@@ -5,10 +5,10 @@
 > under `docs/how-to/host-prepare.d/*.md`; this file is the cgroup
 > section.
 
-`nixling` runs every VM payload inside a per-VM/per-role cgroup leaf
-beneath `/sys/fs/cgroup/nixling.slice`. The slice is created by the
-small `nixling-priv-broker` and then delegated to the non-root
-`nixlingd` daemon so the daemon never needs `CAP_SYS_ADMIN` on the
+`d2b` runs every VM payload inside a per-VM/per-role cgroup leaf
+beneath `/sys/fs/cgroup/d2b.slice`. The slice is created by the
+small `d2b-priv-broker` and then delegated to the non-root
+`d2bd` daemon so the daemon never needs `CAP_SYS_ADMIN` on the
 host cgroup tree at runtime.
 
 This page covers operator-visible behavior. The full algorithm,
@@ -17,7 +17,7 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `nixling host prepare --apply` (not yet wired — it
+Before running `d2b host prepare --apply` (not yet wired — it
 returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
 the "What `host prepare --apply` will do for cgroup" section below),
 confirm the host meets the prerequisites:
@@ -31,8 +31,8 @@ confirm the host meets the prerequisites:
 # 2. Required controllers advertised on the root:
 grep -wE 'cpu|memory|io|pids|cpuset' /sys/fs/cgroup/cgroup.controllers
 
-# 3. nixlingd is non-root (delegation refuses uid 0):
-id nixlingd
+# 3. d2bd is non-root (delegation refuses uid 0):
+id d2bd
 ```
 
 A host that boots with `systemd.unified_cgroup_hierarchy=0` or with the
@@ -41,18 +41,18 @@ legacy `cgroup` v1 mount option WILL fail `host check` with
 
 ## What `host check` reports for cgroup
 
-`nixling host check` evaluates the following invariants in order; the
+`d2b host check` evaluates the following invariants in order; the
 first failure is what the operator sees:
 
 | Reported code | Meaning | Remediation |
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
-| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `nixling.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
-`/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640),
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root:d2bd 0640),
 keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
 ## What `host prepare --apply` will do for cgroup
@@ -69,19 +69,19 @@ perform the 8-step delegation sequence documented in
    every ancestor before `+cpuset` is enabled;
 4. enable `+cpu, +memory, +io, +pids, +cpuset` on `cgroup.subtree_control`
    in that strict order, verifying each enable by re-reading;
-5. create `/sys/fs/cgroup/nixling.slice`;
-6. keep `cpuset.cpus.partition` as `member` on `nixling.slice`
-   and every nixling-created descendant (per-VM intermediate /
-   per-role / host-scoped leaves); nixling does NOT read or
+5. create `/sys/fs/cgroup/d2b.slice`;
+6. keep `cpuset.cpus.partition` as `member` on `d2b.slice`
+   and every d2b-created descendant (per-VM intermediate /
+   per-role / host-scoped leaves); d2b does NOT read or
    write ancestor `cpuset.cpus.partition` (the cgroup v2 root
    is typically a partition root and that state is the host's
-   concern, not nixling's);
-7. fd-relative `fchown` the delegated subtree to `nixlingd:nixlingd`;
+   concern, not d2b's);
+7. fd-relative `fchown` the delegated subtree to `d2bd:d2bd`;
 8. refuse Phase B (post-delegation) runtime mutation if the broker
    is still running as uid 0; Phase A privileged setup
    legitimately runs as root per ADR 0011 Decision item 2.
 
-After the apply, `nixling.slice` will be owned by `nixlingd` and the
+After the apply, `d2b.slice` will be owned by `d2bd` and the
 delegated subtree will carry every required controller in
 `cgroup.subtree_control`. Threaded cgroups are forbidden.
 
@@ -117,7 +117,7 @@ disabled. Confirm `CONFIG_CPUSETS=y`, `CONFIG_MEMCG=y`,
 ### "cgroup-delegation-refused" (uid 0)
 
 The broker is supposed to enter the cgroup work path as the dropped
-`nixlingd` user. If it reaches that path while still running as root,
+`d2bd` user. If it reaches that path while still running as root,
 something is wrong with the broker bootstrap. Re-check
 `docs/explanation/host-prepare.md` § recovery.
 

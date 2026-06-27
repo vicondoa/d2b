@@ -54,8 +54,8 @@ The tests prove:
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path
-for old running VMs until replacement/restart. The new `nixling exec` and
-`nixling vm exec run` commands never fall back to SSH. The executable proof
+for old running VMs until replacement/restart. The new `d2b exec` and
+`d2b vm exec run` commands never fall back to SSH. The executable proof
 models the new protocol's stale-session/restart behavior, not the legacy SSH
 transport itself.
 
@@ -64,7 +64,7 @@ transport itself.
 | VM state | CLI behavior | Compatibility result |
 | --- | --- | --- |
 | Old running VM without `guest-control` capability and existing SSH-backed command (`config sync`, `vm konsole`) | Keep using that command's current SSH path with `transport: "ssh-compat"` and remediation. | Compatible; no forced restart. |
-| Old running VM without `guest-control` capability and new generic exec (`nixling exec`, `nixling vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
+| Old running VM without `guest-control` capability and new generic exec (`d2b exec`, `d2b vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
 | New or restarted VM advertising `guest-control` capability | Use chunked stdio RPCs for exec I/O. | New protocol active. |
 | VM restarts while a client holds an old generation token | Reject the next RPC as stale. | Fail closed; client must reconnect/rediscover. |
 | Guest-control unavailable but SSH still configured | Fall back only through the documented SSH compatibility path. | Operator-visible old-generation behavior. |

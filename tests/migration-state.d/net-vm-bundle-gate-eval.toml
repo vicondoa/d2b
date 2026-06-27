@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo nextest run --workspace (nixlingd net_vm_bundle_gate + typed_error envelope #[test]s)", "tests/tools/assert-pinned-tests.sh (fail-closed pin)"]
+successor_ids = ["cargo nextest run --workspace (d2bd net_vm_bundle_gate + typed_error envelope #[test]s)", "tests/tools/assert-pinned-tests.sh (fail-closed pin)"]

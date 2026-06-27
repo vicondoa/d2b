@@ -1,9 +1,9 @@
-# Nixling-managed SSH keys.
+# D2b-managed SSH keys.
 #
 # This module owns two halves of the same flow:
 #
-#  1. Host-side activation (`nixlingGenerateKeys`):
-#     For each enabled VM declared via `nixling.vms.<name>` (workload
+#  1. Host-side activation (`d2bGenerateKeys`):
+#     For each enabled VM declared via `d2b.vms.<name>` (workload
 #     OR net), generate `<keysDir>/<vm>_ed25519` + matching pubkey on
 #     first activation if missing. Subsequent activations only repair
 #     modes / ACLs. Atomic install via a staging tempfile and `mv -T`;
@@ -18,16 +18,16 @@
 #     `user-authorized-keys` (the resolved content of
 #     `cfg.site.userAuthorizedKeys` and
 #     `cfg.vms.<vm>.userAuthorizedKeys`). host.nix mounts this dir
-#     into the guest at /run/nixling-host-keys/ via a virtiofs share
+#     into the guest at /run/d2b-host-keys/ via a virtiofs share
 #     (see ./host.nix for the share declaration).
 #
-# The matching guest-side consumer (`nixling-load-host-keys.service`,
-# declared in ./base.nix) reads /run/nixling-host-keys/ at boot and
+# The matching guest-side consumer (`d2b-load-host-keys.service`,
+# declared in ./base.nix) reads /run/d2b-host-keys/ at boot and
 # writes the union of host.pub + user-authorized-keys into the SSH
 # user's ~/.ssh/authorized_keys.
 #
 # Operator-visible side effects (none under normal operation):
-#   - `<keysDir>/<vm>_ed25519`        owner root:nixling mode 0640.
+#   - `<keysDir>/<vm>_ed25519`        owner root:d2b mode 0640.
 #                                     The CLI copies to a tempfile (mode 0600,
 #                                     caller-owned) before passing to ssh.
 #   - `<keysDir>/<vm>_ed25519.pub`    owner root:root mode 0644.
@@ -36,9 +36,9 @@
 { config, pkgs, lib, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
-  normalNixosVms = nl.normalNixosVms cfg.vms;
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
+  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
 
   # Resolve a `userAuthorizedKeys` entry (path | string) to its raw
   # text. Paths get read into the Nix store at eval time and surfaced
@@ -60,16 +60,16 @@ let
   # Generate a single shell block for one VM that ensures its key
   # pair exists, repairs perms, and stages the host-keys share dir.
   perVmGenScript = name: vm: ''
-    ### nixling-generate-keys: ${name}
+    ### d2b-generate-keys: ${name}
     vm_keys_dir="${cfg.site.keysDir}"
     vm_state_dir="${cfg.site.stateDir}/vms/${name}"
     vm_host_keys_dir="$vm_state_dir/host-keys"
     priv="$vm_keys_dir/${name}_ed25519"
     pub="$priv.pub"
 
-    install -d -m 0710 -o root -g nixling "$vm_keys_dir"
-    install -d -m 3770 -o nixlingd -g users "$vm_state_dir" 2>/dev/null || true
-    install -d -m 0750 -o nixlingd -g nixling "$vm_host_keys_dir"
+    install -d -m 0710 -o root -g d2b "$vm_keys_dir"
+    install -d -m 3770 -o d2bd -g users "$vm_state_dir" 2>/dev/null || true
+    install -d -m 0750 -o d2bd -g d2b "$vm_host_keys_dir"
     chmod g-s "$vm_host_keys_dir"
 
     if [ ! -f "$priv" ]; then
@@ -80,9 +80,9 @@ let
       ${pkgs.coreutils}/bin/rm -f "$staging" "$staging.pub"
       if ! ${pkgs.openssh}/bin/ssh-keygen \
             -t ed25519 -N "" \
-            -C "nixling:${name}" \
+            -C "d2b:${name}" \
             -f "$staging" >/dev/null; then
-        echo "nixling-generate-keys: FAILED to generate $priv" >&2
+        echo "d2b-generate-keys: FAILED to generate $priv" >&2
         ${pkgs.coreutils}/bin/rm -f "$staging" "$staging.pub"
         exit 1
       fi
@@ -91,7 +91,7 @@ let
     fi
 
     # Repair modes on every activation. Idempotent.
-    # Owner = root, group = nixling, mode = 0640.
+    # Owner = root, group = d2b, mode = 0640.
     # ssh's identity-file permission check requires the caller to
     # OWN the file or the file to be 0600 with no group/other. We
     # can't satisfy either here (root owns, launcher-group reads).
@@ -99,7 +99,7 @@ let
     # tempfile in $XDG_RUNTIME_DIR with the caller's UID + 0600
     # before passing it to ssh. The 0640 mode lets the copy work
     # without sudo.
-    chown root:nixling "$priv"
+    chown root:d2b "$priv"
     chmod 0640 "$priv"
     chown root:root "$pub"
     chmod 0644 "$pub"
@@ -108,9 +108,9 @@ let
     install -m 0644 -o root -g root "$pub" "$vm_host_keys_dir/host.pub"
     user_keys_tmp=$(${pkgs.coreutils}/bin/mktemp \
       "$vm_host_keys_dir/.user-authorized-keys.XXXXXX")
-    cat > "$user_keys_tmp" <<'NIXLING_USER_KEYS_EOF'
+    cat > "$user_keys_tmp" <<'D2B_USER_KEYS_EOF'
 ${perVmUserAuthorizedKeysText vm}
-NIXLING_USER_KEYS_EOF
+D2B_USER_KEYS_EOF
     chmod 0644 "$user_keys_tmp"
     chown root:root "$user_keys_tmp"
     mv -T -- "$user_keys_tmp" "$vm_host_keys_dir/user-authorized-keys"
@@ -125,24 +125,24 @@ in
   # without racing with the first-ever activation's directory
   # creation.
   systemd.tmpfiles.rules = [
-    # Mode 0710 + group nixling: the owning group's --x bit
+    # Mode 0710 + group d2b: the owning group's --x bit
     # grants directory traversal so launcher-group members can stat +
     # read private keys inside (each key carries its own
-    # group:nixling:r-- ACL). Prior to this fix the mode was
-    # 0700 root:root and a named-group ACL (group:nixling:--x)
+    # group:d2b:r-- ACL). Prior to this fix the mode was
+    # 0700 root:root and a named-group ACL (group:d2b:--x)
     # provided traverse. That broke because: (a) `d 0700` forces the
     # POSIX ACL mask to --- which neutralizes named-group entries, and
     # (b) systemd-tmpfiles skips the `a+` fix-up rule due to the
-    # microvm→root ownership transition on /var/lib/nixling. Using
+    # microvm→root ownership transition on /var/lib/d2b. Using
     # traditional group bits avoids ACLs entirely.
-    "d ${cfg.site.keysDir}             0710 root nixling -"
+    "d ${cfg.site.keysDir}             0710 root d2b -"
     "f ${cfg.site.keysDir}/.lock       0600 root root -"
   ];
 
   # Generate + repair on every activation. Ordering:
-  #   - After `users`: needs the nixling group to exist for
+  #   - After `users`: needs the d2b group to exist for
   #     the ACL grant on the private key.
-  system.activationScripts.nixlingGenerateKeys = lib.stringAfter [ "users" ] ''
+  system.activationScripts.d2bGenerateKeys = lib.stringAfter [ "users" ] ''
     set -u
 
     # Serialise: two concurrent nixos-rebuild switches must not race
@@ -151,19 +151,19 @@ in
     # parallel rebuild scenarios.
     exec 9>"${cfg.site.keysDir}/.lock"
     if ! ${pkgs.util-linux}/bin/flock -w 60 9; then
-      echo "nixling-generate-keys: failed to acquire ${cfg.site.keysDir}/.lock within 60s" >&2
+      echo "d2b-generate-keys: failed to acquire ${cfg.site.keysDir}/.lock within 60s" >&2
       exit 1
     fi
 
     ${generateKeysBody}
 
-    # Grant the nixling group traverse-only on the keys
+    # Grant the d2b group traverse-only on the keys
     # directory itself so members can stat + read the individual key
-    # files (which are chown'd root:nixling 0640). This MUST
+    # files (which are chown'd root:d2b 0640). This MUST
     # run AFTER generateKeysBody because each VM's per-script call
     # does `install -d -m 0700` which resets the dir mode and strips
     # ACLs from the effective permission mask.
-    ${pkgs.acl}/bin/setfacl -m "g:nixling:--x" "${cfg.site.keysDir}" || true
+    ${pkgs.acl}/bin/setfacl -m "g:d2b:--x" "${cfg.site.keysDir}" || true
     ${pkgs.acl}/bin/setfacl -m "m::r-x" "${cfg.site.keysDir}" || true
   '';
 }

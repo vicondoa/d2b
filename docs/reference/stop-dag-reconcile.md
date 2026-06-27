@@ -6,13 +6,13 @@
 
 ## Why
 
-When `nixlingd` starts (cold boot, supervisor crash-recovery, or after
+When `d2bd` starts (cold boot, supervisor crash-recovery, or after
 operator restart) it cannot assume the host's nftables fragments and
 USBIP busid carriers still match the trusted bundle:
 
 - The bundle may have been rebuilt while the daemon was down, so the
   per-table ownership-hash recorded under
-  `/var/lib/nixling/state/host-runtime.json` will no longer match the
+  `/var/lib/d2b/state/host-runtime.json` will no longer match the
   current bundle's desired hash.
 - A previously-managed VM may have died (or been removed from the
   bundle) leaving a stale `iif <bridge> ... usbip` rule fragment and
@@ -29,7 +29,7 @@ introduced; all converge actions map 1:1 to `ApplyNftables`,
 
 ## Surface
 
-Module: `packages/nixlingd/src/supervisor/stop_dag.rs`.
+Module: `packages/d2bd/src/supervisor/stop_dag.rs`.
 
 ```text
 pub struct StopDagOwner;
@@ -47,7 +47,7 @@ impl StopDagOwner {
 
 Snapshot of the host as it currently exists. Production callers
 populate it from the daemon's restart-reconciliation probes
-(`/var/lib/nixling/state/host-runtime.json` + `/run/nixling/locks/usbip/`);
+(`/var/lib/d2b/state/host-runtime.json` + `/run/d2b/locks/usbip/`);
 unit tests populate it directly to simulate drift.
 
 | Field | Source on a real host |
@@ -84,7 +84,7 @@ skip the broker dispatch on a clean restart.
 1. **Daemon startup**, before the daemon serves the first mutating
    verb. The startup path:
    - reconnects to live runner pidfds under
-     `/run/nixling/state/runner-pidfds/`,
+     `/run/d2b/state/runner-pidfds/`,
    - calls `StopDagOwner::reconcile_on_restart(&resolver)`,
    - dispatches each action through the existing
      `ApplyNftables` / `UsbipBind` / `UsbipUnbind` broker requests,
@@ -97,11 +97,11 @@ skip the broker dispatch on a clean restart.
 
 ## Testing
 
-- Unit tests (`packages/nixlingd/src/supervisor/stop_dag.rs::tests`)
+- Unit tests (`packages/d2bd/src/supervisor/stop_dag.rs::tests`)
   exercise every drift variant against a fixture-derived
   `BundleResolver`.
 - The stop-dag-reconcile static gate
-  `packages/nixling-contract-tests/tests/policy_daemon.rs`
+  `packages/d2b-contract-tests/tests/policy_daemon.rs`
   (`stop_dag_reconcile_surface`) asserts
   the module surface, the supervisor module wires it in, the planner
   composes only existing broker ops (no new `*Request` types), and

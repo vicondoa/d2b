@@ -16,7 +16,7 @@
 #     variant: site.allowUnsafeEastWest, work {mtu, mssClamp, lan
 #     allow/effective east-west} and per-role bridgePortFlags, plus the
 #     `personal` negative control (stays isolated, no east-west opt-in).
-#   * vms.json (manifest) carries no `microvm@work-app` / `nixling@work-app.`
+#   * vms.json (manifest) carries no `microvm@work-app` / `d2b@work-app.`
 #     systemd-unit reference.
 #   * processes.json node-level systemd `unit` fields.
 #
@@ -25,7 +25,7 @@
 #      variant's `work-app` drops node `unit` fields while the
 #      systemd-supervised `personal-app` and the legacy `demo` variant
 #      KEEP `microvm@<vm>.service` unit references. In v1.1 daemon-only the
-#      `nixling.vms.<vm>.supervisor` option is removed and every enabled VM
+#      `d2b.vms.<vm>.supervisor` option is removed and every enabled VM
 #      is daemon-supervised, so the framework emits NO per-VM systemd unit
 #      for ANY node of ANY VM in EITHER variant (verified by probe: every
 #      node's `unit` is null). The cases below assert the real invariant —
@@ -49,17 +49,17 @@ let
   # Mirrors examples/multi-env/flake.nix's `multi-env-daemon-experimental`
   # overlay.
   daemonExtra = { lib, ... }: {
-    nixling.site.allowUnsafeEastWest = true;
-    nixling.daemonExperimental.enable = true;
-    nixling.envs.work.mtu = lib.mkForce 1400;
-    nixling.envs.work.mssClamp = lib.mkForce true;
-    nixling.envs.work.lan.allowEastWest = lib.mkForce true;
+    d2b.site.allowUnsafeEastWest = true;
+    d2b.daemonExperimental.enable = true;
+    d2b.envs.work.mtu = lib.mkForce 1400;
+    d2b.envs.work.mssClamp = lib.mkForce true;
+    d2b.envs.work.lan.allowEastWest = lib.mkForce true;
   };
 
   demoCfg = (mkEval [ configMod ]).config;
   daemonCfg = (mkEval [ configMod daemonExtra ]).config;
 
-  hostJson = builtins.fromJSON daemonCfg.nixling._bundle.hostJson.jsonText;
+  hostJson = builtins.fromJSON daemonCfg.d2b._bundle.hostJson.jsonText;
   envOf = name: builtins.head (builtins.filter (e: e.env == name) hostJson.environments);
   work = envOf "work";
   personal = envOf "personal";
@@ -69,14 +69,14 @@ let
     let f = builtins.head (builtins.filter (x: x.role == role) env.bridgePortFlags);
     in { inherit (f) isolated neighSuppress learning unicastFlood; };
 
-  daemonProcs = daemonCfg.nixling._bundle.processesJson.data;
-  demoProcs = demoCfg.nixling._bundle.processesJson.data;
+  daemonProcs = daemonCfg.d2b._bundle.processesJson.data;
+  demoProcs = demoCfg.d2b._bundle.processesJson.data;
   vmNodes = procs: vm:
     (builtins.head (builtins.filter (v: v.vm == vm) procs.vms)).nodes;
   unitCount = procs: vm:
     builtins.length (builtins.filter (n: (n.unit or null) != null) (vmNodes procs vm));
 
-  manifestText = daemonCfg.nixling._manifestPkg.text;
+  manifestText = daemonCfg.d2b._manifestPkg.text;
 in
 {
   # ---- host.json env-level propagation (daemon variant) ----
@@ -128,8 +128,8 @@ in
     expr = lib.hasInfix "microvm@work-app" manifestText;
     expected = false;
   };
-  "multi-env-daemon/manifest-no-nixling-work-app" = {
-    expr = lib.hasInfix "nixling@work-app." manifestText;
+  "multi-env-daemon/manifest-no-d2b-work-app" = {
+    expr = lib.hasInfix "d2b@work-app." manifestText;
     expected = false;
   };
 

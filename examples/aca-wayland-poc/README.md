@@ -19,11 +19,11 @@ Azure Relay:
 ```
 foot (ACA sandbox)
   → waypipe --no-gpu server (SHM-only)
-  → /run/nixling/wp.sock
-  ← nixling-relay-bridge send (unix-listen target; trusts the ACA
+  → /run/d2b/wp.sock
+  ← d2b-relay-bridge send (unix-listen target; trusts the ACA
       egress-proxy CA; outbound, SAS-authed WebSocket)
-  → Azure Relay hybrid connection (hc-nixling-display)
-  → nixling-relay-bridge listen (host)
+  → Azure Relay hybrid connection (hc-d2b-display)
+  → d2b-relay-bridge listen (host)
   → /run/user/<uid>/wpc.sock
   → waypipe --no-gpu client (host)
   → niri
@@ -34,8 +34,8 @@ foot (ACA sandbox)
 | Path | What |
 | --- | --- |
 | `azure/` | Bicep (CAF-aligned): ACR, managed identity, **sandbox group** (`Microsoft.App/sandboxGroups`), Relay namespace + hybrid connection + scoped Listen/Send SAS rules. |
-| `container/` | `image.nix` (Nix-built OCI image: waypipe + foot + the relay bridge + the agent), `bridge/nixling-sandbox-agent.sh` (in-sandbox entrypoint), `build-and-push.sh`. |
-| `relay-bridge/` | `nixling-relay-bridge` — a small Rust tunnel that bridges a local socket to an Azure Relay hybrid connection (sender role in the sandbox, listener role on the host). Trusts the sandbox egress-proxy CA via `--ca-file`. |
+| `container/` | `image.nix` (Nix-built OCI image: waypipe + foot + the relay bridge + the agent), `bridge/d2b-sandbox-agent.sh` (in-sandbox entrypoint), `build-and-push.sh`. |
+| `relay-bridge/` | `d2b-relay-bridge` — a small Rust tunnel that bridges a local socket to an Azure Relay hybrid connection (sender role in the sandbox, listener role on the host). Trusts the sandbox egress-proxy CA via `--ca-file`. |
 | `host/` | `run-host-display.sh` — brings up the host `waypipe client` + relay listener (POC stand-in for the gateway's host-side display runner). |
 | `tests/` | `live-demo-checklist.md` — the manual, Layer-2 reproduce-and-verify procedure. |
 
@@ -44,7 +44,7 @@ foot (ACA sandbox)
 See [`tests/live-demo-checklist.md`](./tests/live-demo-checklist.md) for the
 full, copy-pasteable procedure. In short: deploy the Bicep, build+push the
 image, register a sandbox disk + create a sandbox, start the host receivers
-(`host/run-host-display.sh up`), then run `nixling-sandbox-agent` in the
+(`host/run-host-display.sh up`), then run `d2b-sandbox-agent` in the
 sandbox via `aca sandbox exec`. **Delete the sandbox when done.**
 
 ## Trust-boundary notes (ADR 0032)

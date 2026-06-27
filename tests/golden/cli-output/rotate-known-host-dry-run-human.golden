@@ -1,2 +1,2 @@
 # Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
-nixling keys rotate-known-host --dry-run: planned operation for vm 'corp-vm'
+d2b keys rotate-known-host --dry-run: planned operation for vm 'corp-vm'

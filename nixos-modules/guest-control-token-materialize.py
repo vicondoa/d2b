@@ -12,7 +12,7 @@ current_vm = "<unknown>"
 
 
 def fail(kind):
-    print(f"nixling guest-control token {current_vm}: {kind}", file=sys.stderr)
+    print(f"d2b guest-control token {current_vm}: {kind}", file=sys.stderr)
     sys.exit(1)
 
 

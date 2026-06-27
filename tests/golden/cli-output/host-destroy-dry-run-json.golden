@@ -2,7 +2,7 @@
 {
   "command": "host destroy",
   "mode": "dry-run",
-  "notes": "host destroy --dry-run reports nixling-owned resources only; foreign resources are never touched.",
+  "notes": "host destroy --dry-run reports d2b-owned resources only; foreign resources are never touched.",
   "planned": [],
   "tier": "all-daemon"
 }

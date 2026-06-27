@@ -2,7 +2,7 @@
 # tests/test-flake-list.sh — `make test-flake-list`: print the native-system
 # flake check names as a compact JSON array on stdout (all logs go to stderr).
 #
-# The CI dynamic matrix consumes this to fan `make test-flake NL_FLAKE_CHECK=<n>`
+# The CI dynamic matrix consumes this to fan `make test-flake D2B_FLAKE_CHECK=<n>`
 # shards out across runners (see .github/workflows/pr-l1-static-fast.yml). Keep
 # stdout PURE JSON so it can feed `$GITHUB_OUTPUT` + `fromJSON()` directly:
 #
@@ -19,7 +19,7 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
 
-# git+file:// (never a bare path): mirror tests/lib.sh nl_flake_ref so the
+# git+file:// (never a bare path): mirror tests/lib.sh d2b_flake_ref so the
 # sibling cargo target/ + scratch dirs stay invisible to the eval.
 flake_ref="git+file://$ROOT"
 

@@ -108,10 +108,10 @@ jobs:
         with:
           workspaces: |
             packages -> target
-            packages/nixling-priv-broker -> target
+            packages/d2b-priv-broker -> target
           cache-directories: |
-            packages/nixling-priv-broker/target-layer1
-            packages/nixling-priv-broker/target-fakebackends
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
@@ -119,10 +119,10 @@ jobs:
         # Skip the fixture nix-build (~35 min) - the same fixtures are
         # already evaluated by the flake-eval-x86 (fixture-smoke) and
         # (fixture-smoke-full) shards. The contract tests that depend on
-        # NL_FIXTURES still run in those shards' eval; here we test only
+        # D2B_FIXTURES still run in those shards' eval; here we test only
         # the Rust compilation + unit/integration tests.
         env:
-          NL_SKIP_FIXTURE_BUILD: "1"
+          D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
 
   test-proofs:
@@ -176,7 +176,7 @@ jobs:
           # A single check instantiates in its own process and fits a 16 GB
           # runner (heaviest measured ~12 GB), so unlike the old monolith this
           # rarely touches swap. Add a modest swapfile purely as OOM insurance.
-          SWAP=/mnt/nixling-ci-swap
+          SWAP=/mnt/d2b-ci-swap
           sudo swapoff "$SWAP" 2>/dev/null || true
           sudo rm -f "$SWAP"
           sudo fallocate -l 8G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=8192
@@ -191,12 +191,12 @@ jobs:
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: Flake check shard (x86_64-linux)
-        # NL_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
-        # `NL_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
+        # `D2B_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
-          NL_FLAKE_CHECK: ${{ matrix.check }}
+          D2B_FLAKE_CHECK: ${{ matrix.check }}
         run: make test-flake
 
   flake-eval-x86-outputs:
@@ -212,7 +212,7 @@ jobs:
             experimental-features = nix-command flakes
       - name: Flake non-checks outputs (x86_64-linux)
         env:
-          NL_FLAKE_OUTPUTS: "1"
+          D2B_FLAKE_OUTPUTS: "1"
         run: make test-flake
 
   test-flake-x86:

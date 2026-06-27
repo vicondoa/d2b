@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-core/tests/manifest_v04_roundtrip.rs::manifest_v04_roundtrip::baseline_vms_json_round_trips_byte_identically (cargo test -p nixling-core --test manifest_v04_roundtrip[ --features test-support])", "tests/golden/pinned/manifest-v04-roundtrip.txt + tests/tools/assert-pinned-tests.sh"]
+successor_ids = ["packages/d2b-core/tests/manifest_v04_roundtrip.rs::manifest_v04_roundtrip::baseline_vms_json_round_trips_byte_identically (cargo test -p d2b-core --test manifest_v04_roundtrip[ --features test-support])", "tests/golden/pinned/manifest-v04-roundtrip.txt + tests/tools/assert-pinned-tests.sh"]

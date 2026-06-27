@@ -1,7 +1,7 @@
 {
   "uid": "per-vm-store",
   "title": "Per-VM Store",
-  "tags": ["nixling", "v0.2.0"],
+  "tags": ["d2b", "v0.2.0"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -13,8 +13,8 @@
         "label": "VM",
         "type": "query",
         "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(nixling_vm_ch_api_up, vm)",
-        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "query": "label_values(d2b_vm_ch_api_up, vm)",
+        "definition": "label_values(d2b_vm_ch_api_up, vm)",
         "includeAll": true,
         "allValue": ".+",
         "multi": true,
@@ -28,7 +28,7 @@
       "id": 1,
       "type": "table",
       "title": "Current generation per VM",
-      "description": "Extracts the most recent generation number from nixling-store-sync journal lines.",
+      "description": "Extracts the most recent generation number from d2b-store-sync journal lines.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
       "datasource": {"type": "loki", "uid": "loki"},
       "fieldConfig": {"defaults": {}, "overrides": []},
@@ -37,7 +37,7 @@
         {
           "refId": "A",
           "queryType": "range",
-          "expr": "max by (vm) (max_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} | regexp \"generation (?P<generation>[0-9]+)\" | unwrap generation [24h]))"
+          "expr": "max by (vm) (max_over_time({unit=~\"d2b-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} | regexp \"generation (?P<generation>[0-9]+)\" | unwrap generation [24h]))"
         }
       ]
     },
@@ -54,7 +54,7 @@
         {
           "refId": "A",
           "queryType": "range",
-          "expr": "{unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"nixling-store-sync:\""
+          "expr": "{unit=~\"d2b-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"d2b-store-sync:\""
         }
       ]
     },
@@ -70,13 +70,13 @@
         {
           "refId": "A",
           "queryType": "range",
-          "expr": "sum by (vm) (count_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"done (generation\" [30m]))",
+          "expr": "sum by (vm) (count_over_time({unit=~\"d2b-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"done (generation\" [30m]))",
           "legendFormat": "{{vm}} success"
         },
         {
           "refId": "B",
           "queryType": "range",
-          "expr": "sum by (vm) (count_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |~ \"failed|error|not a valid generation dir\" [30m]))",
+          "expr": "sum by (vm) (count_over_time({unit=~\"d2b-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |~ \"failed|error|not a valid generation dir\" [30m]))",
           "legendFormat": "{{vm}} failure"
         }
       ]
@@ -85,7 +85,7 @@
       "id": 4,
       "type": "bargauge",
       "title": "Store path count per VM (future metric)",
-      "description": "Placeholder for future work: nixling does not currently export a per-VM store path count metric.",
+      "description": "Placeholder for future work: d2b does not currently export a per-VM store path count metric.",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -93,7 +93,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "nixling_vm_store_path_count{vm=~\"${vm:regex}\"}",
+          "expr": "d2b_vm_store_path_count{vm=~\"${vm:regex}\"}",
           "legendFormat": "{{vm}}"
         }
       ]

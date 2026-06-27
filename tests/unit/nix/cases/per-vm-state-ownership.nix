@@ -7,17 +7,17 @@
 #
 # The bash gate's source-level store-sync guardrails (no legacy root:kvm /
 # 2775 store-mode enforcement in nixos-modules/store.nix or the daemon's
-# packages/nixlingd/src/ownership_preflight.rs) are SOURCE-LINTS, not
+# packages/d2bd/src/ownership_preflight.rs) are SOURCE-LINTS, not
 # eval-time value assertions, so they live in the Rust policy layer:
-# packages/nixling-contract-tests/tests/policy_ownership_preflight.rs
+# packages/d2b-contract-tests/tests/policy_ownership_preflight.rs
 # (per the eval/Rust routing discipline — nix-unit holds pure-eval
 # assertions; source-greps belong with the other policy_*.rs lints).
 #
 # Spec correction (existing code is canon): the retired gate's prose used the
-# shorthand `nixling:<group>` for several host-created entries, but the
-# committed matrix owner is `nixlingd` (for example
-# `nixlingd:nixling 0600` for store-view/sync.lock and
-# `nixlingd:users 0644` for the live marker). These cases assert the current
+# shorthand `d2b:<group>` for several host-created entries, but the
+# committed matrix owner is `d2bd` (for example
+# `d2bd:d2b 0600` for store-view/sync.lock and
+# `d2bd:users 0644` for the live marker). These cases assert the current
 # matrix values rather than the stale prose shorthand.
 { mkEval, ... }:
 
@@ -30,13 +30,13 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
     };
   };
 
-  matrix = (mkEval [ configMod ]).config.nixling.daemon.perVmStateOwnershipMatrix;
+  matrix = (mkEval [ configMod ]).config.d2b.daemon.perVmStateOwnershipMatrix;
   octalRe = "^[0-7]{3,4}$";
 
   hasPath = path: builtins.any (e: e.path == path) matrix;
@@ -104,15 +104,15 @@ in
   };
 
   # ---- Legacy store hardlink-farm carve-out ----
-  "per-vm-state-ownership/store-owner" = fieldCase "store" "owner" "nixlingd";
+  "per-vm-state-ownership/store-owner" = fieldCase "store" "owner" "d2bd";
   "per-vm-state-ownership/store-group" = fieldCase "store" "group" "users";
   "per-vm-state-ownership/store-mode" = fieldCase "store" "mode" "0755";
   "per-vm-state-ownership/store-recursive-false" = fieldCase "store" "recursive" false;
   "per-vm-state-ownership/store-required-false" = fieldCase "store" "required" false;
 
   # ---- Per-VM swtpm runner ownership ----
-  "per-vm-state-ownership/swtpm-owner" = fieldCase "swtpm" "owner" "nixling-<vm>-swtpm";
-  "per-vm-state-ownership/swtpm-group" = fieldCase "swtpm" "group" "nixling-<vm>-swtpm";
+  "per-vm-state-ownership/swtpm-owner" = fieldCase "swtpm" "owner" "d2b-<vm>-swtpm";
+  "per-vm-state-ownership/swtpm-group" = fieldCase "swtpm" "group" "d2b-<vm>-swtpm";
   "per-vm-state-ownership/swtpm-mode" = fieldCase "swtpm" "mode" "0700";
   "per-vm-state-ownership/swtpm-owner-templated" = {
     expr = builtins.match ".*<vm>.*" (entry "swtpm").owner != null;
@@ -125,30 +125,30 @@ in
 
   # ---- Signed store-view layout ----
   "per-vm-state-ownership/sync-lock-exists" = hasPathCase "store-view/sync.lock";
-  "per-vm-state-ownership/sync-lock-owner" = fieldCase "store-view/sync.lock" "owner" "nixlingd";
-  "per-vm-state-ownership/sync-lock-group" = fieldCase "store-view/sync.lock" "group" "nixling";
+  "per-vm-state-ownership/sync-lock-owner" = fieldCase "store-view/sync.lock" "owner" "d2bd";
+  "per-vm-state-ownership/sync-lock-group" = fieldCase "store-view/sync.lock" "group" "d2b";
   "per-vm-state-ownership/sync-lock-mode" = fieldCase "store-view/sync.lock" "mode" "0600";
   "per-vm-state-ownership/sync-lock-kind" = fieldCase "store-view/sync.lock" "kind" "file";
 
-  "per-vm-state-ownership/meta-owner" = fieldCase "store-view/meta" "owner" "nixlingd";
+  "per-vm-state-ownership/meta-owner" = fieldCase "store-view/meta" "owner" "d2bd";
   "per-vm-state-ownership/meta-group" = fieldCase "store-view/meta" "group" "users";
   "per-vm-state-ownership/meta-mode" = fieldCase "store-view/meta" "mode" "0755";
   "per-vm-state-ownership/meta-kind" = fieldCase "store-view/meta" "kind" "dir";
 
   "per-vm-state-ownership/state-exists" = hasPathCase "store-view/state";
-  "per-vm-state-ownership/state-owner" = fieldCase "store-view/state" "owner" "nixlingd";
-  "per-vm-state-ownership/state-group" = fieldCase "store-view/state" "group" "nixling";
+  "per-vm-state-ownership/state-owner" = fieldCase "store-view/state" "owner" "d2bd";
+  "per-vm-state-ownership/state-group" = fieldCase "store-view/state" "group" "d2b";
   "per-vm-state-ownership/state-mode" = fieldCase "store-view/state" "mode" "0750";
 
   "per-vm-state-ownership/gcroots-exists" = hasPathCase "store-view/gcroots";
-  "per-vm-state-ownership/gcroots-owner" = fieldCase "store-view/gcroots" "owner" "nixlingd";
-  "per-vm-state-ownership/gcroots-group" = fieldCase "store-view/gcroots" "group" "nixling";
+  "per-vm-state-ownership/gcroots-owner" = fieldCase "store-view/gcroots" "owner" "d2bd";
+  "per-vm-state-ownership/gcroots-group" = fieldCase "store-view/gcroots" "group" "d2b";
   "per-vm-state-ownership/gcroots-mode" = fieldCase "store-view/gcroots" "mode" "0750";
 
-  "per-vm-state-ownership/live-marker-exists" = hasPathCase "store-view/live/.nixling-marker-<vm>";
-  "per-vm-state-ownership/live-marker-owner" = fieldCase "store-view/live/.nixling-marker-<vm>" "owner" "nixlingd";
-  "per-vm-state-ownership/live-marker-group" = fieldCase "store-view/live/.nixling-marker-<vm>" "group" "users";
-  "per-vm-state-ownership/live-marker-mode" = fieldCase "store-view/live/.nixling-marker-<vm>" "mode" "0644";
-  "per-vm-state-ownership/live-marker-kind" = fieldCase "store-view/live/.nixling-marker-<vm>" "kind" "file";
-  "per-vm-state-ownership/live-marker-required-false" = fieldCase "store-view/live/.nixling-marker-<vm>" "required" false;
+  "per-vm-state-ownership/live-marker-exists" = hasPathCase "store-view/live/.d2b-marker-<vm>";
+  "per-vm-state-ownership/live-marker-owner" = fieldCase "store-view/live/.d2b-marker-<vm>" "owner" "d2bd";
+  "per-vm-state-ownership/live-marker-group" = fieldCase "store-view/live/.d2b-marker-<vm>" "group" "users";
+  "per-vm-state-ownership/live-marker-mode" = fieldCase "store-view/live/.d2b-marker-<vm>" "mode" "0644";
+  "per-vm-state-ownership/live-marker-kind" = fieldCase "store-view/live/.d2b-marker-<vm>" "kind" "file";
+  "per-vm-state-ownership/live-marker-required-false" = fieldCase "store-view/live/.d2b-marker-<vm>" "required" false;
 }

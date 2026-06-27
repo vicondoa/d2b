@@ -17,7 +17,7 @@ fi
 
 is_known_non_layer1() {
   case "$1" in
-    audio.sh|nixling-store.sh)
+    audio.sh|d2b-store.sh)
       # Documented Layer-2 integration tests in tests/README.md.
       return 0
       ;;
@@ -84,16 +84,16 @@ has_layer1_invocation() {
           index(line, "bash \"$ROOT/tests/" base "\"") ||
           index(line, "bash $HERE/" base) ||
           index(line, "bash $ROOT/tests/" base) ||
-          index(line, "nl_static_parallel_script \"tests/" base "\"") ||
-          index(line, "nl_static_parallel_script_gate \"tests/" base "\"")) {
+          index(line, "d2b_static_parallel_script \"tests/" base "\"") ||
+          index(line, "d2b_static_parallel_script_gate \"tests/" base "\"")) {
         found = 1
       }
 
       if (line ~ "(^|;|&&|\\|\\|)[[:space:]]*\"?\\$HERE/" quoted_base "\"?([[:space:];&|()]|$)" ||
           line ~ "(^|;|&&|\\|\\|)[[:space:]]*\"?\\$ROOT/tests/" quoted_base "\"?([[:space:];&|()]|$)" ||
           line ~ "(^|;|&&|\\|\\|)[[:space:]]*run_layer1_script[[:space:]]+\"?(tests/)?" quoted_base "\"?([[:space:];&|()]|$)" ||
-          line ~ "(^|;|&&|\\|\\|)[[:space:]]*nl_static_parallel_script[[:space:]]+\"?(tests/)?" quoted_base "\"?([[:space:];&|()]|$)" ||
-          line ~ "(^|;|&&|\\|\\|)[[:space:]]*nl_static_parallel_script_gate[[:space:]]+\"?(tests/)?" quoted_base "\"?([[:space:];&|()]|$)") {
+          line ~ "(^|;|&&|\\|\\|)[[:space:]]*d2b_static_parallel_script[[:space:]]+\"?(tests/)?" quoted_base "\"?([[:space:];&|()]|$)" ||
+          line ~ "(^|;|&&|\\|\\|)[[:space:]]*d2b_static_parallel_script_gate[[:space:]]+\"?(tests/)?" quoted_base "\"?([[:space:];&|()]|$)") {
         found = 1
       }
     }

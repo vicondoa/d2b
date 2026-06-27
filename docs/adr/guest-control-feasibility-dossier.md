@@ -6,7 +6,7 @@ panel-review input for locking the guest-control IPC direction.
 
 > **Update (W16) — exploratory/historical.** This is W0 feasibility
 > evidence, not a description of the shipped surface. The guest-control
-> plane has since landed: `nixling-guestd` serves the unary APIs and the
+> plane has since landed: `d2b-guestd` serves the unary APIs and the
 > chunked-stdio exec RPCs over the authenticated vsock channel, `config
 > sync` reads over `ReadGuestFile` and **fails closed** on old
 > generations (the `ssh-compat` transport in the compatibility-matrix
@@ -53,7 +53,7 @@ W0 protocol.
 | ADR introduced | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0028 added with the feasibility gate. |
 | ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0028 accepted after feasibility evidence and panel review findings were addressed. |
 | CH CONNECT transport | integrated W0 decision branch | `6797def8a1916966b4262d70f2381ce5845a6e8f` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque u32 ACK, not used as a buffer limit, malformed/refused ACK failures surface only bounded error categories, handshake timeout is bounded, and post-OK half-close preserves guest output drain. |
-| Static guest build | `guest-control-w0-static` | `a085e68be5bfa9ed19fcb3441b4f914c7120ac69` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `nixling-guestd`/`nixling-userd` artifacts remain a follow-up implementation gate. |
+| Static guest build | `guest-control-w0-static` | `a085e68be5bfa9ed19fcb3441b4f914c7120ac69` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `d2b-guestd`/`d2b-userd` artifacts remain a follow-up implementation gate. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf881a0aa4b7344b2005290248533a1576605` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
 | HMAC auth | `guest-control-w0-auth` | `7a97d09cbd15290d6f738c6bcaaea482bf804324` | PASS: transcript-bound proof-of-possession prototype with redaction and replay tests. |
 | Safe PTY | `guest-control-w0-pty` | `72ddbe351bc5c3a70eedfb479f1225017c35790f` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
@@ -79,7 +79,7 @@ The proof crate validates the exact host-side shape:
 5. construct the client with `Client::new`.
 
 The `OK` number is Cloud Hypervisor's host-side allocated local port (or
-an opaque numeric acknowledgement for nixling's purposes), not a buffer
+an opaque numeric acknowledgement for d2b's purposes), not a buffer
 size. Guest-control must not derive flow-control or ttRPC message limits
 from it.
 
@@ -119,7 +119,7 @@ Result: **pass as static compile proof; runtime test cfg-gated**.
 Routine developer and CI hosts generally do not expose a guest
 AF_VSOCK device, so W0 cannot require a live `bind(AF_VSOCK)` in the
 default Layer-1 gate. The committed compile proof
-`packages/nixling-host/tests/guest_vsock_ttrpc_compile.rs` type-checks
+`packages/d2b-host/tests/guest_vsock_ttrpc_compile.rs` type-checks
 the safe guest-side shape instead:
 
 1. build a guest-side ttRPC async listener with
@@ -133,7 +133,7 @@ The host-side transport proof is the CH base-UDS `CONNECT <port>` proof
 above, not direct host AF_VSOCK client construction.
 
 `ttrpc-rust`'s Linux vsock transport is implemented with
-`tokio-vsock`; Nixling does not call `from_raw_vsock_listener_fd` or any
+`tokio-vsock`; D2b does not call `from_raw_vsock_listener_fd` or any
 other unsafe listener constructor. A live runtime test should be added
 behind an explicit cfg or integration-test knob on a host/microVM that
 provides virtio-vsock. That runtime test must prove:
@@ -157,8 +157,8 @@ static-musl derivation for:
 
 `readelf` evidence shows no ELF interpreter and no `DT_NEEDED`
 entries. `cargo-deny` and `cargo-audit` passed for the proof dependency
-set. The actual `nixling-guestd`, `nixling-userd`, and
-`nixling-exec-runner` binaries do not exist in W0; their static package
+set. The actual `d2b-guestd`, `d2b-userd`, and
+`d2b-exec-runner` binaries do not exist in W0; their static package
 outputs remain a required implementation-wave gate.
 
 Reproducible proof source:
@@ -173,20 +173,20 @@ Static derivation invocations:
 ```console
 $ nix-build .w0-static-proof/ttrpc-static-proof.nix \
     --argstr target x86_64-unknown-linux-musl --no-out-link
-/nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0
+/nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-d2b-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0
 
 $ nix-build .w0-static-proof/ttrpc-static-proof.nix \
     --argstr target aarch64-unknown-linux-musl --no-out-link
-/nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0
+/nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-d2b-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0
 ```
 
 The derivation sets `CARGO_BUILD_TARGET` to the requested target
 triple and `RUSTFLAGS="-C target-feature=+crt-static"`, then runs:
 
 ```sh
-readelf -lW "$out/bin/nixling-ttrpc-static-proof" \
+readelf -lW "$out/bin/d2b-ttrpc-static-proof" \
   > "$out/readelf-program-headers.txt"
-readelf -dW "$out/bin/nixling-ttrpc-static-proof" \
+readelf -dW "$out/bin/d2b-ttrpc-static-proof" \
   > "$out/readelf-dynamic.txt" || true
 grep -q 'Requesting program interpreter' "$out/readelf-program-headers.txt" \
   && exit 1
@@ -197,18 +197,18 @@ grep -q '(NEEDED)' "$out/readelf-dynamic.txt" \
 Rerun evidence:
 
 ```console
-$ file /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/bin/nixling-ttrpc-static-proof
+$ file /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-d2b-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/bin/d2b-ttrpc-static-proof
 ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, not stripped
-$ grep -n 'Requesting program interpreter' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
+$ grep -n 'Requesting program interpreter' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-d2b-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
 no Requesting program interpreter
-$ grep -n '(NEEDED)' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
+$ grep -n '(NEEDED)' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-d2b-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
 no DT_NEEDED entries
 
-$ file /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/bin/nixling-ttrpc-static-proof
+$ file /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-d2b-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/bin/d2b-ttrpc-static-proof
 ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, not stripped
-$ grep -n 'Requesting program interpreter' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
+$ grep -n 'Requesting program interpreter' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-d2b-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
 no Requesting program interpreter
-$ grep -n '(NEEDED)' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
+$ grep -n '(NEEDED)' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-d2b-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
 no DT_NEEDED entries
 ```
 
@@ -427,7 +427,7 @@ limiter or patched/configurable ttRPC transport and a new proof.
 | Port | Direction | Owner | Status |
 | ---: | --- | --- | --- |
 | `14317` | guest-to-host | Observability OTLP/Alloy relay | Existing; not available for guest control. |
-| `14318` | host-to-guest | `nixling-guestd` ttRPC control | Reserved for Hello, Health, capabilities, lifecycle, exec chunked stdio, and framework guest operations. |
+| `14318` | host-to-guest | `d2b-guestd` ttRPC control | Reserved for Hello, Health, capabilities, lifecycle, exec chunked stdio, and framework guest operations. |
 | `14319` | host-to-guest | Future guest-control stream side channel | Reserved but unused by W0; requires a new panel-approved decision before use. |
 
 The control reservation starts at `14318` specifically to avoid
@@ -511,7 +511,7 @@ prototype:
 | VM state | CLI behavior | Compatibility result |
 | --- | --- | --- |
 | Old running VM without `guest-control` capability and existing SSH-backed command (`config sync`, `vm konsole`) | Keep using that command's current SSH path with `transport: "ssh-compat"` and remediation. | Compatible; no forced restart. |
-| Old running VM without `guest-control` capability and new generic exec (`nixling exec`, `nixling vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
+| Old running VM without `guest-control` capability and new generic exec (`d2b exec`, `d2b vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
 | New or restarted VM advertising `guest-control` capability | Use chunked stdio RPCs for exec I/O. | New protocol active. |
 | VM restarts while a client holds an old generation token | Reject the next RPC as stale. | Fail closed; client must reconnect/rediscover. |
 | Guest-control unavailable but SSH still configured | Fall back only through the documented SSH compatibility path. | Operator-visible old-generation behavior. |

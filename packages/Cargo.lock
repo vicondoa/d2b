@@ -684,6 +684,340 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "clap",
+ "d2b-constellation-core",
+ "d2b-constellation-router",
+ "d2b-contracts",
+ "d2b-core",
+ "nix 0.29.0",
+ "rustix 0.38.44",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "d2b-constellation-codec-protobuf"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-contracts",
+ "prost 0.13.5",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-constellation-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-constellation-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-constellation-router"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "chacha20poly1305",
+ "d2b-constellation-codec-protobuf",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-constellation-transport",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-constellation-transport"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-contract-tests"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-core",
+ "d2b-host",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-contracts"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-core",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "bolero",
+ "regex",
+ "rustix 0.38.44",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "d2b-daemon-access"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-contracts",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-exec-runner"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "rustix 0.38.44",
+]
+
+[[package]]
+name = "d2b-gateway"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-gateway-runtime"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "base64",
+ "chacha20poly1305",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-gateway",
+ "d2b-provider-aca",
+ "d2b-provider-relay",
+ "getrandom 0.2.17",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "d2b-guestd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "d2b-contracts",
+ "d2b-exec-runner",
+ "futures",
+ "hmac",
+ "protobuf",
+ "rustix 0.38.44",
+ "sha2",
+ "tokio",
+ "tokio-vsock",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-host"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-contracts",
+ "d2b-core",
+ "libc",
+ "miniz_oxide",
+ "nix 0.29.0",
+ "rustix 0.38.44",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-host-activation-helper"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "d2b-host-providers"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-core",
+ "d2b-host",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-aca"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_identity",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-provider-relay"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "futures-util",
+ "hmac",
+ "libc",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "urlencoding",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "d2b-userd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
+
+[[package]]
+name = "d2b-wayland-filter"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "libc",
+ "log",
+ "nix 0.29.0",
+ "thiserror 2.0.18",
+ "uapi",
+ "wl-proxy",
+]
+
+[[package]]
+name = "d2bd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "clap",
+ "d2b-constellation-core",
+ "d2b-constellation-provider",
+ "d2b-constellation-router",
+ "d2b-contracts",
+ "d2b-core",
+ "d2b-gateway",
+ "d2b-gateway-runtime",
+ "d2b-host",
+ "d2b-provider-aca",
+ "d2b-provider-relay",
+ "getrandom 0.2.17",
+ "libc",
+ "nix 0.29.0",
+ "parking_lot",
+ "protobuf",
+ "regex",
+ "rustix 0.38.44",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.5.10",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ttrpc",
+ "uzers",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1591,340 +1925,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset 0.9.1",
-]
-
-[[package]]
-name = "nixling"
-version = "0.0.0-bootstrap"
-dependencies = [
- "clap",
- "nix 0.29.0",
- "nixling-constellation-core",
- "nixling-constellation-router",
- "nixling-contracts",
- "nixling-core",
- "rustix 0.38.44",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "nixling-constellation-codec-protobuf"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-contracts",
- "prost 0.13.5",
- "serde_json",
-]
-
-[[package]]
-name = "nixling-constellation-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nixling-constellation-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "nixling-constellation-core",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nixling-constellation-router"
-version = "0.0.0-bootstrap"
-dependencies = [
- "chacha20poly1305",
- "hmac",
- "nixling-constellation-codec-protobuf",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-constellation-transport",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nixling-constellation-transport"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "tokio",
-]
-
-[[package]]
-name = "nixling-contract-tests"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-contracts",
- "nixling-core",
- "nixling-host",
- "regex",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nixling-contracts"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-core",
- "protobuf",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nixling-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "bolero",
- "regex",
- "rustix 0.38.44",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "nixling-daemon-access"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "nix 0.29.0",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-contracts",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "nixling-exec-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "rustix 0.38.44",
-]
-
-[[package]]
-name = "nixling-gateway"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "hmac",
- "nixling-constellation-core",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
-]
-
-[[package]]
-name = "nixling-gateway-runtime"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "azure_core",
- "base64",
- "chacha20poly1305",
- "getrandom 0.2.17",
- "libc",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-gateway",
- "nixling-provider-aca",
- "nixling-provider-relay",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "nixling-guestd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "futures",
- "hmac",
- "nixling-constellation-core",
- "nixling-contracts",
- "nixling-exec-runner",
- "protobuf",
- "rustix 0.38.44",
- "sha2",
- "tokio",
- "tokio-vsock",
- "ttrpc",
-]
-
-[[package]]
-name = "nixling-host"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "libc",
- "miniz_oxide",
- "nix 0.29.0",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-contracts",
- "nixling-core",
- "rustix 0.38.44",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "ttrpc",
-]
-
-[[package]]
-name = "nixling-host-activation-helper"
-version = "0.0.0-bootstrap"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "nixling-host-providers"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-core",
- "nixling-host",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "nixling-provider-aca"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "azure_core",
- "azure_identity",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nixling-provider-relay"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "base64",
- "futures-util",
- "hmac",
- "libc",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "rustls",
- "rustls-pki-types",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "urlencoding",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "nixling-userd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "nixling-contracts",
-]
-
-[[package]]
-name = "nixling-wayland-filter"
-version = "0.1.0"
-dependencies = [
- "clap",
- "env_logger",
- "libc",
- "log",
- "nix 0.29.0",
- "thiserror 2.0.18",
- "uapi",
- "wl-proxy",
-]
-
-[[package]]
-name = "nixlingd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "arc-swap",
- "async-trait",
- "clap",
- "getrandom 0.2.17",
- "libc",
- "nix 0.29.0",
- "nixling-constellation-core",
- "nixling-constellation-provider",
- "nixling-constellation-router",
- "nixling-contracts",
- "nixling-core",
- "nixling-gateway",
- "nixling-gateway-runtime",
- "nixling-host",
- "nixling-provider-aca",
- "nixling-provider-relay",
- "parking_lot",
- "protobuf",
- "regex",
- "rustix 0.38.44",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "socket2 0.5.10",
- "subtle",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ttrpc",
- "uzers",
 ]
 
 [[package]]
@@ -4076,10 +4076,10 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "clap_complete",
  "clap_mangen",
- "nixling",
- "nixling-constellation-core",
- "nixling-contracts",
- "nixling-core",
+ "d2b",
+ "d2b-constellation-core",
+ "d2b-contracts",
+ "d2b-core",
  "protobuf-codegen",
  "schemars",
  "serde",

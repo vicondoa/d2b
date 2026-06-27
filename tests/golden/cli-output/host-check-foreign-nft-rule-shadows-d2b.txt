@@ -1,0 +1,7 @@
+error: host-check-error
+  code: foreign-nft-rule-shadows-d2b
+  exit_code: 1
+  what_was_checked: Whether a foreign nft rule in a higher-priority hook shadows the inet d2b table.
+  observed_state: Foreign nft rule found at a hook priority lower than d2b's declared priority.
+  remediation: Move the foreign rule to a higher priority or document it in d2b.firewallCoexistence.allow.
+  docs_anchor: docs/reference/error-codes.md#foreign-nft-rule-shadows-d2b

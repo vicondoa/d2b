@@ -1,7 +1,7 @@
 {
   "name": "corp-vm",
   "services": {
-    "nixling": "inactive",
+    "d2b": "inactive",
     "microvm": "inactive",
     "virtiofsd": "inactive",
     "gpu": null,

@@ -1,31 +1,31 @@
-# migrate-nixling-v0.1.0.sh — historical pre-v0.1.0 migration record
+# migrate-d2b-v0.1.0.sh — historical pre-v0.1.0 migration record
 
 > **This document is a historical record** of the original
-> consumer-side migration from a vendored `/etc/nixos/modules/nixling/`
-> in-tree layout to consuming `github:vicondoa/nixling` `v0.1.0` as a
+> consumer-side migration from a vendored `/etc/nixos/modules/d2b/`
+> in-tree layout to consuming `github:vicondoa/d2b` `v0.1.0` as a
 > flake input. It was written against one specific deployment
 > (specific VM names, specific consumer flake checkout path) and is
 > preserved here for reference — and as a worked example of a
 > TPM-state-preserving migration — but it is **NOT** the general
 > migration guide.
 >
-> If you are migrating to nixling from raw `microvm.nix`, see
+> If you are migrating to d2b from raw `microvm.nix`, see
 > [`docs/how-to/migrating-from-microvm.md`](../docs/how-to/migrating-from-microvm.md).
 >
 > If you are starting fresh, see
 > [`templates/default`](../templates/default/) or
 > [`examples/minimal`](../examples/minimal/).
 >
-> The script itself (`scripts/migrate-nixling-v0.1.0.sh`) ships with
+> The script itself (`scripts/migrate-d2b-v0.1.0.sh`) ships with
 > the historical hostnames baked in; if you genuinely want to reuse
 > the script's TPM-snapshot+verify-then-rename pattern for your own
 > tree, fork it and adjust the VM-name arrays at the top.
 
-# migrate-nixling-v0.1.0.sh
+# migrate-d2b-v0.1.0.sh
 
-One-shot host migration script for moving `/var/lib/nixling/` state from
-the old in-tree `/etc/nixos/modules/nixling/` layout to the new
-[`vicondoa/nixling`](https://github.com/vicondoa/nixling) `v0.1.0`
+One-shot host migration script for moving `/var/lib/d2b/` state from
+the old in-tree `/etc/nixos/modules/d2b/` layout to the new
+[`vicondoa/d2b`](https://github.com/vicondoa/d2b) `v0.1.0`
 external-flake layout.
 
 **Purpose:** rename state dirs + disable obsolete systemd units **without
@@ -37,23 +37,23 @@ flags as a security incident.
 ## Where it lives
 
 This script is committed to the public flake at
-`scripts/migrate-nixling-v0.1.0.sh` in the
-[`vicondoa/nixling`](https://github.com/vicondoa/nixling) repo. Pull
+`scripts/migrate-d2b-v0.1.0.sh` in the
+[`vicondoa/d2b`](https://github.com/vicondoa/d2b) repo. Pull
 it down with any of:
 
 ```
-git clone https://github.com/vicondoa/nixling
-nix flake archive github:vicondoa/nixling   # then `jq .path`
+git clone https://github.com/vicondoa/d2b
+nix flake archive github:vicondoa/d2b   # then `jq .path`
 ```
 
-…and copy `scripts/migrate-nixling-v0.1.0.sh` somewhere on your host
+…and copy `scripts/migrate-d2b-v0.1.0.sh` somewhere on your host
 (typically `/etc/nixos/scripts/`) before running it. The script is
 single-file with no flake-eval dependencies, so you can also `curl`
 the raw URL if that's faster.
 
 ## What it does, in order
 
-1. **Acquire lock** on `/var/lib/nixling/.migration.lock` (flock,
+1. **Acquire lock** on `/var/lib/d2b/.migration.lock` (flock,
    mode 0600 root:root) so two concurrent runs can't race.
 2. **Pre-flight checks** (any failure → exit 1, except in `--dry-run` where
    they warn and continue):
@@ -66,28 +66,28 @@ the raw URL if that's faster.
      are optional (only needed when a TPM VM is running at snapshot
      time). Each missing required tool prints an explicit install hint.
    - `/etc/nixos` is a git repo with a clean working tree.
-   - Workload VMs (`work-aad`, `personal-dev`, `nixling-test`) are
+   - Workload VMs (`work-aad`, `personal-dev`, `d2b-test`) are
      `inactive`.
    - Net VMs (`work-router`, `personal-router`) are `inactive` — or the
      `--stop-net-vms` flag was passed, in which case they're stopped.
-   - At least 2× the size of `/var/lib/nixling/` (or 2 GiB, whichever is
+   - At least 2× the size of `/var/lib/d2b/` (or 2 GiB, whichever is
      larger) is free on the same filesystem.
 3. **Pre-rename stop phase** — stops every sidecar that could mutate
    state during the snapshot window (this **must** happen before the
    snapshot — see "Why stop before snapshot" below):
    - **Critical sidecars** (`swtpm@<vm>`, `microvm-virtiofsd@<vm>`,
-     `nixling-gpu@<vm>`) — stop failure is **fatal**. The script aborts
+     `d2b-gpu@<vm>`) — stop failure is **fatal**. The script aborts
      with prescriptive recovery instructions; no state has been modified
      yet so `--rollback` is not needed (just fix the sidecar and re-run).
-   - **Other sidecars** (`nixling-snd@<vm>`, `nixling-store-sync@<vm>`,
-     `nixling-known-hosts-refresh@<vm>`) — stop failure is a warning.
-   - **USBIPD units** — both old naming (`usbipd-nixling-*`) and the new
-     W2 naming (`nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`),
+   - **Other sidecars** (`d2b-snd@<vm>`, `d2b-store-sync@<vm>`,
+     `d2b-known-hosts-refresh@<vm>`) — stop failure is a warning.
+   - **USBIPD units** — both old naming (`usbipd-d2b-*`) and the new
+     W2 naming (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}`),
      discovered dynamically via `systemctl list-units`.
    - Runs `sync` to flush all dirty pages before the snapshot.
-4. **Snapshot phase** (writes to `/var/lib/nixling-migration-backup/<ts>/`):
-   - SHA256-hashes every file in `/var/lib/nixling/swtpm/<vm>/` and
-     `/var/lib/private/nixling/swtpm/<vm>/` for each TPM-enabled VM
+4. **Snapshot phase** (writes to `/var/lib/d2b-migration-backup/<ts>/`):
+   - SHA256-hashes every file in `/var/lib/d2b/swtpm/<vm>/` and
+     `/var/lib/private/d2b/swtpm/<vm>/` for each TPM-enabled VM
      (currently just `work-aad`).
    - Captures `tpm2_getcap properties-fixed` from the running VM if
      it's up, otherwise records `swtpm_setup --print-capabilities` and a
@@ -102,14 +102,14 @@ the raw URL if that's faster.
    and destination land on different filesystems. **Any temp/hash/diff
    failure in the cross-filesystem path is fatal BEFORE the source is
    removed**:
-   - `/var/lib/nixling/<vm>/` → `/var/lib/nixling/vms/<vm>/` for each
+   - `/var/lib/d2b/<vm>/` → `/var/lib/d2b/vms/<vm>/` for each
      workload VM.
-   - `/var/lib/nixling/work-router/` → `/var/lib/nixling/vms/sys-work-net/`
-   - `/var/lib/nixling/personal-router/` → `/var/lib/nixling/vms/sys-personal-net/`
-   - `/var/lib/nixling/swtpm/<vm>/` → `/var/lib/nixling/vms/<vm>/swtpm/`
+   - `/var/lib/d2b/work-router/` → `/var/lib/d2b/vms/sys-work-net/`
+   - `/var/lib/d2b/personal-router/` → `/var/lib/d2b/vms/sys-personal-net/`
+   - `/var/lib/d2b/swtpm/<vm>/` → `/var/lib/d2b/vms/<vm>/swtpm/`
      (TPM public state).
-   - `/var/lib/private/nixling/swtpm/<vm>/` →
-     `/var/lib/private/nixling/vms/<vm>/swtpm/` (TPM `DynamicUser` private
+   - `/var/lib/private/d2b/swtpm/<vm>/` →
+     `/var/lib/private/d2b/vms/<vm>/swtpm/` (TPM `DynamicUser` private
      state for `swtpm@.service`).
    - Runs `sync` to flush dirty pages.
 6. **Verification phase** — re-hashes every TPM state file (both public
@@ -118,16 +118,16 @@ the raw URL if that's faster.
    This is the non-negotiable gate that protects the TPM enrollment.
 7. **Unit-disable phase** — `systemctl disable --now` on the old-named
    units that the new flake will not recreate:
-   - `swtpm@<vm>.service` (becomes `nixling-<vm>-swtpm.service`)
-   - `nixling-snd@<vm>.service` (becomes `nixling-<vm>-snd.service`)
-   - `nixling-gpu@<vm>.service` (becomes `nixling-<vm>-gpu.service`)
-   - `nixling-store-sync@<vm>.service` (becomes `nixling-<vm>-store-sync.service`)
+   - `swtpm@<vm>.service` (becomes `d2b-<vm>-swtpm.service`)
+   - `d2b-snd@<vm>.service` (becomes `d2b-<vm>-snd.service`)
+   - `d2b-gpu@<vm>.service` (becomes `d2b-<vm>-gpu.service`)
+   - `d2b-store-sync@<vm>.service` (becomes `d2b-<vm>-store-sync.service`)
    - `microvm@work-router.service` (becomes `microvm@sys-work-net.service`)
    - `microvm@personal-router.service` (becomes `microvm@sys-personal-net.service`)
-   - `usbipd-nixling.service`, `usbipd-nixling-<env>.{service,socket}`,
-     `usbipd-nixling-<env>-backend.service` (replaced by
-     `nixling-sys-*-usbipd-*`).
-   - **Any `nixling-sys-*-usbipd-*` units already present** (from a
+   - `usbipd-d2b.service`, `usbipd-d2b-<env>.{service,socket}`,
+     `usbipd-d2b-<env>-backend.service` (replaced by
+     `d2b-sys-*-usbipd-*`).
+   - **Any `d2b-sys-*-usbipd-*` units already present** (from a
      partially-applied Phase 9 flake) are also disabled.
    - Records each disabled unit in the snapshot dir for rollback.
    - **Critical sidecar disable failures (swtpm/virtiofsd/gpu) are fatal**;
@@ -135,20 +135,20 @@ the raw URL if that's faster.
    - "Unit not found" is treated as an acceptable no-op (the script's
      worst-case list includes names that don't exist on every host).
    - Note: `microvm@work-aad`, `microvm@personal-dev`,
-     `microvm@nixling-test` are **not** disabled — the attribute key
+     `microvm@d2b-test` are **not** disabled — the attribute key
      stays unchanged in the new design, those units still exist.
 8. **Back-compat symlink cleanup** — removes
-   `/var/lib/microvms → /var/lib/nixling` and
-   `/var/lib/swtpm → /var/lib/nixling/swtpm` (legacy shims from an
+   `/var/lib/microvms → /var/lib/d2b` and
+   `/var/lib/swtpm → /var/lib/d2b/swtpm` (legacy shims from an
    earlier migration). Records them for rollback.
-9. **Marker write (atomic)** — writes `/var/lib/nixling/.migration-state.json`
+9. **Marker write (atomic)** — writes `/var/lib/d2b/.migration-state.json`
    via `mktemp` + `mv -T` so a crash mid-write can't leave a corrupt
    marker. Contains `migrationVersion: 1`, `appliedAt`, `fromVersion:
    "pre-v0.1.0"`, `toVersion: "v0.1.0"`, and a pointer to the snapshot
    dir. Subsequent runs check this and exit 0 if the version is already
    current. **A corrupt marker is fatal**, not silently re-migrated.
 10. Prints the post-migration verification command, including the
-    `nixling list` / `nixling status <vm>` smoke-test.
+    `d2b list` / `d2b status <vm>` smoke-test.
 
 ### Why stop before snapshot
 
@@ -174,7 +174,7 @@ Run through this before invoking the script:
       `nixos-rebuild build --flake .#desktop` and confirm it succeeds.
       Do this BEFORE running the migration so you don't end up in a
       half-migrated state with no working closure to switch to.
-- [ ] **A snapshot of `/var/lib/nixling` exists**: even though the
+- [ ] **A snapshot of `/var/lib/d2b` exists**: even though the
       script creates its own snapshot, an out-of-band backup (e.g.
       `tar` to an external disk) gives you a clean recovery path if
       `--rollback` itself fails.
@@ -190,7 +190,7 @@ Run through this before invoking the script:
 **Always dry-run first** to inspect the planned actions:
 
 ```bash
-sudo -A bash /etc/nixos/scripts/migrate-nixling-v0.1.0.sh --dry-run
+sudo -A bash /etc/nixos/scripts/migrate-d2b-v0.1.0.sh --dry-run
 ```
 
 The dry-run prints `[DRY]` for every action it would take and exits 0.
@@ -200,14 +200,14 @@ instead).
 Once you're happy with the dry-run output, run for real:
 
 ```bash
-sudo -A bash /etc/nixos/scripts/migrate-nixling-v0.1.0.sh
+sudo -A bash /etc/nixos/scripts/migrate-d2b-v0.1.0.sh
 ```
 
 If the net VMs (`work-router`, `personal-router`) are still up and you
 want the script to stop them for you:
 
 ```bash
-sudo -A bash /etc/nixos/scripts/migrate-nixling-v0.1.0.sh --stop-net-vms
+sudo -A bash /etc/nixos/scripts/migrate-d2b-v0.1.0.sh --stop-net-vms
 ```
 
 The script is idempotent — re-running after success exits cleanly, and
@@ -219,7 +219,7 @@ If the verification phase aborts, **do not** proceed to `nixos-rebuild`.
 Run:
 
 ```bash
-sudo -A bash /etc/nixos/scripts/migrate-nixling-v0.1.0.sh --rollback
+sudo -A bash /etc/nixos/scripts/migrate-d2b-v0.1.0.sh --rollback
 ```
 
 Rollback:
@@ -234,9 +234,9 @@ Rollback:
   cannot let rollback report false success.
 - Removes the migration marker so the forward run can be retried.
 
-After rollback, if you'd already started Phase 9 of the nixling refactor
-on `/etc/nixos` (i.e. updated `flake.nix` inputs, added `nixling-site.nix`,
-deleted `modules/nixling/`), revert those commits before running
+After rollback, if you'd already started Phase 9 of the d2b refactor
+on `/etc/nixos` (i.e. updated `flake.nix` inputs, added `d2b-site.nix`,
+deleted `modules/d2b/`), revert those commits before running
 `nixos-rebuild switch` so the system reactivates against the old layout.
 
 ## Common aborts and fixes
@@ -248,13 +248,13 @@ needed → exact next commands.
 | Symptom (the script prints…) | What it means | Recovery |
 |------------------------------|---------------|----------|
 | `Must run as root` | You forgot `sudo -A`. | Re-run with `sudo -A bash …`. No state changed. |
-| `Pre-flight would FAIL: Workload VMs are still running` | `microvm@work-aad` or another is up. | `nixling down work-aad` etc., re-run. |
+| `Pre-flight would FAIL: Workload VMs are still running` | `microvm@work-aad` or another is up. | `d2b down work-aad` etc., re-run. |
 | `Pre-flight would FAIL: Net VMs are still running` | `microvm@work-router` is up. | Re-run with `--stop-net-vms`, or stop manually. |
 | `/etc/nixos has uncommitted changes` | Working tree dirty. | `git -C /etc/nixos status`, commit or stash, re-run. |
 | `Insufficient disk space on …` | < 2× state size free under `/var/lib`. | `nix-collect-garbage`, free up space, re-run. No state changed. |
 | `Missing required tools: …` | `find`, `mktemp`, `diff` etc. not on PATH. | Each missing entry comes with an install hint; add to `environment.systemPackages`, rebuild, re-run. |
 | `FATAL: critical sidecar would not stop: swtpm@work-aad.service` | `systemctl stop swtpm@<vm>` returned non-zero, or returned 0 but the unit is still active. | **No state has been moved.** Investigate the unit (`systemctl status`, `journalctl -xeu`), force-stop with `systemctl kill --signal=SIGKILL`, `reset-failed`, re-run. `--rollback` is **not** needed. |
-| `Marker file is present but unparseable` | A previous run crashed mid-marker-write, or the file got hand-edited. | Inspect `/var/lib/nixling/.migration-state.json`; recover per the script's printed instructions. Do **not** silently `rm` it without checking the state layout. |
+| `Marker file is present but unparseable` | A previous run crashed mid-marker-write, or the file got hand-edited. | Inspect `/var/lib/d2b/.migration-state.json`; recover per the script's printed instructions. Do **not** silently `rm` it without checking the state layout. |
 | `Marker file reports migrationVersion=<X>` (older than current) | Shouldn't happen with v0.1.0 (no prior migration version exists). | Inspect the file; either it was hand-edited or you're running a downgraded script. |
 | `TPM HASH MISMATCH` (forward verify) | State was moved but byte content differs from snapshot. | **Run `--rollback` IMMEDIATELY.** Do NOT `nixos-rebuild`. Do NOT start `work-aad`. Booting in this state will look like device tampering to Entra-ID. |
 | `Refusing to merge: both <src> and <dst> exist` | Either a partial previous run or a manual fix-up. | The script prints exact ls/rm/`--rollback` instructions; follow them. |
@@ -274,48 +274,48 @@ The script **does not** run `nixos-rebuild`. That's the user's next step:
 
 1. Commit the `/etc/nixos` changes that consume the new flake (Phase 9
    steps 1, 4–8 of the plan):
-   - `flake.nix`: add `inputs.nixling.url = "github:vicondoa/nixling/v0.1.0";`
-   - `flake.nix`: replace `./modules/nixling` import with
-     `inputs.nixling.nixosModules.default`
-   - Add `modules/nixling-site.nix` with `nixling.site.*` options
+   - `flake.nix`: add `inputs.d2b.url = "github:vicondoa/d2b/v0.1.0";`
+   - `flake.nix`: replace `./modules/d2b` import with
+     `inputs.d2b.nixosModules.default`
+   - Add `modules/d2b-site.nix` with `d2b.site.*` options
    - Add `modules/entrablau-site.nix` for the work VM
    - Move sbctl backup activation out of `host.nix`
-   - Delete `/etc/nixos/modules/nixling/`
+   - Delete `/etc/nixos/modules/d2b/`
 2. ```bash
    sudo -A nixos-rebuild switch --flake /etc/nixos#desktop
    ```
-3. **Smoke-test the new unit names with `nixling list` / `nixling status`**
+3. **Smoke-test the new unit names with `d2b list` / `d2b status`**
    (F11 verification):
    ```bash
-   nixling list
+   d2b list
    # Expect entries like:
-   #   nixling@work-aad           (workload, status: stopped or running)
-   #   nixling@personal-dev       (workload)
+   #   d2b@work-aad           (workload, status: stopped or running)
+   #   d2b@personal-dev       (workload)
    #   microvm@sys-work-net       (system)
    #   microvm@sys-personal-net   (system)
    # Old names (microvm@work-router, etc.) must NOT appear.
 
-   nixling status work-aad
+   d2b status work-aad
    # Expect a healthy status report. 'unknown unit' or 'unit not found'
    # means the rebuild didn't pick up the new flake's unit definitions —
    # check that flake inputs/imports are correct before bringing VMs up.
    ```
 4. Bring VMs back up:
    ```bash
-   nixling up work-aad
-   nixling up personal-dev
+   d2b up work-aad
+   d2b up personal-dev
    # net VMs autostart under their new names
 
-   nixling status work-aad       # expect: running, healthy
-   nixling status personal-dev   # expect: running, healthy
+   d2b status work-aad       # expect: running, healthy
+   d2b status personal-dev   # expect: running, healthy
    ```
 5. **Verify TPM enrollment survived**:
    ```bash
-   systemctl status nixling-work-aad-swtpm
+   systemctl status d2b-work-aad-swtpm
    ssh work-aad.local tpm2_getcap properties-fixed
    ```
    Compare with the snapshot at
-   `/var/lib/nixling-migration-backup/<ts>/tpm2_getcap/work-aad.txt`.
+   `/var/lib/d2b-migration-backup/<ts>/tpm2_getcap/work-aad.txt`.
    If `tpm2_getcap` shows a freshly-initialised TPM (default vendor
    strings, no platform hierarchy), stop and run `--rollback`.
 
@@ -324,42 +324,42 @@ the new system is good (Entra-ID logins still work, no Intune
 device-tampering alert), you can clear it:
 
 ```bash
-sudo rm -rf /var/lib/nixling-migration-backup/<ts>
+sudo rm -rf /var/lib/d2b-migration-backup/<ts>
 ```
 
 ## Files
 
-- `migrate-nixling-v0.1.0.sh` — the migration script.
+- `migrate-d2b-v0.1.0.sh` — the migration script.
 - `README.md` — this file.
 
 ## Files written by the script (at runtime)
 
-- `/var/lib/nixling/.migration.lock` — flock guard (empty file).
-- `/var/lib/nixling/.migration-in-progress` — points at the snapshot
+- `/var/lib/d2b/.migration.lock` — flock guard (empty file).
+- `/var/lib/d2b/.migration-in-progress` — points at the snapshot
   while the script is running. Removed on clean finish or rollback.
-- `/var/lib/nixling/.migration-state.json` — written on success.
+- `/var/lib/d2b/.migration-state.json` — written on success.
   Subsequent runs treat `migrationVersion >= 1` as "already done".
-- `/var/lib/nixling-migration-backup/<ts>/` — snapshot dir:
-  - `hashes/<vm>__public.sha256` — SHA256s of `/var/lib/nixling/swtpm/<vm>/`.
-  - `hashes/<vm>__private.sha256` — SHA256s of `/var/lib/private/nixling/swtpm/<vm>/`.
+- `/var/lib/d2b-migration-backup/<ts>/` — snapshot dir:
+  - `hashes/<vm>__public.sha256` — SHA256s of `/var/lib/d2b/swtpm/<vm>/`.
+  - `hashes/<vm>__private.sha256` — SHA256s of `/var/lib/private/d2b/swtpm/<vm>/`.
   - `tpm2_getcap/<vm>.txt` — captured TPM properties (or
     `swtpm_setup --print-capabilities` if the VM was stopped).
   - `renames.tsv` — `<src>\t<dst>` per rename, in execution order.
   - `disabled-units.txt` — one unit name per line.
   - `removed-symlinks.tsv` — `<link>\t<target>` per removed symlink.
-- `/var/log/nixling-migration.log` — append-only run log.
+- `/var/log/d2b-migration.log` — append-only run log.
 
 ## Why not just rely on the existing `host.nix` activation migrations?
 
-The current `/etc/nixos/modules/nixling/host.nix` already has activation
-blocks that migrated `/var/lib/microvms/` → `/var/lib/nixling/` and
-`/var/lib/swtpm/` → `/var/lib/nixling/swtpm/`. Those blocks ran when
+The current `/etc/nixos/modules/d2b/host.nix` already has activation
+blocks that migrated `/var/lib/microvms/` → `/var/lib/d2b/` and
+`/var/lib/swtpm/` → `/var/lib/d2b/swtpm/`. Those blocks ran when
 the in-tree tree last shipped them, and the back-compat symlinks they
 left behind (`/var/lib/microvms`, `/var/lib/swtpm`) are still present.
 
-This script is the next migration in that chain: `/var/lib/nixling/<vm>/`
-→ `/var/lib/nixling/vms/<vm>/`. It is deliberately **not** an activation
-block in the new `vicondoa/nixling` flake — that flake is a clean
+This script is the next migration in that chain: `/var/lib/d2b/<vm>/`
+→ `/var/lib/d2b/vms/<vm>/`. It is deliberately **not** an activation
+block in the new `vicondoa/d2b` flake — that flake is a clean
 external module aimed at multiple consumers, and bundling a one-time
 host-specific data-migration into a reusable module is a bad fit. The
 migration is a one-shot, ships out-of-band, and the new flake assumes

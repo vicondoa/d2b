@@ -1,7 +1,7 @@
 # Guest-control exec I/O credit-window protocol
 
 This document records the bounded credit-window ttRPC stream candidate
-for nixling guest-control exec I/O. The feasibility decision selected
+for d2b guest-control exec I/O. The feasibility decision selected
 [chunked stdio RPCs](./guest-control-exec-io-chunked-stdio.md) instead
 because raw ttRPC stream buffering was the observed failure mode and the
 unary chunked model is simpler to bound and test. This credit-window
@@ -10,7 +10,7 @@ fails later implementation evidence.
 
 Under this candidate, unary guest-control APIs continue to use ordinary
 ttRPC request/response messages. Attached and detached exec I/O uses a
-ttRPC async duplex stream carrying nixling `TerminalFrame` protobuf
+ttRPC async duplex stream carrying d2b `TerminalFrame` protobuf
 messages with application-level byte credit. Raw ttRPC stream
 backpressure is not relied on for correctness.
 
@@ -28,7 +28,7 @@ exec that is still running or has retained logs.
 ```protobuf
 syntax = "proto3";
 
-package nixling.guestcontrol.v1;
+package d2b.guestcontrol.v1;
 
 service GuestControl {
   rpc ExecAttach(stream TerminalFrame) returns (stream TerminalFrame);
@@ -291,7 +291,7 @@ and exit before output final offsets are known.
 
 ## CLI behavior
 
-`nixling exec <vm> -- <argv...>` creates an attached, non-TTY exec with
+`d2b exec <vm> -- <argv...>` creates an attached, non-TTY exec with
 stdin closed unless `--interactive` is set. The CLI grants stdout and
 stderr credit only as writes to its local fds complete. If the user pipes
 output to a slow command, guest output naturally blocks at the credit

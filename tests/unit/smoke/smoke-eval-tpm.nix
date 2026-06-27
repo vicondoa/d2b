@@ -6,12 +6,12 @@
 # inspects the rendered host activation scripts + swtpm sidecar services
 # to prove three invariants:
 #
-#   1. `nixlingTpmStatePerms` grants the swtpm user `--x` on every
+#   1. `d2bTpmStatePerms` grants the swtpm user `--x` on every
 #      TPM VM's parent state dir (graphics and headless).
-#   2. `nixling-<vm>-swtpm.service` carries the pre-start stale-session
+#   2. `d2b-<vm>-swtpm.service` carries the pre-start stale-session
 #      flush helper, grants the socket to the correct runner identity,
 #      and orders headless TPM sidecars before `microvm@<vm>`.
-#   3. `nixlingMigrateOwnership` exists, is gated on `tpm.enable`, and
+#   3. `d2bMigrateOwnership` exists, is gated on `tpm.enable`, and
 #      keeps the running-VM guard + orphan-owner repair logic without
 #      traversing symlinks.
 { system ? builtins.currentSystem
@@ -44,13 +44,13 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
@@ -58,7 +58,7 @@ let
         # Graphics + TPM enabled VM. The framework should emit both the
         # graphics-side state-dir ACLs and the TPM parent-dir traverse
         # ACL for its dedicated swtpm user.
-        nixling.vms.tpm-vm = {
+        d2b.vms.tpm-vm = {
           enable = true;
           env = "work";
           index = 12;
@@ -74,7 +74,7 @@ let
           };
         };
 
-        nixling.vms.plain-vm = {
+        d2b.vms.plain-vm = {
           enable = true;
           env = "work";
           index = 13;
@@ -89,7 +89,7 @@ let
           };
         };
 
-        nixling.vms.headless-tpm = {
+        d2b.vms.headless-tpm = {
           enable = true;
           env = "work";
           index = 14;
@@ -109,13 +109,13 @@ let
   };
 
   hasTpmActivationScript =
-    builtins.hasAttr "nixlingTpmStatePerms"
+    builtins.hasAttr "d2bTpmStatePerms"
       nixos.config.system.activationScripts;
   hasMigrationScript =
-    builtins.hasAttr "nixlingMigrateOwnership"
+    builtins.hasAttr "d2bMigrateOwnership"
       nixos.config.system.activationScripts;
-  tpmGuest = nixos.config.nixling._computed."tpm-vm".config;
-  plainGuest = nixos.config.nixling._computed."plain-vm".config;
+  tpmGuest = nixos.config.d2b._computed."tpm-vm".config;
+  plainGuest = nixos.config.d2b._computed."plain-vm".config;
   hasTpmFlushService =
     builtins.hasAttr "tpm2-flush-sessions"
       tpmGuest.systemd.services;
@@ -126,30 +126,30 @@ let
   tpmSrkService = tpmGuest.systemd.services.tpm2-srk-provision;
 
   # The per-VM
-  # `nixling-<vm>-swtpm.service` units were deleted along with
+  # `d2b-<vm>-swtpm.service` units were deleted along with
   # host-sidecars.nix. The TPM sidecar is now spawned by the
-  # nixling priv-broker as `SpawnRunner{role: Swtpm}`; the
+  # d2b priv-broker as `SpawnRunner{role: Swtpm}`; the
   # equivalent pre-start session-flush + socket ACL handoff lives
-  # in `packages/nixling-priv-broker/src/runners/swtpm.rs`. The
+  # in `packages/d2b-priv-broker/src/runners/swtpm.rs`. The
   # legacy per-VM systemd assertions (ExecStartPre/ExecStartPost,
   # microvm@ wants/after wiring, host-sidecars.nix flush helper
   # source check) are deferred to a forthcoming
   # broker-swtpm-runner-eval.
   #
   # The host-side state-dir hardening *is* preserved: the
-  # `nixlingTpmStatePerms` and `nixlingMigrateOwnership`
+  # `d2bTpmStatePerms` and `d2bMigrateOwnership`
   # activation scripts still live in host-activation.nix because
-  # they prepare /var/lib/nixling/vms/<vm>/swtpm for the broker
+  # they prepare /var/lib/d2b/vms/<vm>/swtpm for the broker
   # runner to chown into at fork time. We keep the presence
   # checks; the textual-fragment assertions that named the
   # deleted per-VM sidecar users are dropped (the broker
   # negotiates ownership at runtime instead of statically
-  # naming `nixling-<vm>-swtpm`).
+  # naming `d2b-<vm>-swtpm`).
   checks = [
     (if hasTpmActivationScript then null else
-      throw "smoke-eval-tpm: system.activationScripts.nixlingTpmStatePerms is missing")
+      throw "smoke-eval-tpm: system.activationScripts.d2bTpmStatePerms is missing")
     (if hasMigrationScript then null else
-      throw "smoke-eval-tpm: system.activationScripts.nixlingMigrateOwnership is missing")
+      throw "smoke-eval-tpm: system.activationScripts.d2bMigrateOwnership is missing")
     (if hasTpmFlushService then null else
       throw "smoke-eval-tpm: TPM guest is missing tpm2-flush-sessions.service")
     (if ! plainHasTpmFlushService then null else

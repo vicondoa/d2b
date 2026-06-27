@@ -1,14 +1,14 @@
 # SSH key lifecycle
 
-Reference for nixling-managed SSH identities, guest authorized-key staging,
+Reference for d2b-managed SSH identities, guest authorized-key staging,
 and host-key trust state.
 
 ## Two different key surfaces
 
-nixling manages two related but distinct things:
+d2b manages two related but distinct things:
 
-1. **The operator SSH identity** used by `nixling` for guest SSH.
-2. **The guest staging share** under `/var/lib/nixling/vms/<vm>/host-keys/`,
+1. **The operator SSH identity** used by `d2b` for guest SSH.
+2. **The guest staging share** under `/var/lib/d2b/vms/<vm>/host-keys/`,
    which contains only `host.pub` and `user-authorized-keys` for guest boot-time
    consumption.
 
@@ -17,22 +17,22 @@ that guest staging share.
 
 ## Managed key path resolution
 
-`nixling` resolves the SSH identity path like this:
+`d2b` resolves the SSH identity path like this:
 
-- if `nixling.vms.<vm>.ssh.keyPath` is set, the CLI uses that path for
+- if `d2b.vms.<vm>.ssh.keyPath` is set, the CLI uses that path for
   SSH-driven lifecycle operations;
-- otherwise it derives the path from `nixling.site.keysDir` as
+- otherwise it derives the path from `d2b.site.keysDir` as
   `<keysDir>/<vm>_ed25519`.
 
 The framework-managed key generation in `host-keys.nix` still writes the
-managed key under `nixling.site.keysDir` on every activation. In other words:
+managed key under `d2b.site.keysDir` on every activation. In other words:
 
 - `keysDir` is the storage location for the framework-owned keypair;
 - `ssh.keyPath` is an operator override for which identity file the CLI should
   present over SSH.
 
 That distinction is intentional: consumer-supplied keys are operator-owned and
-must not be rotated or replaced by `nixling keys rotate`.
+must not be rotated or replaced by `d2b keys rotate`.
 
 ### Current read-only CLI note
 
@@ -47,20 +47,20 @@ Framework-managed keys follow these permissions:
 
 | Path | Owner / mode |
 | --- | --- |
-| `${nixling.site.keysDir}` | `root:nixling` `0710` |
-| `${nixling.site.keysDir}/<vm>_ed25519` | `root:nixling` `0640` |
-| `${nixling.site.keysDir}/<vm>_ed25519.pub` | `root:root` `0644` |
-| `${nixling.site.keysDir}/.lock` | `root:root` `0600` |
+| `${d2b.site.keysDir}` | `root:d2b` `0710` |
+| `${d2b.site.keysDir}/<vm>_ed25519` | `root:d2b` `0640` |
+| `${d2b.site.keysDir}/<vm>_ed25519.pub` | `root:root` `0644` |
+| `${d2b.site.keysDir}/.lock` | `root:root` `0600` |
 
 The CLI copies the private key to a caller-owned `0600` tempfile before passing
 it to `ssh`, because OpenSSH refuses group-readable identity files directly.
 
 ## Rotation flow
 
-`nixling keys rotate <vm>` is the managed-key rollover for the framework-owned
+`d2b keys rotate <vm>` is the managed-key rollover for the framework-owned
 `${keysDir}/<vm>_ed25519` keypair.
 
-1. Resolve the managed key path from `nixling.site.keysDir`.
+1. Resolve the managed key path from `d2b.site.keysDir`.
 2. Verify the old key still reaches the guest over SSH.
 3. Record the old fingerprint.
 4. Move the old private/public pair under `old/<timestamp>/` beside the managed
@@ -74,24 +74,24 @@ it to `ssh`, because OpenSSH refuses group-readable identity files directly.
     `host.pub` share with the new public key.
 
 If you use a per-VM `ssh.keyPath` override, rotate that external key with its
-own owner/tooling. `nixling keys rotate` is for the framework-managed key only.
+own owner/tooling. `d2b keys rotate` is for the framework-managed key only.
 
 ## Trust operations
 
-nixling tracks guest SSH host keys separately from operator private keys.
+d2b tracks guest SSH host keys separately from operator private keys.
 
-### `nixling trust <vm>`
+### `d2b trust <vm>`
 
 - requires a VM `staticIp`;
 - scans the guest with `ssh-keyscan -t ed25519`;
-- rewrites `/var/lib/nixling/known_hosts.nixling` under a lock;
+- rewrites `/var/lib/d2b/known_hosts.d2b` under a lock;
 - replaces any existing entry for that VM/IP with the newly scanned line.
 
 Use this on first boot or after an intentional host-key reset.
 
-### `nixling rotate-known-host <vm>`
+### `d2b rotate-known-host <vm>`
 
-- removes the recorded entry for the VM from `known_hosts.nixling`;
+- removes the recorded entry for the VM from `known_hosts.d2b`;
 - does **not** generate a new host key by itself;
 - is the right pre-step when a guest will come back with a different SSH host
   key and you want the next `trust` to be explicit.
@@ -100,18 +100,18 @@ Use this on first boot or after an intentional host-key reset.
 
 When a key-management verb goes through the daemon -> broker path, the broker
 emits a daily JSONL audit record under
-`/var/lib/nixling/audit/broker-<utc-date>.jsonl` for:
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl` for:
 
 - `RunKeysRotate`
 - `RunHostKeyTrust`
 - `RunRotateKnownHost`
 
-Use `nixling audit` / `nixling audit --json` to inspect those records. If the
+Use `d2b audit` / `d2b audit --json` to inspect those records. If the
 CLI had to fall back to the legacy bash path, rely on shell history, sudo/journal
 logs, and your config history instead — only broker-handled requests land in the
 broker audit log.
 
-## Upgrading from bash nixling
+## Upgrading from bash d2b
 
 Managed keys, `known_hosts`, and trust-state all carry forward into
 the Rust/daemon path. The control-plane owner changes; the files do
@@ -119,32 +119,32 @@ not.
 
 ### What stays in place
 
-- `${nixling.site.keysDir}/<vm>_ed25519` and `.pub`
-- `/var/lib/nixling/known_hosts.nixling`
-- any existing broker audit history under `/var/lib/nixling/audit/`
+- `${d2b.site.keysDir}/<vm>_ed25519` and `.pub`
+- `/var/lib/d2b/known_hosts.d2b`
+- any existing broker audit history under `/var/lib/d2b/audit/`
 
 ### Transition steps
 
-1. Rebuild the host so `nixling keys *`, `trust`, and
+1. Rebuild the host so `d2b keys *`, `trust`, and
    `rotate-known-host` land from the Rust CLI.
-2. Start with read-only checks: `nixling keys list` and
-   `nixling keys show <vm>`.
+2. Start with read-only checks: `d2b keys list` and
+   `d2b keys show <vm>`.
 3. Use `--dry-run` first on `keys rotate`, `trust`, or
-   `rotate-known-host`; add `NIXLING_NATIVE_ONLY=1` only when you
+   `rotate-known-host`; add `D2B_NATIVE_ONLY=1` only when you
    want to validate the daemon path without bash fallback.
 4. Existing guest host keys and authorized-keys entries remain valid
    until you intentionally rotate them.
 
 ### Rollback
 
-- The `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in
+- The `D2B_LEGACY_BASH_OPT_IN=1` escape hatch was retired in
   v1.0 (per ADR 0015). Roll back a half-completed rotation by
   rebuilding to the prior host generation and restoring from your
   backup of `keysDir` / `known_hosts` before rerunning the verb
-  through `nixlingd` → broker `RunKeysRotate`.
+  through `d2bd` → broker `RunKeysRotate`.
 - If a rotation half-completes, restore from your backup of
   `keysDir` / `known_hosts` before rerunning.
-- Never wipe `/var/lib/nixling/vms/<vm>/swtpm/` as a shortcut; TPM
+- Never wipe `/var/lib/d2b/vms/<vm>/swtpm/` as a shortcut; TPM
   identity loss is separate from SSH trust rotation and forces
   external re-enrollment.
 
@@ -153,4 +153,4 @@ not.
 - [`components-tpm.md`](./components-tpm.md)
 - [`daemon-api.md`](./daemon-api.md)
 - [`privileges.md`](./privileges.md)
-- [`../how-to/uninstall-nixling.md`](../how-to/uninstall-nixling.md)
+- [`../how-to/uninstall-d2b.md`](../how-to/uninstall-d2b.md)

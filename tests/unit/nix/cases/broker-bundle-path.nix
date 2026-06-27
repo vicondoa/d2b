@@ -1,18 +1,18 @@
 # nix-unit cases migrated from tests/broker-bundle-path-eval.sh.
 #
 # Asserts the three independent bundle-path declarations in the NixOS module
-# tree all agree on the canonical /etc/nixling/bundle.json:
+# tree all agree on the canonical /etc/d2b/bundle.json:
 #
 #   (A) nixos-modules/host-broker.nix `bundleManifestPath` fallback resolves
-#       to /etc/nixling/bundle.json, and the broker ExecStart passes the
+#       to /etc/d2b/bundle.json, and the broker ExecStart passes the
 #       bundle to the binary via `--bundle-path`.
-#   (B) nixos-modules/bundle.nix emits environment.etc."nixling/bundle.json"
-#       (so the file lands at /etc/nixling/bundle.json) as the trusted
-#       root:nixlingd 0640 artifact, plus the `nixlingBundleAcl` activation
+#   (B) nixos-modules/bundle.nix emits environment.etc."d2b/bundle.json"
+#       (so the file lands at /etc/d2b/bundle.json) as the trusted
+#       root:d2bd 0640 artifact, plus the `d2bBundleAcl` activation
 #       hook that grants the lifecycle group READ-ONLY traverse/read ACLs
 #       (never write) after etc/users.
 #   (C) nixos-modules/host-daemon.nix daemonConfigJson artifacts.bundlePath
-#       equals /etc/nixling/bundle.json, so daemon and broker share one path.
+#       equals /etc/d2b/bundle.json, so daemon and broker share one path.
 #
 # (A) and (C) were source-text checks in the bash gate: evaluating
 # serviceConfig.ExecStart forces the broker/daemon derivation build and
@@ -42,50 +42,50 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.daemonExperimental.enable = true;
+    d2b.daemonExperimental.enable = true;
   };
 
   cfg = (mkEval [ base ]).config;
   etc = cfg.environment.etc;
-  bundleEtc = etc."nixling/bundle.json" or { };
-  acl = cfg.system.activationScripts.nixlingBundleAcl or { };
+  bundleEtc = etc."d2b/bundle.json" or { };
+  acl = cfg.system.activationScripts.d2bBundleAcl or { };
   aclText = acl.text or "";
   aclDeps = acl.deps or [ ];
 in
 {
   # (A) host-broker.nix bundleManifestPath fallback + --bundle-path wiring.
   "broker-bundle-path/broker-default-fallback" =
-    has brokerLines ''cfg.site.bundle.currentManifest or "/etc/nixling/bundle.json"'';
+    has brokerLines ''cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json"'';
   "broker-bundle-path/exec-start-bundle-path-flag" =
     has brokerLines "--bundle-path";
 
-  # (B) bundle.nix emits the trusted artifact at /etc/nixling/bundle.json.
+  # (B) bundle.nix emits the trusted artifact at /etc/d2b/bundle.json.
   "broker-bundle-path/bundle-json-present" = {
-    expr = builtins.hasAttr "nixling/bundle.json" etc;
+    expr = builtins.hasAttr "d2b/bundle.json" etc;
     expected = true;
   };
   "broker-bundle-path/bundle-json-group" = {
     expr = bundleEtc.group or null;
-    expected = "nixlingd";
+    expected = "d2bd";
   };
   "broker-bundle-path/bundle-json-mode" = {
     expr = bundleEtc.mode or null;
     expected = "0640";
   };
 
-  # (B) nixlingBundleAcl: runs after etc/users, grants read-only traverse/read
+  # (B) d2bBundleAcl: runs after etc/users, grants read-only traverse/read
   # ACLs to the lifecycle group, never write, never re-owns the artifact.
   "broker-bundle-path/acl-script-present" = {
-    expr = cfg.system.activationScripts ? nixlingBundleAcl;
+    expr = cfg.system.activationScripts ? d2bBundleAcl;
     expected = true;
   };
   "broker-bundle-path/acl-after-etc" = {
@@ -97,17 +97,17 @@ in
     expected = true;
   };
   "broker-bundle-path/acl-grants-directory" = {
-    expr = lib.hasInfix "g:nixling:rx,m::rx" aclText;
+    expr = lib.hasInfix "g:d2b:rx,m::rx" aclText;
     expected = true;
   };
   "broker-bundle-path/acl-grants-files" = {
-    expr = lib.hasInfix "g:nixling:r,m::r" aclText;
+    expr = lib.hasInfix "g:d2b:r,m::r" aclText;
     expected = true;
   };
   "broker-bundle-path/acl-no-write-grant" = {
     expr =
-      !(lib.hasInfix "g:nixling:rw" aclText)
-      && !(lib.hasInfix "g:nixling:rwx" aclText)
+      !(lib.hasInfix "g:d2b:rw" aclText)
+      && !(lib.hasInfix "g:d2b:rwx" aclText)
       && !(lib.hasInfix "m::rw" aclText)
       && !(lib.hasInfix "m::rwx" aclText);
     expected = true;
@@ -115,5 +115,5 @@ in
 
   # (C) host-daemon.nix daemonConfigJson artifacts.bundlePath agreement.
   "broker-bundle-path/daemon-bundle-path" =
-    has daemonLines ''bundlePath = "/etc/nixling/bundle.json"'';
+    has daemonLines ''bundlePath = "/etc/d2b/bundle.json"'';
 }

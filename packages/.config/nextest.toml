@@ -2,4 +2,4 @@
 retries = 0
 # The custom harness=false core smoke binary is not a libtest #[test]
 # surface; run it from its owning gate, not the workspace nextest pass.
-default-filter = "not binary(nixling-core-smoke)"
+default-filter = "not binary(d2b-core-smoke)"

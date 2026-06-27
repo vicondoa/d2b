@@ -69,7 +69,7 @@ A=(
   host-prepare-network host-validate-verb-eval ifname-collision ioctl-negative
   kernel-module-matrix l1c-privilege-oracle manifest-fuzz-bounded
   manifest-v04-roundtrip minijail-version-check net-vm-bundle-gate-eval
-  nft-coexistence nft-foreign-rule-preservation nixlingd-startup-smoke
+  nft-coexistence nft-foreign-rule-preservation d2bd-startup-smoke
   path-safety-violation-fs pidfd-handoff
   bridge-isolation-runtime runner-shape-preflight runner-shape-snapshot
   rust-workspace-checks sidecar-argv-shape ssh-host-key-preflight-eval
@@ -142,7 +142,7 @@ H=(
 )
 
 # G-ci: device-free runNixOSTest VM tests (W0 placeholder; W4 CI harness lands later).
-GCI=(audio audit-forwarding network-isolation nixling-store state-dir-acl-"runtime" swtpm-persistence-smoke)
+GCI=(audio audit-forwarding network-isolation d2b-store state-dir-acl-"runtime" swtpm-persistence-smoke)
 
 # G-hw: real device passthrough / full microVM boot (OFF-CI, NixOS host w/ devices).
 GHW=(hardware-smoke-gpu-yubikey live-vm-smoke)
@@ -173,7 +173,7 @@ script_rel_for_name() {
     drift-check|vms-json-parity|performance-budgets)
       printf 'tests/unit/gates/%s.sh' "$name"
       ;;
-    audio|audit-forwarding|network-isolation|nixling-store|live-vm-smoke|swtpm-persistence-smoke)
+    audio|audit-forwarding|network-isolation|d2b-store|live-vm-smoke|swtpm-persistence-smoke)
       printf 'tests/integration/live/%s.sh' "$name"
       ;;
     hardware-smoke-gpu-yubikey)
@@ -327,9 +327,9 @@ successors_empty() {
 detect_exercised_today() {
   local script="$1"
 
-  if grep -Eiq 'NL_LIVE|NL_RUN_LAYER2|requires[[:space:]]+a[[:space:]]+live[[:space:]]+host|/dev/kvm|sudo[[:space:]]+-n|NIXLING_PERF_STABLE|manual-only|OFF-CI|manual[[:space:]-]+(gate|obligation|attestation)|NixOS host|real[[:space:]]+(GPU|device|hardware)|YubiKey|hardware-TPM|full[[:space:]]+microVM' "$script"; then
+  if grep -Eiq 'D2B_LIVE|D2B_RUN_LAYER2|requires[[:space:]]+a[[:space:]]+live[[:space:]]+host|/dev/kvm|sudo[[:space:]]+-n|D2B_PERF_STABLE|manual-only|OFF-CI|manual[[:space:]-]+(gate|obligation|attestation)|NixOS host|real[[:space:]]+(GPU|device|hardware)|YubiKey|hardware-TPM|full[[:space:]]+microVM' "$script"; then
     echo manual
-  elif grep -Eiq '(^|[^[:alnum:]_])(SKIP|NL_SKIP)|exit[[:space:]]+77|skips?' "$script"; then
+  elif grep -Eiq '(^|[^[:alnum:]_])(SKIP|D2B_SKIP)|exit[[:space:]]+77|skips?' "$script"; then
     echo skip
   else
     echo yes

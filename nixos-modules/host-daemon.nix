@@ -1,24 +1,24 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   prebuilt = if cfg.site.usePrebuiltHostTools then import ./prebuilt-packages.nix { inherit pkgs lib; } else { };
 
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
-  packagesSrc = nl.cleanRustPackagesSource ../packages;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
     outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
 
-  nixlingdSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixlingd";
+  d2bdSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2bd";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     inherit cargoLock;
-    cargoBuildFlags = [ "--package" "nixlingd" ];
+    cargoBuildFlags = [ "--package" "d2bd" ];
     doCheck = false;
     # strip the dev-only sccache rustc-wrapper (see
     # host-broker.nix for full rationale). Writing the empty
@@ -34,23 +34,23 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixlingd $out/bin/nixlingd 2>/dev/null \
-        || install -Dm755 target/release/nixlingd $out/bin/nixlingd
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2bd $out/bin/d2bd 2>/dev/null \
+        || install -Dm755 target/release/d2bd $out/bin/d2bd
       runHook postInstall
     '';
   };
-  nixlingdPackage = if prebuilt ? nixlingd then prebuilt.nixlingd else nixlingdSourcePackage;
+  d2bdPackage = if prebuilt ? d2bd then prebuilt.d2bd else d2bdSourcePackage;
 
-  # the user-facing CLI is now the Rust nixling crate
-  # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in;
+  # the user-facing CLI is now the Rust d2b crate
+  # (packages/d2b). The pre-v1.0 bash CLI was RETIRED in;
   # ships the daemon-native Rust CLI as the only
-  # `nixling` binary on the host.
-  nixlingCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling";
+  # `d2b` binary on the host.
+  d2bCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     inherit cargoLock;
-    cargoBuildFlags = [ "--package" "nixling" ];
+    cargoBuildFlags = [ "--package" "d2b" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -62,12 +62,12 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling $out/bin/nixling 2>/dev/null \
-        || install -Dm755 target/release/nixling $out/bin/nixling
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b $out/bin/d2b 2>/dev/null \
+        || install -Dm755 target/release/d2b $out/bin/d2b
       runHook postInstall
     '';
   };
-  nixlingCliPackage = if prebuilt ? nixling then prebuilt.nixling else nixlingCliSourcePackage;
+  d2bCliPackage = if prebuilt ? d2b then prebuilt.d2b else d2bCliSourcePackage;
 
   netVmNames = map
     (envName: cfg.envs.${envName}.netName or "sys-${envName}-net")
@@ -88,14 +88,14 @@ EOF
     cfg.vms);
   forceFallbackTimeoutSeconds = 30;
   sidecarCleanupGraceSeconds = 120;
-  nixlingdStopTimeoutSeconds = lib.max 90 (
+  d2bdStopTimeoutSeconds = lib.max 90 (
     maxWorkloadShutdownTimeoutSeconds
     + maxNetVmShutdownTimeoutSeconds
     + 2 * forceFallbackTimeoutSeconds
     + sidecarCleanupGraceSeconds
   );
 
-  hostShutdownHook = pkgs.writeShellScript "nixling-host-shutdown-hook" ''
+  hostShutdownHook = pkgs.writeShellScript "d2b-host-shutdown-hook" ''
     set -eu
 
     manager_state="$(${pkgs.systemd}/bin/busctl get-property \
@@ -111,19 +111,19 @@ EOF
       fi
     fi
 
-    exec ${nixlingCliPackage}/bin/nixling host shutdown-hook --apply
+    exec ${d2bCliPackage}/bin/d2b host shutdown-hook --apply
   '';
 
   # Small fd-safe activation helper that the host activation snippets
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
-  # check-then-act patterns. Lives in nixling-host because it
+  # check-then-act patterns. Lives in d2b-host because it
   # only depends on libc + nix; no IPC; no async runtime.
-  nixlingActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-activation-helper";
+  d2bActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     inherit cargoLock;
-    cargoBuildFlags = [ "--package" "nixling-host" "--bin" "nixling-activation-helper" ];
+    cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -135,19 +135,19 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-activation-helper $out/bin/nixling-activation-helper 2>/dev/null \
-        || install -Dm755 target/release/nixling-activation-helper $out/bin/nixling-activation-helper
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-activation-helper $out/bin/d2b-activation-helper 2>/dev/null \
+        || install -Dm755 target/release/d2b-activation-helper $out/bin/d2b-activation-helper
       runHook postInstall
     '';
   };
-  nixlingActivationHelperPackage = if prebuilt ? "nixling-activation-helper" then prebuilt."nixling-activation-helper" else nixlingActivationHelperSourcePackage;
+  d2bActivationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else d2bActivationHelperSourcePackage;
 
-  nixlingGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-gateway-runtime";
+  d2bGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-gateway-runtime";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     inherit cargoLock;
-    cargoBuildFlags = [ "--package" "nixling-gateway-runtime" ];
+    cargoBuildFlags = [ "--package" "d2b-gateway-runtime" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -159,51 +159,51 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-gateway-enroll $out/bin/nixling-gateway-enroll 2>/dev/null \
-        || install -Dm755 target/release/nixling-gateway-enroll $out/bin/nixling-gateway-enroll
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-gateway-relay $out/bin/nixling-gateway-relay 2>/dev/null \
-        || install -Dm755 target/release/nixling-gateway-relay $out/bin/nixling-gateway-relay
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-gateway-enroll $out/bin/d2b-gateway-enroll 2>/dev/null \
+        || install -Dm755 target/release/d2b-gateway-enroll $out/bin/d2b-gateway-enroll
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-gateway-relay $out/bin/d2b-gateway-relay 2>/dev/null \
+        || install -Dm755 target/release/d2b-gateway-relay $out/bin/d2b-gateway-relay
       runHook postInstall
     '';
   };
-  nixlingGatewayRuntimePackage = if prebuilt ? "nixling-gateway-runtime" then prebuilt."nixling-gateway-runtime" else nixlingGatewayRuntimeSourcePackage;
+  d2bGatewayRuntimePackage = if prebuilt ? "d2b-gateway-runtime" then prebuilt."d2b-gateway-runtime" else d2bGatewayRuntimeSourcePackage;
 
-  nixlingCliShellArtifactsPackage = pkgs.runCommand "nixling-cli-shell-artifacts" { } ''
-    install -Dm644 ${../docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
-    ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
-    install -Dm644 ${../docs/completions/nixling.bash} "$out/share/bash-completion/completions/nixling"
-    install -Dm644 ${../docs/completions/nixling.zsh} "$out/share/zsh/site-functions/_nixling"
-    install -Dm644 ${../docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
+  d2bCliShellArtifactsPackage = pkgs.runCommand "d2b-cli-shell-artifacts" { } ''
+    install -Dm644 ${../docs/manpages/d2b.1} "$out/share/man/man1/d2b.1"
+    ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/d2b.1} > "$out/share/man/man1/d2b.1.gz"
+    install -Dm644 ${../docs/completions/d2b.bash} "$out/share/bash-completion/completions/d2b"
+    install -Dm644 ${../docs/completions/d2b.zsh} "$out/share/zsh/site-functions/_d2b"
+    install -Dm644 ${../docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
   '';
 
   daemonConfigJson = builtins.toJSON {
-    publicSocketPath = "/run/nixling/public.sock";
-    brokerSocketPath = "/run/nixling/priv.sock";
-    stateLockPath = "/run/nixling/daemon.lock";
-    locksDir = "/run/nixling/locks";
-    daemonUser = "nixlingd";
-    daemonGroup = "nixlingd";
-    publicSocketGroup = "nixling";
+    publicSocketPath = "/run/d2b/public.sock";
+    brokerSocketPath = "/run/d2b/priv.sock";
+    stateLockPath = "/run/d2b/daemon.lock";
+    locksDir = "/run/d2b/locks";
+    daemonUser = "d2bd";
+    daemonGroup = "d2bd";
+    publicSocketGroup = "d2b";
     launcherUsers = cfg.site.launcherUsers;
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
-    gatewayConfigPath = "/etc/nixling/gateway.json";
+    gatewayConfigPath = "/etc/d2b/gateway.json";
     autostartParallelism = cfg.daemon.autostart.parallelism;
     gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
     artifacts = {
-      publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
-      bundlePath = "/etc/nixling/bundle.json";
-      hostPath = "/etc/nixling/host.json";
-      processesPath = "/etc/nixling/processes.json";
-      closuresDir = "/etc/nixling/closures";
+      publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
+      bundlePath = "/etc/d2b/bundle.json";
+      hostPath = "/etc/d2b/host.json";
+      processesPath = "/etc/d2b/processes.json";
+      closuresDir = "/etc/d2b/closures";
     };
   };
   enabledGateways = lib.mapAttrsToList
     (name: gw: { inherit name gw; })
     (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
-  realmEntrypointPath = "/run/current-system/sw/share/nixling/realm-entrypoints.json";
+  realmEntrypointPath = "/run/current-system/sw/share/d2b/realm-entrypoints.json";
   realmEntrypointData =
     let
       localEntry = {
@@ -218,7 +218,7 @@ EOF
           name = gateway.gw.realm;
           value = {
             mode = "gateway-backed";
-            gateway = "${gateway.gw.vmName}.nixling";
+            gateway = "${gateway.gw.vmName}.d2b";
           };
         })
         enabledGateways;
@@ -228,18 +228,18 @@ EOF
       entries = lib.listToAttrs ([ localEntry ] ++ gatewayEntries);
     };
   realmEntrypointsPkg = pkgs.writeTextFile {
-    name = "nixling-realm-entrypoints";
+    name = "d2b-realm-entrypoints";
     text = builtins.toJSON realmEntrypointData;
-    destination = "/share/nixling/realm-entrypoints.json";
+    destination = "/share/d2b/realm-entrypoints.json";
   };
   hostRealmRelayEgressPolicyData = {
     schemaVersion = 1;
     mode = "host-realm-relay-deny";
-    owner = "nixling-host";
+    owner = "d2b-host";
     gatewayInterfaces = map
       (gateway: "${gateway.gw.env}-l${toString gateway.gw.index}")
       enabledGateways;
-    forbiddenHostEnvPrefixes = [ "NIXLING_RELAY_" ];
+    forbiddenHostEnvPrefixes = [ "D2B_RELAY_" ];
     diagnostics = {
       redacted = true;
       rateLimited = true;
@@ -250,7 +250,7 @@ EOF
   };
 in
 {
-  options.nixling.host.usbip.allowlist = lib.mkOption {
+  options.d2b.host.usbip.allowlist = lib.mkOption {
     type = lib.types.listOf (lib.types.submodule ({ ... }: {
       options = {
         vendor = lib.mkOption {
@@ -281,25 +281,25 @@ in
 
   config = lib.mkIf cfg.daemonExperimental.enable {
     # DEPRECATED v1.2: kept as migration tombstone for the
-    # nixling-launcher{,s} → nixling rename. No module references the
+    # d2b-launcher{,s} → d2b rename. No module references the
     # legacy groups; no user is a member. The empty declaration
     # preserves the legacy gid in /etc/group so the
-    # nixlingGroupMigration helper can match by numeric gid on direct
+    # d2bGroupMigration helper can match by numeric gid on direct
     # upgrades. Slated for removal in v1.3 after one release of
     # confirmed clean migration.
-    users.groups.nixling-launchers = { };
-    users.groups.nixlingd = { };
+    users.groups.d2b-launchers = { };
+    users.groups.d2bd = { };
 
     users.users =
       (lib.genAttrs cfg.site.launcherUsers (_: {
-        extraGroups = [ "nixling" ];
+        extraGroups = [ "d2b" ];
       }))
       // {
-        nixlingd = {
+        d2bd = {
           isSystemUser = true;
-          group = "nixlingd";
-          description = "nixling daemon user";
-          # nixlingd MUST be a supplementary member of nixling so it
+          group = "d2bd";
+          description = "d2b daemon user";
+          # d2bd MUST be a supplementary member of d2b so it
           # can `chown(path,
           # None, Some(gid))` the public socket to the launcher
           # group on bind. Without this membership, the chown(2)
@@ -308,111 +308,111 @@ in
           # supplementary). The daemon failed at startup with
           # "internal-io" when chown(public.sock, -1, 1000)
           # returned EPERM.
-          extraGroups = [ "nixling" ];
+          extraGroups = [ "d2b" ];
         };
       };
 
-    nixling._hostToolPackages = {
-      nixling = nixlingCliPackage;
-      nixlingd = nixlingdPackage;
-      nixlingGatewayRuntime = nixlingGatewayRuntimePackage;
+    d2b._hostToolPackages = {
+      d2b = d2bCliPackage;
+      d2bd = d2bdPackage;
+      d2bGatewayRuntime = d2bGatewayRuntimePackage;
     };
 
     environment.systemPackages = [
-      nixlingdPackage
-      nixlingCliPackage
-      nixlingCliShellArtifactsPackage
-      nixlingActivationHelperPackage
+      d2bdPackage
+      d2bCliPackage
+      d2bCliShellArtifactsPackage
+      d2bActivationHelperPackage
       realmEntrypointsPkg
     ];
-    environment.etc."nixling/host-realm-relay-egress-policy.json".text =
+    environment.etc."d2b/host-realm-relay-egress-policy.json".text =
       builtins.toJSON hostRealmRelayEgressPolicyData;
 
-    nixling._computed.realmEntrypoints = realmEntrypointData // {
+    d2b._computed.realmEntrypoints = realmEntrypointData // {
       path = realmEntrypointPath;
     };
-    nixling._computed.hostRealmRelayEgressPolicy = hostRealmRelayEgressPolicyData // {
-      path = "/etc/nixling/host-realm-relay-egress-policy.json";
+    d2b._computed.hostRealmRelayEgressPolicy = hostRealmRelayEgressPolicyData // {
+      path = "/etc/d2b/host-realm-relay-egress-policy.json";
     };
 
     environment.etc = {
-      "nixling/daemon-config.json" = {
+      "d2b/daemon-config.json" = {
         text = daemonConfigJson;
         mode = "0640";
         user = "root";
-        group = "nixlingd";
+        group = "d2bd";
       };
     };
 
     systemd.tmpfiles.rules = [
-      # nixlingd runs non-root, so it gets an explicit rwx ACL on
-      # /run/nixling and owns /run/nixling/locks, /run/nixling/state,
-      # and the daemon.lock file. Keep the /run/nixling parent itself
+      # d2bd runs non-root, so it gets an explicit rwx ACL on
+      # /run/d2b and owns /run/d2b/locks, /run/d2b/state,
+      # and the daemon.lock file. Keep the /run/d2b parent itself
       # root-owned: systemd-tmpfiles refuses to create root-owned
-      # descendants such as /run/nixling/vms beneath a daemon-owned
-      # parent as an unsafe path transition. /etc/nixling and
-      # /var/lib/nixling stay root-owned and group-readable by nixlingd
-      # (the broker audit log under /var/lib/nixling/audit/ is
+      # descendants such as /run/d2b/vms beneath a daemon-owned
+      # parent as an unsafe path transition. /etc/d2b and
+      # /var/lib/d2b stay root-owned and group-readable by d2bd
+      # (the broker audit log under /var/lib/d2b/audit/ is
       # broker-owned and written by root; the daemon only reads).
-      # /etc/nixling/ config + bundle/host/processes are root:nixlingd
+      # /etc/d2b/ config + bundle/host/processes are root:d2bd
       # 0640 so the daemon reads without write.
       #
-      # /run/nixling is group-owned by `nixling` so launcher users —
-      # members of `nixling` via daemon-config.json's `publicSocketGroup` —
+      # /run/d2b is group-owned by `d2b` so launcher users —
+      # members of `d2b` via daemon-config.json's `publicSocketGroup` —
       # can traverse the directory to reach `public.sock`. The owning group
       # entry below narrows launcher access to r-x; the 1770 base mode keeps
-      # the ACL mask at rwx so the named nixlingd ACL can bind/remove the
-      # public socket. The public socket itself is mode 0660 group nixling
+      # the ACL mask at rwx so the named d2bd ACL can bind/remove the
+      # public socket. The public socket itself is mode 0660 group d2b
       # (see bind_public_socket).
-      "d /run/nixling 1770 root nixling -"
-      "z /run/nixling 1770 root nixling -"
-      "a+ /run/nixling - - - - g::r-x"
-      "a+ /run/nixling - - - - u:nixlingd:rwx"
-      "a+ /run/nixling - - - - m::rwx"
-      "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
-      # /run/nixling/locks holds per-VM `flock(LOCK_EX |
+      "d /run/d2b 1770 root d2b -"
+      "z /run/d2b 1770 root d2b -"
+      "a+ /run/d2b - - - - g::r-x"
+      "a+ /run/d2b - - - - u:d2bd:rwx"
+      "a+ /run/d2b - - - - m::rwx"
+      "f /run/d2b/daemon.lock 0640 d2bd d2bd -"
+      # /run/d2b/locks holds per-VM `flock(LOCK_EX |
       # LOCK_NB)` files taken by the daemon for the entire `up` /
-      # `prepare` / `destroy` mutation window. Mode 0700 nixlingd
-      # nixlingd so only the daemon (and root) can open the lock file.
+      # `prepare` / `destroy` mutation window. Mode 0700 d2bd
+      # d2bd so only the daemon (and root) can open the lock file.
       # Cleared on every boot via the standard tmpfiles `d` rule
       # semantics.
-      "d /run/nixling/locks 0700 nixlingd nixlingd -"
+      "d /run/d2b/locks 0700 d2bd d2bd -"
       # USBIP busid lock claims are broker-written records read by the
-      # daemon. Keep the claim root root-owned so nixlingd can read
-      # and traverse it via the nixlingd group but cannot create or
+      # daemon. Keep the claim root root-owned so d2bd can read
+      # and traverse it via the d2bd group but cannot create or
       # replace lock claims itself.
-      "d /run/nixling/locks/usbip 0750 root nixlingd -"
-      "d /run/nixling/state 0700 nixlingd nixlingd -"
-      "d /var/lib/nixling 0750 root nixlingd -"
-      "d /var/lib/nixling/daemon-state 0700 nixlingd nixlingd -"
-      "d /var/cache/nixling 0750 root nixlingd -"
-      "d /etc/nixling 0750 root nixlingd -"
+      "d /run/d2b/locks/usbip 0750 root d2bd -"
+      "d /run/d2b/state 0700 d2bd d2bd -"
+      "d /var/lib/d2b 0750 root d2bd -"
+      "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
+      "d /var/cache/d2b 0750 root d2bd -"
+      "d /etc/d2b 0750 root d2bd -"
     ];
 
-    systemd.services.nixlingd = {
-      # nixlingd is allowed to restart on switch/update. Running VMs survive
+    systemd.services.d2bd = {
+      # d2bd is allowed to restart on switch/update. Running VMs survive
       # because systemd stops only the daemon main process (KillMode=process)
       # and the restarted daemon re-adopts broker-spawned runners by identity.
-      description = "nixling daemon skeleton";
+      description = "d2b daemon skeleton";
       wantedBy = [ "multi-user.target" ];
       wants = [
-        "nixling-priv-broker.socket"
+        "d2b-priv-broker.socket"
         "systemd-tmpfiles-setup.service"
       ];
       after = [
         "systemd-tmpfiles-setup.service"
         "network.target"
-        "nixling-priv-broker.socket"
-        "nixling-priv-broker.service"
+        "d2b-priv-broker.socket"
+        "d2b-priv-broker.service"
         "dbus.socket"
         "dbus.service"
-        "nixling.slice"
+        "d2b.slice"
       ];
       serviceConfig = {
-        # Type=notify makes systemd hold nixlingd.service in "activating"
+        # Type=notify makes systemd hold d2bd.service in "activating"
         # until the daemon has completed startup/adoption and is about to
         # accept public.sock frames. This prevents post-switch validation from
-        # racing a successful `systemctl restart nixlingd.service`.
+        # racing a successful `systemctl restart d2bd.service`.
         Type = "notify";
         NotifyAccess = "main";
         TimeoutStartSec = "5min";
@@ -422,16 +422,16 @@ in
         KillMode = "process";
         # cgroup v2 delegation requires the long-lived daemon to be
         # non-root so the broker can fchown
-        # the nixling.slice subtree to the daemon's uid/gid. Running
+        # the d2b.slice subtree to the daemon's uid/gid. Running
         # the daemon as root contradicts the delegation contract in
         # docs/reference/cgroup-delegation.md and ADR 0011 ("the
         # daemon is never uid 0; the broker delegates the cgroup
         # subtree to the daemon user").
-        User = "nixlingd";
-        Group = "nixlingd";
-        ExecStart = "${nixlingdPackage}/bin/nixlingd serve --config /etc/nixling/daemon-config.json";
+        User = "d2bd";
+        Group = "d2bd";
+        ExecStart = "${d2bdPackage}/bin/d2bd serve --config /etc/d2b/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
-        TimeoutStopSec = lib.mkDefault "${toString nixlingdStopTimeoutSeconds}s";
+        TimeoutStopSec = lib.mkDefault "${toString d2bdStopTimeoutSeconds}s";
         Restart = "on-failure";
         RestartSec = "2s";
         NoNewPrivileges = true;
@@ -446,14 +446,14 @@ in
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
         # Supplementary group so the daemon can create
-        # /run/nixling/public.sock with group ownership
-        # nixling (the documented launcher discovery group).
+        # /run/d2b/public.sock with group ownership
+        # d2b (the documented launcher discovery group).
         # The matching publicSocketGroup field in
-        # daemon-config.json already declares nixling as
+        # daemon-config.json already declares d2b as
         # the public socket group; this SupplementaryGroups entry
         # gives the systemd unit's primary uid the second gid it
         # needs to chgrp the socket.
-        SupplementaryGroups = [ "nixling" ];
+        SupplementaryGroups = [ "d2b" ];
       };
     };
   };

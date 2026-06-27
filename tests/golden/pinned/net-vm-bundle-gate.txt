@@ -1,4 +1,4 @@
-# net-vm-bundle-gate (nixlingd net_vm_bundle_gate + typed_error envelope)
+# net-vm-bundle-gate (d2bd net_vm_bundle_gate + typed_error envelope)
 net_vm_bundle_gate::tests::divergent_bytes_surface_hash_mismatch
 net_vm_bundle_gate::tests::drift_path_accessor_returns_offending_path
 net_vm_bundle_gate::tests::drift_reason_redacts_paths

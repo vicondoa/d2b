@@ -5,7 +5,7 @@
 Persistent shells are disabled by default and are configured per VM:
 
 ```nix
-nixling.vms.<vm>.guest.shell = {
+d2b.vms.<vm>.guest.shell = {
   enable = true;
   defaultName = "default";
   maxSessions = 8;
@@ -40,9 +40,9 @@ When enabled for a workload user, the guest module:
 
 - passes `--shell-enable`, `--shell-default-name`, `--shell-max-sessions`, and
   `--shell-max-attached` to guestd;
-- wires the static `nixling-guest-shell-runner` and `systemctl` paths;
-- declares `nixling-shpool-daemon.service` as the workload user with
-  `PAMName=nixling-shpool-daemon`;
+- wires the static `d2b-guest-shell-runner` and `systemctl` paths;
+- declares `d2b-shpool-daemon.service` as the workload user with
+  `PAMName=d2b-shpool-daemon`;
 - sets workload-user linger so `/run/user/<uid>` exists while all shell clients
   are detached.
 

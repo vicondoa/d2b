@@ -3,7 +3,7 @@
 **Diataxis category:** reference.
 
 This page documents the committed ADR 0032 constellation core model in
-`packages/nixling-constellation-core`. It is a contributor-facing
+`packages/d2b-constellation-core`. It is a contributor-facing
 contract for target names, identifiers, capability checks, redacted audit
 metadata, typed errors, and semantic frame schema roots. It does not
 describe live validation evidence, provider credentials, or relay
@@ -47,7 +47,7 @@ reachability, socket reachability, or an overlay route.
 Canonical persisted form:
 
 ```text
-nl://<workload>.<node>.<realm-path>.nixling
+d2b://<workload>.<node>.<realm-path>.d2b
 ```
 
 Accepted human forms:
@@ -55,14 +55,14 @@ Accepted human forms:
 | Form | Meaning |
 | --- | --- |
 | `<workload>` | v1-compatible local workload on the current node in the `local` realm. |
-| `<workload>.nixling` | Explicit local workload on the current node in the `local` realm. |
-| `<workload>.<node>.nixling` | Workload on a named local-realm node. |
-| `<workload>.<node>.<realm>.nixling` | Workload on a node in a named realm. |
-| `<workload>.<node>.<child>.<parent>.nixling` | Workload in a nested realm, written most-specific first. |
+| `<workload>.d2b` | Explicit local workload on the current node in the `local` realm. |
+| `<workload>.<node>.d2b` | Workload on a named local-realm node. |
+| `<workload>.<node>.<realm>.d2b` | Workload on a node in a named realm. |
+| `<workload>.<node>.<child>.<parent>.d2b` | Workload in a nested realm, written most-specific first. |
 
 Parsing is fail-closed. Multi-label human forms require the reserved
-`.nixling` suffix, `nl://` forms must be fully qualified, and `all`,
-`*`, and non-suffix `nixling` labels are rejected as target labels.
+`.d2b` suffix, `d2b://` forms must be fully qualified, and `all`,
+`*`, and non-suffix `d2b` labels are rejected as target labels.
 
 ## Identifier families
 
@@ -237,7 +237,7 @@ the structured capability.
 
 ## Related references
 
-- [ADR 0032 — nixling v2 constellation control plane](../adr/0032-nixling-v2-constellation-control-plane.md)
+- [ADR 0032 — d2b v2 constellation control plane](../adr/0032-d2b-v2-constellation-control-plane.md)
 - [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
 - [Constellation peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)

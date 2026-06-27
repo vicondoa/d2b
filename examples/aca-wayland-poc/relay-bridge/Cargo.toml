@@ -1,5 +1,5 @@
 [package]
-name = "nixling-relay-bridge"
+name = "d2b-relay-bridge"
 version = "0.0.0-poc"
 edition = "2024"
 publish = false
@@ -9,10 +9,10 @@ license = "Apache-2.0"
 # an Azure Relay Hybrid Connection so the in-sandbox `waypipe server` can
 # reach the host `waypipe client` with no inbound ports. Deliberately kept
 # out of the main `packages/` workspace; the productionized form is the
-# planned `nixling-constellation-transport-azure-relay` crate.
+# planned `d2b-constellation-transport-azure-relay` crate.
 
 [[bin]]
-name = "nixling-relay-bridge"
+name = "d2b-relay-bridge"
 path = "src/main.rs"
 
 [dependencies]

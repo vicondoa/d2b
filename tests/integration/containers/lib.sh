@@ -8,13 +8,13 @@
 # tests/integration/containers/images/*.nix), loads it into podman, runs it, and asserts.
 #
 # Scope: this layer is ONLY for things that need a foreign (non-Nix) userland
-# — e.g. proving a static nixling binary runs on stock Ubuntu, matching CI.
+# — e.g. proving a static d2b binary runs on stock Ubuntu, matching CI.
 # It is deliberately NOT used to boot systemd and exercise daemon/socket
 # activation: that is covered far more cheaply by the native
-# `packages/nixling-priv-broker/tests/socket_activation.rs` test (real
+# `packages/d2b-priv-broker/tests/socket_activation.rs` test (real
 # LISTEN_FDS fd-3 handoff + Hello round-trip, ~0.4 s, unprivileged) plus the
 # nix-unit unit-shape cases. A faithful systemd-boot container was measured at
-# ~1.4 G to ship (the nixling bundle drags the full per-VM runtime substrate,
+# ~1.4 G to ship (the d2b bundle drags the full per-VM runtime substrate,
 # so `systemdMinimal` does not help) for zero marginal coverage — do not add
 # one. See tests/integration/containers/README.md.
 #

@@ -76,7 +76,7 @@ W4.
 
 ### Runner-shape preflight
 
-`nixling host check` runs a dry-run preflight that consumes
+`d2b host check` runs a dry-run preflight that consumes
 `host.json`, `processes.json`, and `closures/<vm>.json` without
 launching CH. The preflight validates:
 

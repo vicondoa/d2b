@@ -4,17 +4,17 @@
 
 Runtime providers describe the local VM runner family used for a
 workload. They are capability declarations and routing policy, not
-escape hatches around `nixlingd` or `nixling-priv-broker`.
+escape hatches around `d2bd` or `d2b-priv-broker`.
 
 ## Default provider
 
-Normal local nixling VMs use the Cloud Hypervisor runtime provider:
+Normal local d2b VMs use the Cloud Hypervisor runtime provider:
 
 | Field | Value |
 | --- | --- |
 | Provider id | `local-cloud-hypervisor` |
 | Provider locality | Local host |
-| Runner authority | `nixlingd` DAG plus broker `SpawnRunner` |
+| Runner authority | `d2bd` DAG plus broker `SpawnRunner` |
 | Supported baseline | local lifecycle through the daemon, vsock, virtiofs store/share surfaces |
 
 The provider adapter validates the existing typed Cloud Hypervisor input

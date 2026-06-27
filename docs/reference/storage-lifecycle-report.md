@@ -2,10 +2,10 @@
 
 **Diataxis category:** reference.
 
-`nixlingd` writes a host-local startup contract report at:
+`d2bd` writes a host-local startup contract report at:
 
 ```text
-/var/lib/nixling/daemon-state/storage-lifecycle-report.json
+/var/lib/d2b/daemon-state/storage-lifecycle-report.json
 ```
 
 The report records the daemon's read-only check of the generated

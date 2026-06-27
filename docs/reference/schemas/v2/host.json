@@ -89,7 +89,7 @@
       ]
     },
     "nftables": {
-      "description": "Exact nftables `inet nixling` table declaration.",
+      "description": "Exact nftables `inet d2b` table declaration.",
       "allOf": [
         {
           "$ref": "#/definitions/NftablesModel"
@@ -244,10 +244,10 @@
       "additionalProperties": false
     },
     "CoexistencePolicy": {
-      "description": "What nixling does when a given firewall manager is present.",
+      "description": "What d2b does when a given firewall manager is present.",
       "oneOf": [
         {
-          "description": "Coexist: install `inet nixling` table alongside the manager's rules without flushing.",
+          "description": "Coexist: install `inet d2b` table alongside the manager's rules without flushing.",
           "type": "string",
           "enum": [
             "coexist"
@@ -261,7 +261,7 @@
           ]
         },
         {
-          "description": "RequireUnmanaged: require an explicit \"unmanaged\" file from the manager covering nixling interfaces before proceeding.",
+          "description": "RequireUnmanaged: require an explicit \"unmanaged\" file from the manager covering d2b interfaces before proceeding.",
           "type": "string",
           "enum": [
             "require-unmanaged"
@@ -320,7 +320,7 @@
           ]
         },
         "policy": {
-          "description": "What nixling does when this manager is detected.",
+          "description": "What d2b does when this manager is detected.",
           "allOf": [
             {
               "$ref": "#/definitions/CoexistencePolicy"
@@ -426,7 +426,7 @@
       "pattern": "^[A-Za-z0-9_-]+$"
     },
     "IfNameMapping": {
-      "description": "Hash-derived IfName mapping row exposed in `host.json`. The broker's `nixling_host::ifname::detect_collisions` re-validates uniqueness over `derived_ifname` at runtime; the Nix emitter rejects duplicates at bundle build with a deterministic emitter error.",
+      "description": "Hash-derived IfName mapping row exposed in `host.json`. The broker's `d2b_host::ifname::detect_collisions` re-validates uniqueness over `derived_ifname` at runtime; the Nix emitter rejects duplicates at bundle build with a deterministic emitter error.",
       "type": "object",
       "required": [
         "derivedIfname",
@@ -436,7 +436,7 @@
       ],
       "properties": {
         "derivedIfname": {
-          "description": "Deterministic hash-derived IFNAMSIZ-safe interface name with `nl-` prefix (e.g. `nl-br-a1b2c3d4`). Bundle build refuses any collision.",
+          "description": "Deterministic hash-derived IFNAMSIZ-safe interface name with `d2b-` prefix (e.g. `d2b-br-a1b2c3d4`). Bundle build refuses any collision.",
           "allOf": [
             {
               "$ref": "#/definitions/IfName"
@@ -456,7 +456,7 @@
           ]
         },
         "userVisibleName": {
-          "description": "User-visible interface name as it appears in `nixling.envs.*` and operator docs (e.g. `br-work-lan`).",
+          "description": "User-visible interface name as it appears in `d2b.envs.*` and operator docs (e.g. `br-work-lan`).",
           "type": "string"
         },
         "vm": {
@@ -743,7 +743,7 @@
       "additionalProperties": false
     },
     "NftablesModel": {
-      "description": "Exact nftables table, hook priorities, and chain layout owned by nixling.",
+      "description": "Exact nftables table, hook priorities, and chain layout owned by d2b.",
       "type": "object",
       "required": [
         "chains",
@@ -761,14 +761,14 @@
           "type": "string"
         },
         "ownershipId": {
-          "description": "Stable per-table comment marker installed on every rule (`comment \"nixling managed: <ownership-id>\"`). Empty for V1-shaped bundles.",
+          "description": "Stable per-table comment marker installed on every rule (`comment \"d2b managed: <ownership-id>\"`). Empty for V1-shaped bundles.",
           "type": "string"
         },
         "table": {
           "type": "string"
         },
         "tableHashAfterApply": {
-          "description": "Drift-detection digest of the applied `inet nixling` table. `None` in the emitted bundle; the broker fills it in after `ApplyNftables` so pre-VM-start drift checks can compare against the previously applied digest.",
+          "description": "Drift-detection digest of the applied `inet d2b` table. `None` in the emitted bundle; the broker fills it in after `ApplyNftables` so pre-VM-start drift checks can compare against the previously applied digest.",
           "type": [
             "string",
             "null"

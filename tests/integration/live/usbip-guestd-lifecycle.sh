@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Live host USBIP guestd lifecycle check.
 #
-# Requires a deployed nixling host, a USBIP-enabled running VM, and a real
-# busid. This is intentionally Layer 2/manual: it restarts nixlingd and mutates
-# live USBIP attachment state through `nixling usb` only.
+# Requires a deployed d2b host, a USBIP-enabled running VM, and a real
+# busid. This is intentionally Layer 2/manual: it restarts d2bd and mutates
+# live USBIP attachment state through `d2b usb` only.
 #
 # Usage:
-#   NL_LIVE=1 NL_USBIP_VM=work-ssd NL_USBIP_BUSID=1-2.1 \
+#   D2B_LIVE=1 D2B_USBIP_VM=work-ssd D2B_USBIP_BUSID=1-2.1 \
 #     bash tests/integration/live/usbip-guestd-lifecycle.sh
 
 set -euo pipefail
@@ -16,15 +16,15 @@ ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-if [ "${NL_LIVE:-0}" != "1" ]; then
-  log "SKIP: set NL_LIVE=1 to run live USBIP lifecycle checks"
+if [ "${D2B_LIVE:-0}" != "1" ]; then
+  log "SKIP: set D2B_LIVE=1 to run live USBIP lifecycle checks"
   exit 0
 fi
 
-vm=${NL_USBIP_VM:-}
-busid=${NL_USBIP_BUSID:-}
+vm=${D2B_USBIP_VM:-}
+busid=${D2B_USBIP_BUSID:-}
 if [ -z "$vm" ] || [ -z "$busid" ]; then
-  log "SKIP: set NL_USBIP_VM and NL_USBIP_BUSID"
+  log "SKIP: set D2B_USBIP_VM and D2B_USBIP_BUSID"
   exit 0
 fi
 
@@ -34,7 +34,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 status_for() {
-  nixling usb probe --json \
+  d2b usb probe --json \
     | jq -r --arg vm "$vm" --arg bus "$busid" '
       .entries[]
       | select(.vm == $vm and .busId == $bus)
@@ -64,34 +64,34 @@ fi
 
 restore() {
   if [ "$initial_status" = "bound" ] && [ "$initial_owner" = "$vm" ]; then
-    nixling usb attach --apply "$vm" "$busid" >/dev/null 2>&1 || true
+    d2b usb attach --apply "$vm" "$busid" >/dev/null 2>&1 || true
   else
-    nixling usb detach --apply "$vm" "$busid" >/dev/null 2>&1 || true
+    d2b usb detach --apply "$vm" "$busid" >/dev/null 2>&1 || true
   fi
 }
 trap restore EXIT
 
 log "detaching stale guest/host USBIP state"
-nixling usb detach --apply "$vm" "$busid" >/dev/null
+d2b usb detach --apply "$vm" "$busid" >/dev/null
 
 log "attaching through daemon/broker/guestd"
-nixling usb attach --apply "$vm" "$busid" >/dev/null
+d2b usb attach --apply "$vm" "$busid" >/dev/null
 require_owner "$vm"
 
-log "restarting nixlingd to verify adoption"
+log "restarting d2bd to verify adoption"
 if ! sudo -n true >/dev/null 2>&1; then
-  fail "passwordless sudo is required to restart nixlingd"
+  fail "passwordless sudo is required to restart d2bd"
   exit 1
 fi
-sudo -n systemctl restart nixlingd.service
+sudo -n systemctl restart d2bd.service
 sleep 5
 require_owner "$vm"
 
 log "detaching after daemon restart"
-nixling usb detach --apply "$vm" "$busid" >/dev/null
+d2b usb detach --apply "$vm" "$busid" >/dev/null
 
 log "reattaching after daemon restart"
-nixling usb attach --apply "$vm" "$busid" >/dev/null
+d2b usb attach --apply "$vm" "$busid" >/dev/null
 require_owner "$vm"
 
 ok "USBIP guestd lifecycle survived daemon restart and reattach"

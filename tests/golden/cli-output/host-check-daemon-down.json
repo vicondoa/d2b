@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#daemon-down",
   "exit_code": 1,
   "kind": "host-check-error",
-  "observed_state": "systemctl is-active nixlingd reports inactive/failed.",
-  "remediation": "Start the daemon: `systemctl start nixlingd.service`.",
-  "what_was_checked": "Whether nixlingd.service is active on the host."
+  "observed_state": "systemctl is-active d2bd reports inactive/failed.",
+  "remediation": "Start the daemon: `systemctl start d2bd.service`.",
+  "what_was_checked": "Whether d2bd.service is active on the host."
 }

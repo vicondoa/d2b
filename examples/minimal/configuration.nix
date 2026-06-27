@@ -30,16 +30,16 @@
   };
 
   # --------------------------------------------------------------
-  # nixling.site — host-wide knobs
+  # d2b.site — host-wide knobs
   # --------------------------------------------------------------
-  nixling.site = {
+  d2b.site = {
     # Headless host: no Wayland session, no graphics or audio
     # forwarding. Any VM that sets `graphics.enable = true` or
     # `audio.enable = true` will fail eval with a clear assertion
     # while this stays null.
     waylandUser = null;
 
-    # No launcher users: no host user is added to the nixling lifecycle
+    # No launcher users: no host user is added to the d2b lifecycle
     # group. sudo + the per-VM SSH key flow still cover every CLI path.
     launcherUsers = [ ];
 
@@ -50,25 +50,25 @@
   };
 
   # --------------------------------------------------------------
-  # nixling.envs.personal — one isolated environment
+  # d2b.envs.personal — one isolated environment
   # --------------------------------------------------------------
-  # Declaring this attribute set is enough for nixling to render
+  # Declaring this attribute set is enough for d2b to render
   # the full per-env plumbing — see this example's README for the
   # itemised list of bridges, VMs, and services that materialise.
-  nixling.envs.personal = {
+  d2b.envs.personal = {
     lanSubnet    = "10.99.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
   # --------------------------------------------------------------
-  # nixling.vms.personal-dev — one headless workload VM
+  # d2b.vms.personal-dev — one headless workload VM
   # --------------------------------------------------------------
   # No `graphics.enable`, `audio.enable`, `tpm.enable`, or
-  # `usbip.yubikey`. This is the bare-minimum nixling consumer:
+  # `usbip.yubikey`. This is the bare-minimum d2b consumer:
   # plain DHCP guest networking, framework-managed SSH key, and
   # nothing else. Layer components on from the
   # `graphics-workstation` example next.
-  nixling.vms.personal-dev = {
+  d2b.vms.personal-dev = {
     enable = true;
 
     # Bind to the env declared above. Together with `index`, this
@@ -77,9 +77,9 @@
     env   = "personal";
     index = 10;
 
-    # `nixling switch personal-dev --apply` will SSH in as this user
+    # `d2b switch personal-dev --apply` will SSH in as this user
     # using the framework-managed Ed25519 key generated under
-    # /var/lib/nixling/keys/ on every activation.
+    # /var/lib/d2b/keys/ on every activation.
     ssh.user = "alice";
 
     # NixOS module merged INTO THE GUEST (not the host). Keep

@@ -13,17 +13,17 @@ world-readable system profile.
 | Artifact | Visibility | Mode | Purpose |
 | --- | --- | --- | --- |
 | `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
-| `bundle.json` | private bundle index | root:`nixlingd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
-| `host.json` | private host intent | root:`nixlingd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
-| `processes.json` | private supervisor intent | root:`nixlingd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
-| `storage.json` | private storage lifecycle contract | root:`nixlingd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
-| `sync.json` | private synchronization contract | root:`nixlingd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
-| `privileges.json` | private authorization policy | root:`nixlingd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
-| `closures/<vm>.json` | private closure metadata | root:`nixlingd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
-| `minijail-profile.json` | private sandbox profile catalog | root:`nixlingd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
+| `bundle.json` | private bundle index | root:`d2bd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
+| `host.json` | private host intent | root:`d2bd` `0640` | Host requirements, network intent, runtime/provider catalog, kernel/device/fd requirements, and support tier. |
+| `processes.json` | private supervisor intent | root:`d2bd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
+| `storage.json` | private storage lifecycle contract | root:`d2bd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
+| `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
+| `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
+| `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
+| `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
 
 `vms.json` is the only public artifact. All other artifacts are trusted
-inputs to `nixlingd` and the privileged broker described by
+inputs to `d2bd` and the privileged broker described by
 [ADR 0002](../adr/0002-non-root-daemon-and-privileged-broker.md).
 
 ## Versioning policy
@@ -44,14 +44,14 @@ for the storage/restart/synchronization contract additions (ADR 0034).
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
-`schemas/v2/` from the Rust DTOs in `nixling-core` and
-`nixling-contracts`; keep the markdown companions in sync in the same
+`schemas/v2/` from the Rust DTOs in `d2b-core` and
+`d2b-contracts`; keep the markdown companions in sync in the same
 commit whenever the schema changes.
 
 ## Drift policy
 
-The committed schema files are derived from Rust DTOs in `nixling-core`
-and `nixling-contracts`. The drift gate is:
+The committed schema files are derived from Rust DTOs in `d2b-core`
+and `d2b-contracts`. The drift gate is:
 
 ```bash
 cargo xtask gen-schemas

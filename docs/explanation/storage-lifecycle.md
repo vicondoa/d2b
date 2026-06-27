@@ -1,8 +1,8 @@
 # Storage lifecycle, restart, and synchronization
 
-Nixling treats host filesystem state as part of the control plane. The
+D2b treats host filesystem state as part of the control plane. The
 state is not just a set of directories that happen to exist; it is the
-evidence used to restart `nixlingd`, re-adopt live runners, preserve TPM
+evidence used to restart `d2bd`, re-adopt live runners, preserve TPM
 and store-view identity, and decide whether a VM is healthy or degraded.
 
 This document explains the design selected by
@@ -13,7 +13,7 @@ how-to docs as the implementation lands.
 ## Why this exists
 
 The historical model split ownership among tmpfiles, activation scripts,
-`nixlingd`, the privileged broker, and runner processes. That made it easy
+`d2bd`, the privileged broker, and runner processes. That made it easy
 for two different layers to believe they owned the same inode. The common
 symptoms were:
 
@@ -41,15 +41,15 @@ must never be violated?"
 
 Examples of invariants that belong in the contract:
 
-- `/etc/nixling` contains generated configuration and bundle artifacts; it
+- `/etc/d2b` contains generated configuration and bundle artifacts; it
   is not runtime state.
-- `/var/lib/nixling` holds persistent framework state.
-- `/run/nixling` is boot-scoped runtime state, but a daemon restart does
+- `/var/lib/d2b` holds persistent framework state.
+- `/run/d2b` is boot-scoped runtime state, but a daemon restart does
   not make every entry stale.
 - The store-view live pool is a hardlink farm and must never receive
   recursive chmod, chown, or setfacl operations.
 - External paths such as `/run/user/<uid>` and `/dev/kvm` are grant-only
-  surfaces; nixling may grant access or verify posture but does not own
+  surfaces; d2b may grant access or verify posture but does not own
   those roots.
 
 ### Restart contract
@@ -58,13 +58,13 @@ Every process role declares how restart works. A role is one of:
 
 | Class | Meaning |
 | --- | --- |
-| `adoptable` | The process may survive daemon restart. Nixling discovers it through its declared cgroup leaf, opens a fresh pidfd, verifies identity, and resumes supervision. |
+| `adoptable` | The process may survive daemon restart. D2b discovers it through its declared cgroup leaf, opens a fresh pidfd, verifies identity, and resumes supervision. |
 | `recreatable` | The process can be restarted from persistent state without data loss. |
-| `stateful-quarantine` | Nixling cannot prove safety. It leaves the state alone and marks the component degraded. |
+| `stateful-quarantine` | D2b cannot prove safety. It leaves the state alone and marks the component degraded. |
 | `non-resumable` | The process cannot be resumed safely and requires an explicit restart/remediation. |
-| `external-observed` | Nixling observes health but does not own the process or resource. |
+| `external-observed` | D2b observes health but does not own the process or resource. |
 
-This is why runtime cleanup cannot be a broad sweep. `nixlingd` may have
+This is why runtime cleanup cannot be a broad sweep. `d2bd` may have
 died while a VM and its role sockets stayed alive. The daemon must first
 rebuild the live-owner set, then clean only entries whose owners are
 proven dead.
@@ -98,7 +98,7 @@ an unrelated host file.
 
 ## Degraded state instead of silent repair
 
-When nixling cannot prove a safe action, it records a typed degraded state.
+When d2b cannot prove a safe action, it records a typed degraded state.
 Examples include storage drift, ambiguous lock owner, adoption quarantine,
 external dependency unhealthy, and migration failure.
 
@@ -121,14 +121,14 @@ before skipping, and formats an existing image only when kernel extent metadata
 proves it is empty. This keeps host-side storage validation from letting a VM
 boot into initrd emergency with an unmountable `/var` or writable-store image.
 
-When a path is undeclared or malicious, nixling emits a separate
+When a path is undeclared or malicious, d2b emits a separate
 rate-limited incident event. Violation events have their own quota so an
 attacker cannot flood the violation lane and evict normal audit history.
 
 ## Migration posture
 
 The storage cutover is allowed to be disruptive once. During that planned
-downtime, nixling may clear old boot-scoped runtime files and lock records
+downtime, d2b may clear old boot-scoped runtime files and lock records
 after proving VMs and runner processes are stopped. Persistent data such as
 TPM NVRAM, store-view metadata, SSH keys, daemon adoption metadata, audit
 history, host-runtime metadata, and disk images is preserved and verified.

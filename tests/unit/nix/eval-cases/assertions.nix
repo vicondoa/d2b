@@ -9,10 +9,10 @@
 # Replaces 31 separate per-case `nix-instantiate --eval --strict`
 # invocations in the legacy bash gate. See `shared.nix` for the
 # evaluator contract.
-{ flakeRoot ? null, nixpkgs ? null, nixlingModule ? null }:
+{ flakeRoot ? null, nixpkgs ? null, d2bModule ? null }:
 
 let
-  shared = import ./shared.nix { inherit flakeRoot nixpkgs nixlingModule; };
+  shared = import ./shared.nix { inherit flakeRoot nixpkgs d2bModule; };
 in
 shared.mkBatch {
   cases = {
@@ -22,7 +22,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.site.userAuthorizedKeys = [
+          d2b.site.userAuthorizedKeys = [
             "-----BEGIN OPENSSH PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEILa...\n-----END OPENSSH PRIVATE KEY-----"
           ];
         }
@@ -31,12 +31,12 @@ shared.mkBatch {
 
     # H10/2 — graphics VM declared but waylandUser = null.
     "graphics-without-wayland-user" = {
-      expectedSubstring = "nixling.site.waylandUser";
+      expectedSubstring = "d2b.site.waylandUser";
       override = (
         { ... }:
         {
-          nixling.site.waylandUser = null;
-          nixling.vms.corp-vm.graphics.enable = true;
+          d2b.site.waylandUser = null;
+          d2b.vms.corp-vm.graphics.enable = true;
         }
       );
     };
@@ -47,7 +47,7 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.site.waylandUser = lib.mkForce "ghost";
+          d2b.site.waylandUser = lib.mkForce "ghost";
         }
       );
     };
@@ -59,7 +59,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms = {
+          d2b.vms = {
             "42web" = {
               enable = true;
               env = "work";
@@ -84,7 +84,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms = {
+          d2b.vms = {
             launcher = {
               enable = true;
               env = "work";
@@ -109,7 +109,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms = {
+          d2b.vms = {
             "sys-shadow" = {
               enable = true;
               env = "work";
@@ -134,13 +134,13 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.envs = {
+          d2b.envs = {
             "9corp" = {
               lanSubnet = "10.99.0.0/24";
               uplinkSubnet = "198.51.100.0/30";
             };
           };
-          nixling.vms.corp-vm.env = lib.mkForce "9corp";
+          d2b.vms.corp-vm.env = lib.mkForce "9corp";
         }
       );
     };
@@ -151,13 +151,13 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.envs = {
+          d2b.envs = {
             corpwest1 = {
               lanSubnet = "10.99.0.0/24";
               uplinkSubnet = "198.51.100.0/30";
             };
           };
-          nixling.vms.corp-vm.env = lib.mkForce "corpwest1";
+          d2b.vms.corp-vm.env = lib.mkForce "corpwest1";
         }
       );
     };
@@ -165,11 +165,11 @@ shared.mkBatch {
     # Network option-schema — workload env references must point at
     # a declared env.
     "vm-env-missing" = {
-      expectedSubstring = "but nixling.envs has no such ENABLED env";
+      expectedSubstring = "but d2b.envs has no such ENABLED env";
       override = (
         { lib, ... }:
         {
-          nixling.vms.corp-vm.env = lib.mkForce "ghost";
+          d2b.vms.corp-vm.env = lib.mkForce "ghost";
         }
       );
     };
@@ -177,12 +177,12 @@ shared.mkBatch {
     # Network option-schema — workload env references may not target
     # a disabled env.
     "vm-env-disabled" = {
-      expectedSubstring = "but nixling.envs has no such ENABLED env";
+      expectedSubstring = "but d2b.envs has no such ENABLED env";
       override = (
         { lib, ... }:
         {
-          nixling.envs.work.enable = lib.mkForce false;
-          nixling.vms.corp-vm.env = lib.mkForce "work";
+          d2b.envs.work.enable = lib.mkForce false;
+          d2b.vms.corp-vm.env = lib.mkForce "work";
         }
       );
     };
@@ -194,7 +194,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.other-vm = {
+          d2b.vms.other-vm = {
             enable = true;
             env = "work";
             index = 10;
@@ -218,7 +218,7 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.vms.corp-vm.staticIp = lib.mkForce "10.20.0.50";
+          d2b.vms.corp-vm.staticIp = lib.mkForce "10.20.0.50";
         }
       );
     };
@@ -229,7 +229,7 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.envs.work.lanSubnet = lib.mkForce "10.99.0.0/23";
+          d2b.envs.work.lanSubnet = lib.mkForce "10.99.0.0/23";
         }
       );
     };
@@ -240,7 +240,7 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.envs.work.uplinkSubnet = lib.mkForce "192.0.2.0/29";
+          d2b.envs.work.uplinkSubnet = lib.mkForce "192.0.2.0/29";
         }
       );
     };
@@ -251,7 +251,7 @@ shared.mkBatch {
       override = (
         { lib, ... }:
         {
-          nixling.envs.work.lanSubnet = lib.mkForce "10.99.0.5/24";
+          d2b.envs.work.lanSubnet = lib.mkForce "10.99.0.5/24";
         }
       );
     };
@@ -262,7 +262,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.envs.other = {
+          d2b.envs.other = {
             lanSubnet = "10.20.0.0/16";
             uplinkSubnet = "198.51.100.0/30";
           };
@@ -272,32 +272,32 @@ shared.mkBatch {
 
     # H10/8 — env subnet overlaps with a hostLanCidrs entry.
     "env-vs-host-overlap" = {
-      expectedSubstring = "overlaps with `nixling.hostLanCidrs`";
+      expectedSubstring = "overlaps with `d2b.hostLanCidrs`";
       override = (
         { ... }:
         {
-          nixling.hostLanCidrs = [ "10.20.0.0/16" ];
+          d2b.hostLanCidrs = [ "10.20.0.0/16" ];
         }
       );
     };
 
     # Wave 3 — stateDir is reserved but not fully threaded.
     "state-dir-override-rejected" = {
-      expectedSubstring = "nixling.site.stateDir is reserved but not fully threaded yet";
+      expectedSubstring = "d2b.site.stateDir is reserved but not fully threaded yet";
       override = (
         { lib, ... }:
         {
-          nixling.site.stateDir = lib.mkForce "/persist/nixling";
+          d2b.site.stateDir = lib.mkForce "/persist/d2b";
         }
       );
     };
 
     "store-state-dir-override-rejected" = {
-      expectedSubstring = "nixling.store.stateDir is reserved but not fully threaded yet";
+      expectedSubstring = "d2b.store.stateDir is reserved but not fully threaded yet";
       override = (
         { lib, ... }:
         {
-          nixling.store.stateDir = lib.mkForce "/persist/nixling/vms";
+          d2b.store.stateDir = lib.mkForce "/persist/d2b/vms";
         }
       );
     };
@@ -307,7 +307,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.envs.work.lan.allowEastWest = true;
+          d2b.envs.work.lan.allowEastWest = true;
         }
       );
     };
@@ -320,7 +320,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.graphics.enable = true;
+          d2b.vms.corp-vm.graphics.enable = true;
         }
       );
     };
@@ -332,7 +332,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.audio.enable = true;
+          d2b.vms.corp-vm.audio.enable = true;
         }
       );
     };
@@ -343,8 +343,8 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.graphics.enable = true;
-          nixling.vms.corp-vm.autostart = true;
+          d2b.vms.corp-vm.graphics.enable = true;
+          d2b.vms.corp-vm.autostart = true;
         }
       );
     };
@@ -355,19 +355,19 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.graphics.enable = true;
-          nixling.vms.corp-vm.graphics.xwayland.enable = true;
+          d2b.vms.corp-vm.graphics.enable = true;
+          d2b.vms.corp-vm.graphics.xwayland.enable = true;
         }
       );
     };
 
     # Issue #22 — guest audit forwarding requires per-VM observability.
     "audit-without-observability" = {
-      expectedSubstring = "nixling.vms.corp-vm.audit.enable requires observability.enable on the same VM";
+      expectedSubstring = "d2b.vms.corp-vm.audit.enable requires observability.enable on the same VM";
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.audit.enable = true;
+          d2b.vms.corp-vm.audit.enable = true;
         }
       );
     };
@@ -380,7 +380,7 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.guest.exec.allowRoot = true;
+          d2b.vms.corp-vm.guest.exec.allowRoot = true;
         }
       );
     };
@@ -392,31 +392,31 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          nixling.vms.corp-vm.guest.exec.users = [ "alice" ];
+          d2b.vms.corp-vm.guest.exec.users = [ "alice" ];
         }
       );
     };
 
     # v1.1.2fu19 panel-test R2 must-fix: stablePrincipalId UID
     # collision assertion (per the new check in
-    # nixos-modules/minijail-profiles.nix:538-575). vm9163 and
-    # vm11019 are a known-colliding pair whose
-    # `nixling-<name>-runner` SHA-256 prefixes both map to UID
-    # 12139143 = 50000 + 0xb87737. Two enabled VMs with these
+    # nixos-modules/minijail-profiles.nix:538-575). vm2672 and
+    # vm8350 are a known-colliding pair whose
+    # `d2b-<name>-runner` SHA-256 prefixes both map to UID
+    # 2442195 = 50000 + 0x248083. Two enabled VMs with these
     # names MUST trigger the assertion at eval time. The expected
     # substring is from the assertion message template.
     "principal-uid-collision" = {
-      expectedSubstring = "v1.1.2 stablePrincipalId collision: UID 12139143";
+      expectedSubstring = "v1.1.2 stablePrincipalId collision: UID 2442195";
       override = (
         { lib, ... }:
         {
-          nixling.vms.vm9163 = {
+          d2b.vms.vm2672 = {
             enable = true;
             env = "work";
             index = 30;
             ssh.user = "alice";
           };
-          nixling.vms.vm11019 = {
+          d2b.vms.vm8350 = {
             enable = true;
             env = "work";
             index = 31;

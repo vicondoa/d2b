@@ -159,10 +159,10 @@ def rust_job(job: dict[str, Any]) -> str:
         with:
           workspaces: |
             packages -> target
-            packages/nixling-priv-broker -> target
+            packages/d2b-priv-broker -> target
           cache-directories: |
-            packages/nixling-priv-broker/target-layer1
-            packages/nixling-priv-broker/target-fakebackends
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"
@@ -170,10 +170,10 @@ def rust_job(job: dict[str, Any]) -> str:
         # Skip the fixture nix-build (~35 min) - the same fixtures are
         # already evaluated by the flake-eval-x86 (fixture-smoke) and
         # (fixture-smoke-full) shards. The contract tests that depend on
-        # NL_FIXTURES still run in those shards' eval; here we test only
+        # D2B_FIXTURES still run in those shards' eval; here we test only
         # the Rust compilation + unit/integration tests.
         env:
-          NL_SKIP_FIXTURE_BUILD: "1"
+          D2B_SKIP_FIXTURE_BUILD: "1"
         run: make {job["makeTarget"]}"""
 
 
@@ -211,7 +211,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           # A single check instantiates in its own process and fits a 16 GB
           # runner (heaviest measured ~12 GB), so unlike the old monolith this
           # rarely touches swap. Add a modest swapfile purely as OOM insurance.
-          SWAP=/mnt/nixling-ci-swap
+          SWAP=/mnt/d2b-ci-swap
           sudo swapoff "$SWAP" 2>/dev/null || true
           sudo rm -f "$SWAP"
           sudo fallocate -l 8G "$SWAP" || sudo dd if=/dev/zero of="$SWAP" bs=1M count=8192
@@ -222,12 +222,12 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
-        # NL_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
-        # `NL_FLAKE_CHECK='${{{{ matrix.check }}}}' ...` would be a shell-injection
+        # `D2B_FLAKE_CHECK='${{{{ matrix.check }}}}' ...` would be a shell-injection
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
-          NL_FLAKE_CHECK: ${{{{ matrix.check }}}}
+          D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
         run: make test-flake"""
 
 
@@ -240,7 +240,7 @@ def flake_x86_outputs_job(job: dict[str, Any]) -> str:
 {nix_setup_step()}
       - name: {job["displayName"]}
         env:
-          NL_FLAKE_OUTPUTS: "1"
+          D2B_FLAKE_OUTPUTS: "1"
         run: make test-flake"""
 
 
@@ -391,14 +391,14 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
         raise RuntimeError(f"local job {job_id!r} has no makeTarget")
     env = os.environ.copy()
     env.update(job.get("localEnv", {}))
-    log_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"nixling-{job_id}."))
+    log_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"d2b-{job_id}."))
     log_path = log_dir / "output.log"
     print(f"==> {target} ({job.get('displayName', job_id)})", flush=True)
     with log_path.open("wb") as log:
         proc = subprocess.run(["make", target], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
     if proc.returncode == 0:
         print(f"ok: {target}", flush=True)
-        if os.environ.get("NL_CHECK_KEEP_LOGS") != "1":
+        if os.environ.get("D2B_CHECK_KEEP_LOGS") != "1":
             try:
                 log_path.unlink()
                 log_dir.rmdir()
@@ -426,12 +426,12 @@ def command_run_local(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     jobs = manifest["jobs"]
     try:
-        max_jobs = int(os.environ.get("NL_CHECK_JOBS", manifest["local"].get("defaultJobs", 4)))
+        max_jobs = int(os.environ.get("D2B_CHECK_JOBS", manifest["local"].get("defaultJobs", 4)))
     except ValueError:
-        print("NL_CHECK_JOBS must be an integer", file=sys.stderr)
+        print("D2B_CHECK_JOBS must be an integer", file=sys.stderr)
         return 2
     if max_jobs < 1:
-        print("NL_CHECK_JOBS must be >= 1", file=sys.stderr)
+        print("D2B_CHECK_JOBS must be >= 1", file=sys.stderr)
         return 2
     include_preflight = not args.skip_preflight
     for phase in selected_phases(manifest, include_preflight):

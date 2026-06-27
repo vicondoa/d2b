@@ -1,17 +1,17 @@
 # nix-unit cases migrated from tests/autostart-wiring-eval.sh.
 #
 # Positive-eval regression for the daemon-driven autostart wiring in the
-# daemon-only end-state. After the `nixling@<vm>.service` template was
-# deleted, autostart is driven by the `nixlingd.service` daemon (it reads
-# `nixling.vms.<name>.autostart` out of the bundle and brings VMs up via
+# daemon-only end-state. After the `d2b@<vm>.service` template was
+# deleted, autostart is driven by the `d2bd.service` daemon (it reads
+# `d2b.vms.<name>.autostart` out of the bundle and brings VMs up via
 # the broker `SpawnRunner{role: CloudHypervisor}` op). This gate is the
 # inverse of its pre-cutover form:
 #
-#   - `systemd.services."nixling@"` (and per-instance attrs) MUST NOT exist
+#   - `systemd.services."d2b@"` (and per-instance attrs) MUST NOT exist
 #     (template deleted);
 #   - `systemd.targets.multi-user.wants` MUST NOT pull any
-#     `nixling@*.service` (dangling wants would log a load failure at boot);
-#   - `nixlingd.service` MUST be wired into `multi-user.target.wants` so it
+#     `d2b@*.service` (dangling wants would log a load failure at boot);
+#   - `d2bd.service` MUST be wired into `multi-user.target.wants` so it
 #     comes up on boot and drives `autostart = true` VMs;
 #   - `systemd.targets.microvms.wants` MUST still be `[]` — the upstream
 #     `microvm@<vm>` autostart cascade stays suppressed even though the
@@ -31,17 +31,17 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.daemonExperimental.enable = true;
-    nixling.envs.work = {
+    d2b.daemonExperimental.enable = true;
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.auto-vm = {
+    d2b.vms.auto-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -52,7 +52,7 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
-    nixling.vms.manual-vm = {
+    d2b.vms.manual-vm = {
       enable = true;
       env = "work";
       index = 11;
@@ -72,33 +72,33 @@ let
     if builtins.hasAttr "microvms" cfg.systemd.targets
     then cfg.systemd.targets.microvms.wants or [ ]
     else [ ];
-  nlAttrs = lib.filter (n: lib.hasPrefix "nixling@" n && lib.hasSuffix ".service" n) mu;
-  nixlingdWantedBy =
-    if builtins.hasAttr "nixlingd" svcs then svcs.nixlingd.wantedBy or [ ] else [ ];
+  nlAttrs = lib.filter (n: lib.hasPrefix "d2b@" n && lib.hasSuffix ".service" n) mu;
+  d2bdWantedBy =
+    if builtins.hasAttr "d2bd" svcs then svcs.d2bd.wantedBy or [ ] else [ ];
 in
 {
-  "autostart-wiring/no-nixling-template" = {
-    expr = builtins.hasAttr "nixling@" svcs;
+  "autostart-wiring/no-d2b-template" = {
+    expr = builtins.hasAttr "d2b@" svcs;
     expected = false;
   };
-  "autostart-wiring/no-nixling-auto-vm" = {
-    expr = builtins.hasAttr "nixling@auto-vm" svcs;
+  "autostart-wiring/no-d2b-auto-vm" = {
+    expr = builtins.hasAttr "d2b@auto-vm" svcs;
     expected = false;
   };
-  "autostart-wiring/no-nixling-manual-vm" = {
-    expr = builtins.hasAttr "nixling@manual-vm" svcs;
+  "autostart-wiring/no-d2b-manual-vm" = {
+    expr = builtins.hasAttr "d2b@manual-vm" svcs;
     expected = false;
   };
-  "autostart-wiring/no-dangling-nixling-wants" = {
+  "autostart-wiring/no-dangling-d2b-wants" = {
     expr = nlAttrs;
     expected = [ ];
   };
-  "autostart-wiring/nixlingd-present" = {
-    expr = builtins.hasAttr "nixlingd" svcs;
+  "autostart-wiring/d2bd-present" = {
+    expr = builtins.hasAttr "d2bd" svcs;
     expected = true;
   };
-  "autostart-wiring/nixlingd-wired-multi-user" = {
-    expr = builtins.elem "multi-user.target" nixlingdWantedBy;
+  "autostart-wiring/d2bd-wired-multi-user" = {
+    expr = builtins.elem "multi-user.target" d2bdWantedBy;
     expected = true;
   };
   "autostart-wiring/microvms-target-empty" = {

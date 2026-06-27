@@ -24,15 +24,15 @@
 # Replaces the old per-case `nix-instantiate --eval` invocation (31 cases
 # in assertions-eval, 23 in observability-eval) with one batched eval.
 {
-  # Two ways to supply nixpkgs + the nixling module set:
+  # Two ways to supply nixpkgs + the d2b module set:
   #   * flakeRoot — re-`getFlake`s the repo (the bash gates' path; flakeRoot
   #     is a real working-tree path).
-  #   * nixpkgs + nixlingModule — direct injection, used by the in-flake
+  #   * nixpkgs + d2bModule — direct injection, used by the in-flake
   #     nix-unit check where `flakeRoot = ./.` would resolve to a non-git
   #     store path. Provide exactly one of the two.
   flakeRoot ? null,
   nixpkgs ? null,
-  nixlingModule ? null,
+  d2bModule ? null,
 }:
 
 let
@@ -44,10 +44,10 @@ let
     if nixpkgs != null then nixpkgs
     else if flake != null then flake.inputs.nixpkgs
     else throw "shared.nix: provide either flakeRoot or nixpkgs";
-  resolvedNixlingModule =
-    if nixlingModule != null then nixlingModule
+  resolvedD2bModule =
+    if d2bModule != null then d2bModule
     else if flake != null then flake.nixosModules.default
-    else throw "shared.nix: provide either flakeRoot or nixlingModule";
+    else throw "shared.nix: provide either flakeRoot or d2bModule";
   lib = resolvedNixpkgs.lib;
   defaultSystem = "x86_64-linux";
 
@@ -55,16 +55,16 @@ let
   # Minimal NixOS option surface (the eval-speed win).
   #
   # The assertions gate only ever forces `config.assertions`, which reads
-  # just `config.users.users` (membership) plus `config.nixling.*`. It
+  # just `config.users.users` (membership) plus `config.d2b.*`. It
   # does NOT need nixpkgs' ~1,370-module `nixosSystem` baseModules — those
   # only matter for building a real system. Booting them per case cost
   # ~28s each (26 cases ≈ 13 min).
   #
   # Instead we `lib.evalModules` with ONLY:
   #   * nixpkgs' self-contained `misc/assertions.nix` (declares the
-  #     `assertions` / `warnings` options nixling writes to), and
+  #     `assertions` / `warnings` options d2b writes to), and
   #   * sink declarations (`types.anything`) for every other top-level
-  #     NixOS namespace nixling's modules *write* to, so those definitions
+  #     NixOS namespace d2b's modules *write* to, so those definitions
   #     are accepted. The sinks are never forced (config.assertions does
   #     not read them), so they cost nothing.
   # Marginal per-case cost drops from ~28s to ~0.6s. This mirrors how
@@ -72,7 +72,7 @@ let
   # `evalModules` over fixtures, never `nixosSystem`.
   assertionsModule = resolvedNixpkgs + "/nixos/modules/misc/assertions.nix";
 
-  # Top-level NixOS namespaces nixling's modules assign to. If nixling
+  # Top-level NixOS namespaces d2b's modules assign to. If d2b
   # grows a write to a new top-level NixOS namespace, add it here (a
   # missing sink surfaces loudly as `option <ns> does not exist`, never
   # as a silent wrong result).
@@ -196,16 +196,16 @@ let
         isNormalUser = true;
         uid = 1000;
       };
-      nixling.site = {
+      d2b.site = {
         waylandUser = "alice";
         launcherUsers = [ "alice" ];
         yubikey.enable = false;
       };
-      nixling.envs.work = {
+      d2b.envs.work = {
         lanSubnet = "10.20.0.0/24";
         uplinkSubnet = "192.0.2.0/30";
       };
-      nixling.vms.corp-vm = {
+      d2b.vms.corp-vm = {
         enable = true;
         env = "work";
         index = 10;
@@ -230,7 +230,7 @@ let
     lib.evalModules {
       modules = [
         assertionsModule
-        resolvedNixlingModule
+        resolvedD2bModule
         baseModule
         override
       ]

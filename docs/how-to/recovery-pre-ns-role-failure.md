@@ -22,11 +22,11 @@ reports `SpawnRunner failed at <role>`.
 1. **Check the broker child log**:
 
    ```bash
-   sudo tail -100 /var/log/nixling-broker-child.log
+   sudo tail -100 /var/log/d2b-broker-child.log
    ```
 
    The child closure writes its exit code to this file (via the
-   `CHILD_EXIT_*` constants defined in `packages/nixling-priv-broker/src/sys.rs`).
+   `CHILD_EXIT_*` constants defined in `packages/d2b-priv-broker/src/sys.rs`).
 
 2. **Look for these exit codes** (the most common pre-NS failure modes):
 
@@ -79,9 +79,9 @@ specific component's options):
 
 ```nix
 # In your consumer flake's nixosConfiguration:
-nixling.components.tpm.brokerPreNs = false;   # disable D5 swtpm pre-NS
-nixling.components.graphics.brokerPreNs = false;  # disable D5 gpu pre-NS
-nixling.components.audio.brokerPreNs = false;  # disable D5 audio Tier 2
+d2b.components.tpm.brokerPreNs = false;   # disable D5 swtpm pre-NS
+d2b.components.graphics.brokerPreNs = false;  # disable D5 gpu pre-NS
+d2b.components.audio.brokerPreNs = false;  # disable D5 audio Tier 2
 ```
 
 This reverts the role to the v1.1.2 isolation model (minijail-only,
@@ -95,12 +95,12 @@ The broker writes `/proc/<child-pid>/uid_map` and `gid_map`
 immediately after `clone3` returns. Failure of this step usually
 means:
 
-- The `stablePrincipalId("nixling-<vm>-<role>")` hash collided
+- The `stablePrincipalId("d2b-<vm>-<role>")` hash collided
   with an already-allocated system UID. Run
   `bash tests/principal-uid-collision-eval.sh` to verify.
 - The broker process itself lost CAP_SETUID/CAP_SETGID between
   `clone3` and the map write — usually a regression in
-  `packages/nixling-priv-broker/src/sys.rs` clone child closure.
+  `packages/d2b-priv-broker/src/sys.rs` clone child closure.
 
 ### Scenario 4: Sidecar binary execve failed (exit 73)
 
@@ -112,7 +112,7 @@ Verify:
   is not colliding with another inherited fd in the sidecar's
   argv (check `processes-json.nix` for the fd-passing argv).
 - For swtpm: the per-VM state directory exists with the right
-  ownership (a fresh `nixling vm reset <vm>` re-provisions it).
+  ownership (a fresh `d2b vm reset <vm>` re-provisions it).
 
 ## After remediation
 
@@ -120,8 +120,8 @@ Once you've identified and fixed the underlying issue, retry the
 VM start:
 
 ```bash
-sudo systemctl restart nixling-priv-broker
-nixling vm start <vm> --apply
+sudo systemctl restart d2b-priv-broker
+d2b vm start <vm> --apply
 ```
 
 If you disabled `brokerPreNs` for any role, please re-enable it

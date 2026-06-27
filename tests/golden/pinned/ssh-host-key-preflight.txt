@@ -1,4 +1,4 @@
-# ssh-host-key-preflight — nixlingd ssh_host_key_preflight + typed_error #[test]s.
+# ssh-host-key-preflight — d2bd ssh_host_key_preflight + typed_error #[test]s.
 # Successor of tests/ssh-host-key-preflight-eval.sh: these tests already run in
 # the gated `cargo test --workspace` (tests/tools/rust-workspace-checks.sh); pinned
 # fail-closed via tests/tools/assert-pinned-tests.sh. One bare libtest path/line.

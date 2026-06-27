@@ -60,7 +60,7 @@
       ]
     },
     "nftables": {
-      "description": "Exact nftables `inet nixling` table declaration.",
+      "description": "Exact nftables `inet d2b` table declaration.",
       "allOf": [
         {
           "$ref": "#/definitions/NftablesModel"
@@ -464,7 +464,7 @@
       "additionalProperties": false
     },
     "NftablesModel": {
-      "description": "Exact nftables table, hook priorities, and chain layout owned by nixling.",
+      "description": "Exact nftables table, hook priorities, and chain layout owned by d2b.",
       "type": "object",
       "required": [
         "chains",

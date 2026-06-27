@@ -1,0 +1,29 @@
+[package]
+name = "d2b-constellation-codec-protobuf"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# The first ProtocolCodec implementation (ADR 0032): protobuf via `prost`.
+# The authoritative schema is the `prost::Message`-derived wire types in
+# this crate (Spec correction: the plan named a proto/constellation.proto +
+# prost-build, but prost-build requires a `protoc` binary that is not on the
+# NixOS build PATH and would break the hermetic flake/CI build; prost's
+# derive macro produces the identical protobuf wire format without protoc).
+# This crate is the ONLY contract crate permitted to link `prost`; the
+# routing/operation layer never depends on it (dependency-direction gate).
+[dependencies]
+d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+prost = "0.13"
+
+[dev-dependencies]
+serde_json = { workspace = true }

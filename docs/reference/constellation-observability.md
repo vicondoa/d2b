@@ -7,9 +7,9 @@ state requests through configured local and gateway entrypoints, but it does
 not become the owner of global telemetry history, remote registries, or realm
 relay/provider credentials.
 
-## `nixling op inspect`
+## `d2b op inspect`
 
-`nixling op inspect` reports the current local operation/realm posture:
+`d2b op inspect` reports the current local operation/realm posture:
 
 - local VM and gateway counts;
 - configured host-resident and gateway-backed realms;
@@ -39,7 +39,7 @@ attributes use bounded outcome enums such as `clean_guest_shutdown`,
 values. The applied graceful shutdown timeout and elapsed wait are numeric
 `*_seconds` values, and historical degraded shutdown outcomes are exported as
 bounded counter metrics for dashboards. Current uncleared degraded markers remain
-available through `nixling host doctor`.
+available through `d2b host doctor`.
 
 Observer/ops realm export is opt-in. Exporters must reuse existing
 observability configuration and must not acquire new fd, pidfd, cgroup,

@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
   "exit_code": 78,
   "kind": "host-check-error",
-  "observed_state": "host.tier == 0 / legacy but nixlingd.service was reached.",
+  "observed_state": "host.tier == 0 / legacy but d2bd.service was reached.",
   "remediation": "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
   "what_was_checked": "Whether a Tier-0 all-legacy host is configured via the W3 daemon path."
 }

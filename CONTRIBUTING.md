@@ -1,20 +1,20 @@
-# Contributing to nixling
+# Contributing to d2b
 
 For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ## Filing issues
 
-- Use [GitHub Issues](https://github.com/vicondoa/nixling/issues) for bugs, docs fixes, and feature requests.
+- Use [GitHub Issues](https://github.com/vicondoa/d2b/issues) for bugs, docs fixes, and feature requests.
 - Include a minimal reproduction, expected vs actual behavior, and any relevant logs.
-- Include the nixling version: `nixling --version` on an installed host, or the repo tag / commit you tested.
+- Include the d2b version: `d2b --version` on an installed host, or the repo tag / commit you tested.
 - **Do not** file security vulnerabilities publicly; follow [SECURITY.md](./SECURITY.md).
 
 ## Setting up a dev environment
 
 1. Clone the repo and enter it:
    ```bash
-   git clone https://github.com/vicondoa/nixling.git
-   cd nixling
+   git clone https://github.com/vicondoa/d2b.git
+   cd d2b
    ```
 2. Install Nix with flakes enabled (`experimental-features = nix-command flakes`).
 3. No separate `nix develop` shell is needed.
@@ -58,13 +58,13 @@ inside `packages/`. See
 [ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
 toolchain, MSRV, and supply-chain policy.
 
-All nixling worktrees on paydro's host share Cargo build artifacts via
+All d2b worktrees on paydro's host share Cargo build artifacts via
 repo-local `.cargo/config.toml` files:
 
-- `packages/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/workspace`
-- `packages/nixling-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/broker`
-- `packages/nixling-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
-- `packages/nixling-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/nixling-cargo-target/fuzz`
+- `packages/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/workspace`
+- `packages/d2b-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/broker`
+- `packages/d2b-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
+- `packages/d2b-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/fuzz`
 
 Cargo's internal locking makes concurrent worktree builds safe, but a
 very old checkout may pay one slower rebuild while incremental state is
@@ -74,11 +74,11 @@ The persistent-shell feasibility helper is a standalone excluded workspace. Run
 it explicitly when iterating on that crate:
 
 ```bash
-cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml fmt --check
-cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path packages/nixling-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
-cargo deny --manifest-path packages/nixling-guest-shell-runner/Cargo.toml check --config packages/nixling-guest-shell-runner/deny.toml
-cargo audit --file packages/nixling-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml fmt --check
+cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
+cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
+cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --config packages/d2b-guest-shell-runner/deny.toml
+cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
 ```
 
 `bash tests/static.sh` also has a fast path for Rust-heavy gates:
@@ -87,7 +87,7 @@ cargo audit --file packages/nixling-guest-shell-runner/Cargo.lock --ignore RUSTS
   reuses that PATH in child scripts instead of spawning a fresh `nix shell`
   per gate;
 - independent Rust, schema, and example gates run behind a small semaphore
-  controlled by `NL_STATIC_JOBS` (default `4`);
+  controlled by `D2B_STATIC_JOBS` (default `4`);
 - `bash tests/tools/static-timing.sh` writes a per-gate wall-clock report to
   `$ROOT/.static-timing.log`;
 - to profile one gate in isolation, run `time bash tests/<gate>.sh`.
@@ -142,11 +142,11 @@ When docs disagree with committed, passing code, the code wins. Update the docs 
 
 ## Host-prepare gates
 
-Contributors touching anything in `packages/nixling-host/`,
-`packages/nixling-priv-broker/src/ops/`, or the host-prepare
+Contributors touching anything in `packages/d2b-host/`,
+`packages/d2b-priv-broker/src/ops/`, or the host-prepare
 docs (`docs/how-to/host-prepare.md`,
 `docs/how-to/host-prepare.d/*.md`,
-`docs/reference/{cgroup-delegation,inet-nixling-chains,privileges,support-matrix}.md`,
+`docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`,
 ADRs 0011–0014) MUST run the host-prepare Layer-1 gate set before
 submitting:
 
@@ -177,8 +177,8 @@ pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
 
 ### When to run the L2 KVM tests
 
-The Layer-2 (`tests/integration/live/nixling-store.sh`, `tests/integration/live/audio.sh`) tests
-require a live host with nixling activated and are NOT part of the
+The Layer-2 (`tests/integration/live/d2b-store.sh`, `tests/integration/live/audio.sh`) tests
+require a live host with d2b activated and are NOT part of the
 PR gate. Run them locally when:
 
 - You change a privileged broker handler whose effect is only
@@ -201,4 +201,4 @@ explicitly targets those tiers.
 
 ## License
 
-nixling is licensed under [Apache-2.0](./LICENSE). By contributing, you agree to license your contributions under the same terms.
+d2b is licensed under [Apache-2.0](./LICENSE). By contributing, you agree to license your contributions under the same terms.

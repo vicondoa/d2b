@@ -17,15 +17,15 @@ separate broker-spawned process outside the guest.
 
 ### App-ids are rewritten on the host
 
-All guest window surfaces acquire the prefix `nixling.<vm>.` on
+All guest window surfaces acquire the prefix `d2b.<vm>.` on
 their `xdg_toplevel` `app_id`.  For example, `org.mozilla.firefox`
-becomes `nixling.work.org.mozilla.firefox` when viewed from the host
+becomes `d2b.work.org.mozilla.firefox` when viewed from the host
 compositor.
 
 This affects any niri (or other compositor) rules you have written
 that match by app-id.  Rules that matched `org.mozilla.firefox` must
-be updated to match `nixling.work.org.mozilla.firefox` or the regex
-pattern `^nixling\.work\.`.
+be updated to match `d2b.work.org.mozilla.firefox` or the regex
+pattern `^d2b\.work\.`.
 
 ### Window title prefix is retained
 
@@ -55,16 +55,16 @@ trusted before the host filter can forward them.
 
 ```nix
 # before
-nixling.vms.work.graphics.xwayland.enable = true;
+d2b.vms.work.graphics.xwayland.enable = true;
 
 # after (or remove the option entirely)
-nixling.vms.work.graphics.xwayland.enable = false;
+d2b.vms.work.graphics.xwayland.enable = false;
 ```
 
 ### 2. Enable cross-domain forwarding
 
 ```nix
-nixling.vms.work.graphics.crossDomainTrusted = true;
+d2b.vms.work.graphics.crossDomainTrusted = true;
 ```
 
 > **Note:** Do not set `crossDomainTrusted = true` for VMs that run
@@ -78,7 +78,7 @@ The Wayland filter is enabled by default for graphics VMs with
 `crossDomainTrusted = true`.  You can set it explicitly for clarity:
 
 ```nix
-nixling.vms.work.graphics.waylandFilter.enable = true;
+d2b.vms.work.graphics.waylandFilter.enable = true;
 ```
 
 Leave it enabled unless you intentionally want the GPU sidecar to use the
@@ -98,24 +98,24 @@ window-rule {
 
 // after (match the prefixed form)
 window-rule {
-    match app-id=r#"^nixling\.work\.org\.mozilla\.firefox$"#
+    match app-id=r#"^d2b\.work\.org\.mozilla\.firefox$"#
     // ...
 }
 ```
 
 Or use the generated include file (see
-[Set up niri window borders for nixling VMs](./niri-vm-borders.md)):
+[Set up niri window borders for d2b VMs](./niri-vm-borders.md)):
 
 ```nix
-nixling.site.ui.compositors.niri.enable = true;
+d2b.site.ui.compositors.niri.enable = true;
 ```
 
 ```kdl
 // config.kdl
-include "/etc/nixling/niri-vm-borders.kdl"
+include "/etc/d2b/niri-vm-borders.kdl"
 ```
 
-The generated rules use the prefix regex `^nixling\.<vm>\.` so they
+The generated rules use the prefix regex `^d2b\.<vm>\.` so they
 match all windows from a given VM regardless of their original
 app-ids.
 
@@ -125,11 +125,11 @@ Apply the configuration and restart the affected VM:
 
 ```bash
 sudo nixos-rebuild switch
-nixling vm stop work --apply
-nixling vm start work --apply
+d2b vm stop work --apply
+d2b vm start work --apply
 ```
 
-After `nixling vm start`, confirm the guest starts successfully and windows
+After `d2b vm start`, confirm the guest starts successfully and windows
 appear on the host compositor.
 
 ## Verifying the migration
@@ -143,9 +143,9 @@ niri msg windows
 ```
 
 Every window from the VM should have `app_id` starting with
-`nixling.<vm>.`.  If the original app-id appears without the prefix,
+`d2b.<vm>.`.  If the original app-id appears without the prefix,
 confirm `crossDomainTrusted = true` and that the filter proxy is
-running (`nixling vm status <vm>`).
+running (`d2b vm status <vm>`).
 
 ### Check the host compositor socket ownership
 
@@ -159,16 +159,16 @@ ls -la /proc/$(pgrep -f "crosvm.*work")/fd 2>/dev/null \
   | grep wayland
 
 # Confirm the proxy holds the compositor socket
-ls -la /proc/$(pgrep -f "nixling-wayland-filter.*work")/fd 2>/dev/null \
+ls -la /proc/$(pgrep -f "d2b-wayland-filter.*work")/fd 2>/dev/null \
   | grep wayland
 ```
 
 ## Understanding the warning model
 
 The filter proxy's policy engine emits runtime advisory diagnostics when
-an operator override changes a rule nixling considers required or
+an operator override changes a rule d2b considers required or
 high-risk.  These warnings do not block evaluation or builds; they appear
-in the `nixling-wayland-filter` journal stream when the VM starts.
+in the `d2b-wayland-filter` journal stream when the VM starts.
 
 For a full list of warning conditions, see
 [`docs/reference/wayland-filter-warnings.md`](../reference/wayland-filter-warnings.md).
@@ -181,7 +181,7 @@ the migration:
 1. Set `graphics.crossDomainTrusted = false` and
    `graphics.waylandFilter.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
-3. Restart the VM: `nixling vm stop <vm> --apply && nixling vm start <vm> --apply`.
+3. Restart the VM: `d2b vm stop <vm> --apply && d2b vm start <vm> --apply`.
 
 The VM will stop using the filtered cross-domain Wayland path until
 `crossDomainTrusted` is enabled again. Standard virtio-gpu display

@@ -14,7 +14,7 @@
 # flake.checks.<sys>.guest-exec-policy already builds for the positive
 # "enabled" scenario) by importing it with a synthetic `flake` shim whose
 # `inputs.nixpkgs.lib.nixosSystem` routes through the harness `mkEval` (==
-# nixosSystem with the nixling module set). This keeps the eval 100% faithful
+# nixosSystem with the d2b module set). This keeps the eval 100% faithful
 # to the retired bash gate's `nix eval` of each scenario while staying hermetic
 # (no `builtins.getFlake`). Each positive scenario asserts the exact evidence
 # JSON; each policy-violation scenario asserts the eval THROWS (the bash gate

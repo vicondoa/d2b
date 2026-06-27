@@ -1,8 +1,8 @@
 # tests/unit/smoke/smoke-eval-extraspecialargs.nix — regression test for Spec
-# correction #30 (v0.1.1: `nixling.site.extraSpecialArgs` is merged
-# into the per-VM `specialArgs` in the nixling-owned VM evaluator).
+# correction #30 (v0.1.1: `d2b.site.extraSpecialArgs` is merged
+# into the per-VM `specialArgs` in the d2b-owned VM evaluator).
 #
-# Mirrors tests/unit/smoke/smoke-eval.nix but declares `nixling.site.extraSpecialArgs
+# Mirrors tests/unit/smoke/smoke-eval.nix but declares `d2b.site.extraSpecialArgs
 # = { sentinel = "ok"; }` and a per-VM `config` module that consumes
 # `sentinel` directly via a positional-attribute argument. If
 # extraSpecialArgs ever stops flowing through (e.g. a refactor of
@@ -41,7 +41,7 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
@@ -54,12 +54,12 @@ let
           extraSpecialArgs = { sentinel = "ok"; };
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        nixling.vms.corp-vm = {
+        d2b.vms.corp-vm = {
           enable = true;
           env = "work";
           index = 10;
@@ -82,22 +82,22 @@ let
               uid = 1000;
             };
             # Forces a strict comparison; eval fails noisily on mismatch.
-            environment.etc."nixling-extraspecialargs-sentinel".text =
+            environment.etc."d2b-extraspecialargs-sentinel".text =
               if sentinel == "ok"
               then "ok"
-              else throw "nixling.site.extraSpecialArgs did not flow to per-VM specialArgs (got sentinel=${toString sentinel})";
+              else throw "d2b.site.extraSpecialArgs did not flow to per-VM specialArgs (got sentinel=${toString sentinel})";
           };
         };
       })
     ];
   };
 in
-  # Force the per-VM nixling-owned evaluator so the specialArgs
+  # Force the per-VM d2b-owned evaluator so the specialArgs
   # merge path is actually evaluated. Reading the per-VM
   # environment.etc sentinel file's `.text` value forces
   # both the module-argument resolution (proves `sentinel` was
   # propagated) AND the inline throw above (proves the *value*
   # is the expected one).
   builtins.deepSeq
-    nixos.config.nixling._computed.corp-vm.config.environment.etc."nixling-extraspecialargs-sentinel".text
+    nixos.config.d2b._computed.corp-vm.config.environment.etc."d2b-extraspecialargs-sentinel".text
     nixos.config.system.build.toplevel

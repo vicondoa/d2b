@@ -6,7 +6,7 @@ The crosvm vhost-user-media backend is wired as a supported opt-in path for
 graphics VMs that set:
 
 ```nix
-nixling.vms.<vm>.graphics.videoSidecar = true;
+d2b.vms.<vm>.graphics.videoSidecar = true;
 ```
 
 The implementation is still intentionally narrow: H264 decode only and
@@ -36,7 +36,7 @@ exact store path referenced by the trusted process graph.
 
 ## Why the implementation stays narrow
 
-The sidecar is a host GPU attack surface, so nixling keeps the exposed surface
+The sidecar is a host GPU attack surface, so d2b keeps the exposed surface
 closed:
 
 - one AF_UNIX socket per VM;

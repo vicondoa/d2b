@@ -1,6 +1,6 @@
-# Graphics support for nixling VMs (virtio-gpu + Wayland cross-domain
+# Graphics support for d2b VMs (virtio-gpu + Wayland cross-domain
 # forward to the host compositor). Imported by host.nix whenever a VM
-# sets `nixling.vms.<name>.graphics.enable = true`.
+# sets `d2b.vms.<name>.graphics.enable = true`.
 #
 # Hypervisor: cloud-hypervisor (chosen over crosvm because crosvm has
 # no swtpm backend — its only `--vtpm-proxy` flag wires to ChromeOS's
@@ -32,7 +32,7 @@ let
 
   # wl-cross-domain-proxy handles the guest-side virtio-gpu Wayland
   # transport only. Filtering, global hiding, and app-id rewriting are
-  # performed by the host-side nixling-wayland-filter proxy. The binary
+  # performed by the host-side d2b-wayland-filter proxy. The binary
   # is gated on crossDomainTrusted so it does not start crash-looping
   # when the cross-domain crosvm context is absent.
   wlCrossDomainProxy = import ../../pkgs/wl-cross-domain-proxy { inherit pkgs; };
@@ -157,14 +157,14 @@ let
     # caps: the guest sends VIRGL_CCMD_CREATE_VIDEO_CODEC which
     # blocks the GPU command loop while the host does synchronous
     # CUDA/NVDEC operations, causing a protocol-level hang.
-    # `nixling.graphics.virglVideo = true` re-enables the plumbing for
+    # `d2b.graphics.virglVideo = true` re-enables the plumbing for
     # an explicit experimental validation run.
     postPatch = (old.postPatch or "") + ''
       # 3. Enable video in build_rutabaga when GPU path is present
       substituteInPlace devices/src/virtio/gpu/mod.rs \
         --replace-fail \
           'let use_render_server =' \
-          'let use_video = ${if config.nixling.graphics.virglVideo then "true" else "false"};
+          'let use_video = ${if config.d2b.graphics.virglVideo then "true" else "false"};
     let use_render_server ='
 
       substituteInPlace devices/src/virtio/gpu/mod.rs \
@@ -279,7 +279,7 @@ let
       -exec sed -i '/^statx:/d' {} +
     cat >> $out/share/policy/crosvm/common_device.policy <<'EOF'
 
-# nixpkgs glibc 2.41+ compat — see modules/nixling/graphics.nix
+# nixpkgs glibc 2.41+ compat — see modules/d2b/graphics.nix
 statx: 1
 EOF
 
@@ -294,22 +294,22 @@ EOF
 in
 
 {
-  options.nixling.graphics.crossDomainTrusted = lib.mkOption {
+  options.d2b.graphics.crossDomainTrusted = lib.mkOption {
     type = lib.types.bool;
     default = false;
     description = "Allow cross-domain Wayland forwarding via virtio-gpu for this VM. Default false; set true only for VMs where cross-domain is the primary use case (e.g. a Wayland-forwarding launchpad VM that runs FreeRDP or another remote-desktop client). Must be false for VMs running Docker.";
   };
 
-  options.nixling.graphics.virglVideo = lib.mkOption {
+  options.d2b.graphics.virglVideo = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Experimental guest-side mirror of nixling.vms.<vm>.graphics.virglVideo. Enables rutabaga/virglrenderer video forwarding for the crosvm GPU sidecar.";
+    description = "Experimental guest-side mirror of d2b.vms.<vm>.graphics.virglVideo. Enables rutabaga/virglrenderer video forwarding for the crosvm GPU sidecar.";
   };
 
-  options.nixling.graphics.xwayland.enable = lib.mkOption {
+  options.d2b.graphics.xwayland.enable = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Guest-side mirror of nixling.vms.<vm>.graphics.xwayland.enable. Intentionally unsupported: graphics.xwayland.enable = true fails eval with a clear message for the Wayland-only migration period.";
+    description = "Guest-side mirror of d2b.vms.<vm>.graphics.xwayland.enable. Intentionally unsupported: graphics.xwayland.enable = true fails eval with a clear message for the Wayland-only migration period.";
   };
 
   config = {
@@ -350,7 +350,7 @@ in
       # directly (see crosvmPatched let-binding for why no overrides).
       #
       # gate the cross-domain Wayland context type on
-      # `nixling.graphics.crossDomainTrusted`. When the option is false
+      # `d2b.graphics.crossDomainTrusted`. When the option is false
       # (the default — set true only for VMs that legitimately need
       # cross-domain Wayland forwarding, e.g. a Wayland-forwarding
       # launchpad VM running FreeRDP), wrap crosvm in a shell shim
@@ -386,7 +386,7 @@ in
       # workspace. The scanout protocol stays intact; only the
       # visible artifact is suppressed.
       graphics.crosvmPackage =
-        if config.nixling.graphics.crossDomainTrusted
+        if config.d2b.graphics.crossDomainTrusted
         then crosvmWithRenderServer
         else
           let
@@ -504,9 +504,9 @@ in
     # cross-domain channel exists for the proxy to connect to).
     #
     # Title rewriting and app-id prefixing are performed on the HOST
-    # side by nixling-wayland-filter; the guest proxy does not use
+    # side by d2b-wayland-filter; the guest proxy does not use
     # --tag or any filtering flag.
-    systemd.user.services.wayland-proxy = lib.mkIf config.nixling.graphics.crossDomainTrusted {
+    systemd.user.services.wayland-proxy = lib.mkIf config.d2b.graphics.crossDomainTrusted {
       description = "Wayland cross-domain proxy (guest virtio-gpu transport)";
       wantedBy = [ "default.target" ];
       serviceConfig = {

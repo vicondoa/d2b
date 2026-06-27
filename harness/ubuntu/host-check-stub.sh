@@ -62,12 +62,12 @@ fi
 nft_table_status=missing
 nft_table_detail="nft command not found"
 if command -v nft >/dev/null 2>&1; then
-  if nft list table inet nixling >/dev/null 2>&1; then
-    nft_table_status=existing-nixling-table
-    nft_table_detail="found existing inet nixling table, run nixling host destroy first"
+  if nft list table inet d2b >/dev/null 2>&1; then
+    nft_table_status=existing-d2b-table
+    nft_table_detail="found existing inet d2b table, run d2b host destroy first"
   else
     nft_table_status=ok
-    nft_table_detail="inet nixling table absent"
+    nft_table_detail="inet d2b table absent"
   fi
 fi
 
@@ -120,7 +120,7 @@ if [ -d /etc/NetworkManager ] || command -v NetworkManager >/dev/null 2>&1 || co
     nm_found_config=""
     shopt -s nullglob
     for nm_conf in /etc/NetworkManager/conf.d/*.conf; do
-      if grep -q 'unmanaged-devices' "$nm_conf" 2>/dev/null && grep -q 'nixling' "$nm_conf" 2>/dev/null; then
+      if grep -q 'unmanaged-devices' "$nm_conf" 2>/dev/null && grep -q 'd2b' "$nm_conf" 2>/dev/null; then
         nm_found_config=$nm_conf
         break
       fi
@@ -128,10 +128,10 @@ if [ -d /etc/NetworkManager ] || command -v NetworkManager >/dev/null 2>&1 || co
     shopt -u nullglob
     if [ -n "$nm_found_config" ]; then
       nm_status=ok
-      nm_detail="found nixling unmanaged-devices config: $nm_found_config"
+      nm_detail="found d2b unmanaged-devices config: $nm_found_config"
     elif [ "$nm_running" -eq 1 ]; then
       nm_status=todo
-      nm_detail="NetworkManager is active but no nixling unmanaged-devices config was found"
+      nm_detail="NetworkManager is active but no d2b unmanaged-devices config was found"
     fi
   elif [ "$nm_running" -eq 1 ]; then
     nm_status=todo
@@ -167,13 +167,13 @@ ifnamsiz_detail="W3 interface-name regex: $ifnamsiz_regex"
 hosts_status=unsupported
 hosts_detail="/etc/hosts not readable"
 if [ -r /etc/hosts ]; then
-  hosts_count=$(grep -c '# BEGIN nixling' /etc/hosts 2>/dev/null || true)
+  hosts_count=$(grep -c '# BEGIN d2b' /etc/hosts 2>/dev/null || true)
   if [ "$hosts_count" -gt 0 ]; then
     hosts_status=existing
-    hosts_detail="found $hosts_count nixling marked block(s) in /etc/hosts"
+    hosts_detail="found $hosts_count d2b marked block(s) in /etc/hosts"
   else
     hosts_status=ok
-    hosts_detail="no nixling marked block found in /etc/hosts"
+    hosts_detail="no d2b marked block found in /etc/hosts"
   fi
 fi
 
@@ -232,10 +232,10 @@ print_comment "Canonical W0b stub output. Regenerate expected-host-check.json by
 print_field kernel_version "$kernel_status" "$kernel_release" ","
 print_field cgroup_v2_unified "$cgroup_status" "$cgroup_detail" ","
 print_field nftables "$nft_status" "$nft_detail" ","
-print_field nftables_table_nixling "$nft_table_status" "$nft_table_detail" ","
+print_field nftables_table_d2b "$nft_table_status" "$nft_table_detail" ","
 print_field firewalld_coexistence "$firewall_status" "$firewall_detail" ","
 print_field network_manager_unmanaged "$nm_status" "$nm_detail" ","
-print_field route_preflight todo-wave-w3 "deferred to W3 host prepare; nixling envs not yet declared" ","
+print_field route_preflight todo-wave-w3 "deferred to W3 host prepare; d2b envs not yet declared" ","
 print_field bridge_tap_port_flag_readback "$bridge_readback_status" "$bridge_readback_detail" ","
 print_field ipv6_sysctl_drift "$ipv6_status" "$ipv6_detail" ","
 print_field ifnamsiz_validation_negatives ok "$ifnamsiz_detail" ","

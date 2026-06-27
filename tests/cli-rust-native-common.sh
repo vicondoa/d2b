@@ -6,18 +6,18 @@ HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 ROOT=${ROOT:-$(dirname "$HERE")}
 export ROOT
 export FLAKE=${FLAKE:-$ROOT}
-export NL_LOG=${NL_LOG:-$ROOT/.cli-rust-native.log}
-export NL_STATIC_CACHE=${NL_STATIC_CACHE:-$ROOT/.cli-rust-native-cache}
-mkdir -p "$NL_STATIC_CACHE"
+export D2B_LOG=${D2B_LOG:-$ROOT/.cli-rust-native.log}
+export D2B_STATIC_CACHE=${D2B_STATIC_CACHE:-$ROOT/.cli-rust-native-cache}
+mkdir -p "$D2B_STATIC_CACHE"
 
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-nl_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path || true
 
-nl_cli_flake_source_root() {
+d2b_cli_flake_source_root() {
   # The cli-rust-native eval sites resolve the framework flake as
-  # `git+file://$(nl_cli_flake_source_root)`. Return $ROOT directly:
+  # `git+file://$(d2b_cli_flake_source_root)`. Return $ROOT directly:
   # git+file fetches only git-tracked files straight from the repo
   # (target/ is gitignored), matching `nix flake check` semantics, so
   # there is no working-tree copy. (Earlier this pre-copied a clean
@@ -27,8 +27,8 @@ nl_cli_flake_source_root() {
   printf '%s\n' "$ROOT"
 }
 
-nl_cli_toolchain_shell() {
-  if [ -n "${NL_RUST_TOOLCHAIN_PATH:-}" ]; then
+d2b_cli_toolchain_shell() {
+  if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
     env PATH="$PATH" bash -lc "$*"
   else
     nix shell --quiet --inputs-from "$ROOT" \
@@ -37,37 +37,37 @@ nl_cli_toolchain_shell() {
   fi
 }
 
-nl_cli_native_bin() {
+d2b_cli_native_bin() {
   local bin workspace_target_dir
-  bin=$(nl_cargo_bin_path workspace nixling) || return 1
+  bin=$(d2b_cargo_bin_path workspace d2b) || return 1
   if [ ! -x "$bin" ]; then
-    workspace_target_dir=$(nl_cargo_target_dir workspace) || return 1
-    nl_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p nixling"
+    workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
+    d2b_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p d2b"
   fi
   printf '%s\n' "$bin"
 }
 
-nl_daemon_native_bin() {
+d2b_daemon_native_bin() {
   local bin workspace_target_dir
-  bin=$(nl_cargo_bin_path workspace nixlingd) || return 1
+  bin=$(d2b_cargo_bin_path workspace d2bd) || return 1
   if [ ! -x "$bin" ]; then
-    workspace_target_dir=$(nl_cargo_target_dir workspace) || return 1
-    nl_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p nixlingd"
+    workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
+    d2b_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/packages/Cargo.toml' -p d2bd"
   fi
   printf '%s\n' "$bin"
 }
 
-_nl_cli_reap_repo_sockets() {
-  local target_dir="$ROOT/packages/nixlingd/target"
+_d2b_cli_reap_repo_sockets() {
+  local target_dir="$ROOT/packages/d2bd/target"
   [ -d "$target_dir" ] || return 0
   find "$target_dir" -maxdepth 1 -type s -name '*.sock' -exec rm -f -- {} +
 }
 
-_nl_cli_smoke_eval_raw() {
+_d2b_cli_smoke_eval_raw() {
   local expr="$1" out="$2"
   local modules flake_root
-  modules=$(_nl_smoke_config_modules)
-  flake_root=$(nl_cli_flake_source_root)
+  modules=$(_d2b_smoke_config_modules)
+  flake_root=$(d2b_cli_flake_source_root)
   : > "$out.stderr"
   if ! nix eval --impure --raw --expr "
     let
@@ -88,15 +88,15 @@ _nl_cli_smoke_eval_raw() {
   mv -f "$out.tmp" "$out"
 }
 
-_nl_cli_smoke_eval_value() {
-  local expr="$1" out="$NL_STATIC_CACHE/.cli-smoke-value"
-  _nl_cli_smoke_eval_raw "$expr" "$out"
+_d2b_cli_smoke_eval_value() {
+  local expr="$1" out="$D2B_STATIC_CACHE/.cli-smoke-value"
+  _d2b_cli_smoke_eval_raw "$expr" "$out"
   cat "$out"
 }
 
-nl_cli_smoke_bundle_tree() {
-  local tree="$NL_STATIC_CACHE/cli-bundle-tree"
-  local lock_file="$NL_STATIC_CACHE/cli-bundle-tree.lock"
+d2b_cli_smoke_bundle_tree() {
+  local tree="$D2B_STATIC_CACHE/cli-bundle-tree"
+  local lock_file="$D2B_STATIC_CACHE/cli-bundle-tree.lock"
   if [ -f "$tree/.ready" ] \
     && [ -f "$tree/vms.json" ] \
     && [ -f "$tree/bundle.json" ] \
@@ -106,7 +106,7 @@ nl_cli_smoke_bundle_tree() {
     return 0
   fi
 
-  mkdir -p "$NL_STATIC_CACHE"
+  mkdir -p "$D2B_STATIC_CACHE"
   exec {tree_lock_fd}>>"$lock_file"
   flock -x "$tree_lock_fd"
   if [ -f "$tree/.ready" ] \
@@ -122,10 +122,10 @@ nl_cli_smoke_bundle_tree() {
 
   rm -rf -- "$tree"
   mkdir -p "$tree/closures"
-  cp "$(nl_smoke_vms_json)" "$tree/vms.json"
+  cp "$(d2b_smoke_vms_json)" "$tree/vms.json"
   local modules flake_root bundle_path
-  modules=$(_nl_smoke_config_modules)
-  flake_root=$(nl_cli_flake_source_root)
+  modules=$(_d2b_smoke_config_modules)
+  flake_root=$(d2b_cli_flake_source_root)
   bundle_path=$(nix build --impure --no-link --print-out-paths --expr "
     let
       flake = builtins.getFlake \"git+file://$flake_root\";
@@ -136,14 +136,14 @@ nl_cli_smoke_bundle_tree() {
           $modules
         ];
       };
-    in nixos.config.nixling._bundle.bundle.path
+    in nixos.config.d2b._bundle.bundle.path
   ")
   cp "$bundle_path" "$tree/bundle.json"
-  _nl_cli_smoke_eval_raw 'nixos.config.nixling._bundle.hostJson.jsonText' "$tree/host.json"
-  _nl_cli_smoke_eval_raw 'nixos.config.nixling._bundle.processesJson.jsonText' "$tree/processes.json"
+  _d2b_cli_smoke_eval_raw 'nixos.config.d2b._bundle.hostJson.jsonText' "$tree/host.json"
+  _d2b_cli_smoke_eval_raw 'nixos.config.d2b._bundle.processesJson.jsonText' "$tree/processes.json"
 
   # Each closures/<vm>.json artifact is a runCommand-emitted derivation
-  # exposed via `nixling._bundle.closures.<vm>.path`. Evaluating `.path`
+  # exposed via `d2b._bundle.closures.<vm>.path`. Evaluating `.path`
   # alone gives the future output store path; we must REALISE it to copy
   # the file. `nix build --impure --expr ... --no-link --print-out-paths`
   # both instantiates and builds the derivation, returning the realised
@@ -162,7 +162,7 @@ nl_cli_smoke_bundle_tree() {
             $modules
           ];
         };
-      in (builtins.getAttr \"$vm\" nixos.config.nixling._bundle.closures).path
+      in (builtins.getAttr \"$vm\" nixos.config.d2b._bundle.closures).path
     ")
     cp "$path" "$tree/closures/$vm.json"
   done < <(jq -r 'keys[] | select(startswith("_") | not)' "$tree/vms.json")
@@ -173,10 +173,10 @@ nl_cli_smoke_bundle_tree() {
   printf '%s\n' "$tree"
 }
 
-nl_cli_smoke_bundle_tree_runner_drift() {
+d2b_cli_smoke_bundle_tree_runner_drift() {
   local base tree
-  base=$(nl_cli_smoke_bundle_tree)
-  tree="$NL_STATIC_CACHE/cli-bundle-tree-runner-drift"
+  base=$(d2b_cli_smoke_bundle_tree)
+  tree="$D2B_STATIC_CACHE/cli-bundle-tree-runner-drift"
   if [ ! -f "$tree/.ready" ]; then
     rm -rf "$tree"
     cp -R "$base" "$tree"
@@ -188,10 +188,10 @@ nl_cli_smoke_bundle_tree_runner_drift() {
   printf '%s\n' "$tree"
 }
 
-nl_legacy_cli_bin() {
-  local cache="$NL_STATIC_CACHE/legacy-cli.path"
-  local keys_dir="$NL_STATIC_CACHE/legacy-cli-keys"
-  local expr="$NL_STATIC_CACHE/legacy-cli.nix"
+d2b_legacy_cli_bin() {
+  local cache="$D2B_STATIC_CACHE/legacy-cli.path"
+  local keys_dir="$D2B_STATIC_CACHE/legacy-cli-keys"
+  local expr="$D2B_STATIC_CACHE/legacy-cli.nix"
   local cli_out
 
   if [ -f "$cache" ] && [ -x "$(cat "$cache")" ]; then
@@ -205,7 +205,7 @@ nl_legacy_cli_bin() {
   fi
 
   local flake_root
-  flake_root=$(nl_cli_flake_source_root)
+  flake_root=$(d2b_cli_flake_source_root)
 
   cat > "$expr" <<EOF2
 let
@@ -214,7 +214,7 @@ let
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   keysDir = builtins.path {
     path = $keys_dir;
-    name = "nixling-cli-json-keys";
+    name = "d2b-cli-json-keys";
   };
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -228,17 +228,17 @@ let
         environment.etc."machine-id".text = "00000000000000000000000000000000";
         system.stateVersion = "25.11";
         users.users.alice = { isNormalUser = true; uid = 1000; };
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
           keysDir = keysDir;
         };
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
-        nixling.vms.corp-vm = {
+        d2b.vms.corp-vm = {
           enable = true;
           env = "work";
           index = 10;
@@ -252,26 +252,26 @@ let
     ];
   };
   cliPkg = lib.findFirst
-    (p: (p.pname or "") == "nixling")
-    (throw "nixling CLI package not found in systemPackages")
+    (p: (p.pname or "") == "d2b")
+    (throw "d2b CLI package not found in systemPackages")
     nixos.config.environment.systemPackages;
 in
   cliPkg
 EOF2
   cli_out=$(nix-build --no-out-link "$expr")
-  printf '%s\n' "$cli_out/bin/nixling" > "$cache"
+  printf '%s\n' "$cli_out/bin/d2b" > "$cache"
   cat "$cache"
 }
 
-nl_write_system_state_fixture() {
+d2b_write_system_state_fixture() {
   local out="$1"
   cat > "$out" <<'EOF2'
 {
   "units": {
-    "nixling@corp-vm.service": "inactive",
+    "d2b@corp-vm.service": "inactive",
     "microvm@corp-vm.service": "inactive",
     "microvm-virtiofsd@corp-vm.service": "inactive",
-    "nixling@sys-work-net.service": "active",
+    "d2b@sys-work-net.service": "active",
     "microvm@sys-work-net.service": "active",
     "microvm-virtiofsd@sys-work-net.service": "active"
   },
@@ -293,12 +293,12 @@ nl_write_system_state_fixture() {
 EOF2
 }
 
-nl_write_system_state_fixture_pending() {
+d2b_write_system_state_fixture_pending() {
   local out="$1"
   cat > "$out" <<'EOF2'
 {
   "units": {
-    "nixling@corp-vm.service": "active",
+    "d2b@corp-vm.service": "active",
     "microvm@corp-vm.service": "active",
     "microvm-virtiofsd@corp-vm.service": "active"
   },
@@ -320,7 +320,7 @@ nl_write_system_state_fixture_pending() {
 EOF2
 }
 
-_nl_host_check_sysctls_json() {
+_d2b_host_check_sysctls_json() {
   local bundle_root="$1"
   # host_check now enforces
   # kernelModules[].sysctls when the module is loaded/built-in. The
@@ -347,12 +347,12 @@ _nl_host_check_sysctls_json() {
   ' "$bundle_root/host.json"
 }
 
-nl_write_host_check_fixture_pass() {
+d2b_write_host_check_fixture_pass() {
   local out="$1" bundle_root="$2" sysctls
-  sysctls=$(_nl_host_check_sysctls_json "$bundle_root")
+  sysctls=$(_d2b_host_check_sysctls_json "$bundle_root")
   cat > "$out" <<EOF2
 {
-  "kernelRelease": "6.8.12-nixling",
+  "kernelRelease": "6.8.12-d2b",
   "cgroupV2Present": true,
   "cpuVendor": "intel",
   "loadedModules": [
@@ -360,7 +360,7 @@ nl_write_host_check_fixture_pass() {
     "br_netfilter", "i915", "amdgpu", "nvidia", "nvidia_modeset", "nvidia_uvm",
     "nvidia_drm", "usbip_host"
   ],
-  "nftHasNixlingTable": true,
+  "nftHasD2bTable": true,
   "firewalldActive": false,
   "ufwActive": false,
   "sysctls": $sysctls
@@ -368,12 +368,12 @@ nl_write_host_check_fixture_pass() {
 EOF2
 }
 
-nl_write_host_check_fixture_warn() {
+d2b_write_host_check_fixture_warn() {
   local out="$1" bundle_root="$2" sysctls
-  sysctls=$(_nl_host_check_sysctls_json "$bundle_root")
+  sysctls=$(_d2b_host_check_sysctls_json "$bundle_root")
   cat > "$out" <<EOF2
 {
-  "kernelRelease": "6.8.12-nixling",
+  "kernelRelease": "6.8.12-d2b",
   "cgroupV2Present": true,
   "cpuVendor": "intel",
   "loadedModules": [
@@ -381,7 +381,7 @@ nl_write_host_check_fixture_warn() {
     "br_netfilter", "i915", "amdgpu", "nvidia", "nvidia_modeset", "nvidia_uvm",
     "nvidia_drm", "usbip_host"
   ],
-  "nftHasNixlingTable": false,
+  "nftHasD2bTable": false,
   "firewalldActive": false,
   "ufwActive": false,
   "sysctls": $sysctls
@@ -389,12 +389,12 @@ nl_write_host_check_fixture_warn() {
 EOF2
 }
 
-nl_write_host_check_fixture_fail() {
+d2b_write_host_check_fixture_fail() {
   local out="$1" bundle_root="$2" sysctls
-  sysctls=$(_nl_host_check_sysctls_json "$bundle_root")
+  sysctls=$(_d2b_host_check_sysctls_json "$bundle_root")
   cat > "$out" <<EOF2
 {
-  "kernelRelease": "6.5.0-nixling",
+  "kernelRelease": "6.5.0-d2b",
   "cgroupV2Present": true,
   "cpuVendor": "intel",
   "loadedModules": [
@@ -402,7 +402,7 @@ nl_write_host_check_fixture_fail() {
     "br_netfilter", "i915", "amdgpu", "nvidia", "nvidia_modeset", "nvidia_uvm",
     "nvidia_drm", "usbip_host"
   ],
-  "nftHasNixlingTable": true,
+  "nftHasD2bTable": true,
   "firewalldActive": false,
   "ufwActive": false,
   "sysctls": $sysctls
@@ -410,7 +410,7 @@ nl_write_host_check_fixture_fail() {
 EOF2
 }
 
-nl_write_auth_status_fixture() {
+d2b_write_auth_status_fixture() {
   local out="$1" role="$2"
   case "$role" in
     launcher)
@@ -450,7 +450,7 @@ EOF2
   esac
 }
 
-nl_assert_json_schema() {
+d2b_assert_json_schema() {
   local schema="$1" json_file="$2"
   nix shell --quiet --inputs-from "$ROOT" nixpkgs#check-jsonschema --command bash -lc \
     "check-jsonschema --schemafile '$schema' '$json_file'" >/dev/null

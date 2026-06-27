@@ -1,9 +1,9 @@
 # wl-cross-domain-proxy: guest-side virtio-gpu cross-domain Wayland proxy.
 #
 # This package provides the plain Wayland-over-virtio-gpu transport inside
-# nixling graphics VMs. It intentionally does NOT perform filtering, global
+# d2b graphics VMs. It intentionally does NOT perform filtering, global
 # hiding, app-id rewriting, or Xwayland proxying — those responsibilities
-# belong to the host-side nixling-wayland-filter binary. The split is
+# belong to the host-side d2b-wayland-filter binary. The split is
 # deliberate: wl-cross-domain-proxy only bridges the kernel virtio-gpu
 # cross-domain transport to a guest Wayland socket; every security-relevant
 # decision is made on the host side before frames reach the real compositor.

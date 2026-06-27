@@ -24,14 +24,14 @@ Instead, each caller transfers bounded chunks with explicit cursors:
 
 This follows Kata Agent's prior-art shape (`WriteStdin`, `ReadStdout`,
 `ReadStderr`, `CloseStdin`, `TtyWinResize`, `SignalProcess`, and
-`WaitProcess`) while adding nixling-specific offset cursors, memory
+`WaitProcess`) while adding d2b-specific offset cursors, memory
 budgets, long-poll behavior, detached-log retention, and typed
 slow-consumer cancellation.
 
 ## Service surface
 
 The committed protobuf service source is
-[`packages/nixling-contracts/proto/guest_control.proto`](../../packages/nixling-contracts/proto/guest_control.proto).
+[`packages/d2b-contracts/proto/guest_control.proto`](../../packages/d2b-contracts/proto/guest_control.proto).
 Lifecycle requests carry `vm_id`, `request_id`, and negotiated
 `protocol_version` in `RequestMetadata`; exec-specific requests also carry
 `exec_id` and the Hello-returned `guest_boot_id` in `ExecRequestMetadata` so
@@ -181,7 +181,7 @@ If guestd loses pre-terminal output without delivering it to the attached
 reader or representing it through detached `start_offset`/`dropped_bytes`
 accounting, the exec transitions to terminal `protocol-error` with bounded
 kind `output-lost`. This wakes waiters/readers and lets the CLI restore
-local terminal state with a typed nixling error instead of polling
+local terminal state with a typed d2b error instead of polling
 forever.
 
 ### `ExecWait`
@@ -556,12 +556,12 @@ contains them outside the explicit stdio/log payload APIs.
 If retained logs are file-backed, they live below guestd-owned guest
 paths, never below `/nix/store`, a host-shared mount, or a virtiofs export:
 
-- live attached state: `/run/nixling/guest-control/exec/<uid>/<exec-id>/`;
-- detached retained state: `/run/nixling-exec/slot-<NN>/` — a root-owned,
+- live attached state: `/run/d2b/guest-control/exec/<uid>/<exec-id>/`;
+- detached retained state: `/run/d2b-exec/slot-<NN>/` — a root-owned,
   `0700`, boot-scoped slot-keyed directory. Detached state is **not**
   per-user and **not** keyed by the opaque exec id: it is keyed by the
   fixed slot index, and is owned by the root guestd service, not a target
-  workload user or `nixling-userd`.
+  workload user or `d2b-userd`.
 
 The path components above are design-level names; implementations may use
 different leaves only if they preserve the same security properties:
@@ -569,14 +569,14 @@ different leaves only if they preserve the same security properties:
 1. The top-level runtime/state parents are created by guest activation (or
    a tmpfiles rule) as root-owned, mode `0700`, boot-scoped. Per-exec
    directories and log segments are `0700` directories and `0600` files,
-   owned by the root `nixling-guestd` service account, not by the target
+   owned by the root `d2b-guestd` service account, not by the target
    workload user.
 2. Detached retained-log ownership is served by the root guestd and its
-   trusted runner; there is no `nixling-userd` involvement and no per-user
+   trusted runner; there is no `d2b-userd` involvement and no per-user
    retained-log path to resolve. Attached exec and the detached workload
    child both run as the host-fixed workload user (`ssh.user`) inside a PAM
    login session, never root; the wire `user` field is ignored and there is
-   no separate user-session daemon (`nixling-userd` was removed; see
+   no separate user-session daemon (`d2b-userd` was removed; see
    [ADR 0030](../adr/0030-guest-exec-as-workload-user.md)).
 3. Every open is rooted at the pre-opened runtime/state directory and uses
    symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
@@ -884,11 +884,11 @@ payload bytes, or guest free-form error text.
 > **Scope note.** The guest-control exec *RPC/service* surface
 > (`ExecCreate`/`WriteStdin`/`CloseStdin`/`ReadOutput`/`TtyWinResize`/
 > `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
-> contract. The `nixling vm exec` **CLI** described below — including the
+> contract. The `d2b vm exec` **CLI** described below — including the
 > `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
 > flow — is shipped and drives that RPC surface (admin-only). Detached
-> non-interactive exec is also shipped: `nixling vm exec -d <vm> --
-> <cmd>` creates a workload-user detached exec, and `nixling vm exec <vm>
+> non-interactive exec is also shipped: `d2b vm exec -d <vm> --
+> <cmd>` creates a workload-user detached exec, and `d2b vm exec <vm>
 > list|logs|status|kill <id>` manages retained records. Detached exec uses
 > the same never-root workload-user model as attached exec, remains inside
 > guestd (no broker op), and is advertised only when guestd has reconciled
@@ -896,12 +896,12 @@ payload bytes, or guest free-form error text.
 
 ### Attached exec
 
-`nixling vm exec <vm> -- <argv...>` creates a non-TTY exec with stdin
+`d2b vm exec <vm> -- <argv...>` creates a non-TTY exec with stdin
 closed. The CLI reads stdout/stderr through offsets until both streams
 EOF and `ExecWait` returns terminal. The CLI exits with the remote exit
 code for normal command exit. Remote signal termination is reported as the
 command result with signal metadata and shell-style status `128 + signal`.
-Typed nixling errors are reserved for transport, protocol, authorization,
+Typed d2b errors are reserved for transport, protocol, authorization,
 and pre-exec failures.
 
 `--interactive` (`-i`) opens stdin and must be paired with `--tty`
@@ -920,7 +920,7 @@ return path.
 
 ### Detached exec
 
-`nixling vm exec -d <vm> -- <argv...>` creates a non-TTY detached exec and
+`d2b vm exec -d <vm> -- <argv...>` creates a non-TTY detached exec and
 returns an opaque `exec_id` plus the initial state. The command runs as the
 VM's workload user inside a PAM login session, never as root, and
 continues after the host CLI disconnects. `-d` is mutually exclusive with
@@ -930,11 +930,11 @@ names are resolved by the workload user's login `PATH` through the same
 
 Detached management is VM-first so management words remain valid VM names:
 
-- `nixling vm exec <vm> list` lists retained detached records;
-- `nixling vm exec <vm> logs <exec_id>` returns retained stdout/stderr;
-- `nixling vm exec <vm> status <exec_id>` returns state and terminal
+- `d2b vm exec <vm> list` lists retained detached records;
+- `d2b vm exec <vm> logs <exec_id>` returns retained stdout/stderr;
+- `d2b vm exec <vm> status <exec_id>` returns state and terminal
   disposition;
-- `nixling vm exec <vm> kill <exec_id>` maps to `ExecCancel`.
+- `d2b vm exec <vm> kill <exec_id>` maps to `ExecCancel`.
 
 `kill` is a two-phase cancel: guestd requests graceful termination, waits a
 bounded grace window, then force-kills the workload if needed. It is
@@ -1037,7 +1037,7 @@ material, or guest free-form errors.
 Health responses and CLI JSON use the same rule except for fields that are
 the explicit user-facing API result. The interactive `-i`/`-t` exec forms
 are human-only and reject `--json` with a usage envelope, while the
-non-TTY `nixling vm exec <vm> --json -- <argv...>` returns a single
+non-TTY `d2b vm exec <vm> --json -- <argv...>` returns a single
 terminal envelope (exit code + source/reason + bounded captured output).
 On the service surface, `ExecInspect`/`ExecLogs` may return the
 `execId`/cursor state or the requested log payload when the caller asked

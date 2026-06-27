@@ -2,34 +2,34 @@
 { pkgs, self }:
 
 let
-  nixlingLib = import ./lib.nix {
+  d2bLib = import ./lib.nix {
     inherit self;
     inherit (pkgs) lib;
   };
 in
 pkgs.testers.runNixOSTest {
-  name = "nixling-host-realm-isolation";
+  name = "d2b-host-realm-isolation";
 
-  nodes.machine = nixlingLib.nixlingDaemonNode {
+  nodes.machine = d2bLib.d2bDaemonNode {
     extra = { ... }: {
       environment.systemPackages = [
         pkgs.iproute2
         pkgs.jq
       ];
 
-      nixling.site.usePrebuiltHostTools = false;
-      nixling.gateways.work = {
+      d2b.site.usePrebuiltHostTools = false;
+      d2b.gateways.work = {
         env = "work";
         index = 20;
         relay.namespace = "relns-example.servicebus.windows.net";
-        relay.entity = "hc-nixling-display";
+        relay.entity = "hc-d2b-display";
         aca = {
           subscription = "00000000-0000-0000-0000-000000000000";
-          resourceGroup = "rg-nixling-centralus";
-          sandboxGroup = "casbx-nixling-demo";
+          resourceGroup = "rg-d2b-centralus";
+          sandboxGroup = "casbx-d2b-demo";
           region = "centralus";
-          image = "registry.example.invalid/nixling-wayland:mi";
-          diskName = "nixling-wayland-mi";
+          image = "registry.example.invalid/d2b-wayland:mi";
+          diskName = "d2b-wayland-mi";
         };
       };
     };
@@ -37,10 +37,10 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     start_all()
-    machine.wait_for_unit("nixlingd.service")
-    machine.wait_for_unit("nixling-priv-broker.socket")
+    machine.wait_for_unit("d2bd.service")
+    machine.wait_for_unit("d2b-priv-broker.socket")
 
-    policy = "/etc/nixling/host-realm-relay-egress-policy.json"
+    policy = "/etc/d2b/host-realm-relay-egress-policy.json"
     machine.succeed(f"test -r {policy}")
     machine.succeed(
       f"jq -e '.mode == \"host-realm-relay-deny\" "
@@ -50,26 +50,26 @@ pkgs.testers.runNixOSTest {
     )
     policy_forbidden = [
       "relns-example.servicebus.windows.net",
-      "hc-nixling-display",
-      "registry.example.invalid/nixling-wayland:mi",
-      "/var/lib/nixling/gateways/work/credential.sealed.json",
-      "/var/lib/nixling/gateways/work/seal.key",
+      "hc-d2b-display",
+      "registry.example.invalid/d2b-wayland:mi",
+      "/var/lib/d2b/gateways/work/credential.sealed.json",
+      "/var/lib/d2b/gateways/work/seal.key",
       "SharedAccessKey",
     ]
     for token in policy_forbidden:
       machine.fail(f"grep -F {repr(token)} {policy}")
 
-    runtime_forbidden = policy_forbidden + ["NIXLING_RELAY_"]
+    runtime_forbidden = policy_forbidden + ["D2B_RELAY_"]
 
-    machine.fail("test -e /etc/nixling/gateway.json")
-    machine.fail("systemd-tmpfiles --cat-config | grep -F '/var/lib/nixling/gateways/work'")
+    machine.fail("test -e /etc/d2b/gateway.json")
+    machine.fail("systemd-tmpfiles --cat-config | grep -F '/var/lib/d2b/gateways/work'")
 
-    pids = machine.succeed("pgrep -x nixlingd").strip().split()
-    assert pids, "nixlingd pid missing"
-    machine.succeed("systemctl start nixling-priv-broker.service")
+    pids = machine.succeed("pgrep -x d2bd").strip().split()
+    assert pids, "d2bd pid missing"
+    machine.succeed("systemctl start d2b-priv-broker.service")
     broker_pid = machine.succeed(
       "for i in $(seq 1 50); do "
-      "pid=$(systemctl show -p MainPID --value nixling-priv-broker.service); "
+      "pid=$(systemctl show -p MainPID --value d2b-priv-broker.service); "
       "if [ -n \"$pid\" ] && [ \"$pid\" != 0 ]; then echo \"$pid\"; exit 0; fi; "
       "sleep 0.2; done; exit 1"
     ).strip()
@@ -86,7 +86,7 @@ pkgs.testers.runNixOSTest {
 
     sockets = machine.succeed("ss -Htanp || true")
     assert "servicebus.windows.net" not in sockets
-    assert "nixling-provider-relay" not in sockets
-    assert "nixling-gateway-relay" not in sockets
+    assert "d2b-provider-relay" not in sockets
+    assert "d2b-gateway-relay" not in sockets
   '';
 }

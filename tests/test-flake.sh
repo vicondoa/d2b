@@ -10,7 +10,7 @@
 # flake.checks (nix-unit corpus, cargo-deny/cargo-audit derivations, more
 # example evals).
 #
-# Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every supported system in one
+# Set D2B_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every supported system in one
 # process (the heavier `make check` / tests/static.sh local gate does this on a
 # large-memory host).
 
@@ -18,8 +18,8 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
-export ROOT NL_LOG
+D2B_LOG=${D2B_LOG:-/dev/null}
+export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
@@ -29,8 +29,8 @@ cd "$ROOT"
 
 # git+file:// (never a bare path): source-capture from the git tree only, so the
 # sibling cargo target/ + scratch dirs stay invisible to the eval (disk-hygiene
-# contract — see tests/lib.sh nl_flake_ref).
-flake_ref=$(nl_flake_ref "$ROOT")
+# contract — see tests/lib.sh d2b_flake_ref).
+flake_ref=$(d2b_flake_ref "$ROOT")
 
 dump_flake_eval_segfault() {
   local label="$1"
@@ -43,7 +43,7 @@ dump_flake_eval_segfault() {
     printf '%q ' "$@"
     echo
     echo "=== selected environment ==="
-    env | LC_ALL=C sort | grep -E '^(CI=|GITHUB_|RUNNER_|TMPDIR=|NIX|NL_)' || true
+    env | LC_ALL=C sort | grep -E '^(CI=|GITHUB_|RUNNER_|TMPDIR=|NIX|D2B_)' || true
     echo "=== system ==="
     uname -a || true
     lsb_release -a 2>/dev/null || true
@@ -93,21 +93,21 @@ dump_flake_eval_segfault() {
 
 # Local all-shards mode: mirror CI's x86 flake fan-out on one host instead of
 # re-combining every check into a monolithic evaluator process. This is used by
-# the Layer-1 manifest runner behind `make check`; `NL_FLAKE_JOBS` bounds local
+# the Layer-1 manifest runner behind `make check`; `D2B_FLAKE_JOBS` bounds local
 # concurrency so operators can tune Nix-daemon pressure.
-if [ "${NL_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
+if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
   log "--> flake local shards: checks.$native.* + packages.$native.*"
 
-  flake_jobs=${NL_FLAKE_JOBS:-4}
+  flake_jobs=${D2B_FLAKE_JOBS:-4}
   case "$flake_jobs" in
     ""|*[!0-9]*)
-      fail "NL_FLAKE_JOBS must be a positive integer"
+      fail "D2B_FLAKE_JOBS must be a positive integer"
       exit 2
       ;;
   esac
   if [ "$flake_jobs" -lt 1 ]; then
-    fail "NL_FLAKE_JOBS must be >= 1"
+    fail "D2B_FLAKE_JOBS must be >= 1"
     exit 2
   fi
 
@@ -120,7 +120,7 @@ if [ "${NL_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     exit 1
   fi
 
-  shard_dir=$(mktemp -d "${TMPDIR:-/tmp}/nixling-flake-shards.XXXXXX")
+  shard_dir=$(mktemp -d "${TMPDIR:-/tmp}/d2b-flake-shards.XXXXXX")
   add_cleanup "rm -rf -- $(printf '%q' "$shard_dir")"
   declare -A shard_label=()
   declare -A shard_log=()
@@ -133,12 +133,12 @@ if [ "${NL_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     local kind="$1" value="${2:-}"
     case "$kind" in
       check)
-        env -u NL_FLAKE_LOCAL_SHARDS -u NL_FLAKE_OUTPUTS \
-          NL_FLAKE_CHECK="$value" bash "$0"
+        env -u D2B_FLAKE_LOCAL_SHARDS -u D2B_FLAKE_OUTPUTS \
+          D2B_FLAKE_CHECK="$value" bash "$0"
         ;;
       outputs)
-        env -u NL_FLAKE_LOCAL_SHARDS -u NL_FLAKE_CHECK \
-          NL_FLAKE_OUTPUTS=1 bash "$0"
+        env -u D2B_FLAKE_LOCAL_SHARDS -u D2B_FLAKE_CHECK \
+          D2B_FLAKE_OUTPUTS=1 bash "$0"
         ;;
       *)
         echo "unknown local flake shard kind: $kind" >&2
@@ -222,58 +222,58 @@ if [ "${NL_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
   exit 0
 fi
 
-# Single-check shard mode (CI dynamic matrix): NL_FLAKE_CHECK=<name> instantiates
+# Single-check shard mode (CI dynamic matrix): D2B_FLAKE_CHECK=<name> instantiates
 # just that one flake check's derivation for the native system, matching the
 # `--no-build` semantics of the full sweep (evaluate + instantiate, do not
 # build). Sharding lets CI fan the checks out across parallel runners so no
 # single evaluator process holds every nixosSystem toplevel at once — the
 # OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
 # The complementary `test-flake-aarch64` job runs only the dedicated
-# smoke-eval-aarch64 expression. `NL_FLAKE_OUTPUTS=1` (below) sweeps x86
+# smoke-eval-aarch64 expression. `D2B_FLAKE_OUTPUTS=1` (below) sweeps x86
 # non-`checks` outputs.
-if [ -n "${NL_FLAKE_CHECK:-}" ]; then
+if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
   # Defense in depth: the CI matrix sources these names from the flake's check
   # attrNames, but reject anything outside a safe charset before it reaches the
   # nix attr path / any shell so a hostile attr name can neither inject nor
   # silently no-op a shard.
-  case "$NL_FLAKE_CHECK" in
+  case "$D2B_FLAKE_CHECK" in
     ""|*[!A-Za-z0-9._-]*)
-      fail "NL_FLAKE_CHECK '${NL_FLAKE_CHECK}' has characters outside [A-Za-z0-9._-]"
+      fail "D2B_FLAKE_CHECK '${D2B_FLAKE_CHECK}' has characters outside [A-Za-z0-9._-]"
       exit 1
       ;;
   esac
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
-  log "--> flake check shard: checks.$native.${NL_FLAKE_CHECK} (instantiate-only)"
+  log "--> flake check shard: checks.$native.${D2B_FLAKE_CHECK} (instantiate-only)"
   set +e
-  nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null
+  nix eval --raw "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}.drvPath" >/dev/null
   rc=$?
   set -e
   if [ "$rc" -eq 0 ]; then
-    ok "flake check shard: ${NL_FLAKE_CHECK}"
+    ok "flake check shard: ${D2B_FLAKE_CHECK}"
   elif [ "$rc" -eq 139 ]; then
-    log "  WARN: nix eval segfaulted for shard ${NL_FLAKE_CHECK}; retrying via nix-instantiate"
+    log "  WARN: nix eval segfaulted for shard ${D2B_FLAKE_CHECK}; retrying via nix-instantiate"
     dump_flake_eval_segfault \
-      "nix eval ${NL_FLAKE_CHECK}" \
-      nix eval --raw "${flake_ref}#checks.${native}.${NL_FLAKE_CHECK}.drvPath"
+      "nix eval ${D2B_FLAKE_CHECK}" \
+      nix eval --raw "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}.drvPath"
     if nix-instantiate --eval --strict -E \
-      "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath" >/dev/null; then
-      ok "flake check shard: ${NL_FLAKE_CHECK} (nix-instantiate fallback)"
+      "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${D2B_FLAKE_CHECK}.drvPath" >/dev/null; then
+      ok "flake check shard: ${D2B_FLAKE_CHECK} (nix-instantiate fallback)"
     else
       fallback_rc=$?
       if [ "$fallback_rc" -eq 139 ]; then
         dump_flake_eval_segfault \
-          "nix-instantiate ${NL_FLAKE_CHECK}" \
+          "nix-instantiate ${D2B_FLAKE_CHECK}" \
           nix-instantiate --eval --strict -E \
-          "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${NL_FLAKE_CHECK}.drvPath"
+          "let f = builtins.getFlake \"${flake_ref}\"; in f.checks.${native}.${D2B_FLAKE_CHECK}.drvPath"
       fi
-      fail "flake check shard: ${NL_FLAKE_CHECK}"
+      fail "flake check shard: ${D2B_FLAKE_CHECK}"
       exit 1
     fi
   else
-    fail "flake check shard: ${NL_FLAKE_CHECK}"
+    fail "flake check shard: ${D2B_FLAKE_CHECK}"
     exit 1
   fi
-  log "test-flake (shard ${NL_FLAKE_CHECK}) OK"
+  log "test-flake (shard ${D2B_FLAKE_CHECK}) OK"
   exit 0
 fi
 
@@ -284,7 +284,7 @@ fi
 # derivation. This closes the gap where the sharded `test-flake-x86` context
 # could pass with a broken x86 `packages` output that the lightweight aarch64
 # smoke job would not catch.
-if [ "${NL_FLAKE_OUTPUTS:-0}" = 1 ]; then
+if [ "${D2B_FLAKE_OUTPUTS:-0}" = 1 ]; then
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
   log "--> flake non-checks outputs: packages.$native.* (instantiate-only)"
   if nix eval --raw "${flake_ref}#packages.${native}" --apply \
@@ -300,7 +300,7 @@ if [ "${NL_FLAKE_OUTPUTS:-0}" = 1 ]; then
 fi
 
 systems_flag=()
-if [ "${NL_FLAKE_ALL_SYSTEMS:-0}" = 1 ]; then
+if [ "${D2B_FLAKE_ALL_SYSTEMS:-0}" = 1 ]; then
   systems_flag=(--all-systems)
   log "--> nix flake check --no-build --all-systems"
 else

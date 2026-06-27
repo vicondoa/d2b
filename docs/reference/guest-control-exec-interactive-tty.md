@@ -7,8 +7,8 @@ builds on the non-interactive contract in the
 [chunked stdio reference](./guest-control-exec-io-chunked-stdio.md).
 
 > **Scope note.** This document specifies the interactive TTY exec
-> *RPC/service* surface served by `nixling-guestd`. The operator-facing
-> `nixling vm exec -it` / `--tty` **CLI** front-end is shipped and
+> *RPC/service* surface served by `d2b-guestd`. The operator-facing
+> `d2b vm exec -it` / `--tty` **CLI** front-end is shipped and
 > drives this contract (admin-only, over the authenticated
 > guest-control vsock; see
 > [`cli-contract.md`](./cli-contract.md) for the verb surface).
@@ -27,7 +27,7 @@ builds on the non-interactive contract in the
 An interactive TTY exec is **connection-owned and non-durable**: it lives only
 for the originating ttRPC connection, has no retained-log or registry record,
 and is torn down when the connection drops. It is served entirely by
-`nixling-guestd`; there is no per-user `nixling-userd` involvement.
+`d2b-guestd`; there is no per-user `d2b-userd` involvement.
 
 ## Spawn model: helper-exec, no first-party unsafe
 
@@ -41,7 +41,7 @@ controlling terminal. The full guest stack keeps `unsafe_code = "forbid"`.
    the PTY alive (preserving the HUP/EOF contract). `Stdio::from(slave)` still
    hands fd 0 to the helper because `Command`'s `dup2` clears `CLOEXEC` on the
    duplicate.
-2. guestd spawns the static `nixling-exec-runner` in its `--tty-exec` mode via
+2. guestd spawns the static `d2b-exec-runner` in its `--tty-exec` mode via
    `Command`, with the slave on **stdin** (`Stdio::from(OwnedFd)`) and an
    `O_CLOEXEC` status pipe on **stdout**. There are no arbitrary `pass_fds`,
    no `process_group(0)`, and no `pre_exec` closure.
@@ -125,7 +125,7 @@ allowed.
 ## Runtime ceiling: indefinite, scoped to TTY
 
 A TTY exec runs **indefinitely by default** (`interactiveMaxRuntimeSec = 0` ⇒
-unlimited). Setting `nixling.vms.<vm>.guest.exec.interactiveMaxRuntimeSec > 0`
+unlimited). Setting `d2b.vms.<vm>.guest.exec.interactiveMaxRuntimeSec > 0`
 installs an optional ceiling for interactive sessions only. The 6-hour
 non-interactive attached ceiling (`MAX_EXEC_RUNTIME_MS`) is unchanged — only
 the interactive path opts into unlimited runtime.
@@ -159,18 +159,18 @@ guest user's privileges, so escaping the session is not a privilege boundary.
 
 `ExecTty`, `TtyResize`, and `Signals` are advertised in the capabilities
 response **only when the interactive path is usable** — i.e. the PTY spawner
-is wired, which requires the `nixling-exec-runner` helper to be present
+is wired, which requires the `d2b-exec-runner` helper to be present
 (the same gate as the detached exec surface).
 
 ## Conformance
 
 The interactive contract is validated by:
 
-- a fake-driven runtime matrix in `nixling-guestd` (fake PTY duplex, fake
+- a fake-driven runtime matrix in `d2b-guestd` (fake PTY duplex, fake
   session reaper, and fake clock) covering offset/sequence rejection, VEOF
   injection, target/signal allowlists, the runtime ceiling, and the
   `Running → Closing → Terminal` teardown; and
-- a real-PTY, Linux-only integration test in `nixling-exec-runner` that drives
+- a real-PTY, Linux-only integration test in `d2b-exec-runner` that drives
   the `--tty-exec` helper exactly as guestd does and asserts session
   leadership + controlling terminal, the initial winsize, `SIGWINCH`
   delivery on resize, `SIGHUP` on master hangup, status-pipe EOF (no fd

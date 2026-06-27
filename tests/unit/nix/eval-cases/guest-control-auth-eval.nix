@@ -2,7 +2,7 @@
 , pkgs ? import <nixpkgs> { inherit system; }
 , flake ? builtins.getFlake ("git+file://" + toString ./../../../..)
 , guestControlEnable ? true
-, tokenFile ? "/run/secrets/nixling/corp-vm-token"
+, tokenFile ? "/run/secrets/d2b/corp-vm-token"
 }:
 
 let
@@ -28,19 +28,19 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
-          stateDir = lib.mkForce "/var/lib/nixling";
+        d2b.site = {
+          stateDir = lib.mkForce "/var/lib/d2b";
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        nixling.vms.corp-vm = {
+        d2b.vms.corp-vm = {
           enable = true;
           env = "work";
           index = 10;
@@ -60,18 +60,18 @@ let
       })
     ];
   };
-  guestConfig = nixos.config.nixling._computed.corp-vm.config;
+  guestConfig = nixos.config.d2b._computed.corp-vm.config;
   configuredTokenFile =
-    nixos.config.nixling.vms.corp-vm.guest.control.auth.tokenFile;
-  tokenShare = lib.findFirst (share: share.tag == "nl-gctl") null guestConfig.microvm.shares;
-  service = guestConfig.systemd.services.nixling-guestd;
+    nixos.config.d2b.vms.corp-vm.guest.control.auth.tokenFile;
+  tokenShare = lib.findFirst (share: share.tag == "d2b-gctl") null guestConfig.microvm.shares;
+  service = guestConfig.systemd.services.d2b-guestd;
   serviceJson = builtins.toJSON {
     inherit (service) serviceConfig unitConfig;
   };
   processVm = lib.findFirst (vm: vm.vm == "corp-vm") null
-    nixos.config.nixling._bundle.processesJson.data.vms;
+    nixos.config.d2b._bundle.processesJson.data.vms;
   processNodes = processVm.nodes;
-  tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-nl-gctl") null processNodes;
+  tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-d2b-gctl") null processNodes;
   cloudHypervisor = lib.findFirst (node: node.id == "cloud-hypervisor") null processNodes;
   validTokenFile =
     lib.hasPrefix "/" tokenFile
@@ -80,21 +80,21 @@ let
   positive =
     assert tokenShare != null;
     assert configuredTokenFile == tokenFile;
-    assert tokenShare.source == "/var/lib/nixling/guest-control-corp-vm";
-    assert tokenShare.mountPoint == "/run/nixling-guest-control-host";
+    assert tokenShare.source == "/var/lib/d2b/guest-control-corp-vm";
+    assert tokenShare.mountPoint == "/run/d2b-guest-control-host";
     assert tokenShare.readOnly == true;
-    assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
+    assert builtins.elem "guest_control_token:/run/d2b-guest-control-host/token"
       service.serviceConfig.LoadCredential;
-    assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
+    assert builtins.elem "/run/d2b-guest-control-host" service.unitConfig.RequiresMountsFor;
     assert service.wantedBy == [ "multi-user.target" ];
     assert service.restartIfChanged == false;
-    assert lib.hasInfix "/bin/nixling-guestd --serve --vm-id corp-vm"
+    assert lib.hasInfix "/bin/d2b-guestd --serve --vm-id corp-vm"
       service.serviceConfig.ExecStart;
     assert lib.hasInfix "--activation-systemd-run-path" service.serviceConfig.ExecStart;
     assert lib.hasInfix "--activation-systemctl-path" service.serviceConfig.ExecStart;
-    assert builtins.elem "d /run/nixling-guestd 0700 root root -" guestConfig.systemd.tmpfiles.rules;
-    assert builtins.elem "d /run/nixling-guestd/activations 0700 root root -" guestConfig.systemd.tmpfiles.rules;
-    assert !(builtins.hasAttr "nixling-guestd" nixos.config.systemd.services);
+    assert builtins.elem "d /run/d2b-guestd 0700 root root -" guestConfig.systemd.tmpfiles.rules;
+    assert builtins.elem "d /run/d2b-guestd/activations 0700 root root -" guestConfig.systemd.tmpfiles.rules;
+    assert !(builtins.hasAttr "d2b-guestd" nixos.config.systemd.services);
     assert !(lib.hasInfix tokenFile serviceJson);
     assert processVm != null;
     assert tokenVirtiofsd != null;
@@ -107,14 +107,14 @@ let
       && node.readiness == [{ kind = "guest-control-health"; value = { vm = "corp-vm"; }; }]) processNodes;
     assert lib.all (node: node.id != "guest-ssh-readiness") processNodes;
     assert builtins.elem "--readonly" tokenVirtiofsd.argv;
-    assert builtins.elem "--socket-path=/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock"
+    assert builtins.elem "--socket-path=/run/d2b/vms/corp-vm/guest-control/d2b-gctl.sock"
       tokenVirtiofsd.argv;
     assert tokenVirtiofsd.profile.uid != cloudHypervisor.profile.uid;
-    assert !(lib.hasInfix "/var/lib/nixling/vms/corp-vm"
+    assert !(lib.hasInfix "/var/lib/d2b/vms/corp-vm"
       (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths));
-    assert !(lib.hasInfix "\"path\":\"/run/nixling/vms/corp-vm\""
+    assert !(lib.hasInfix "\"path\":\"/run/d2b/vms/corp-vm\""
       (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths));
-    assert lib.hasInfix "/run/nixling/vms/corp-vm/guest-control"
+    assert lib.hasInfix "/run/d2b/vms/corp-vm/guest-control"
       (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths);
     builtins.toJSON {
       inherit (tokenShare) source mountPoint readOnly;

@@ -1,8 +1,8 @@
-{ config, lib, name, nixlingInputs, pkgs, ... }:
+{ config, lib, name, d2bInputs, pkgs, ... }:
 
 let
-  cfg = config.nixling.guestControl;
-  guestPackages = nixlingInputs.self.packages.${pkgs.stdenv.hostPlatform.system};
+  cfg = config.d2b.guestControl;
+  guestPackages = d2bInputs.self.packages.${pkgs.stdenv.hostPlatform.system};
   usernamePattern = "^[a-z][a-z0-9_-]{0,31}$";
   usernameValid = user: builtins.match usernamePattern user != null;
   userExists = user:
@@ -18,12 +18,12 @@ let
   execRuntimeEnabled = cfg.exec.enable && cfg.exec.execUser != null;
 in
 {
-  options.nixling.guestControl = {
+  options.d2b.guestControl = {
     enable = lib.mkOption {
       type = lib.types.bool;
       internal = true;
       readOnly = true;
-      description = "Whether nixling's guest-control credential surface is wired in this guest.";
+      description = "Whether d2b's guest-control credential surface is wired in this guest.";
     };
 
     guestConfigPath = lib.mkOption {
@@ -32,9 +32,9 @@ in
       readOnly = true;
       description = ''
         Absolute in-guest path of the operator-editable guest config
-        working copy that `nixling config sync` reads back over the
+        working copy that `d2b config sync` reads back over the
         authenticated guest-control channel. Host-owned, derived from
-        `nixling.vms.<vm>.guestConfigFile` independently of any SSH
+        `d2b.vms.<vm>.guestConfigFile` independently of any SSH
         metadata. When non-null, guestd advertises the `ReadGuestFile`
         capability and serves a bounded read of exactly this path; when
         null there is nothing to sync and the capability stays absent
@@ -133,8 +133,8 @@ in
           !cfg.exec.enable
           || cfg.enable;
         message = ''
-          nixling.guestControl.exec.enable requires nixling.guestControl.enable.
-          Set nixling.vms.<vm>.guest.control.enable = true on the host-side VM
+          d2b.guestControl.exec.enable requires d2b.guestControl.enable.
+          Set d2b.vms.<vm>.guest.control.enable = true on the host-side VM
           option before enabling guest exec policy.
         '';
       }
@@ -142,9 +142,9 @@ in
         # Exec runs as the workload user; a workload user MUST be configured.
         assertion = !cfg.exec.enable || cfg.exec.execUser != null;
         message = ''
-          nixling.vms.<vm>.guest.exec.enable is true, but no workload user is
+          d2b.vms.<vm>.guest.exec.enable is true, but no workload user is
           configured. Guest exec always runs as the VM's workload user; set
-          nixling.vms.<vm>.ssh.user to the in-guest user exec should run as.
+          d2b.vms.<vm>.ssh.user to the in-guest user exec should run as.
         '';
       }
       {
@@ -154,7 +154,7 @@ in
           || cfg.exec.execUser == null
           || (usernameValid cfg.exec.execUser && cfg.exec.execUser != "root");
         message = ''
-          nixling.vms.<vm>.ssh.user (used as the guest exec workload user) must
+          d2b.vms.<vm>.ssh.user (used as the guest exec workload user) must
           match ${usernamePattern} and must not be root. Guest exec never runs
           as root; users elevate with sudo inside the session.
         '';
@@ -166,7 +166,7 @@ in
           || cfg.exec.execUser == null
           || userExists cfg.exec.execUser;
         message = ''
-          nixling.vms.<vm>.ssh.user (the guest exec workload user) is not
+          d2b.vms.<vm>.ssh.user (the guest exec workload user) is not
           declared as a normal or system user inside the guest. Declare it (or
           enable the desktop/home-manager user) before enabling guest exec.
         '';
@@ -184,7 +184,7 @@ in
           || !(builtins.hasAttr cfg.exec.execUser config.users.users)
           || (config.users.users.${cfg.exec.execUser}.uid or null) != 0;
         message = ''
-          nixling.vms.<vm>.ssh.user (the guest exec workload user) is configured
+          d2b.vms.<vm>.ssh.user (the guest exec workload user) is configured
           with uid = 0. Guest exec never runs as root; assign the workload user
           a non-zero uid.
         '';
@@ -192,30 +192,30 @@ in
       {
         assertion = !cfg.shell.enable || cfg.enable;
         message = ''
-          nixling.guestControl.shell.enable requires nixling.guestControl.enable.
-          Set nixling.vms.<vm>.guest.control.enable = true on the host-side VM
+          d2b.guestControl.shell.enable requires d2b.guestControl.enable.
+          Set d2b.vms.<vm>.guest.control.enable = true on the host-side VM
           option before enabling persistent shell policy.
         '';
       }
       {
         assertion = !cfg.shell.enable || cfg.exec.enable;
         message = ''
-          nixling.guestControl.shell.enable requires nixling.guestControl.exec.enable
+          d2b.guestControl.shell.enable requires d2b.guestControl.exec.enable
           because persistent shells reuse the guest-control exec terminal substrate.
         '';
       }
       {
         assertion = cfg.shell.maxAttached <= cfg.shell.maxSessions;
         message = ''
-          nixling.guestControl.shell.maxAttached must be less than or equal to
-          nixling.guestControl.shell.maxSessions.
+          d2b.guestControl.shell.maxAttached must be less than or equal to
+          d2b.guestControl.shell.maxSessions.
         '';
       }
     ];
 
     environment.systemPackages = [
-      guestPackages.nixling-guestd-static
-      guestPackages.nixling-exec-runner-static
+      guestPackages.d2b-guestd-static
+      guestPackages.d2b-exec-runner-static
     ];
 
     environment.etc."shpool/config.toml" = lib.mkIf cfg.shell.enable {
@@ -225,10 +225,10 @@ in
     };
 
     systemd.services = {
-      nixling-guestd = lib.mkIf cfg.enable {
-        description = "nixling guest control daemon";
+      d2b-guestd = lib.mkIf cfg.enable {
+        description = "d2b guest control daemon";
         wantedBy = [ "multi-user.target" ];
-        unitConfig.RequiresMountsFor = [ "/run/nixling-guest-control-host" ];
+        unitConfig.RequiresMountsFor = [ "/run/d2b-guest-control-host" ];
         serviceConfig = {
           Type = "exec";
           ExecStart =
@@ -248,7 +248,7 @@ in
               execRuntimeFlags =
                 lib.optionalString execEnabledUser (
                   " --systemd-run-path ${pkgs.systemd}/bin/systemd-run"
-                  + " --exec-runner-path ${guestPackages.nixling-exec-runner-static}/bin/nixling-exec-runner"
+                  + " --exec-runner-path ${guestPackages.d2b-exec-runner-static}/bin/d2b-exec-runner"
                   + " --detached-max-runtime-sec ${toString cfg.exec.detachedMaxRuntimeSec}"
                 );
               # config sync read surface: advertised iff the host
@@ -271,35 +271,35 @@ in
                   + " --shell-max-sessions ${toString cfg.shell.maxSessions}"
                   + " --shell-max-attached ${toString cfg.shell.maxAttached}"
                   + lib.optionalString execEnabledUser
-                      " --shell-runner-path ${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner"
+                      " --shell-runner-path ${guestPackages.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner"
                   + lib.optionalString execEnabledUser
                       " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${activationFlags}${shellFlags}";
+            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
-            "guest_control_token:/run/nixling-guest-control-host/token"
+            "guest_control_token:/run/d2b-guest-control-host/token"
           ];
         };
         restartIfChanged = false;
       };
 
-      nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
-        description = "nixling persistent shell pool daemon";
+      d2b-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
+        description = "d2b persistent shell pool daemon";
         serviceConfig = {
           Type = "exec";
           User = cfg.exec.execUser;
-          PAMName = "nixling-shpool-daemon";
+          PAMName = "d2b-shpool-daemon";
           ExecStart =
             let
-              daemonScript = pkgs.writeShellScript "nixling-shpool-daemon-start" ''
+              daemonScript = pkgs.writeShellScript "d2b-shpool-daemon-start" ''
                 set -eu
                 uid="$(${pkgs.coreutils}/bin/id -u)"
                 home="$HOME"
                 export XDG_RUNTIME_DIR="/run/user/$uid"
                 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-                exec ${guestPackages.nixling-guest-shell-runner-static}/bin/nixling-guest-shell-runner daemon \
-                  --socket "$XDG_RUNTIME_DIR/nixling-shpool.sock" \
+                exec ${guestPackages.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner daemon \
+                  --socket "$XDG_RUNTIME_DIR/d2b-shpool.sock" \
                   --home "$home"
               '';
             in
@@ -311,7 +311,7 @@ in
       };
     };
 
-    security.pam.services.nixling-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
+    security.pam.services.d2b-shpool-daemon = lib.mkIf (cfg.shell.enable && cfg.exec.execUser != null) {
       # Do not start a pam_systemd session here: it migrates the daemon out of
       # the delegated system service cgroup. Linger keeps /run/user/<uid>
       # available while the daemon stays under systemd's service authority.
@@ -333,18 +333,18 @@ in
     # RuntimeDirectoryPreserve, else a restart wipes adoptable state.
     systemd.tmpfiles.rules =
       lib.optionals cfg.enable [
-        "d /run/nixling-guestd 0700 root root -"
-        "d /run/nixling-guestd/activations 0700 root root -"
+        "d /run/d2b-guestd 0700 root root -"
+        "d /run/d2b-guestd/activations 0700 root root -"
       ]
       ++ lib.optionals execRuntimeEnabled [
-        "D /run/nixling-exec 0700 root root -"
+        "D /run/d2b-exec 0700 root root -"
       ];
 
     # Guest-internal slice that scopes every per-exec transient slot unit
-    # (nixling-exec-NN.service). Slot-keyed unit names bound metadata
+    # (d2b-exec-NN.service). Slot-keyed unit names bound metadata
     # cardinality to <=32 stable values that carry no exec id.
-    systemd.slices."nixling-exec" = lib.mkIf execRuntimeEnabled {
-      description = "nixling detached guest exec slice";
+    systemd.slices."d2b-exec" = lib.mkIf execRuntimeEnabled {
+      description = "d2b detached guest exec slice";
     };
   };
 }

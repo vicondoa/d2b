@@ -1,4 +1,4 @@
-# `nixling host check` output
+# `d2b host check` output
 
 Schema: [`host-check.schema.json`](./host-check.schema.json)
 
@@ -40,7 +40,7 @@ meaning of an existing one.
 ## Human example
 
 ```text
-$ nixling host check
+$ d2b host check
 PASS
 - kernel-version: running kernel 6.8.0 satisfies >= 6.6
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present

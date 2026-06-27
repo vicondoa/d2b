@@ -22,13 +22,13 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
-SYSTEM=${NL_FLAKE_MATRIX_SYSTEM:-x86_64-linux}
+SYSTEM=${D2B_FLAKE_MATRIX_SYSTEM:-x86_64-linux}
 PIN="$ROOT/tests/golden/flake-check-matrix/$SYSTEM.txt"
 
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
 
-# git+file:// (never a bare path): mirror tests/lib.sh nl_flake_ref so the
+# git+file:// (never a bare path): mirror tests/lib.sh d2b_flake_ref so the
 # sibling cargo target/ + scratch dirs stay invisible to the eval.
 flake_ref="git+file://$ROOT"
 

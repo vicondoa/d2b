@@ -1,4 +1,4 @@
-# How to install nixling on Fedora
+# How to install d2b on Fedora
 
 This is the current Fedora Tier-1-later / best-effort manual install path.
 Like the Ubuntu walkthrough, it is a scaffold-oriented guide for the current
@@ -30,29 +30,29 @@ Verify:
 nix --version
 ```
 
-## 3. Install the nixling CLI
+## 3. Install the d2b CLI
 
 ```bash
-nix profile install github:vicondoa/nixling#nixling
-nixling --help >/dev/null
+nix profile install github:vicondoa/d2b#d2b
+d2b --help >/dev/null
 ```
 
 ## 4. Run the host-install scaffold
 
 ```bash
-sudo nixling host install --dry-run --enable --start
-sudo nixling host install --apply --enable --start
+sudo d2b host install --dry-run --enable --start
+sudo d2b host install --apply --enable --start
 ```
 
-Inspect the written artifacts under `/etc/systemd/system/`, `/etc/nixling/`,
-and `/var/lib/nixling/runtime/` before assuming you have a production-ready
+Inspect the written artifacts under `/etc/systemd/system/`, `/etc/d2b/`,
+and `/var/lib/d2b/runtime/` before assuming you have a production-ready
 service install.
 
 ## 5. Validate host prerequisites
 
 ```bash
-nixling host check --strict
-nixling host prepare --dry-run --json
+d2b host check --strict
+d2b host prepare --dry-run --json
 ```
 
 Fedora uses the same daemon-facing first-boot model as Ubuntu: the practical
@@ -66,7 +66,7 @@ Place the full trusted bundle at the daemon's configured bundle root. On the
 current host-install scaffold, that means:
 
 ```text
-/var/lib/nixling/current-bundle/manifest.json
+/var/lib/d2b/current-bundle/manifest.json
 ```
 
 Use [`../reference/manifest-bundle.md`](../reference/manifest-bundle.md) as the
@@ -75,15 +75,15 @@ source of truth for the bundle artifact set.
 ## 7. Plan and start the first VM
 
 ```bash
-nixling vm start work-vm --dry-run --json
-sudo nixling vm start work-vm --apply
+d2b vm start work-vm --dry-run --json
+sudo d2b vm start work-vm --apply
 ```
 
 If the guest comes up, finish the SSH trust handshake:
 
 ```bash
-nixling trust work-vm
-nixling status work-vm
+d2b trust work-vm
+d2b status work-vm
 ```
 
 ## 8. Fedora-specific notes

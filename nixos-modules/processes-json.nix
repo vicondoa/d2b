@@ -3,15 +3,15 @@
 let
   clean = builtins.unsafeDiscardStringContext;
 
-  cfg = config.nixling;
+  cfg = config.d2b;
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
-  # nixling-owned access helpers (see lib.nix).
-  nl = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = nl.normalNixosVms cfg.vms;
-  qemuMediaVms = nl.qemuMediaVms cfg.vms;
+  # d2b-owned access helpers (see lib.nix).
+  d2bLib = import ./lib.nix { inherit lib pkgs; };
+  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
   obsOtlpPort = cfg._index.observability.sourceBasePort;
   obsSourcePort = name: cfg._index.observability.sourcePorts.${name} or obsOtlpPort;
   waylandUid =
@@ -22,23 +22,23 @@ let
   # Real host compositor socket. Used only by the wayland-proxy role;
   # GPU runners no longer reference this path directly.
   waylandHostSock = "/run/user/${waylandUid}/${waylandDisplay}";
-  chVsockConnect = import ./nixling-ch-vsock-connect.nix { inherit pkgs; };
+  chVsockConnect = import ./d2b-ch-vsock-connect.nix { inherit pkgs; };
   vhostDeviceSound = import ../pkgs/vhost-device-sound { inherit pkgs; };
   spectrumCH = import ../pkgs/spectrum-ch { inherit pkgs; };
 
-  # nixling-wayland-filter: host-side Wayland filter proxy.
+  # d2b-wayland-filter: host-side Wayland filter proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
-  packagesSrc = nl.cleanRustPackagesSource ../packages;
-  nixlingWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "nixling-wayland-filter";
+  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  d2bWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-wayland-filter";
     version = "0.0.0";
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
-    cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
+    cargoBuildFlags = [ "--package" "d2b-wayland-filter" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -50,13 +50,13 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-wayland-filter $out/bin/nixling-wayland-filter 2>/dev/null \
-        || install -Dm755 target/release/nixling-wayland-filter $out/bin/nixling-wayland-filter
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-filter $out/bin/d2b-wayland-filter 2>/dev/null \
+        || install -Dm755 target/release/d2b-wayland-filter $out/bin/d2b-wayland-filter
       runHook postInstall
     '';
   };
-  nixlingWaylandFilterPackage = if prebuilt ? "nixling-wayland-filter" then prebuilt."nixling-wayland-filter" else nixlingWaylandFilterSourcePackage;
-  nixlingWaylandFilterBinary = "${nixlingWaylandFilterPackage}/bin/nixling-wayland-filter";
+  d2bWaylandFilterPackage = if prebuilt ? "d2b-wayland-filter" then prebuilt."d2b-wayland-filter" else d2bWaylandFilterSourcePackage;
+  d2bWaylandFilterBinary = "${d2bWaylandFilterPackage}/bin/d2b-wayland-filter";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
@@ -68,10 +68,10 @@ EOF
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
   shareSocketPath = name: share:
-    if share.tag == "nl-gctl"
-    then "/run/nixling/vms/${name}/guest-control/${clean share.tag}.sock"
-    else "/run/nixling/vms/${name}/${clean share.tag}.sock";
-  volumeHostPath = name: volume: nl.volumeHostPath cfg.store.stateDir name volume;
+    if share.tag == "d2b-gctl"
+    then "/run/d2b/vms/${name}/guest-control/${clean share.tag}.sock"
+    else "/run/d2b/vms/${name}/${clean share.tag}.sock";
+  volumeHostPath = name: volume: d2bLib.volumeHostPath cfg.store.stateDir name volume;
 
   mkReadiness = kind: value: { inherit kind value; };
   componentReady = mkReadiness "component-specific";
@@ -146,11 +146,11 @@ EOF
       toString (if microvm.vcpu > 0 then microvm.vcpu else 1);
 
   swtpmFlushScript = name:
-    pkgs.writeShellScript "nixling-${name}-swtpm-flush" ''
+    pkgs.writeShellScript "d2b-${name}-swtpm-flush" ''
       set -eu
-      state_dir=/var/lib/nixling/vms/${name}/swtpm
+      state_dir=/var/lib/d2b/vms/${name}/swtpm
       permall_file="$state_dir/swtpm_perm.state"
-      flush_sock=/run/nixling/vms/${name}/tpm-flush.sock
+      flush_sock=/run/d2b/vms/${name}/tpm-flush.sock
 
       if [ ! -f "$permall_file" ]; then
         exit 0
@@ -187,7 +187,7 @@ EOF
     '';
 
   cloudHypervisorBinaryPath = microvm: "${microvm.cloud-hypervisor.package}/bin/cloud-hypervisor";
-  qemuMediaQmpSocket = name: "/run/nixling/vms/${name}/qmp.sock";
+  qemuMediaQmpSocket = name: "/run/d2b/vms/${name}/qmp.sock";
   qemuMediaBinaryPath =
     if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
       "${pkgs.qemu_kvm}/bin/qemu-system-x86_64"
@@ -198,7 +198,7 @@ EOF
 
   qemuMediaMac = name:
     let vm = cfg.vms.${name};
-    in nl.mkMac vm.env "lan" vm.index;
+    in d2bLib.mkMac vm.env "lan" vm.index;
   qemuMediaArgv = name:
     let
       vm = cfg.vms.${name};
@@ -212,7 +212,7 @@ EOF
         "merge=${if security.disableMemoryMerge then "off" else "on"}"
       ] ++ lib.optional security.lockMemory "prealloc=on";
     in [
-      "nixling-qemu-media@${name}"
+      "d2b-qemu-media@${name}"
       "-nodefaults"
       "-no-user-config"
       "-S"
@@ -251,18 +251,18 @@ EOF
       "-parallel"
       "none"
       "-name"
-      "nixling-${name}-qemu-media"
+      "d2b-${name}-qemu-media"
     ];
   qemuMediaEnv = name:
     lib.optionals (cfg.site.waylandUser != null) [
       "GDK_BACKEND=wayland"
       "WAYLAND_DISPLAY=wayland-0"
-      "XDG_RUNTIME_DIR=/run/nixling-wlproxy/${name}"
+      "XDG_RUNTIME_DIR=/run/d2b-wlproxy/${name}"
     ];
 
   cloudHypervisorArgv = name: vm: manifest:
     let
-      microvm = nl.vmRunner config name;
+      microvm = d2bLib.vmRunner config name;
       extraArgs = microvm.cloud-hypervisor.extraArgs;
       hasUserVsockExtraArg = lib.any
         (arg: arg == "--vsock" || lib.hasPrefix "--vsock=" arg)
@@ -298,7 +298,7 @@ EOF
       supportsNotifySocket = true;
       vsockOpts =
         if hasUserVsockExtraArg then
-          throw "nixling.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; nixling owns the Cloud Hypervisor vsock device for guest control and observability"
+          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for guest control and observability"
         else
           "cid=${toString vsockCID},socket=${vsockPath}";
       virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
@@ -364,14 +364,14 @@ EOF
             # unchanged.
             path = volumeHostPath name volume;
             # Defensive defaults for volume fields the consumer may
-            # omit. The nixling-owned vm-options.nix
+            # omit. The d2b-owned vm-options.nix
             # types `microvm.volumes` as `listOf attrs` (untyped)
             # for forward compat; processes-json.nix supplies the
             # CH defaults when the consumer doesn't.
             direct = if (volume.direct or false) then "on" else "off";
             readonly = if (volume.readOnly or false) then "on" else "off";
             image_type = toString (volume.imageType or "raw");
-            serial = nl.volumeSerial volume;
+            serial = d2bLib.volumeSerial volume;
           }
           // diskMqOps)
         ) microvm.volumes
@@ -416,7 +416,7 @@ EOF
       ) microvm.devices;
       audioExtraArgs = lib.optionals vm.audio.enable [
         "--generic-vhost-user"
-        "socket=/run/nixling/vms/${name}/snd.sock,virtio_id=25,queue_sizes=[64,64,64,64]"
+        "socket=/run/d2b/vms/${name}/snd.sock,virtio_id=25,queue_sizes=[64,64,64,64]"
       ];
     in
     [
@@ -459,16 +459,16 @@ EOF
 
   virtiofsdRunner = name: share:
     let
-      microvm = nl.vmRunner config name;
+      microvm = d2bLib.vmRunner config name;
       # (ADR 0021): under broker-pre-NS, virtiofsd is
       # fake-root inside its own user namespace. Use --sandbox=chroot
       # (now works because we have CAP_SYS_ADMIN inside the NS) and
       # disable file handles (we don't need open_by_handle_at(2)
       # for read-only or per-VM share serving). --posix-acl + --xattr
       # are dropped: /nix/store has no ACLs, and the per-VM shares
-      # are nixling-managed (no foreign xattrs to preserve).
+      # are d2b-managed (no foreign xattrs to preserve).
       isRoStore = share.source == "/nix/store";
-      isStoreMeta = share.tag == "nl-meta";
+      isStoreMeta = share.tag == "d2b-meta";
       # SECURITY (per-VM store isolation): the ro-store share's guest
       # `/nix/store` must expose ONLY this VM's closure, never the host's
       # full `/nix/store`. `share.source` stays `/nix/store` as the
@@ -508,7 +508,7 @@ EOF
       script = swtpmFlushScript name;
     in {
       binaryPath = "${script}";
-      argv = [ "nixling-swtpm-flush@${name}" ];
+      argv = [ "d2b-swtpm-flush@${name}" ];
     };
 
   swtpmRunner = name: {
@@ -517,14 +517,14 @@ EOF
       "microvm-swtpm@${name}"
       "socket"
       "--tpmstate"
-      "dir=/var/lib/nixling/vms/${name}/swtpm"
+      "dir=/var/lib/d2b/vms/${name}/swtpm"
       "--ctrl"
       # mode=0660 (was 0600) so that combined with
       # umask 0o007 from the swtpm role profile and the per-VM
-      # /run/nixling/vms/<vm>/ default ACL granting CH's UID rw,
+      # /run/d2b/vms/<vm>/ default ACL granting CH's UID rw,
       # cloud-hypervisor can connect to the TPM control socket
       # without operator setfacl intervention.
-      "type=unixio,path=/run/nixling/vms/${name}/tpm.sock,mode=0660"
+      "type=unixio,path=/run/d2b/vms/${name}/tpm.sock,mode=0660"
       "--tpm2"
       "--flags"
       "startup-clear"
@@ -533,9 +533,9 @@ EOF
 
   gpuRunner = name: vm:
     let
-      microvm = nl.vmRunner config name;
+      microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
-      filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
+      filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
       emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
       # When the filter proxy is emitted, crosvm connects to the filter
       # socket. Otherwise preserve the legacy display backend by connecting
@@ -544,7 +544,7 @@ EOF
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
-        "nixling-${name}-gpu"
+        "d2b-${name}-gpu"
         "device"
         "gpu"
         "--socket"
@@ -571,15 +571,15 @@ EOF
   # ever needing host-side DAC access to /dev/dri/.
   gpuRenderNodeRunner = name: vm:
     let
-      microvm = nl.vmRunner config name;
+      microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
-      filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
+      filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
       emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
       waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
-        "nixling-${name}-gpu-render-node"
+        "d2b-${name}-gpu-render-node"
         "device"
         "gpu"
         "--socket"
@@ -599,16 +599,16 @@ EOF
       ];
     };
 
-  # wayland-proxy runner: nixling-wayland-filter host-side filter proxy.
-  # Runs as nixling-<vm>-wlproxy, listens on the per-VM filter socket,
+  # wayland-proxy runner: d2b-wayland-filter host-side filter proxy.
+  # Runs as d2b-<vm>-wlproxy, listens on the per-VM filter socket,
   # and connects upstream to the real host compositor socket. The broker
   # grants the wlproxy principal an ACL on exactly that socket.
   waylandProxyRunner = name: vm:
     let
       vmName = name;
-      filterSock = "/run/nixling-wlproxy/${vmName}/wayland-0";
+      filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
       upstreamSock = waylandHostSock;
-      appIdPrefix = "nixling.${vmName}.";
+      appIdPrefix = "d2b.${vmName}.";
       titlePrefix = "[${vmName}] ";
       denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandFilter.denyGlobals;
       allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandFilter.allowGlobals;
@@ -620,19 +620,19 @@ EOF
       dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
       dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
     in {
-      binaryPath = nixlingWaylandFilterBinary;
+      binaryPath = d2bWaylandFilterBinary;
       env = [
         "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
         "WAYLAND_DISPLAY=${waylandDisplay}"
       ] ++ lib.optionals vm.graphics.waylandFilter.debugLogging [
         "WL_PROXY_DEBUG=1"
-        "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
+        "WL_PROXY_PREFIX=d2b-${vmName}-wlproxy"
       ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
         "WL_PROXY_HEXDUMP=1"
         "WL_PROXY_HEXDUMP_LIMIT=256"
       ];
       argv = [
-        "nixling-${vmName}-wlproxy"
+        "d2b-${vmName}-wlproxy"
         "--listen" filterSock
         "--connect" upstreamSock
         "--vm-name" vmName
@@ -643,7 +643,7 @@ EOF
 
   videoBinaryPath = _name:
     # the per-VM
-    # `nixling-${name}-video.service` was deleted. The video
+    # `d2b-${name}-video.service` was deleted. The video
     # sidecar is now broker-spawned via SpawnRunner{role: Video},
     # and the broker takes the binary path from the bundle's
     # helperPaths map (populated by this file's emitter below).
@@ -736,11 +736,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   videoRunner = name: {
     binaryPath = videoBinaryPath name;
     argv = [
-      "nixling-${name}-video"
+      "d2b-${name}-video"
       "device"
       "video-decoder"
       "--socket-path"
-      "/run/nixling-video/${name}/video.sock"
+      "/run/d2b-video/${name}/video.sock"
       "--backend"
       "vaapi"
     ];
@@ -755,9 +755,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   audioRunner = name: {
     binaryPath = "${vhostDeviceSound}/bin/vhost-device-sound";
     argv = [
-      "nixling-${name}-snd"
+      "d2b-${name}-snd"
       "--socket"
-      "/run/nixling/vms/${name}/snd.sock"
+      "/run/d2b/vms/${name}/snd.sock"
       "--backend"
       "pipewire"
     ];
@@ -767,41 +767,41 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     # looks at /run/user/$EUID/pipewire-0 which doesn't exist
     # for the ephemeral UID. The PipeWire socket itself is
     # grant'd to the ephemeral UID by host-activation.nix's
-    # nixlingRoleUidAcls script.
+    # d2bRoleUidAcls script.
     env = [
       "PIPEWIRE_RUNTIME_DIR=/run/user/${waylandUid}"
       "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-      ''PIPEWIRE_PROPS={ application.name = "nixling-${name}" node.name = "nixling-${name}" node.description = "nixling ${name}" nixling.vm = "${name}" }''
+      ''PIPEWIRE_PROPS={ application.name = "d2b-${name}" node.name = "d2b-${name}" node.description = "d2b ${name}" d2b.vm = "${name}" }''
     ] ++ lib.optional (cfg.site.audio.inputTargetNode != null)
-      "NIXLING_AUDIO_INPUT_TARGET_NODE=${cfg.site.audio.inputTargetNode}";
+      "D2B_AUDIO_INPUT_TARGET_NODE=${cfg.site.audio.inputTargetNode}";
   };
 
   vsockRelayRunner = name: manifest: {
     binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
     argv = [
-      "nixling-otel-relay@${name}"
+      "d2b-otel-relay@${name}"
       "-d"
       "-d"
       "UNIX-LISTEN:${vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort},fork,max-children=16,reuseaddr,mode=0660"
-      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
+      "EXEC:${chVsockConnect}/bin/d2b-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
     ];
   };
 
   otelHostBridgeRunner = manifest: {
     binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
     argv = [
-      "nixling-otel-host-bridge"
+      "d2b-otel-host-bridge"
       "-d"
       "-d"
-      "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
-      ''EXEC:"${chVsockConnect}/bin/nixling-ch-vsock-connect ${manifest.observability.vsockHostSocket} ${toString obsOtlpPort}"''
+      "UNIX-LISTEN:/run/d2b/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+      ''EXEC:"${chVsockConnect}/bin/d2b-ch-vsock-connect ${manifest.observability.vsockHostSocket} ${toString obsOtlpPort}"''
     ];
   };
 
   usbipBackendRunner = envName: {
     binaryPath = "${pkgs.linuxPackages.usbip}/bin/usbipd";
     argv = [
-      "nixling-sys-${envName}-usbipd-backend"
+      "d2b-sys-${envName}-usbipd-backend"
       "-4"
       "--tcp-port"
       (toString (backendPort envName))
@@ -815,7 +815,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     # same-env streams may be active; use host unbind plus targeted
     # conntrack/socket cleanup, or fail closed if the stream cannot be isolated.
     argv = [
-      "nixling-sys-${envName}-usbipd-proxy"
+      "d2b-sys-${envName}-usbipd-proxy"
       "TCP-LISTEN:3240,bind=${m.hostUplinkIp},fork,max-children=4,reuseaddr"
       "TCP:127.0.0.1:${toString (backendPort envName)}"
     ];
@@ -883,8 +883,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   vmDag = name: vm:
     let
       manifest = cfg.manifest.${name};
-      microvm = nl.vmRunner config name;
-      hypervisorService = nl.runtimeHypervisorService "nixos";
+      microvm = d2bLib.vmRunner config name;
+      hypervisorService = d2bLib.runtimeHypervisorService "nixos";
       # The guest-control authenticated Health probe is the framework
       # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
       # retained for the SSH-compat window but are no longer the framework
@@ -905,7 +905,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       preOptionalNodeIds = if vm.tpm.enable then [ "swtpm" ] else postStoreNodeIds;
       optionalSidecarBaseNodeIds = if vm.observability.enable then [ "vsock-relay" ] else preOptionalNodeIds;
       graphicsReadiness = [
-        (unixSocketExists (nl.vmRunner config name).graphics.socket)
+        (unixSocketExists (d2bLib.vmRunner config name).graphics.socket)
       ] ++ lib.optional vm.graphics.virglVideo
         (componentReady "graphics.virglVideo=true");
       # Whether the host-jailed Wayland filter proxy is emitted for this VM.
@@ -936,34 +936,34 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         (node name {
           id = "store-virtiofs-preflight";
           role = "store-virtiofs-preflight";
-          unit = "nixling-${name}-store-sync.service";
+          unit = "d2b-${name}-store-sync.service";
           readiness = [
-            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store-view/live/.nixling-marker-${name}" ])
+            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store-view/live/.d2b-marker-${name}" ])
           ];
         })
       ]
       ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm-flush";
         role = "swtpm-pre-start-flush";
-        unit = "nixling-${name}-swtpm.service";
+        unit = "d2b-${name}-swtpm.service";
         readiness = [ ];
       } (swtpmFlushRunner name))
       ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm";
         role = "swtpm";
-        unit = "nixling-${name}-swtpm.service";
+        unit = "d2b-${name}-swtpm.service";
         readiness = [ (unixSocketListening manifest.tpmSocket) ];
       } (swtpmRunner name))
       ++ shareNodes
       ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu";
         role = "gpu";
-        unit = "nixling-${name}-gpu.service";
+        unit = "d2b-${name}-gpu.service";
       # (Option B): readiness uses microvm.graphics.socket
       # (the same path the argv tells crosvm to create), not the
-      # stale /var/lib/nixling/vms/<vm>/<vm>-gpu.sock from manifest.
+      # stale /var/lib/d2b/vms/<vm>/<vm>-gpu.sock from manifest.
       # The two paths diverged when the v1.1.1 substrate moved the
-      # gpu sidecar from /var/lib/nixling to /run/nixling without
+      # gpu sidecar from /var/lib/d2b to /run/d2b without
       # updating the readiness predicate. Without this fix the DAG
       # times out waiting on a socket that crosvm never creates.
       readiness = graphicsReadiness;
@@ -975,30 +975,30 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional (vm.graphics.enable && vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu-render-node";
         role = "gpu-render-node";
-        unit = "nixling-${name}-gpu.service";
+        unit = "d2b-${name}-gpu.service";
         readiness = graphicsReadiness;
       } (gpuRenderNodeRunner name vm))
       ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (mkRunnerNode name {
         id = "video";
         role = "video";
-        readiness = [ (unixSocketListening "/run/nixling-video/${name}/video.sock") ];
+        readiness = [ (unixSocketListening "/run/d2b-video/${name}/video.sock") ];
       } (videoRunner name))
       ++ lib.optional emitWaylandProxy (mkRunnerNode name {
         id = "wayland-proxy";
         role = "wayland-proxy";
         readiness = [
-          (unixSocketListening "/run/nixling-wlproxy/${name}/wayland-0")
+          (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
       } (waylandProxyRunner name vm))
       ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";
-        unit = "nixling-${name}-snd.service";
-        readiness = [ (unixSocketExists "/run/nixling/vms/${name}/snd.sock") ];
+        unit = "d2b-${name}-snd.service";
+        readiness = [ (unixSocketExists "/run/d2b/vms/${name}/snd.sock") ];
       } (audioRunner name))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
-          unit = if vm.graphics.enable then "nixling-${name}-gpu.service" else "microvm@${name}.service";
+          unit = if vm.graphics.enable then "d2b-${name}-gpu.service" else "microvm@${name}.service";
           runner = {
             binaryPath = cloudHypervisorBinaryPath microvm;
             argv = cloudHypervisorArgv name vm manifest;
@@ -1013,7 +1013,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           };
           readiness = [ (apiSocketInfo manifest.apiSocket) ];
           # emit DiskInit plan-ops before SpawnRunner.
-          # Nixling-owned relative raw/ext4 microvm.volumes are declared by
+          # D2b-owned relative raw/ext4 microvm.volumes are declared by
           # the consumer and mounted inside the guest by vm-guest-base.nix,
           # so missing images must be created and mkfs'd before CH starts.
           # Existing images are validated non-destructively (`ifAbsent = true`):
@@ -1025,10 +1025,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           # opens them via kvm group); store-overlay keeps 0o600.
           planOps = (builtins.map (volume: mkDiskInitPlanOp {
             targetPath = volumeHostPath name volume;
-            sizeBytes = nl.volumeSizeBytes volume;
+            sizeBytes = d2bLib.volumeSizeBytes volume;
             mode = 432;
             ownerProfile = profileFor name "cloud-hypervisor";
-          }) (builtins.filter nl.volumeDiskInitEligible microvm.volumes))
+          }) (builtins.filter d2bLib.volumeDiskInitEligible microvm.volumes))
           ++ lib.optionals (microvm.writableStoreOverlay != null) [
             (mkDiskInitPlanOp {
               targetPath = "${toString cfg.store.stateDir}/${name}/store-overlay.img";
@@ -1042,15 +1042,15 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional vm.observability.enable (runnerNode name {
         id = "vsock-relay";
         role = "vsock-relay";
-        unit = "nixling-otel-relay@${name}.service";
+        unit = "d2b-otel-relay@${name}.service";
         readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
         runner = vsockRelayRunner name manifest;
       })
       ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (runnerNode name {
         id = "otel-host-bridge";
         role = "otel-host-bridge";
-        unit = "nixling-otel-host-bridge.service";
-        readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
+        unit = "d2b-otel-host-bridge.service";
+        readiness = [ (unixSocketExists "/run/d2b/otel/host-egress.sock") ];
         runner = otelHostBridgeRunner manifest;
       })
       ++ lib.optional guestControlEnabled (node name {
@@ -1103,7 +1103,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   qemuMediaDag = name: vm:
     let
       emitWaylandProxy = cfg.site.waylandUser != null;
-      hypervisorService = nl.runtimeHypervisorService "qemu-media";
+      hypervisorService = d2bLib.runtimeHypervisorService "qemu-media";
     in
     {
       vm = name;
@@ -1117,7 +1117,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         id = "wayland-proxy";
         role = "wayland-proxy";
         readiness = [
-          (unixSocketListening "/run/nixling-wlproxy/${name}/wayland-0")
+          (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
       } // waylandProxyRunner name vm))
       ++ [
@@ -1184,12 +1184,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
   };
 
   jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-processes.json" jsonText;
+  jsonFile = pkgs.writeText "d2b-processes.json" jsonText;
   videoAssertions = lib.flatten (lib.mapAttrsToList (name: vm:
     let
       manifest = cfg.manifest.${name};
-      microvm = nl.vmRunner config name;
-      expectedMediaArg = "socket=/run/nixling-video/${name}/video.sock";
+      microvm = d2bLib.vmRunner config name;
+      expectedMediaArg = "socket=/run/d2b-video/${name}/video.sock";
       values = mediaArgValues name vm manifest;
       flags = mediaFlagTokens name vm manifest;
     in
@@ -1197,7 +1197,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       {
         assertion = toString microvm.cloud-hypervisor.package == toString spectrumCH;
         message = ''
-          nixling.vms.${name}.graphics.videoSidecar requires the vendored patched
+          d2b.vms.${name}.graphics.videoSidecar requires the vendored patched
           Cloud Hypervisor package from pkgs/spectrum-ch. Remove the
           microvm.cloud-hypervisor.package override or disable graphics.videoSidecar.
         '';
@@ -1205,7 +1205,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       {
         assertion = flags == [ "--vhost-user-media" ] && values == [ expectedMediaArg ];
         message = ''
-          nixling.vms.${name}.graphics.videoSidecar requires exactly one
+          d2b.vms.${name}.graphics.videoSidecar requires exactly one
           --vhost-user-media argument equal to ${expectedMediaArg}. Do not add
           or override media endpoints via microvm.cloud-hypervisor.extraArgs.
         '';
@@ -1215,7 +1215,7 @@ in
 {
   config = {
     assertions = videoAssertions;
-    nixling._bundle.processesJson = {
+    d2b._bundle.processesJson = {
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "processes.json";

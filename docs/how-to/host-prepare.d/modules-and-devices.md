@@ -36,7 +36,7 @@ pinning:
 - `net.bridge.bridge-nf-call-iptables=0`
 - `net.bridge.bridge-nf-call-ip6tables=0`
 
-so iptables / ip6tables cannot route around the `inet nixling`
+so iptables / ip6tables cannot route around the `inet d2b`
 policy. An ADR opt-in is required to suppress this recommendation.
 
 ### Distro troubleshooting
@@ -49,7 +49,7 @@ policy. An ADR opt-in is required to suppress this recommendation.
 - **Arch (Tier 2).** Kernel built with `MODULES_DISABLED=y` requires a
   rebuild before VM startup is accepted.
 - **NixOS (Tier 0 legacy).** The framework's NixOS module is the
-  primary path; `nixling host prepare --apply` is refused with
+  primary path; `d2b host prepare --apply` is refused with
   `tier-0-legacy-uses-nixos-module`.
 
 ## Device nodes
@@ -83,7 +83,7 @@ under `host doctor --read-only` and **refuses** to mutate store state.
 
 ## Runner-shape preflight
 
-`nixling host check` consumes `host.json`, `processes.json`, and
+`d2b host check` consumes `host.json`, `processes.json`, and
 `closures/<vm>.json` runner-parity snapshots, then validates them
 without launching Cloud Hypervisor:
 

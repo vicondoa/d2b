@@ -1,4 +1,4 @@
-# nixling tests
+# d2b tests
 
 How the test suite is organized, where each kind of test lives, and how to run
 and add them. For the **decision rule on where a new test goes** (and the rule
@@ -35,7 +35,7 @@ tests/
 ├── integration/                   ── Layer 2 ──
 │   ├── containers/                                              type 9: podman (make test-integration; host/manual pre-PR)
 │   ├── distro-matrix/                                           distro pins + fixtures
-│   └── live/                                                    type 11: NL_LIVE live-host (manual)
+│   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
     ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; host/manual pre-PR)
     └── hardware/                                                type 12: real-device tests (manual)
@@ -53,7 +53,7 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system); `NL_FLAKE_CHECK=<name>` instantiates one check, `NL_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `NL_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
+| `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
@@ -68,12 +68,12 @@ Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
 | `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
-| `NL_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed nixling host** |
+| `D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed d2b host** |
 
-Current live-host scripts include `nixling-store.sh` for per-VM store
+Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
-a `nixlingd` restart. The USBIP script requires
-`NL_USBIP_VM=<vm>` and `NL_USBIP_BUSID=<busid>` and uses only `nixling usb`
+a `d2bd` restart. The USBIP script requires
+`D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 
 `tests/layer1-jobs.json` is the central Layer-1 job graph. `make check` and
@@ -89,21 +89,21 @@ stable aggregator over the shards + the non-`checks` outputs job). The aarch64
 leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
-sets `NL_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
-`NL_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
-the fixture checks run in the flake shard set; tune `NL_CHECK_JOBS` and
-`NL_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
+sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
+`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
+the fixture checks run in the flake shard set; tune `D2B_CHECK_JOBS` and
+`D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
 `make test-integration` and `make test-host-integration` on the host before the
 PR is opened; those manual integration tiers are not replaced by PR pipeline
 jobs.
 
 Useful knobs:
-- `NL_NO_SCCACHE=1` — disable sccache in the rust gate.
-- `NL_CI_SCCACHE=1` — opt the rust gate back into sccache under CI (off by
+- `D2B_NO_SCCACHE=1` — disable sccache in the rust gate.
+- `D2B_CI_SCCACHE=1` — opt the rust gate back into sccache under CI (off by
   default there; `pr-l1-static-fast` sets it and backs `SCCACHE_DIR` with
   `actions/cache`, using sccache's local-disk backend — never the native GHA
   backend, which would export `ACTIONS_RUNTIME_TOKEN` into the build env).
-- `NL_NO_PARALLEL_BROKER=1` — run the broker feature passes serially.
+- `D2B_NO_PARALLEL_BROKER=1` — run the broker feature passes serially.
 - The rust gate uses **sccache** (a shared per-crate compilation cache) and
   runs the broker's three feature passes (default / layer1-bootstrap /
   fake-backends) concurrently with the main workspace, on deterministic target
@@ -119,11 +119,11 @@ Layer 1:
   `tests/tools/gen-nix-unit-pins.sh`).
 - Rust logic → a `#[test]` in the crate's `src`.
 - Real-binary behaviour → `packages/<crate>/tests/*.rs` against
-  `CARGO_BIN_EXE_*`. **Spawn hermetically**: point `NIXLING_PUBLIC_SOCKET`,
-  `NIXLING_BROKER_SOCKET`, and the `NIXLING_*_PATH` fixture env vars at fixtures
+  `CARGO_BIN_EXE_*`. **Spawn hermetically**: point `D2B_PUBLIC_SOCKET`,
+  `D2B_BROKER_SOCKET`, and the `D2B_*_PATH` fixture env vars at fixtures
   or missing paths so the test never touches the operator's live daemon.
 - Rendered-artifact ↔ DTO/doc contract → a contract test in
-  `packages/nixling-contract-tests/`.
+  `packages/d2b-contract-tests/`.
 - Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
   `cargo run -p xtask -- gen-*`. Do **not** add a new shell gate.
 

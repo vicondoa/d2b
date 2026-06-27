@@ -1,4 +1,4 @@
-<!-- nixling PR template. The checklist below is MANDATORY and validated by
+<!-- d2b PR template. The checklist below is MANDATORY and validated by
      tests/unit/meta/pr-checklist-gate.sh.
 
      Do not include AI agent, assistant, or model metadata in this PR body. -->
@@ -21,7 +21,7 @@
 - [ ] **Manual `make test-hardware` run** on a NixOS host **with the real
       devices** (GPU / YubiKey / hardware-TPM), if this change touches
       graphics/GPU, video decode, USBIP/YubiKey, hardware-TPM, or a full
-      nixling-microVM boot. Paste results, **or** state
+      d2b-microVM boot. Paste results, **or** state
       `N/A: no device/passthrough or full-microVM-boot surface touched`
       with a one-line justification. *(This tier requires physical devices.)*
 - [ ] **New/changed tests are wired into a `make` target** and have rows in

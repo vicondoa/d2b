@@ -1,7 +1,7 @@
 { lib, config, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
 
   # the default-switch criteria
   # (docs/explanation/default-switch-and-deprecation.md) now track two
@@ -42,8 +42,8 @@ let
       implementedDefault = true;
     };
     p0 = {
-      implementedDescription = "Daemon-only foundation shipped (broker socket-activation + bundle digest verify + canonical /run/nixling + notify-ready nixlingd.service)";
-      validatedDescription = "Validated via tests/nixlingd-startup-smoke.sh on this host with evidence record";
+      implementedDescription = "Daemon-only foundation shipped (broker socket-activation + bundle digest verify + canonical /run/d2b + notify-ready d2bd.service)";
+      validatedDescription = "Validated via tests/d2bd-startup-smoke.sh on this host with evidence record";
       implementedDefault = false;
     };
     p0Fu = {
@@ -72,7 +72,7 @@ let
       implementedDefault = false;
     };
     p5 = {
-      implementedDescription = "first-run validation UX shipped (nixling host validate --apply + daemon auto-write on first op)";
+      implementedDescription = "first-run validation UX shipped (d2b host validate --apply + daemon auto-write on first op)";
       validatedDescription = "Validated via fresh-host bootstrap smoke";
       implementedDefault = false;
     };
@@ -97,13 +97,13 @@ let
   # daemon-only end state was considered fully attested. The set
   # intentionally excludes waves that legitimately shipped AFTER the
   # original flip (p5 first-run UX, p6 clean break, p7 release cut).
-  # `nixling.daemonExperimental.enable` now defaults `true` and is no
+  # `d2b.daemonExperimental.enable` now defaults `true` and is no
   # longer evidence-auto-flipped by this set, but it still functionally
   # gates the daemon control plane (setting it `false` reverts the host
   # to the unsupported pre-daemon legacy state); this set no longer
   # flips its default.
   # The per-wave `validated` evidence still gates the readiness
-  # assertions below and `nixling host validate`. Related deliverables
+  # assertions below and `d2b host validate`. Related deliverables
   # are modelled inside the existing w4Fu (headless daemon and
   # supervisor path), w8Fu, and w9Fu (host install + migrate) readiness
   # records; w7Fu carries the store-lifecycle slice that landed
@@ -176,7 +176,7 @@ let
     && payload.operatorSignature != "";
 in
 {
-  options.nixling.daemonExperimental = {
+  options.d2b.daemonExperimental = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -190,24 +190,24 @@ in
         state, so consumers should leave it at its default. Retained
         for compatibility; it is no longer evidence-auto-flipped (the
         per-wave `defaultSwitchReadiness.<wave>.validated` evidence
-        gates the readiness assertions and `nixling host validate`
+        gates the readiness assertions and `d2b host validate`
         separately).
       '';
     };
 
     defaultFlipEvidenceDir = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/nixling/validated";
-      example = "/var/lib/nixling/validated";
+      default = "/var/lib/d2b/validated";
+      example = "/var/lib/d2b/validated";
       description = ''
         Filesystem directory holding the per-wave validation evidence
         files (`<wave>.json`) consumed by the per-wave
-        `validated = true` eval assertion and by `nixling host
+        `validated = true` eval assertion and by `d2b host
         validate`. (Historically these files also gated the
-        `nixling.daemonExperimental.enable` default-flip; that gate is
+        `d2b.daemonExperimental.enable` default-flip; that gate is
         retired — `daemonExperimental.enable` now simply defaults
         `true` and is no longer evidence-auto-flipped.) The default
-        `/var/lib/nixling/validated`
+        `/var/lib/d2b/validated`
         is the canonical operator-host location; the option is
         overridable mainly for regression tests (see
         `tests/daemon-default-compat-eval.sh`).
@@ -218,20 +218,20 @@ in
   # Default-switch readiness now tracks shipped-vs-validated state
   # separately. `implemented` flips when the code lands; the
   # operator may only set `validated = true` after recording host-local
-  # evidence under /var/lib/nixling/validated/<wave>.json.
-  options.nixling.defaultSwitchReadiness = lib.mapAttrs mkReadinessOption readinessWaveSpecs;
+  # evidence under /var/lib/d2b/validated/<wave>.json.
+  options.d2b.defaultSwitchReadiness = lib.mapAttrs mkReadinessOption readinessWaveSpecs;
 
-  # nixlingd autostart contract knobs.
+  # d2bd autostart contract knobs.
   # The Rust implementation lives in
-  # packages/nixlingd/src/autostart.rs; the contract is described in
+  # packages/d2bd/src/autostart.rs; the contract is described in
   # docs/reference/daemon-autostart.md.
-  options.nixling.daemon.autostart = {
+  options.d2b.daemon.autostart = {
     parallelism = lib.mkOption {
       type = lib.types.ints.positive;
       default = 3;
       example = 4;
       description = ''
-        Concurrency cap N for the nixlingd autostart pass that runs
+        Concurrency cap N for the d2bd autostart pass that runs
         on daemon startup. At most N VMs are started in parallel
         within each phase (net VMs first, then workloads). The
         daemon clamps values < 1 to 1.
@@ -244,12 +244,12 @@ in
     };
   };
 
-  options.nixling.daemon.lifecycle.gracefulShutdown = {
+  options.d2b.daemon.lifecycle.gracefulShutdown = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether nixlingd should ask supported local VM providers to shut
+        Whether d2bd should ask supported local VM providers to shut
         the guest OS down before falling back to host-side VMM
         termination. Enabled by default for Cloud Hypervisor/NixOS VMs
         and qemu-media VMs; per-VM options can opt a VM out or back in.
@@ -262,22 +262,22 @@ in
       example = 120;
       description = ''
         Default bounded wait, in seconds, for provider-aware graceful guest
-        shutdown before nixlingd uses the standard SIGTERM/SIGKILL VMM
+        shutdown before d2bd uses the standard SIGTERM/SIGKILL VMM
         cleanup path. Values must be between 1 and 600 seconds so a typo
         cannot stretch host shutdown or reboot for hours.
       '';
     };
   };
 
-  options.nixling.daemon.lifecycle.liveActivation = {
+  options.d2b.daemon.lifecycle.liveActivation = {
     timeoutSeconds = lib.mkOption {
       type = lib.types.int;
       default = 600;
       example = 1800;
       description = ''
         Default bounded wait, in seconds, for an authenticated in-guest
-        live activation (`nixling switch` / `test` / `rollback`) to
-        finish before nixlingd reports a typed activation timeout.
+        live activation (`d2b switch` / `test` / `rollback`) to
+        finish before d2bd reports a typed activation timeout.
         Identity-bound guests may need a larger value when user-manager
         activation waits for an operator-mediated provider flow such as
         Entra/Himmelblau hello/PIN. Values must be between 1 and 3600
@@ -296,8 +296,8 @@ in
         {
           assertion = (!readiness.validated) || readiness.implemented;
           message =
-            "nixling.defaultSwitchReadiness.${wave}.validated = true requires "
-            + "nixling.defaultSwitchReadiness.${wave}.implemented = true.";
+            "d2b.defaultSwitchReadiness.${wave}.validated = true requires "
+            + "d2b.defaultSwitchReadiness.${wave}.implemented = true.";
         }
       ) readinessWaves)
       ++ (map (
@@ -308,7 +308,7 @@ in
         {
           assertion = (!readiness.validated) || validationEvidencePresent wave;
           message =
-            "nixling.defaultSwitchReadiness.${wave}.validated = true requires "
+            "d2b.defaultSwitchReadiness.${wave}.validated = true requires "
             + validationEvidenceFileText wave
             + " to exist and contain JSON fields \"wave\" = \"${wave}\", "
             + "\"timestamp\", and \"operatorSignature\".";
@@ -320,7 +320,7 @@ in
             cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds >= 1
             && cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds <= 600;
           message = ''
-            nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be
+            d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be
             between 1 and 600 seconds. The upper bound keeps host shutdown
             and reboot bounded; use per-VM timeout overrides only within the
             same range.
@@ -331,7 +331,7 @@ in
             cfg.daemon.lifecycle.liveActivation.timeoutSeconds >= 1
             && cfg.daemon.lifecycle.liveActivation.timeoutSeconds <= 3600;
           message = ''
-            nixling.daemon.lifecycle.liveActivation.timeoutSeconds must be
+            d2b.daemon.lifecycle.liveActivation.timeoutSeconds must be
             between 1 and 3600 seconds. Use per-VM overrides for guests whose
             user-manager activation may legitimately wait on an operator-mediated
             identity flow.
@@ -342,8 +342,8 @@ in
             (!cfg.defaultSwitchReadiness.w5Fu.implemented)
             || cfg.defaultSwitchReadiness.w4Fu.implemented;
           message =
-            "nixling.defaultSwitchReadiness.w5Fu.implemented = true requires "
-            + "nixling.defaultSwitchReadiness.w4Fu.implemented = true "
+            "d2b.defaultSwitchReadiness.w5Fu.implemented = true requires "
+            + "d2b.defaultSwitchReadiness.w4Fu.implemented = true "
             + "(GPU/audio sidecars spawn through the SpawnRunner "
             + "broker exec).";
         }
@@ -352,8 +352,8 @@ in
             (!cfg.defaultSwitchReadiness.w5Fu.validated)
             || cfg.defaultSwitchReadiness.w4Fu.validated;
           message =
-            "nixling.defaultSwitchReadiness.w5Fu.validated = true requires "
-            + "nixling.defaultSwitchReadiness.w4Fu.validated = true "
+            "d2b.defaultSwitchReadiness.w5Fu.validated = true requires "
+            + "d2b.defaultSwitchReadiness.w4Fu.validated = true "
             + "(validation depends on the SpawnRunner path "
             + "already being validated).";
         }

@@ -52,7 +52,7 @@ assignment at the trusted ingress boundary.
 
 ### Identity
 
-- Introduce `nixling.observability.host.identityName`
+- Introduce `d2b.observability.host.identityName`
   (default `config.networking.hostName`). It is the value stamped as
   `vm.name` and `host.name` for the `host` source.
 - The identity is threaded into the `host` ingress source **only in
@@ -75,7 +75,7 @@ assignment at the trusted ingress boundary.
   `service.namespace` stay `"host"`. `deployment.environment` stays
   `cfg.hostName` (unchanged).
 - The **ingress source key stays `host`**: only the source *value*
-  changes, so the ingress unit (`nixling-otel-vsock-in-host`), the vsock
+  changes, so the ingress unit (`d2b-otel-vsock-in-host`), the vsock
   port (`14317`), and the firewall posture are unchanged.
 - The host edge collector's own `resource` / `resource/store_sync_audit`
   labels are also updated to `identityName` for consistency, but remain
@@ -86,7 +86,7 @@ assignment at the trusted ingress boundary.
 
 Mirror `guest.nix` in `host.nix`, gated so the new surface is opt-in.
 Critically, the host's existing `resource` processor upserts
-`service.name = "nixling-host-otel-collector"`; reusing it for ingested
+`service.name = "d2b-host-otel-collector"`; reusing it for ingested
 app/journal telemetry would clobber the source's own `service.name`. So
 the processors are restructured to mirror `guest.nix`:
 
@@ -94,51 +94,51 @@ the processors are restructured to mirror `guest.nix`:
   `vm.role`, **no `service.name`**) for the otlp + journald + hostmetrics
   pipelines;
 - a `resource/self` processor (adds `service.name =
-  nixling-host-otel-collector`) used **only** for the collector's own
+  d2b-host-otel-collector`) used **only** for the collector's own
   self-`prometheus` metrics pipeline;
 - the existing `resource/store_sync_audit` processor is retained
   (with its `vm.name` updated to `identityName`).
 
 New gated surface:
 
-- `nixling.observability.host.otlpIngest.enable` (default `false`):
+- `d2b.observability.host.otlpIngest.enable` (default `false`):
   add an `otlp` ingest receiver bound to a **Unix domain socket only**,
   in a **dedicated ingest subdirectory**
-  (`/run/nixling/otel/ingest/host-otlp.sock`), a `traces` pipeline, and
+  (`/run/d2b/otel/ingest/host-otlp.sock`), a `traces` pipeline, and
   `otlp` as a receiver on the `metrics` and `logs` pipelines. No loopback
   gRPC TCP listener is added (see Rejected alternatives). Host-side
   instrumentation pushes OTLP over this socket through the same
   host->`sys-obs` bridge as host metrics. Socket access model:
   - The ingest socket lives in its own directory
-    (`/run/nixling/otel/ingest/`), separate from `host-egress.sock`,
+    (`/run/d2b/otel/ingest/`), separate from `host-egress.sock`,
     because Linux checks `unlink`/`rename` authority on the **parent
     directory**: granting the collector write on the egress directory to
     `bind(2)` would also let it delete or replace `host-egress.sock`. The
-    collector gets write only on `/run/nixling/otel/ingest/`;
+    collector gets write only on `/run/d2b/otel/ingest/`;
     `host-egress.sock` stays in a directory the collector cannot write.
   - The unit runs `ProtectSystem = strict`, so `/run` is read-only in its
-    namespace; `ReadWritePaths = [ "/run/nixling/otel/ingest" ]` is added
+    namespace; `ReadWritePaths = [ "/run/d2b/otel/ingest" ]` is added
     (only when `otlpIngest.enable`) so `bind(2)` of the socket succeeds.
     ACLs alone do not make the bind work.
   - `ExecStartPre` unlinks any stale `host-otlp.sock` before start, so a
     crash/`SIGKILL` + `Restart=on-failure` does not wedge on a leftover
     pathname-socket inode.
   - The socket defaults to collector-owned `0600` (root + collector
-    only). `nixling.observability.host.otlpIngest.clientGroup`
+    only). `d2b.observability.host.otlpIngest.clientGroup`
     (str or null, default `null`) optionally group-owns the socket
     `0660` (+ matching ACL) so members of that group can emit, with
     execute-only (`--x`) traversal granted on the parent dirs; this is
     the explicit, opt-in path to broaden access. The change never widens
-    permissions on `host-egress.sock` or the shared `/run/nixling/otel`
+    permissions on `host-egress.sock` or the shared `/run/d2b/otel`
     directory; only the dedicated `ingest/` subdirectory and the socket
     itself are touched.
-- `nixling.observability.host.scrapeJournal` (default `false`):
+- `d2b.observability.host.scrapeJournal` (default `false`):
   add a `journald` receiver (`start_at = "end"`, a `file_storage` read
   cursor, and the same PRIORITY->severity mapping as the guest), and a
   `logs` pipeline. The collector identity gains the `systemd-journal`
   supplementary group and `journalctl` in `PATH`. The `file_storage`
   cursor directory lives under the host unit's own `StateDirectory`
-  (`/var/lib/nixling-host-otel-collector/journald`), **not** the guest's
+  (`/var/lib/d2b-host-otel-collector/journald`), **not** the guest's
   `/var/lib/otel/journald` path (which would be unwritable under
   `ProtectSystem = strict`).
 
@@ -151,7 +151,7 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   sensitive as a guest journal (it can contain auth failures, sudo
   command lines, and service-logged secrets). The same trust boundary as
   the guest path applies — telemetry leaves only over
-  `/run/nixling/otel/host-egress.sock` -> broker `OtelHostBridge` ->
+  `/run/d2b/otel/host-egress.sock` -> broker `OtelHostBridge` ->
   `sys-obs` vsock, never the workload/host LAN — but the conservative
   framework default is opt-in, matching `ch.exporter.includeTopologyLabels`
   and the SigNoz anonymous-viewer posture.
@@ -176,7 +176,7 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   trust boundary.
 - Retention of these host-sensitive logs is governed by
   **SigNoz/ClickHouse TTL inside `sys-obs`**, not by
-  `nixling.observability.retention.*` (which currently only warns). The
+  `d2b.observability.retention.*` (which currently only warns). The
   docs state this explicitly.
 - `identityName` is host-config-controlled and assigned at the trusted
   ingress boundary, so it does not weaken ADR 0026's anti-forgery
@@ -190,7 +190,7 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
 - **Testability:** `host.nix` currently keeps its collector config in a
   private `pkgs.writeText` binding, so eval tests cannot inspect it. The
   pre-serialization attrset is exposed via an internal, `visible = false`
-  option (e.g. `nixling.observability._internal.hostCollectorConfig`) so
+  option (e.g. `d2b.observability._internal.hostCollectorConfig`) so
   `tests/unit/nix/cases/observability.nix` (the live nix-unit corpus) can
   assert receivers / pipelines / extensions. (The dead
   `tests/unit/nix/eval-cases/observability.nix`, used only by a retired
@@ -202,11 +202,11 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   (`host-otlp.sock` != `host-egress.sock` / guest sockets; no SigNoz
   4317/4318 or vsock 14317 reuse).
 - **Contract tests (Rust):**
-  `packages/nixling-contract-tests/tests/policy_state.rs::store_sync_export`
+  `packages/d2b-contract-tests/tests/policy_state.rs::store_sync_export`
   regex-asserts the StoreSync `vm.name` *value* is `"host"`, so it is
   updated to follow `identityName` while `vm.env` / `vm.role` stay
   `"host"`. The resource-attribute **key**-allowlist gate
-  `packages/nixling-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes`
+  `packages/d2b-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes`
   (legacy name — the framework uses native SigNoz/ClickHouse, not Loki;
   the retired `tests/loki-label-cardinality-eval.sh` shell gate is gone)
   checks the *set of keys*, not values, and forbids retired
@@ -237,7 +237,7 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   host-sensitive log data (already true for guest journals).
 - With `otlpIngest.enable`, the host exposes a local OTLP boundary for
   host instrumentation; nothing is opened on any LAN.
-- New option surface (`nixling.observability.host.*`) becomes part of the
+- New option surface (`d2b.observability.host.*`) becomes part of the
   observability review and documentation surface.
 - Consumers that do not set the new receiver flags get **no new
   collection surface** (no host journal, no host OTLP ingest, no extra
@@ -282,7 +282,7 @@ rejected in favor of **UDS-only** ingest. A TCP listener — even on
 already uses `4317`/`4318`/`8888` inside `sys-obs`, `9101` for the host
 CH-exporter, and `12345` for the collector's self-metrics) and is
 reachable by any local process without filesystem-permission scoping. A
-Unix-domain socket under `/run/nixling/otel/` gets ownership/mode/ACL
+Unix-domain socket under `/run/d2b/otel/` gets ownership/mode/ACL
 access control for free (default `0600`, opt-in `clientGroup`), adds no
 routable surface, and matches the guest collector's socket-based local
 ingress. A loopback TCP endpoint can be reintroduced later behind its

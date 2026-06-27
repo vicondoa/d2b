@@ -1,11 +1,11 @@
 { config, lib, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  normalNixosVms = nl.normalNixosVms cfg.vms;
-  qemuMediaVms = nl.qemuMediaVms cfg.vms;
+  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
   tpmVms = lib.filterAttrs (_: vm: vm.tpm.enable) normalNixosVms;
   processDags = cfg._bundle.processesJson.data.vms or [ ];
 
@@ -33,12 +33,12 @@ let
       kind ? "directory",
       lifecycle ? "persistent",
       persistence ? "persistent",
-      owner ? principal "user" "nixlingd",
-      group ? principal "group" "nixlingd",
+      owner ? principal "user" "d2bd",
+      group ? principal "group" "d2bd",
       mode ? modeForKind kind,
-      creator ? actor "broker" "nixling-priv-broker",
+      creator ? actor "broker" "d2b-priv-broker",
       writers ? [ creator ],
-      readers ? [ (actor "daemon" "nixlingd") ],
+      readers ? [ (actor "daemon" "d2bd") ],
       cleanupPolicy ? "never",
       repairPolicy ? "broker-reconcile",
       restartPolicy ? "preserve-across-daemon-restart",
@@ -80,12 +80,12 @@ let
     };
 
   bundleArtifactPaths = [
-    "/etc/nixling/bundle.json"
-    "/etc/nixling/host.json"
-    "/etc/nixling/processes.json"
-    "/etc/nixling/privileges.json"
-    "/etc/nixling/storage.json"
-    "/etc/nixling/sync.json"
+    "/etc/d2b/bundle.json"
+    "/etc/d2b/host.json"
+    "/etc/d2b/processes.json"
+    "/etc/d2b/privileges.json"
+    "/etc/d2b/storage.json"
+    "/etc/d2b/sync.json"
   ];
 
   daemonStateReports = [
@@ -100,11 +100,11 @@ let
     (mkPath {
       id = "path:etc-root";
       scope = "host";
-      path = "/etc/nixling";
+      path = "/etc/d2b";
       lifecycle = "config";
       persistence = "persistent";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       creator = actor "nix-module" "environment.etc";
       writers = [ (actor "nix-module" "environment.etc") ];
       cleanupPolicy = "never";
@@ -118,16 +118,16 @@ let
       path = toString cfg.site.stateDir;
       persistence = "persistent";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       creator = actor "nix-module" "tmpfiles";
     })
     (mkPath {
       id = "path:cache-root";
       scope = "host";
-      path = "/var/cache/nixling";
+      path = "/var/cache/d2b";
       persistence = "persistent";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       cleanupPolicy = "never";
@@ -136,11 +136,11 @@ let
     (mkPath {
       id = "path:run-root";
       scope = "host";
-      path = "/run/nixling";
+      path = "/run/d2b";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixling";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2b";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       cleanupPolicy = "boot";
@@ -155,7 +155,7 @@ let
       lifecycle = "config";
       persistence = "persistent";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       creator = actor "nix-module" "environment.etc";
       writers = [ (actor "nix-module" "environment.etc") ];
       cleanupPolicy = "never";
@@ -171,25 +171,25 @@ let
       id = "path:daemon-state";
       scope = "host";
       path = "${toString cfg.site.stateDir}/daemon-state";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixlingd";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2bd";
       mode = "0700";
       creator = actor "nix-module" "tmpfiles";
-      writers = [ (actor "daemon" "nixlingd") ];
+      writers = [ (actor "daemon" "d2bd") ];
       cleanupPolicy = "never";
       repairPolicy = "nix-activation";
     })
     (mkPath {
       id = "path:run-locks";
       scope = "host";
-      path = "/run/nixling/locks";
+      path = "/run/d2b/locks";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixlingd";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2bd";
       mode = "0700";
       creator = actor "nix-module" "tmpfiles";
-      writers = [ (actor "daemon" "nixlingd") ];
+      writers = [ (actor "daemon" "d2bd") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
       leaseClass = "none";
@@ -197,14 +197,14 @@ let
     (mkPath {
       id = "path:run-locks-usbip";
       scope = "host";
-      path = "/run/nixling/locks/usbip";
+      path = "/run/d2b/locks/usbip";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
+      writers = [ (actor "broker" "d2b-priv-broker") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
       leaseClass = "file-record";
@@ -213,33 +213,33 @@ let
     (mkPath {
       id = "path:run-state";
       scope = "host";
-      path = "/run/nixling/state";
+      path = "/run/d2b/state";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixlingd";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2bd";
       mode = "0700";
       creator = actor "nix-module" "tmpfiles";
-      writers = [ (actor "daemon" "nixlingd") ];
+      writers = [ (actor "daemon" "d2bd") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
     })
     (mkPath {
       id = "path:run-otel";
       scope = "host";
-      path = "/run/nixling/otel";
+      path = "/run/d2b/otel";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixling";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2b";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
       writers = [
-        (actor "daemon" "nixlingd")
+        (actor "daemon" "d2bd")
         (actor "role" "role:host:otel-host-bridge")
       ];
       readers = [
-        (actor "daemon" "nixlingd")
+        (actor "daemon" "d2bd")
         (actor "role" "role:host:otel-host-bridge")
       ];
       cleanupPolicy = "boot";
@@ -252,13 +252,13 @@ let
       scope = "host";
       path = "${toString cfg.site.stateDir}/state";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       mode = "0750";
-      creator = actor "broker" "nixling-priv-broker";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
+      creator = actor "broker" "d2b-priv-broker";
+      writers = [ (actor "broker" "d2b-priv-broker") ];
       readers = [
-        (actor "daemon" "nixlingd")
-        (actor "broker" "nixling-priv-broker")
+        (actor "daemon" "d2bd")
+        (actor "broker" "d2b-priv-broker")
       ];
       cleanupPolicy = "never";
       repairPolicy = "broker-reconcile";
@@ -269,7 +269,7 @@ let
       scope = "host";
       path = cfg.daemonExperimental.defaultFlipEvidenceDir;
       owner = principal "user" "root";
-      group = principal "group" "nixling";
+      group = principal "group" "d2b";
       mode = "0775";
       creator = actor "operator" "host-validate-apply";
       writers = [ (actor "operator" "host-validate-apply") ];
@@ -287,7 +287,7 @@ let
       path = "${cfg.daemonExperimental.defaultFlipEvidenceDir}/<readiness-key>.json";
       kind = "regular-file";
       owner = principal "user" "root";
-      group = principal "group" "nixling";
+      group = principal "group" "d2b";
       mode = "0664";
       creator = actor "operator" "host-validate-apply";
       writers = [ (actor "operator" "host-validate-apply") ];
@@ -307,9 +307,9 @@ let
       owner = principal "user" "root";
       group = principal "group" "root";
       mode = "0700";
-      creator = actor "broker" "nixling-priv-broker";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
-      readers = [ (actor "broker" "nixling-priv-broker") ];
+      creator = actor "broker" "d2b-priv-broker";
+      writers = [ (actor "broker" "d2b-priv-broker") ];
+      readers = [ (actor "broker" "d2b-priv-broker") ];
       cleanupPolicy = "never";
       repairPolicy = "broker-fail-closed";
       invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
@@ -317,18 +317,18 @@ let
     (mkPath {
       id = "path:qemu-media-redacted-index";
       scope = "host";
-      path = "/run/nixling/qemu-media-registry-index.json";
+      path = "/run/d2b/qemu-media-registry-index.json";
       kind = "regular-file";
       lifecycle = "boot-scoped-readoptable";
       persistence = "boot-scoped";
       owner = principal "user" "root";
-      group = principal "group" "nixlingd";
+      group = principal "group" "d2bd";
       mode = "0640";
-      creator = actor "broker" "nixling-priv-broker";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
+      creator = actor "broker" "d2b-priv-broker";
+      writers = [ (actor "broker" "d2b-priv-broker") ];
       readers = [
-        (actor "daemon" "nixlingd")
-        (actor "broker" "nixling-priv-broker")
+        (actor "daemon" "d2bd")
+        (actor "broker" "d2b-priv-broker")
         (actor "operator" "host-doctor")
       ];
       cleanupPolicy = "boot";
@@ -344,9 +344,9 @@ let
       owner = principal "user" "root";
       group = principal "group" "root";
       mode = "0700";
-      creator = actor "broker" "nixling-priv-broker";
-      writers = [ (actor "broker" "nixling-priv-broker") ];
-      readers = [ (actor "broker" "nixling-priv-broker") ];
+      creator = actor "broker" "d2b-priv-broker";
+      writers = [ (actor "broker" "d2b-priv-broker") ];
+      readers = [ (actor "broker" "d2b-priv-broker") ];
       cleanupPolicy = "never";
       repairPolicy = "broker-fail-closed";
       sensitivity = "secret-adjacent";
@@ -358,13 +358,13 @@ let
       scope = "host";
       path = "${toString cfg.site.stateDir}/daemon-state/${file}";
       kind = "regular-file";
-      owner = principal "user" "nixlingd";
-      group = principal "group" "nixling";
+      owner = principal "user" "d2bd";
+      group = principal "group" "d2b";
       mode = "0640";
-      creator = actor "daemon" "nixlingd";
-      writers = [ (actor "daemon" "nixlingd") ];
+      creator = actor "daemon" "d2bd";
+      writers = [ (actor "daemon" "d2bd") ];
       readers = [
-        (actor "daemon" "nixlingd")
+        (actor "daemon" "d2bd")
         (actor "operator" "host-doctor")
       ];
       cleanupPolicy = "never";
@@ -379,17 +379,17 @@ let
         id = "path:vm-state:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "3770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
         cleanupPolicy = "never";
         repairPolicy = "nix-activation";
@@ -398,16 +398,16 @@ let
       (mkPath {
         id = "path:vm-run:${name}";
         scope = "vm:${name}";
-        path = "/run/nixling/vms/${name}";
+        path = "/run/d2b/vms/${name}";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "1770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
@@ -417,16 +417,16 @@ let
       (mkPath {
         id = "path:vm-run-guest-control:${name}";
         scope = "vm:${name}";
-        path = "/run/nixling/vms/${name}/guest-control";
+        path = "/run/d2b/vms/${name}/guest-control";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "0770";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
@@ -437,12 +437,12 @@ let
         id = "path:daemon-state-vm:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixlingd";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2bd";
         mode = "0750";
-        creator = actor "daemon" "nixlingd";
-        writers = [ (actor "daemon" "nixlingd") ];
-        readers = [ (actor "daemon" "nixlingd") ];
+        creator = actor "daemon" "d2bd";
+        writers = [ (actor "daemon" "d2bd") ];
+        readers = [ (actor "daemon" "d2bd") ];
         cleanupPolicy = "never";
         repairPolicy = "none";
         invariants = [ "no-symlink" "no-recursive-mutation" ];
@@ -452,12 +452,12 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}/runtime.<role>.json";
         kind = "regular-file";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "0640";
-        creator = actor "daemon" "nixlingd";
-        writers = [ (actor "daemon" "nixlingd") ];
-        readers = [ (actor "daemon" "nixlingd") ];
+        creator = actor "daemon" "d2bd";
+        writers = [ (actor "daemon" "d2bd") ];
+        readers = [ (actor "daemon" "d2bd") ];
         cleanupPolicy = "never";
         repairPolicy = "none";
         invariants = [ "no-symlink" "no-recursive-mutation" ];
@@ -467,13 +467,13 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.site.stateDir}/daemon-state/${name}/api-ready.json";
         kind = "regular-file";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "0640";
-        creator = actor "daemon" "nixlingd";
-        writers = [ (actor "daemon" "nixlingd") ];
+        creator = actor "daemon" "d2bd";
+        writers = [ (actor "daemon" "d2bd") ];
         readers = [
-          (actor "daemon" "nixlingd")
+          (actor "daemon" "d2bd")
           (actor "operator" "vm-status")
         ];
         cleanupPolicy = "never";
@@ -484,14 +484,14 @@ let
         id = "path:store-view:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "never";
@@ -502,14 +502,14 @@ let
         id = "path:store-view-live:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/live";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "cutover-only";
@@ -519,15 +519,15 @@ let
       (mkPath {
         id = "path:store-view-marker:${name}";
         scope = "vm:${name}";
-        path = "${toString cfg.store.stateDir}/${name}/store-view/live/.nixling-marker-${name}";
+        path = "${toString cfg.store.stateDir}/${name}/store-view/live/.d2b-marker-${name}";
         kind = "regular-file";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0444";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
+          (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "never";
@@ -538,14 +538,14 @@ let
         id = "path:store-view-meta:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/meta";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "never";
@@ -556,13 +556,13 @@ let
         id = "path:store-view-generations:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/meta/generations";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
+          (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "cutover-only";
@@ -573,12 +573,12 @@ let
         id = "path:store-view-gcroots:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/meta/gcroots";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
-        readers = [ (actor "daemon" "nixlingd") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
+        readers = [ (actor "daemon" "d2bd") ];
         cleanupPolicy = "cutover-only";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
@@ -588,13 +588,13 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/meta/current";
         kind = "symlink";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0777";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
+          (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "cutover-only";
@@ -607,14 +607,14 @@ let
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/store-view/sync.lock";
         kind = "regular-file";
-        owner = principal "user" "nixlingd";
+        owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0640";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
         cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
@@ -630,15 +630,15 @@ let
         id = "path:swtpm-state:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/swtpm";
-        owner = uidPrincipal (nl.stablePrincipalId ("nixling-" + name + "-swtpm"));
-        group = gidPrincipal (nl.stablePrincipalId ("nixling-" + name + "-swtpm"));
+        owner = uidPrincipal (d2bLib.stablePrincipalId ("d2b-" + name + "-swtpm"));
+        group = gidPrincipal (d2bLib.stablePrincipalId ("d2b-" + name + "-swtpm"));
         mode = "0700";
-        creator = actor "broker" "nixling-priv-broker";
+        creator = actor "broker" "d2b-priv-broker";
         writers = [
-          (actor "broker" "nixling-priv-broker")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:swtpm")
         ];
-        readers = [ (actor "broker" "nixling-priv-broker") ];
+        readers = [ (actor "broker" "d2b-priv-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -652,9 +652,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0600";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
-        readers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
+        readers = [ (actor "broker" "d2b-priv-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -669,16 +669,16 @@ let
         id = "path:qemu-media-vm-state:${name}";
         scope = "vm:${name}";
         path = "${toString cfg.store.stateDir}/${name}/qemu-media";
-        owner = principal "user" "nixling-${name}-qemu-media";
-        group = principal "group" "nixling-${name}-qemu-media";
+        owner = principal "user" "d2b-${name}-qemu-media";
+        group = principal "group" "d2b-${name}-qemu-media";
         mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "broker" "nixling-priv-broker")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         readers = [
-          (actor "broker" "nixling-priv-broker")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         cleanupPolicy = "never";
@@ -688,15 +688,15 @@ let
       (mkPath {
         id = "path:qemu-media-vm-run:${name}";
         scope = "vm:${name}";
-        path = "/run/nixling/vms/${name}";
+        path = "/run/d2b/vms/${name}";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "broker" "nixling-priv-broker")
+          (actor "broker" "d2b-priv-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         cleanupPolicy = "boot";
@@ -705,7 +705,7 @@ let
         invariants = [ "no-symlink" "scope-authorization-required" ];
         accessAcl = [
           {
-            principal = principal "user" "nixling-${name}-qemu-media";
+            principal = principal "user" "d2b-${name}-qemu-media";
             permissions = "rwx";
           }
         ];
@@ -713,17 +713,17 @@ let
       (mkPath {
         id = "path:qemu-media-qmp:${name}";
         scope = "vm:${name}";
-        path = "/run/nixling/vms/${name}/qmp.sock";
+        path = "/run/d2b/vms/${name}/qmp.sock";
         kind = "unix-socket";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
-        owner = principal "user" "nixling-${name}-qemu-media";
-        group = principal "group" "nixling-${name}-qemu-media";
+        owner = principal "user" "d2b-${name}-qemu-media";
+        group = principal "group" "d2b-${name}-qemu-media";
         mode = "0660";
         creator = actor "role" "role:${name}:qemu-media";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
+        writers = [ (actor "broker" "d2b-priv-broker") ];
         readers = [
-          (actor "broker" "nixling-priv-broker")
+          (actor "broker" "d2b-priv-broker")
         ];
         cleanupPolicy = "process-exit-with-proof";
         repairPolicy = "broker-fail-closed";
@@ -737,9 +737,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0700";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
-        readers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
+        readers = [ (actor "broker" "d2b-priv-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -753,9 +753,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0600";
-        creator = actor "broker" "nixling-priv-broker";
-        writers = [ (actor "broker" "nixling-priv-broker") ];
-        readers = [ (actor "broker" "nixling-priv-broker") ];
+        creator = actor "broker" "d2b-priv-broker";
+        writers = [ (actor "broker" "d2b-priv-broker") ];
+        readers = [ (actor "broker" "d2b-priv-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -778,10 +778,10 @@ let
               if lib.hasPrefix "/run/" writable.path then "boot-scoped" else "persistent";
             owner = uidPrincipal node.profile.uid;
             group = gidPrincipal node.profile.gid;
-            creator = actor "broker" "nixling-priv-broker";
+            creator = actor "broker" "d2b-priv-broker";
             writers = [ (actor "role" "role:${dag.vm}:${node.id}") ];
             readers = [
-              (actor "daemon" "nixlingd")
+              (actor "daemon" "d2bd")
               (actor "role" "role:${dag.vm}:${node.id}")
             ];
             cleanupPolicy =
@@ -811,8 +811,8 @@ let
             creator = actor "role" "role:${dag.vm}:${node.id}";
             writers = [ (actor "role" "role:${dag.vm}:${node.id}") ];
             readers = [
-              (actor "daemon" "nixlingd")
-              (actor "broker" "nixling-priv-broker")
+              (actor "daemon" "d2bd")
+              (actor "broker" "d2b-priv-broker")
             ];
             cleanupPolicy = "process-exit-with-proof";
             leaseClass = "process-pidfd";
@@ -838,8 +838,8 @@ let
             owner = uidPrincipal op.ownerUid;
             group = gidPrincipal op.ownerGid;
             mode = modeString op.mode;
-            creator = actor "broker" "nixling-priv-broker";
-            writers = [ (actor "broker" "nixling-priv-broker") ];
+            creator = actor "broker" "d2b-priv-broker";
+            writers = [ (actor "broker" "d2b-priv-broker") ];
             readers = [ (actor "role" "role:${dag.vm}:cloud-hypervisor") ];
             cleanupPolicy = "never";
             repairPolicy = "broker-reconcile";
@@ -919,10 +919,10 @@ let
     roots = [
       {
         id = "root:etc";
-        path = "/etc/nixling";
+        path = "/etc/d2b";
         class = "config";
         owner = principal "user" "root";
-        group = principal "group" "nixlingd";
+        group = principal "group" "d2bd";
         mode = "0750";
         authority = "nix-module";
       }
@@ -931,16 +931,16 @@ let
         path = toString cfg.site.stateDir;
         class = "persistent";
         owner = principal "user" "root";
-        group = principal "group" "nixlingd";
+        group = principal "group" "d2bd";
         mode = "0750";
         authority = "broker";
       }
       {
         id = "root:run";
-        path = "/run/nixling";
+        path = "/run/d2b";
         class = "runtime";
-        owner = principal "user" "nixlingd";
-        group = principal "group" "nixling";
+        owner = principal "user" "d2bd";
+        group = principal "group" "d2b";
         mode = "0750";
         authority = "daemon";
       }
@@ -958,17 +958,17 @@ let
     remediations = [
       {
         id = "remediate:host-doctor";
-        command = "nixling host doctor --storage --read-only";
+        command = "d2b host doctor --storage --read-only";
         description = "Inspect storage/degraded state without mutating the host.";
       }
       {
         id = "remediate:vm-status";
-        command = "nixling vm status <vm>";
+        command = "d2b vm status <vm>";
         description = "Inspect the VM's role-level degraded state and adoption evidence.";
       }
       {
         id = "remediate:vm-restart";
-        command = "nixling vm restart <vm> --apply";
+        command = "d2b vm restart <vm> --apply";
         description = "Restart a VM whose role cannot be safely re-adopted.";
       }
     ];
@@ -977,7 +977,7 @@ let
 in
 {
   config = {
-    nixling._bundle.storageJson = {
+    d2b._bundle.storageJson = {
       inherit data;
       installFileName = "storage.json";
       classification = "contractPrivateNonSecret";

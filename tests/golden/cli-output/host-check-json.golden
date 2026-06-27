@@ -11,7 +11,7 @@
     {
       "id": "kernel-version",
       "severity": "pass",
-      "message": "kernel 6.8.12-nixling satisfies the >= 6.6 requirement",
+      "message": "kernel 6.8.12-d2b satisfies the >= 6.6 requirement",
       "remediation": "Keep a 6.6+ kernel available for W2 daemon experiments."
     },
     {
@@ -33,7 +33,7 @@
       "remediation": "No action required.",
       "detail": "cloud-hypervisor",
       "details": {
-        "gate": "All nixling VMs require the base KVM module."
+        "gate": "All d2b VMs require the base KVM module."
       }
     },
     {
@@ -93,7 +93,7 @@
       "remediation": "No action required.",
       "detail": "nftables",
       "details": {
-        "gate": "Required for the marker-owned inet nixling table."
+        "gate": "Required for the marker-owned inet d2b table."
       }
     },
     {
@@ -113,7 +113,7 @@
       "remediation": "No action required.",
       "detail": "bridge-netfilter",
       "details": {
-        "gate": "Optional, but if present nixling fails closed unless all bridge-nf-call sysctls are zero."
+        "gate": "Optional, but if present d2b fails closed unless all bridge-nf-call sysctls are zero."
       }
     },
     {
@@ -245,7 +245,7 @@
     {
       "id": "nftables-table",
       "severity": "pass",
-      "message": "`nft list ruleset --json` shows an `inet nixling` table",
+      "message": "`nft list ruleset --json` shows an `inet d2b` table",
       "remediation": "No action required."
     },
     {
@@ -258,7 +258,7 @@
       "id": "ipv6-sysctl:work:br-work-lan.disable_ipv6",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-lan.disable_ipv6` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -268,7 +268,7 @@
       "id": "ipv6-sysctl:work:br-work-lan.accept_ra",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-lan.accept_ra` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -278,7 +278,7 @@
       "id": "ipv6-sysctl:work:br-work-lan.autoconf",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-lan.autoconf` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -288,7 +288,7 @@
       "id": "ipv6-sysctl:work:br-work-lan.addr_gen_mode",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-lan.addr_gen_mode` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -298,7 +298,7 @@
       "id": "ipv6-sysctl:work:br-work-lan.arp_ignore",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-lan.arp_ignore` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -308,7 +308,7 @@
       "id": "ipv6-sysctl:work:br-work-up.disable_ipv6",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-up.disable_ipv6` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -318,7 +318,7 @@
       "id": "ipv6-sysctl:work:br-work-up.accept_ra",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-up.accept_ra` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -328,7 +328,7 @@
       "id": "ipv6-sysctl:work:br-work-up.autoconf",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-up.autoconf` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -338,7 +338,7 @@
       "id": "ipv6-sysctl:work:br-work-up.addr_gen_mode",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-up.addr_gen_mode` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -348,7 +348,7 @@
       "id": "ipv6-sysctl:work:br-work-up.arp_ignore",
       "severity": "pass",
       "message": "IPv6 sysctl `br-work-up.arp_ignore` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -358,7 +358,7 @@
       "id": "ipv6-sysctl:work:work-l1.disable_ipv6",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l1.disable_ipv6` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -368,7 +368,7 @@
       "id": "ipv6-sysctl:work:work-l1.accept_ra",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l1.accept_ra` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -378,7 +378,7 @@
       "id": "ipv6-sysctl:work:work-l1.autoconf",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l1.autoconf` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -388,7 +388,7 @@
       "id": "ipv6-sysctl:work:work-l1.addr_gen_mode",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l1.addr_gen_mode` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -398,7 +398,7 @@
       "id": "ipv6-sysctl:work:work-l1.arp_ignore",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l1.arp_ignore` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -408,7 +408,7 @@
       "id": "ipv6-sysctl:work:work-u2.disable_ipv6",
       "severity": "pass",
       "message": "IPv6 sysctl `work-u2.disable_ipv6` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -418,7 +418,7 @@
       "id": "ipv6-sysctl:work:work-u2.accept_ra",
       "severity": "pass",
       "message": "IPv6 sysctl `work-u2.accept_ra` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -428,7 +428,7 @@
       "id": "ipv6-sysctl:work:work-u2.autoconf",
       "severity": "pass",
       "message": "IPv6 sysctl `work-u2.autoconf` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -438,7 +438,7 @@
       "id": "ipv6-sysctl:work:work-u2.addr_gen_mode",
       "severity": "pass",
       "message": "IPv6 sysctl `work-u2.addr_gen_mode` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -448,7 +448,7 @@
       "id": "ipv6-sysctl:work:work-u2.arp_ignore",
       "severity": "pass",
       "message": "IPv6 sysctl `work-u2.arp_ignore` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -458,7 +458,7 @@
       "id": "ipv6-sysctl:work:work-l10.disable_ipv6",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l10.disable_ipv6` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -468,7 +468,7 @@
       "id": "ipv6-sysctl:work:work-l10.accept_ra",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l10.accept_ra` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -478,7 +478,7 @@
       "id": "ipv6-sysctl:work:work-l10.autoconf",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l10.autoconf` matches the declared value `0`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "0",
         "observed": "0"
@@ -488,7 +488,7 @@
       "id": "ipv6-sysctl:work:work-l10.addr_gen_mode",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l10.addr_gen_mode` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"
@@ -498,7 +498,7 @@
       "id": "ipv6-sysctl:work:work-l10.arp_ignore",
       "severity": "pass",
       "message": "IPv6 sysctl `work-l10.arp_ignore` matches the declared value `1`",
-      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "remediation": "Ensure the declared d2b IPv6 sysctls are applied to every env bridge and tap.",
       "details": {
         "expected": "1",
         "observed": "1"

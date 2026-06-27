@@ -1,5 +1,5 @@
 # crosvm with patched seccomp policies for the GPU sidecar used by
-# nixling's graphics component (see
+# d2b's graphics component (see
 # `nixos-modules/components/graphics.nix`). Originally an inline
 # let-block; lifted into the framework via phase-1c so consumers can
 # depend on a single store path. See `pkgs/crosvm-seccomp/` for the

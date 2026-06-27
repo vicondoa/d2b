@@ -1,0 +1,13 @@
+[package]
+name = "d2b-userd"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+

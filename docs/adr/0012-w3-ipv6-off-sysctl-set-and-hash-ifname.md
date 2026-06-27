@@ -8,7 +8,7 @@
 
 W3 introduces idempotent host reconcile for bridges, TAPs, NetworkManager
 unmanaged drop-ins, `/etc/hosts` ownership, route preflight, and
-IPv6 disablement on every nixling-owned link. Three load-bearing
+IPv6 disablement on every d2b-owned link. Three load-bearing
 choices in this scope deserve an ADR because they freeze a contract
 the integrator and consumer ABI depend on:
 
@@ -24,8 +24,8 @@ the integrator and consumer ABI depend on:
 
 ### 1. IPv6-off sysctl set + ordering
 
-For every nixling-created bridge or TAP, the broker performs the
-5-step ordered sequence in `nixling_host::netlink::ipv6_off_sequence`:
+For every d2b-created bridge or TAP, the broker performs the
+5-step ordered sequence in `d2b_host::netlink::ipv6_off_sequence`:
 
 1. Pre-create: install NM unmanaged drop-in + run `nmcli general
    reload conf` (NM >= 1.20) or `systemctl reload
@@ -54,13 +54,13 @@ unintended IPv6 state.
 
 `<prefix><role-tag><HASH_SUFFIX>` where:
 
-- `prefix` defaults to `nl-` (configurable per site, `<=8` bytes,
+- `prefix` defaults to `d2b-` (configurable per site, `<=8` bytes,
   `[A-Za-z0-9_-]+`, must end with `-`);
 - `role-tag` is one ASCII char: `b` for bridge, `t` for TAP;
 - `HASH_SUFFIX` is the 8-char Crockford base32 encoding of a
   64-bit FNV-1a hash over `env | 0x1F | vm? | 0x1E | role-tag`.
 
-The default-prefix shape `nl-b<8>` is 12 bytes, well within
+The default-prefix shape `d2b-b<8>` is 12 bytes, well within
 IFNAMSIZ-1 (15 bytes).
 
 Two emitter-time guards:
@@ -80,7 +80,7 @@ copy before any host mutation. Both sides emit the same
 ### 3. Per-role bridge-port flag defaults
 
 Every flag, every role per
-`nixling_host::bridge_port::BridgePortFlagSet::defaults_for`:
+`d2b_host::bridge_port::BridgePortFlagSet::defaults_for`:
 
 | Role                       | isolated | hairpin | learning | unicast_flood | multicast_flood | neigh_suppress | bpdu_guard | root_block | fast_leave |
 | -------------------------- | -------- | ------- | -------- | ------------- | --------------- | -------------- | ---------- | ---------- | ---------- |
@@ -92,8 +92,8 @@ Every flag, every role per
 `workload-lan-east-west` requires a **double opt-in** before
 `SetBridgePortFlags` will accept it:
 
-- `nixling.envs.<env>.lan.allowEastWest = true`;
-- `nixling.site.allowUnsafeEastWest = true`.
+- `d2b.envs.<env>.lan.allowEastWest = true`;
+- `d2b.site.allowUnsafeEastWest = true`.
 
 `validate_role_against_policy` returns
 `BridgePortPolicyError::EastWestRequiresEnvOptIn` /
@@ -176,7 +176,7 @@ L1b unit tests cover every flag/role combination in
 - Operators see deterministic, short, hash-derived names — the
   pretty `(env)-(vm)` form lives in `host.json` and CLI status
   only.
-- Foreign IPv6 connectivity on non-nixling links is preserved.
+- Foreign IPv6 connectivity on non-d2b links is preserved.
 - The `bridge-port-flag-drift` and `ipv6-sysctl-drift` canaries
   catch foreign actors that flip per-link state after host prepare.
 - The east-west double opt-in adds friction for operators who

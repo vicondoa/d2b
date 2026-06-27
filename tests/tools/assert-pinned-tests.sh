@@ -16,8 +16,8 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 if ! cargo nextest --version >/dev/null 2>&1; then
-  if [ -z "${NIXLING_ASSERT_PINNED_IN_NIX_SHELL:-}" ] && command -v nix >/dev/null 2>&1; then
-    export NIXLING_ASSERT_PINNED_IN_NIX_SHELL=1
+  if [ -z "${D2B_ASSERT_PINNED_IN_NIX_SHELL:-}" ] && command -v nix >/dev/null 2>&1; then
+    export D2B_ASSERT_PINNED_IN_NIX_SHELL=1
     exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-nextest nixpkgs#gcc \
       --command bash "$0" "$@"
   fi
@@ -64,16 +64,16 @@ collect_present() {
 # Main workspace (packages/Cargo.toml).
 collect_present < <(
   cd "$ROOT/packages"
-  cargo nextest list --workspace --exclude nixling-contract-tests --message-format oneline
+  cargo nextest list --workspace --exclude d2b-contract-tests --message-format oneline
 )
 # Fixture contract tests are excluded from the default workspace test pass, but
-# test-rust.sh runs them with NL_FIXTURES. Include their nextest
+# test-rust.sh runs them with D2B_FIXTURES. Include their nextest
 # listing so retired shell gates can pin rendered-artifact contract successors.
 collect_present < <(
   cd "$ROOT/packages"
-  cargo nextest list -p nixling-contract-tests --message-format oneline
+  cargo nextest list -p d2b-contract-tests --message-format oneline
 )
-# Broker workspace (packages/nixling-priv-broker/Cargo.toml) is a SEPARATE
+# Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
 # cargo workspace, excluded from the main one. Retired canaries pinned
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
 # pinned gate must enumerate it too — otherwise those retirements would be
@@ -83,7 +83,7 @@ collect_present < <(
 # transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
 # full feature set), which would dirty the working tree. Snapshot + restore
 # the broker lock so listing is non-mutating by construction.
-broker_lock="$ROOT/packages/nixling-priv-broker/Cargo.lock"
+broker_lock="$ROOT/packages/d2b-priv-broker/Cargo.lock"
 broker_lock_backup=""
 restore_broker_lock() {
   if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
@@ -101,7 +101,7 @@ if [ -f "$broker_lock" ]; then
   trap restore_broker_lock EXIT
 fi
 collect_present < <(
-  cd "$ROOT/packages/nixling-priv-broker"
+  cd "$ROOT/packages/d2b-priv-broker"
   # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
   # test surface: the default real-wire tests, the layer1-bootstrap legacy
   # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the

@@ -1,7 +1,7 @@
-# `with-entra-id` — composing nixling with `entrablau`
+# `with-entra-id` — composing d2b with `entrablau`
 
 This example is the **integration showcase** for using
-[`vicondoa/nixling`][nixling] together with the framework-agnostic
+[`vicondoa/d2b`][d2b] together with the framework-agnostic
 [`vicondoa/entrablau.nix`][entrablau] flake to spin up an
 Entra-ID-joined work microVM on a NixOS host.
 
@@ -16,11 +16,11 @@ work environment with one Entra-joined VM:
 
 | Component                | Owner            | Role                                                 |
 |--------------------------|------------------|------------------------------------------------------|
-| Bridges / NAT / firewall | nixling          | Per-env isolated /24 LAN, /30 uplink, NAT egress     |
-| Net VM (`sys-work-net`)  | nixling          | Auto-declared dnsmasq + nftables NAT router          |
-| swtpm 2.0                | nixling          | Software TPM exposed to guest at `/dev/tpmrm0`       |
-| Wayland / audio / GPU    | nixling          | (Off in this minimal example — TPM-only headless VM) |
-| YubiKey USBIP backend    | nixling          | (Available; toggle `usbip.yubikey = true` per VM)    |
+| Bridges / NAT / firewall | d2b          | Per-env isolated /24 LAN, /30 uplink, NAT egress     |
+| Net VM (`sys-work-net`)  | d2b          | Auto-declared dnsmasq + nftables NAT router          |
+| swtpm 2.0                | d2b          | Software TPM exposed to guest at `/dev/tpmrm0`       |
+| Wayland / audio / GPU    | d2b          | (Off in this minimal example — TPM-only headless VM) |
+| YubiKey USBIP backend    | d2b          | (Available; toggle `usbip.yubikey = true` per VM)    |
 | Himmelblau daemon + PAM  | entrablau        | Linux-native Entra ID client (TPM-enabled rebuild)   |
 | Intune compliance shims  | entrablau        | `dmiOverride` / `osReleaseOverride`, `FileDescriptorStoreMax` for PRT survival |
 | Firefox SSO + pinentry   | entrablau        | Browser-broker plumbing for the interactive MFA flow |
@@ -29,22 +29,22 @@ work environment with one Entra-joined VM:
 
 ```
 examples/with-entra-id/
-├── flake.nix           inputs: nixpkgs, nixling, entrablau
+├── flake.nix           inputs: nixpkgs, d2b, entrablau
 │                       outputs: nixosConfigurations.demo
-├── configuration.nix   host-side: user, nixling.site, nixling.envs.work
+├── configuration.nix   host-side: user, d2b.site, d2b.envs.work
 ├── work-entra.nix         guest-side: hostname, security.tpm2, entrablau.*
 └── README.md           you are here
 ```
 
 ## Two-flake composition: who owns what
 
-The split is intentional. **`nixling` owns VM lifecycle and host
+The split is intentional. **`d2b` owns VM lifecycle and host
 plumbing**; **`entrablau` owns Entra protocol + Intune
-compatibility**. Putting Entra inside nixling would have coupled the
+compatibility**. Putting Entra inside d2b would have coupled the
 framework to Microsoft-specific machinery that the average single-
 user NixOS desktop will never want.
 
-### Options that live in `nixling.*` (from this flake)
+### Options that live in `d2b.*` (from this flake)
 
 These are set on the **host** in `configuration.nix`, or on the VM
 attrset in `flake.nix`. They have nothing to do with Entra; they
@@ -52,17 +52,17 @@ configure the VM itself.
 
 | Option                                | Set in            | Purpose                                           |
 |---------------------------------------|-------------------|---------------------------------------------------|
-| `nixling.site.waylandUser`            | `configuration.nix` | Host's Plasma / Wayland user                    |
-| `nixling.site.launcherUsers`          | `configuration.nix` | Adds users to the `nixling` lifecycle group for daemon socket access |
-| `nixling.site.yubikey.enable`         | `configuration.nix` | Host-side YubiKey udev rules; `usbip-host` loads on per-VM opt-in |
-| `nixling.envs.<env>.lanSubnet`        | `configuration.nix` | Per-env workload `/24`                          |
-| `nixling.envs.<env>.uplinkSubnet`     | `configuration.nix` | Per-env host↔net-VM `/30`                       |
-| `nixling.vms.<vm>.tpm.enable`         | `flake.nix`         | swtpm for this VM                               |
-| `nixling.vms.<vm>.graphics.enable`    | `flake.nix`         | virtio-gpu + Wayland forward (off in this example) |
-| `nixling.vms.<vm>.usbip.yubikey`      | `flake.nix`         | YubiKey USBIP passthrough (off in this example) |
-| `nixling.vms.<vm>.env`, `index`       | `flake.nix`         | Bind VM into the env's LAN; derive MAC + IP     |
-| `nixling.vms.<vm>.ssh.user`           | `flake.nix`         | SSH user the CLI uses to talk into the VM       |
-| `nixling.vms.<vm>.config.imports`     | `flake.nix`         | **The composition seam** — guest NixOS modules  |
+| `d2b.site.waylandUser`            | `configuration.nix` | Host's Plasma / Wayland user                    |
+| `d2b.site.launcherUsers`          | `configuration.nix` | Adds users to the `d2b` lifecycle group for daemon socket access |
+| `d2b.site.yubikey.enable`         | `configuration.nix` | Host-side YubiKey udev rules; `usbip-host` loads on per-VM opt-in |
+| `d2b.envs.<env>.lanSubnet`        | `configuration.nix` | Per-env workload `/24`                          |
+| `d2b.envs.<env>.uplinkSubnet`     | `configuration.nix` | Per-env host↔net-VM `/30`                       |
+| `d2b.vms.<vm>.tpm.enable`         | `flake.nix`         | swtpm for this VM                               |
+| `d2b.vms.<vm>.graphics.enable`    | `flake.nix`         | virtio-gpu + Wayland forward (off in this example) |
+| `d2b.vms.<vm>.usbip.yubikey`      | `flake.nix`         | YubiKey USBIP passthrough (off in this example) |
+| `d2b.vms.<vm>.env`, `index`       | `flake.nix`         | Bind VM into the env's LAN; derive MAC + IP     |
+| `d2b.vms.<vm>.ssh.user`           | `flake.nix`         | SSH user the CLI uses to talk into the VM       |
+| `d2b.vms.<vm>.config.imports`     | `flake.nix`         | **The composition seam** — guest NixOS modules  |
 
 ### Options that live in `entrablau.*` (from the other flake)
 
@@ -85,8 +85,8 @@ the [`entrablau` README][entrablau-readme].
 The two trees meet at exactly one place — `flake.nix`:
 
 ```nix
-nixling.vms.work-entra = {
-  tpm.enable = true;             # nixling option
+d2b.vms.work-entra = {
+  tpm.enable = true;             # d2b option
   config = {
     imports = [
       entrablau.nixosModules.default   # bring in the other flake
@@ -97,7 +97,7 @@ nixling.vms.work-entra = {
 ```
 
 `config` is a regular NixOS module. It gets merged into the VM's
-internal NixOS configuration by nixling's `host.nix` translation
+internal NixOS configuration by d2b's `host.nix` translation
 into `microvm.vms.<name>`. From the imported modules' perspective,
 they're being evaluated as a normal NixOS system — they neither
 know nor care that they're inside a microVM.
@@ -129,8 +129,8 @@ in `entrablau` for the patch rationale.
 **swtpm satisfies this requirement**, because the kernel inside
 the VM sees a real TPM CRB at `/dev/tpmrm0` and exposes it through
 the standard tpm2 stack. The keys it generates persist on the host
-under `/var/lib/nixling/vms/<vm>/swtpm/` (for this example:
-`/var/lib/nixling/vms/work-entra/swtpm/`).
+under `/var/lib/d2b/vms/<vm>/swtpm/` (for this example:
+`/var/lib/d2b/vms/work-entra/swtpm/`).
 
 TPM persistence is necessary but not sufficient for stable Entra device
 identity. Himmelblau also stores identity-bearing OS state under the
@@ -147,7 +147,7 @@ config.microvm.volumes = [{
 }];
 ```
 
-Nixling mounts declared `microvm.volumes` by stable virtio serial inside
+D2b mounts declared `microvm.volumes` by stable virtio serial inside
 the guest. Without this persistent `/var`, the root tmpfs regenerates
 `/etc/machine-id`, `/var/lib/systemd/credential.secret`, and Himmelblau
 state after each restart, which can look like a new device enrollment
@@ -164,7 +164,7 @@ restarts should keep the same device identity.
 > next boot — Entra/Intune may register that as a tamper signal in
 > your IT's compliance feed, and you'll need to clean up the old
 > stale device entry from the tenant. Back it up the same way you
-> back up the rest of nixling state (each `microvm.stateDir` /
+> back up the rest of d2b state (each `microvm.stateDir` /
 > `swtpm-state` pair is a unit; see
 > `nixos-modules/host-sidecars.nix` for the exact paths).
 
@@ -180,7 +180,7 @@ across restarts. That gets you past the device-compliance gate so
 the actual user-facing Conditional Access policies (MFA prompt,
 location check, risk-based step-up) can run their normal flow.
 
-It does **not** hide that you're running Linux + nixling +
+It does **not** hide that you're running Linux + d2b +
 Himmelblau:
 
 - The Himmelblau client identifies itself in protocol-level
@@ -210,11 +210,11 @@ actually circumvent enterprise controls, this is the wrong tool
 
 ## Quick start
 
-The example wires `inputs.nixling.url = "path:../.."` so it builds
-against the in-tree nixling sources during the refactor. Real
+The example wires `inputs.d2b.url = "path:../.."` so it builds
+against the in-tree d2b sources during the refactor. Real
 consumers should swap that for a tagged GitHub ref
-(`github:vicondoa/nixling/v0.1.0` once tags exist, or
-`github:vicondoa/nixling` to track `main`); see the comments in
+(`github:vicondoa/d2b/v0.1.0` once tags exist, or
+`github:vicondoa/d2b` to track `main`); see the comments in
 `flake.nix`.
 
 ### 1. Evaluate
@@ -251,23 +251,23 @@ loudly at build time.
 sudo -A nixos-rebuild switch --flake .#demo
 ```
 
-This creates `/var/lib/nixling/keys/work-entra_ed25519`, spawns
+This creates `/var/lib/d2b/keys/work-entra_ed25519`, spawns
 `sys-work-net` (the per-env net VM), materialises the
-`br-work-up` + `br-work-lan` bridges, and installs the `nixling`
+`br-work-up` + `br-work-lan` bridges, and installs the `d2b`
 CLI on `$PATH`. The work VM itself is **not** started — graphics
 VMs and Entra VMs both expect interactive launch.
 
-After activation, `nixling list` / `nixling status` should look
+After activation, `d2b list` / `d2b status` should look
 like this (the work VM has `tpm.enable = true`, the rest is
 default):
 
 ```text
-nixling list
+d2b list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
 
-nixling status
+d2b status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       running (net-vm)
 # work-entra            work      false     true  false   10.20.0.10      stopped
@@ -278,18 +278,18 @@ nixling status
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 ```
 
-`work-entra` shows `STATUS=stopped` until you `nixling vm start
+`work-entra` shows `STATUS=stopped` until you `d2b vm start
 work-entra --apply`; after that it transitions to `running` under
-`nixlingd` supervision. The `TPM=true` column reflects the swtpm
-sidecar wired up by `nixling.vms.work-entra.tpm.enable = true`.
+`d2bd` supervision. The `TPM=true` column reflects the swtpm
+sidecar wired up by `d2b.vms.work-entra.tpm.enable = true`.
 
 ### 4. Bring the VM up
 
 From a Plasma / Wayland terminal (not over SSH — see
-[nixling's README, "Common gotchas"][nixling-readme] for why):
+[d2b's README, "Common gotchas"][d2b-readme] for why):
 
 ```bash
-nixling vm start work-entra --apply
+d2b vm start work-entra --apply
 ```
 
 ### 5. Trigger enrolment
@@ -299,7 +299,7 @@ the canonical way to surface enrolment errors without going through
 a graphical login:
 
 ```bash
-ssh -i /var/lib/nixling/keys/work-entra_ed25519 alice@10.20.0.10
+ssh -i /var/lib/d2b/keys/work-entra_ed25519 alice@10.20.0.10
 
 # Inside the VM:
 sudo aad-tool auth-test --name alice@contoso.com
@@ -336,8 +336,8 @@ sudo sha256sum \
 sudo tpm2_readpublic -c 0x81000001 | grep -E '^(name:|qualified name:)'
 ```
 
-After `nixling vm stop work-entra --apply` followed by
-`nixling vm start work-entra --apply`, those values should remain stable
+After `d2b vm stop work-entra --apply` followed by
+`d2b vm start work-entra --apply`, those values should remain stable
 except for normal Himmelblau cache DB churn. If the VM asks to re-enroll
 after every restart, check `findmnt /var` first: TPM loss and `/var`
 persistence loss look similar from Entra's point of view, but the fix is
@@ -355,14 +355,14 @@ journalctl -b -u var.mount -u local-fs.target --no-pager
   [`entrablau` README quick start][entrablau-readme]
   for tenant prerequisites (admin role, Conditional Access caveats,
   `dmidecode` for realistic `dmiOverride` values).
-- **Add graphics** — set `nixling.vms.work-entra.graphics.enable =
+- **Add graphics** — set `d2b.vms.work-entra.graphics.enable =
   true` in `flake.nix` and the VM gains a virtio-gpu + Wayland
   forward to the host compositor (a `foot` terminal auto-launches
-  inside the guest on boot). Requires `nixling.site.waylandUser`
+  inside the guest on boot). Requires `d2b.site.waylandUser`
   to be non-null on the host — already set in this example.
 - **Add YubiKey passthrough** — set
-  `nixling.vms.work-entra.usbip.yubikey = true` and run
-  `nixling usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
+  `d2b.vms.work-entra.usbip.yubikey = true` and run
+  `d2b usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
   host's USB controller to the VM via USBIP. Useful for the MFA
   prompt during `aad-tool auth-test` and any downstream FIDO2
   flow.
@@ -378,7 +378,7 @@ This example targets **`x86_64-linux`**. The flake declares
 `nixosConfigurations.demo`.
 
 The framework itself is multi-arch (headless VMs eval on
-`aarch64-linux`); nixling's platform gate fires on `graphics.enable`
+`aarch64-linux`); d2b's platform gate fires on `graphics.enable`
 + `audio.enable` only — **not on `tpm.enable`** — so a future
 `aarch64`-clean variant of this example would be possible if
 upstream Himmelblau gained an `aarch64` cargo build. Today,
@@ -397,7 +397,7 @@ back into sync.
 ## Common gotchas
 
 - **TPM state backup**: do **not** wipe
-  `/var/lib/nixling/vms/work-entra/swtpm/`. It holds the per-VM TPM
+  `/var/lib/d2b/vms/work-entra/swtpm/`. It holds the per-VM TPM
   2.0 NVRAM + EK seed that Entra/Intune treats as the device's
   hardware identity. Zeroing it forces re-enrolment and looks
   like device tampering to the IdP.
@@ -408,7 +408,7 @@ back into sync.
   crosvm GPU sidecar) and TPM emulation paths are platform-gated
   to `x86_64-linux`. aarch64 hosts will fail eval with an
   actionable message.
-- **`nixling vm start work-entra --apply` before SSH/enrollment.** The Himmelblau
+- **`d2b vm start work-entra --apply` before SSH/enrollment.** The Himmelblau
   service inside the VM doesn't start until the VM is up;
   attempting to enrol against a stopped VM hangs at the first
   device-code prompt.
@@ -420,11 +420,11 @@ back into sync.
 
 ## After subsequent rebuilds
 
-`nixos-rebuild switch` updates the declared nixling bundle and may
-restart `nixlingd`, but daemon restarts are continuation events:
+`nixos-rebuild switch` updates the declared d2b bundle and may
+restart `d2bd`, but daemon restarts are continuation events:
 running VM runners are re-adopted rather than cycled. After rebuilding,
-`nixling list` flags any VM whose declared closure has drifted from the
-running one as `[pending restart]`; apply with `nixling vm restart
+`d2b list` flags any VM whose declared closure has drifted from the
+running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
@@ -441,11 +441,11 @@ for the exact predicate.
   module bundle. Read its README for tenant prerequisites,
   detailed enrolment troubleshooting, and the full `entrablau.*`
   schema.
-- [`vicondoa/nixling` README][nixling-readme] — quick start, common
+- [`vicondoa/d2b` README][d2b-readme] — quick start, common
   gotchas, full option index.
 
-[nixling]: https://github.com/vicondoa/nixling
-[nixling-readme]: ../../README.md
+[d2b]: https://github.com/vicondoa/d2b
+[d2b-readme]: ../../README.md
 [entrablau]: https://github.com/vicondoa/entrablau.nix
 [entrablau-readme]: https://github.com/vicondoa/entrablau.nix#readme
 [himmelblau-tpm-maintaining]: https://github.com/vicondoa/entrablau.nix/blob/main/pkgs/himmelblau-tpm/MAINTAINING.md

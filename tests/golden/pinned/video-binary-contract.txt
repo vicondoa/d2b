@@ -1,3 +1,3 @@
 # video-binary-contract — rendered processes.json binaryPath command-surface
 # successor for tests/video-binary-contract.sh. Exact cargo nextest list path.
-nixling-contract-tests::video_binary_contract patched_video_binaries_expose_required_command_surface
+d2b-contract-tests::video_binary_contract patched_video_binaries_expose_required_command_surface

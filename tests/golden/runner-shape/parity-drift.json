@@ -6,7 +6,7 @@
     {"vm": "corp-vm", "argvHash": ""}
   ],
   "chApiSocketPaths": [
-    {"vm": "corp-vm", "path": "/run/nixling/vms/corp-vm/ch.sock", "mode": 384, "owner": ""}
+    {"vm": "corp-vm", "path": "/run/d2b/vms/corp-vm/ch.sock", "mode": 384, "owner": ""}
   ],
   "vsockTransports": [
     {"vm": "corp-vm", "transport": "ip"}

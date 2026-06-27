@@ -18,7 +18,7 @@ modules::tests::loaded_module_passes_even_with_modules_disabled
 modules::tests::modules_disabled_locks_required_absent_module
 modules::tests::parse_modules_builtin_strips_path_and_compression_suffix
 modules::tests::parse_proc_modules_extracts_names
-# broker workspace (nixling-priv-broker): ops::device / ops::modprobe canaries
+# broker workspace (d2b-priv-broker): ops::device / ops::modprobe canaries
 ops::device::tests::allowed_when_role_declares_class_and_matrix_validates
 ops::device::tests::denied_role_class_mismatch
 ops::device::tests::denied_not_in_matrix_for_undeclared_path

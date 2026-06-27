@@ -27,7 +27,7 @@ allowed to request its contents through the daemon.
 ## Decision
 
 1. **Transport.** W2 uses non-abstract Unix-domain `SOCK_SEQPACKET`
-   sockets for both `/run/nixling/public.sock` and `/run/nixling/priv.sock`.
+   sockets for both `/run/d2b/public.sock` and `/run/d2b/priv.sock`.
    Each message is framed as a 4-byte little-endian length prefix plus
    one JSON body, with a maximum frame size of 1 MiB.
 2. **Handshake and downgrade policy.** Every connection begins with a

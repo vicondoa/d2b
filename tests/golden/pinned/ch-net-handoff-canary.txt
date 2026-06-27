@@ -1,6 +1,6 @@
-# ch-net-handoff-canary — nixling-host runner_shape ch-net-handoff probe
+# ch-net-handoff-canary — d2b-host runner_shape ch-net-handoff probe
 # #[test]s. Successor of tests/ch-net-handoff-canary.sh, which ran
-# `cargo test -p nixling-host -- ch_help_with_fd_selects_tap_fd
+# `cargo test -p d2b-host -- ch_help_with_fd_selects_tap_fd
 # ch_help_without_fd_or_tap_fails_closed`.
 # The exact bare libtest paths are already pinned by their primary owner,
 # tests/golden/pinned/runner-shape-preflight.txt:
@@ -10,10 +10,10 @@
 # fails closed on duplicate bare paths.
 # Non-cargo residuals from the retired script are covered elsewhere:
 # - the ch-net-handoff-not-supported golden envelope/code field is guarded by
-#   packages/nixling/tests/cli_contract_coverage.rs and the committed
+#   packages/d2b/tests/cli_contract_coverage.rs and the committed
 #   host-check goldens;
 # - the CreateTapFd broker-wire/docs anchor is guarded by
-#   packages/nixling-contract-tests/tests/policy_contracts.rs::
+#   packages/d2b-contract-tests/tests/policy_contracts.rs::
 #   tap_dag_contract_doc_matches_implementation, already recorded by
 #   tests/migration-state.d/tap-dag-contract-doc-eval.toml.
 # No unique bare libtest paths live in this file.

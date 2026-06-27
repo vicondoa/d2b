@@ -3,15 +3,15 @@
 # integration tests. Each tests/integration/containers/*.sh builds its Nix-built
 # OCI image (containerImages.<system>.<name>, NOT swept by `nix flake check`) and
 # runs it with rootless podman. Scope is foreign-userland portability only (e.g.
-# a static nixling binary on stock Ubuntu); daemon/socket activation is covered
+# a static d2b binary on stock Ubuntu); daemon/socket activation is covered
 # natively. Runs identically on a NixOS host and an ubuntu-latest runner.
 
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
-export ROOT NL_LOG
+D2B_LOG=${D2B_LOG:-/dev/null}
+export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"

@@ -1,4 +1,4 @@
-# `nixling.vms.<vm>.homeManager.*`
+# `d2b.vms.<vm>.homeManager.*`
 
 > Reference for the `home-manager` component module.
 > Source: [`nixos-modules/components/home-manager.nix`](../../nixos-modules/components/home-manager.nix)
@@ -10,10 +10,10 @@ Imports [Home Manager] into the guest **as a NixOS module** (the
 same composition the framework itself documents for the host), pre-
 wires it with the framework's sensible defaults (`useGlobalPkgs`,
 `useUserPackages`, `backupFileExtension = "hm-backup"`, `inputs` in
-`extraSpecialArgs`), and exposes a `nixling.homeManager.users`
+`extraSpecialArgs`), and exposes a `d2b.homeManager.users`
 attrset whose per-user values are forwarded into upstream
 `home-manager.users`. One `nixos-rebuild switch` (or, for
-VM-only changes, one `nixling switch <vm> --apply`) rebuilds the guest's
+VM-only changes, one `d2b switch <vm> --apply`) rebuilds the guest's
 system + home environment atomically — there is no separate
 `home-manager switch` invocation inside the VM.
 
@@ -23,8 +23,8 @@ system + home environment atomically — there is no separate
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.vms.<vm>.homeManager.enable` | bool | `false` | Import Home Manager into this VM. Pulls in [`components/home-manager.nix`](../../nixos-modules/components/home-manager.nix) which loads `inputs.home-manager.nixosModules.home-manager` and applies the framework's HM defaults. |
-| `nixling.vms.<vm>.homeManager.users` | attrs (unspecified) | `{ }` | Per-user HM config attrsets. Propagated host→guest by `host.nix` into the guest's `nixling.homeManager.users`. Each value is a NixOS HM module (see "Expected user-value shape" below). |
+| `d2b.vms.<vm>.homeManager.enable` | bool | `false` | Import Home Manager into this VM. Pulls in [`components/home-manager.nix`](../../nixos-modules/components/home-manager.nix) which loads `inputs.home-manager.nixosModules.home-manager` and applies the framework's HM defaults. |
+| `d2b.vms.<vm>.homeManager.users` | attrs (unspecified) | `{ }` | Per-user HM config attrsets. Propagated host→guest by `host.nix` into the guest's `d2b.homeManager.users`. Each value is a NixOS HM module (see "Expected user-value shape" below). |
 
 ## Options (guest-side propagation)
 
@@ -33,7 +33,7 @@ the guest config under a `mkIf` gate:
 
 ```nix
 (lib.mkIf vm'.homeManager.enable {
-  nixling.homeManager.users = vm'.homeManager.users;
+  d2b.homeManager.users = vm'.homeManager.users;
 })
 ```
 
@@ -42,7 +42,7 @@ The matching guest-visible option (declared in
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.homeManager.users` | attrs (unspecified) | `{ }` | Per-user HM config attrsets, populated by `host.nix` from the host-side option. Each value is fed straight into upstream `home-manager.users.<user>`. |
+| `d2b.homeManager.users` | attrs (unspecified) | `{ }` | Per-user HM config attrsets, populated by `host.nix` from the host-side option. Each value is fed straight into upstream `home-manager.users.<user>`. |
 
 ### Expected user-value shape
 
@@ -86,7 +86,7 @@ the host beyond what other components already create.
 - `home-manager.extraSpecialArgs = { inherit inputs; }` — the
   consumer's flake `inputs` is available inside every HM module's
   argument set.
-- `home-manager.users = config.nixling.homeManager.users` — the
+- `home-manager.users = config.d2b.homeManager.users` — the
   propagated attrset.
 
 ## Runtime invariants
@@ -135,7 +135,7 @@ manages with the usual NixOS guarantees.
   AGENTS.md describes for the host.
 - **Secrets in HM.** Not in scope for the v0.1.0 component. Use
   `sops-nix` (multi-secret) or `agenix` per-VM via
-  `nixling.vms.<vm>.config.imports = [ … ];` — the component does
+  `d2b.vms.<vm>.config.imports = [ … ];` — the component does
   not auto-import either.
 
 ## See also

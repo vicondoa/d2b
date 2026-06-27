@@ -1,10 +1,10 @@
 { config, lib, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  qemuMediaVms = nl.qemuMediaVms cfg.vms;
+  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
 
   actor = kind: value: { inherit kind value; };
   lockId = prefix: key: "${prefix}:${builtins.hashString "sha256" key}";
@@ -20,7 +20,7 @@ let
     lockId = id;
   };
 
-  ofdLock = { id, scope, path, owner ? actor "daemon" "nixlingd", scopeClass ? "host", root ? "run", normalizedPath ? id }: {
+  ofdLock = { id, scope, path, owner ? actor "daemon" "d2bd", scopeClass ? "host", root ? "run", normalizedPath ? id }: {
     inherit id scope;
     pathTemplate = path;
     resourceId = null;
@@ -97,8 +97,8 @@ let
     pathTemplate = null;
     resourceId = "op-lock:${vm}";
     kind = "in-process";
-    ownerProcess = actor "daemon" "nixlingd";
-    allowedHolders = [ (actor "daemon" "nixlingd") ];
+    ownerProcess = actor "daemon" "d2bd";
+    allowedHolders = [ (actor "daemon" "d2bd") ];
     inheritancePolicy = "not-applicable";
     fdPassingPolicy = fdNone;
     acquireOrder = order "vm" "daemon" "op-lock:${vm}" "lock:op:${vm}";
@@ -112,15 +112,15 @@ let
     };
     adoptionPolicy = "quarantine-on-ambiguity";
     degradeScope = "vm";
-    releaseAuthority = actor "daemon" "nixlingd";
+    releaseAuthority = actor "daemon" "d2bd";
     cloexecRequired = false;
   };
 
   vmStartLock = vm: ofdLock {
     id = "lock:vm-start:${vm}";
     scope = "vm:${vm}";
-    path = "/run/nixling/locks/vm-start-${vm}.lock";
-    owner = actor "daemon" "nixlingd";
+    path = "/run/d2b/locks/vm-start-${vm}.lock";
+    owner = actor "daemon" "d2bd";
     scopeClass = "vm";
     root = "run";
     normalizedPath = "locks/vm-start-${vm}.lock";
@@ -130,7 +130,7 @@ let
     id = "lock:store-sync:${vm}";
     scope = "vm:${vm}";
     path = "${toString cfg.store.stateDir}/${vm}/store-view/sync.lock";
-    owner = actor "broker" "nixling-priv-broker";
+    owner = actor "broker" "d2b-priv-broker";
     scopeClass = "vm";
     root = "state";
     normalizedPath = "vms/${vm}/store-view/sync.lock";
@@ -153,17 +153,17 @@ let
     in {
       inherit id;
       scope = "vm:${vm}";
-      pathTemplate = "/run/nixling/locks/usbip/${busid}";
+      pathTemplate = "/run/d2b/locks/usbip/${busid}";
       resourceId = null;
       kind = "file-record";
-      ownerProcess = actor "broker" "nixling-priv-broker";
+      ownerProcess = actor "broker" "d2b-priv-broker";
       allowedHolders = [
-        (actor "broker" "nixling-priv-broker")
-        (actor "daemon" "nixlingd")
+        (actor "broker" "d2b-priv-broker")
+        (actor "daemon" "d2bd")
       ];
       inheritancePolicy = "close-on-exec";
       fdPassingPolicy = fdNone;
-      acquireOrder = order "host" "run" "run/nixling/locks/usbip/${busid}" id;
+      acquireOrder = order "host" "run" "run/d2b/locks/usbip/${busid}" id;
       timeoutPolicy = {
         kind = "fail-fast";
         timeoutMs = null;
@@ -174,7 +174,7 @@ let
       };
       adoptionPolicy = "reacquire-after-proof";
       degradeScope = "vm";
-      releaseAuthority = actor "broker" "nixling-priv-broker";
+      releaseAuthority = actor "broker" "d2b-priv-broker";
       cloexecRequired = true;
     };
 
@@ -188,46 +188,46 @@ let
       (lockRoot {
         id = "lock-root:run";
         scope = "host";
-        path = "/run/nixling";
+        path = "/run/d2b";
         owner = actor "nix-module" "tmpfiles";
-        normalizedPath = "run/nixling";
+        normalizedPath = "run/d2b";
         readers = [
-          (actor "daemon" "nixlingd")
-          (actor "broker" "nixling-priv-broker")
+          (actor "daemon" "d2bd")
+          (actor "broker" "d2b-priv-broker")
         ];
       })
       (lockRoot {
         id = "lock-root:daemon-state";
         scope = "host";
-        path = "/run/nixling/state";
+        path = "/run/d2b/state";
         owner = actor "nix-module" "tmpfiles";
-        normalizedPath = "run/nixling/state";
-        readers = [ (actor "daemon" "nixlingd") ];
+        normalizedPath = "run/d2b/state";
+        readers = [ (actor "daemon" "d2bd") ];
       })
       (lockRoot {
         id = "lock-root:vm-locks";
         scope = "host";
-        path = "/run/nixling/locks";
+        path = "/run/d2b/locks";
         owner = actor "nix-module" "tmpfiles";
-        normalizedPath = "run/nixling/locks";
-        readers = [ (actor "daemon" "nixlingd") ];
+        normalizedPath = "run/d2b/locks";
+        readers = [ (actor "daemon" "d2bd") ];
       })
       (lockRoot {
         id = "lock-root:usbip";
         scope = "host";
-        path = "/run/nixling/locks/usbip";
+        path = "/run/d2b/locks/usbip";
         owner = actor "nix-module" "tmpfiles";
-        normalizedPath = "run/nixling/locks/usbip";
+        normalizedPath = "run/d2b/locks/usbip";
         readers = [
-          (actor "broker" "nixling-priv-broker")
-          (actor "daemon" "nixlingd")
+          (actor "broker" "d2b-priv-broker")
+          (actor "daemon" "d2bd")
         ];
       })
       (ofdLock {
         id = "lock:daemon";
         scope = "host";
-        path = "/run/nixling/daemon.lock";
-        owner = actor "daemon" "nixlingd";
+        path = "/run/d2b/daemon.lock";
+        owner = actor "daemon" "d2bd";
         scopeClass = "global";
         root = "run";
         normalizedPath = "daemon.lock";
@@ -243,7 +243,7 @@ let
 in
 {
   config = {
-    nixling._bundle.syncJson = {
+    d2b._bundle.syncJson = {
       inherit data;
       installFileName = "sync.json";
       classification = "contractPrivateNonSecret";

@@ -1,8 +1,8 @@
-// nixling ACA + Wayland POC — Azure deployment (ADR 0032, Wave P0).
+// d2b ACA + Wayland POC — Azure deployment (ADR 0032, Wave P0).
 //
 // Subscription-scoped orchestrator. Every resource in this POC is regional
 // (each has a location), so they all live in the regional resource group
-// rg-<workload>-<region> (e.g. rg-nixling-centralus). The common resource
+// rg-<workload>-<region> (e.g. rg-d2b-centralus). The common resource
 // group rg-common is RESERVED by the naming scheme for genuinely-global
 // resources; this POC has none, so it is not created here.
 //
@@ -28,9 +28,9 @@ targetScope = 'subscription'
 param location string = 'centralus'
 
 @description('Stable workload token used in every resource name.')
-param workload string = 'nixling'
+param workload string = 'd2b'
 
-@description('Resource-type name prefixes. Defaults follow the Azure CAF recommended abbreviations; override any field to suit a house style. The two types CAF does not define use nixling-chosen prefixes: sandboxGroup (casbx) and relayNamespace (relns).')
+@description('Resource-type name prefixes. Defaults follow the Azure CAF recommended abbreviations; override any field to suit a house style. The two types CAF does not define use d2b-chosen prefixes: sandboxGroup (casbx) and relayNamespace (relns).')
 param prefixes object = {
   resourceGroup: 'rg'
   registry: 'cr'
@@ -44,7 +44,7 @@ param prefixes object = {
 param regionalResourceGroupName string = '${prefixes.resourceGroup}-${workload}-${location}'
 
 @description('Container image repository inside the registry (registered as a sandbox disk image via the data plane).')
-param imageRepository string = 'nixling-wayland'
+param imageRepository string = 'd2b-wayland'
 
 @description('Container image tag.')
 param imageTag string = 'latest'
@@ -62,7 +62,7 @@ param operatorPrincipalType string = 'User'
 @description('Tags applied to every resource.')
 param tags object = {
   workload: workload
-  component: 'nixling-aca-wayland-poc'
+  component: 'd2b-aca-wayland-poc'
   managedBy: 'bicep'
 }
 
@@ -73,7 +73,7 @@ resource regionalResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' =
 }
 
 module registry 'modules/registry.bicep' = {
-  name: 'nixling-registry'
+  name: 'd2b-registry'
   scope: regionalResourceGroup
   params: {
     workload: workload
@@ -83,7 +83,7 @@ module registry 'modules/registry.bicep' = {
 }
 
 module sandbox 'modules/sandbox.bicep' = {
-  name: 'nixling-sandbox'
+  name: 'd2b-sandbox'
   scope: regionalResourceGroup
   params: {
     workload: workload

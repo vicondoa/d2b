@@ -1,15 +1,15 @@
 # typed declaration of the per-VM state
 # directory ownership matrix.
 #
-# Every leaf path under /var/lib/nixling/vms/<vm>/ has a canonical
+# Every leaf path under /var/lib/d2b/vms/<vm>/ has a canonical
 # owner/group/mode. The matrix is cross-referenced against the
 # `writablePaths` blocks in nixos-modules/minijail-profiles.nix; the
 # minijail profiles describe WHAT a runner role may write, this
 # matrix describes WHO OWNS each subdirectory and WITH WHICH MODE.
 #
 # CRITICAL — hardlink farm carve-out.
-# /var/lib/nixling/vms/<vm>/store-view/live/ (and the legacy
-# /var/lib/nixling/vms/<vm>/store/) is a hardlink pool whose inodes are
+# /var/lib/d2b/vms/<vm>/store-view/live/ (and the legacy
+# /var/lib/d2b/vms/<vm>/store/) is a hardlink pool whose inodes are
 # SHARED with /nix/store. `setfacl -R` (or `chmod -R`, `chown -R`)
 # recursively across that subtree propagates ACLs INTO /nix/store via the
 # shared inodes, which breaks the openssh `safe_path` checks on the per-VM
@@ -19,12 +19,12 @@
 # `recursive = false` and the enforcer asserts the carve-out independently.
 #
 # Signed store-view layout (ADR 0027): `store-view/{live,meta}` are
-# runner/virtiofsd-readable (`nixlingd:users 0755`); `store-view/state`,
+# runner/virtiofsd-readable (`d2bd:users 0755`); `store-view/state`,
 # `store-view/state/generations`, and `store-view/gcroots` are HOST-ONLY
-# (`nixlingd:nixling 0750`) and MUST NOT reuse the runner-readable
+# (`d2bd:d2b 0750`) and MUST NOT reuse the runner-readable
 # `users 0755` posture; `store-view/sync.lock` is broker-private
-# (`nixlingd:nixling 0600`, file-kind); the live readiness marker is
-# guest-readable (`nixlingd:users 0644`, file-kind).
+# (`d2bd:d2b 0600`, file-kind); the live readiness marker is
+# guest-readable (`d2bd:users 0644`, file-kind).
 { lib, ... }:
 
 let
@@ -60,7 +60,7 @@ let
   defaultMatrix = [
     (mkEntry {
       path = ".";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "3770";
       description = ''
@@ -70,15 +70,15 @@ let
     })
     (mkEntry {
       path = "state";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       description = "Daemon-owned per-VM state subdirectory (audio-state.json, etc.).";
     })
     (mkEntry {
       path = "swtpm";
-      owner = "nixling-<vm>-swtpm";
-      group = "nixling-<vm>-swtpm";
+      owner = "d2b-<vm>-swtpm";
+      group = "d2b-<vm>-swtpm";
       mode = "0700";
       description = ''
         CRITICAL SUBSYSTEM (AGENTS.md): per-VM TPM 2.0 NVRAM. Wiping or
@@ -89,8 +89,8 @@ let
     })
     (mkEntry {
       path = "sshd-host-keys";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       description = ''
         Container for per-VM sshd host keys. The daemon refuses to start
@@ -99,14 +99,14 @@ let
     })
     (mkEntry {
       path = "host-keys";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       description = "Known-hosts pin store for per-VM ssh host key fingerprints.";
     })
     (mkEntry {
       path = "store";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
@@ -119,7 +119,7 @@ let
         The enforcer MUST NEVER recurse into this subdirectory.
         `recursive` is hard-pinned to false and the daemon-side
         enforcer additionally asserts the carve-out by name (see
-        packages/nixling-host/src/ownership_matrix.rs). `required` is
+        packages/d2b-host/src/ownership_matrix.rs). `required` is
         false: native (post-cutover) VMs never had this artifact, so
         its absence must not fail preflight; migrated VMs still have
         it checked/postured when present.
@@ -127,7 +127,7 @@ let
     })
     (mkEntry {
       path = "store-meta";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
@@ -142,7 +142,7 @@ let
     })
     (mkEntry {
       path = "store-view";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
@@ -155,7 +155,7 @@ let
     })
     (mkEntry {
       path = "store-view/live";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
@@ -170,13 +170,13 @@ let
     })
     (mkEntry {
       path = "store-view/meta";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
       description = ''
         Guest read-only metadata share root (ADR 0027). Served read-only
-        as /run/nixling-store-meta. Holds only the guest-safe `current`
+        as /run/d2b-store-meta. Holds only the guest-safe `current`
         symlink and `generations/<id>/{store-paths,db.dump,meta.json}`.
         Runner/virtiofsd-readable (`users 0755`); never exposes `live/`,
         `state/`, `gcroots/`, or the broker `sync.lock`.
@@ -184,7 +184,7 @@ let
     })
     (mkEntry {
       path = "store-view/meta/generations";
-      owner = "nixlingd";
+      owner = "d2bd";
       group = "users";
       mode = "0755";
       recursive = false;
@@ -197,12 +197,12 @@ let
     })
     (mkEntry {
       path = "store-view/state";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       recursive = false;
       description = ''
-        HOST-ONLY broker StoreSync state (ADR 0027). `nixling:nixling
+        HOST-ONLY broker StoreSync state (ADR 0027). `d2b:d2b
         0750` so the runner/virtiofsd identity has no access — this is
         broker-authoritative metadata (`current`, per-generation
         marker.json/meta.json/integrity.json, integrity-unknown.json)
@@ -212,39 +212,39 @@ let
     })
     (mkEntry {
       path = "store-view/state/generations";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       recursive = false;
       description = ''
         HOST-ONLY per-generation broker state directory under
-        `store-view/state`. `nixling:nixling 0750`. Per-generation
+        `store-view/state`. `d2b:d2b 0750`. Per-generation
         host-only leaves (`marker.json`, `meta.json`, `integrity.json`)
-        are `nixling:nixling 0640`, repaired out of band; they are not
+        are `d2b:d2b 0640`, repaired out of band; they are not
         enumerated here because `<id>` is dynamic.
       '';
     })
     (mkEntry {
       path = "store-view/gcroots";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0750";
       recursive = false;
       description = ''
-        HOST-ONLY StoreSync GC roots (ADR 0027). `nixling:nixling 0750`.
+        HOST-ONLY StoreSync GC roots (ADR 0027). `d2b:d2b 0750`.
         Holds host-absolute symlinks into /nix/store that protect
         retained closures from host GC; never guest- or runner-readable.
       '';
     })
     (mkEntry {
       path = "store-view/sync.lock";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0600";
       kind = "file";
       description = ''
         BROKER-PRIVATE StoreSync serialization lock (ADR 0027).
-        `nixling:nixling 0600`, file-kind: the enforcer reasserts
+        `d2b:d2b 0600`, file-kind: the enforcer reasserts
         mode/uid/gid on the file inode with no-follow semantics and
         never recurses. Created by broker prep before ownership
         preflight on a fresh VM.
@@ -252,29 +252,29 @@ let
     })
     (mkEntry {
       path = "store-view/state/integrity-unknown.json";
-      owner = "nixlingd";
-      group = "nixling";
+      owner = "d2bd";
+      group = "d2b";
       mode = "0640";
       kind = "file";
       required = false;
       description = ''
         HOST-ONLY VM-level integrity fallback record (ADR 0027), used
-        when generation identity is indeterminate. `nixling:nixling
+        when generation identity is indeterminate. `d2b:d2b
         0640`, file-kind. `required` is false: it is created lazily by
         broker integrity code, so its absence before first use must not
         fail preflight. Other (non-ENOENT) stat errors still drift.
       '';
     })
     (mkEntry {
-      path = "store-view/live/.nixling-marker-<vm>";
-      owner = "nixlingd";
+      path = "store-view/live/.d2b-marker-<vm>";
+      owner = "d2bd";
       group = "users";
       mode = "0644";
       kind = "file";
       required = false;
       description = ''
         Guest-readable live readiness marker (ADR 0027). Zero-length;
-        `nixling:users 0644` so the guest/runner may read it through the
+        `d2b:users 0644` so the guest/runner may read it through the
         read-only `live/` share but only the broker may write it.
         File-kind single-inode check: explicitly exempt from the
         no-recursion-into-`live/` carve-out (a direct stat of one named
@@ -286,10 +286,10 @@ let
   ];
 in
 {
-  options.nixling.daemon.perVmStateOwnershipMatrix = mkOption {
+  options.d2b.daemon.perVmStateOwnershipMatrix = mkOption {
     description = ''
       Typed ownership matrix for every per-VM state subdirectory under
-      `/var/lib/nixling/vms/<vm>/`. Consumed by the daemon's VM-start
+      `/var/lib/d2b/vms/<vm>/`. Consumed by the daemon's VM-start
       preflight: the daemon refuses to start a VM whose per-VM state
       has drifted from this declaration.
 
@@ -305,7 +305,7 @@ in
         path = mkOption {
           type = types.str;
           description = ''
-            Subdirectory path relative to `/var/lib/nixling/vms/<vm>/`.
+            Subdirectory path relative to `/var/lib/d2b/vms/<vm>/`.
             Use "." for the per-VM root itself.
           '';
         };
@@ -353,7 +353,7 @@ in
             posture-if-present: only a not-found (`ENOENT`) stat result
             is skipped; every other stat error (`EACCES`, `EIO`,
             `ELOOP`, …) still surfaces as drift/error. Use `false` for
-            lazily-created paths (`store-view/live/.nixling-marker-<vm>`,
+            lazily-created paths (`store-view/live/.d2b-marker-<vm>`,
             `store-view/state/integrity-unknown.json`) and for legacy
             recovery artifacts (`store`, `store-meta`) absent on
             native post-cutover VMs.
@@ -378,6 +378,6 @@ in
       };
     });
     default = defaultMatrix;
-    defaultText = lib.literalExpression "the canonical /var/lib/nixling/vms/<vm>/ ownership matrix";
+    defaultText = lib.literalExpression "the canonical /var/lib/d2b/vms/<vm>/ ownership matrix";
   };
 }

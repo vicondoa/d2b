@@ -1,7 +1,7 @@
 # nixos-modules/manifest.nix — typed JSON manifest contract.
 #
 # Builds the per-VM JSON manifest that the (current bash, future Rust)
-# nixling CLI consumes at runtime. The manifest is the stable contract
+# d2b CLI consumes at runtime. The manifest is the stable contract
 # between the Nix-evaluated framework state and the imperative CLI; it
 # carries every piece of per-VM metadata the CLI needs at command
 # dispatch time (socket paths, IPs, env membership, capability flags,
@@ -10,7 +10,7 @@
 # Why an externally-typed module instead of an ad-hoc let-binding in
 # cli.nix
 #
-#   1. The JSON file at `/run/current-system/sw/share/nixling/vms.json`
+#   1. The JSON file at `/run/current-system/sw/share/d2b/vms.json`
 #      is the integration surface for the Rust CLI port. It
 #      must be documented and versioned. A typed `mkOption` gives us
 #      a schema we can hand-walk into `docs/reference/manifest-schema.{md,json}`
@@ -19,7 +19,7 @@
 #      if a future refactor accidentally produces a field of the wrong
 #      type, evaluation fails immediately rather than silently shipping
 #      a broken JSON file.
-#   3. The CLI can consume `config.nixling.manifest` directly from
+#   3. The CLI can consume `config.d2b.manifest` directly from
 #      sibling modules (e.g. `cli.nix`'s per-VM exec launcher) with
 #      type-checked attribute access, no second `lib.mapAttrs` of the
 #      same data.
@@ -48,29 +48,29 @@
 { lib, pkgs, config, ... }:
 
 let
-  nl = import ./lib.nix { inherit lib pkgs; };
-  inherit (nl) subnetIp;
+  d2bLib = import ./lib.nix { inherit lib pkgs; };
+  inherit (d2bLib) subnetIp;
 
-  envMeta = config.nixling._envMeta;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) config.nixling.vms;
-  obsCfg = config.nixling.observability;
+  envMeta = config.d2b._envMeta;
+  enabledVms = lib.filterAttrs (_: vm: vm.enable) config.d2b.vms;
+  obsCfg = config.d2b.observability;
 
   # `lib.attrNames` returns names sorted lexicographically, so the
   # env-index assignment is deterministic and stable across evals.
-  envNames = lib.attrNames config.nixling.envs;
+  envNames = lib.attrNames config.d2b.envs;
   envIndexMap = lib.listToAttrs (
     lib.imap0 (i: name: { inherit name; value = i; }) envNames
   );
 
   netVmOfEnv = envName:
-    let n = config.nixling.envs.${envName}.netName or "sys-${envName}-net";
+    let n = config.d2b.envs.${envName}.netName or "sys-${envName}-net";
     in n;
 
   envOfNetVm = name:
     lib.findFirst
       (e: netVmOfEnv e == name)
       null
-      (lib.attrNames config.nixling.envs);
+      (lib.attrNames config.d2b.envs);
 
   vmMeta = name: vm:
     let
@@ -78,7 +78,7 @@ let
       asNetVmForEnv = envOfNetVm name;
       envName = if env != null then env else asNetVmForEnv;
       m = if env != null && envMeta ? ${env} then envMeta.${env} else null;
-      runtime = nl.vmRuntimeMetadata name vm;
+      runtime = d2bLib.vmRuntimeMetadata name vm;
       isNixosRuntime = runtime.kind == "nixos";
       derivedIp =
         if m != null then subnetIp m.lanSubnet vm.index
@@ -98,20 +98,20 @@ let
       usbipdHostIp =
         if isNixosRuntime && m != null then m.hostUplinkIp
         else null;
-      stateRoot = "${config.nixling.store.stateDir}/${name}";
+      stateRoot = "${config.d2b.store.stateDir}/${name}";
       envIndex =
         if envName != null && envIndexMap ? ${envName}
         then envIndexMap.${envName}
         else null;
       baseVsockCid =
-        if isNixosRuntime then nl.guestControlVsockCid {
+        if isNixosRuntime then d2bLib.guestControlVsockCid {
           inherit name envIndex;
           index = vm.index;
           isNetVm = asNetVmForEnv != null;
           isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
         } else null;
       baseVsockHostSocket =
-        if isNixosRuntime then nl.guestControlVsockHostSocket stateRoot else null;
+        if isNixosRuntime then d2bLib.guestControlVsockHostSocket stateRoot else null;
     in
     {
       inherit name;
@@ -138,16 +138,16 @@ let
       stateDir = stateRoot;
       apiSocket = if isNixosRuntime then "${stateRoot}/${name}.sock" else null;
       gpuSocket = if isNixosRuntime then "${stateRoot}/${name}-gpu.sock" else null;
-      tpmSocket = if isNixosRuntime then "/run/nixling/vms/${name}/tpm.sock" else null;
+      tpmSocket = if isNixosRuntime then "/run/d2b/vms/${name}/tpm.sock" else null;
       # State file under root-owned non-group-writable subdir.
       audioStateFile =
         if isNixosRuntime then "${stateRoot}/state/audio-state.json" else null;
-      audioService = if isNixosRuntime then "nixling-${name}-snd.service" else null;
+      audioService = if isNixosRuntime then "d2b-${name}-snd.service" else null;
       observability = {
         enabled = isNixosRuntime && vm.observability.enable;
         vsockCid = baseVsockCid;
         vsockHostSocket = baseVsockHostSocket;
-        agentSocket = if isNixosRuntime then "/run/nixling/otlp.sock" else null;
+        agentSocket = if isNixosRuntime then "/run/d2b/otlp.sock" else null;
       };
       shell =
         if isNixosRuntime then {
@@ -162,15 +162,15 @@ let
       sshUser = if isNixosRuntime then vm.ssh.user else null;
       # `sshKeyPath` is intentionally NOT part of the public manifest.
       # The manifest ships to
-      # `/run/current-system/sw/share/nixling/vms.json` which is
+      # `/run/current-system/sw/share/d2b/vms.json` which is
       # world-readable; exposing a per-VM private-key path there
       # leaks the location of secret material to every local user.
       # The CLI resolves the private-key path locally from
-      # `config.nixling.site.keysDir` (or `vm.ssh.keyPath` when the
+      # `config.d2b.site.keysDir` (or `vm.ssh.keyPath` when the
       # consumer overrides it) at Nix-eval time and bakes the
       # per-VM mapping into the shell wrapper. Consumers
       # reimplementing the CLI should mirror that — read
-      # `nixling.site.keysDir` from their own privileged config
+      # `d2b.site.keysDir` from their own privileged config
       # access, not from this world-readable file. The PUBLIC key
       # is fine to expose; if a future use case warrants it, add
       # `sshPubKeyPath` here.
@@ -182,7 +182,7 @@ let
         enabled = lib.mkOption {
           type = lib.types.bool;
           description = ''
-            True iff `nixling.vms.<name>.guest.shell.enable` is set on a runtime
+            True iff `d2b.vms.<name>.guest.shell.enable` is set on a runtime
             provider that supports persistent guest shells.
           '';
         };
@@ -213,14 +213,14 @@ let
   # iteration patterns.
   manifestJson = computedManifest // {
     _manifest = {
-      manifestVersion = config.nixling._manifestVersion;
+      manifestVersion = config.d2b._manifestVersion;
     };
     _observability = {
       enabled = obsCfg.enable;
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
       obsVsockHostSocket =
-        nl.guestControlVsockHostSocket "${config.nixling.store.stateDir}/${obsCfg.vmName}";
+        d2bLib.guestControlVsockHostSocket "${config.d2b.store.stateDir}/${obsCfg.vmName}";
       signozUrl = "http://${obsCfg.signoz.listenAddress}:${toString obsCfg.signoz.listenPort}";
       signozOtlpGrpcPort = obsCfg.signoz.otlpGrpcPort;
       signozOtlpHttpPort = obsCfg.signoz.otlpHttpPort;
@@ -228,9 +228,9 @@ let
   };
 
   manifestPkg = pkgs.writeTextFile {
-    name = "nixling-vms-manifest";
+    name = "d2b-vms-manifest";
     text = builtins.toJSON manifestJson;
-    destination = "/share/nixling/vms.json";
+    destination = "/share/d2b/vms.json";
   };
 
   runtimeProviderType = lib.types.submodule {
@@ -405,7 +405,7 @@ let
       enable = lib.mkOption {
         type = lib.types.bool;
         description = ''
-          True iff nixlingd should attempt provider-aware graceful guest
+          True iff d2bd should attempt provider-aware graceful guest
           shutdown for this VM before falling back to forced VMM cleanup.
         '';
       };
@@ -452,7 +452,7 @@ let
       enabled = lib.mkOption {
         type = lib.types.bool;
         description = ''
-          True iff `nixling.vms.<name>.observability.enable` is set.
+          True iff `d2b.vms.<name>.observability.enable` is set.
         '';
       };
       vsockCid = lib.mkOption {
@@ -461,8 +461,8 @@ let
           Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud
           Hypervisor VMs. Env-backed VMs use `100 + envIndex * 1000 + slot`,
           where slot 1 is reserved for the env net VM and workload VMs use
-          `nixling.vms.<vm>.index`. Null for providers that do not expose
-          nixling guest-control or in-guest observability.
+          `d2b.vms.<vm>.index`. Null for providers that do not expose
+          d2b guest-control or in-guest observability.
         '';
       };
 
@@ -470,7 +470,7 @@ let
         type = lib.types.nullOr lib.types.str;
         description = ''
           Host-side Unix socket backing this VM's Cloud Hypervisor vsock
-          device. Null for providers without nixling guest-control or
+          device. Null for providers without d2b guest-control or
           in-guest observability.
         '';
       };
@@ -494,7 +494,7 @@ let
     options = {
       name = lib.mkOption {
         type = lib.types.str;
-        description = "VM name (attribute key in nixling.vms.<name>).";
+        description = "VM name (attribute key in d2b.vms.<name>).";
       };
 
       runtime = lib.mkOption {
@@ -510,7 +510,7 @@ let
       lifecycle = lib.mkOption {
         type = manifestLifecycleType;
         description = ''
-          Per-VM lifecycle policy consumed by nixlingd. v7 currently contains
+          Per-VM lifecycle policy consumed by d2bd. v7 currently contains
           provider-aware graceful guest shutdown enablement and optional
           timeout override metadata.
         '';
@@ -519,21 +519,21 @@ let
       graphics = lib.mkOption {
         type = lib.types.bool;
         description = ''
-          True iff `nixling.vms.<name>.graphics.enable` is set. The CLI
+          True iff `d2b.vms.<name>.graphics.enable` is set. The CLI
           uses this to pick the launch path.
         '';
       };
 
       tpm = lib.mkOption {
         type = lib.types.bool;
-        description = "True iff `nixling.vms.<name>.tpm.enable` is set.";
+        description = "True iff `d2b.vms.<name>.tpm.enable` is set.";
       };
 
       usbipYubikey = lib.mkOption {
         type = lib.types.bool;
         description = ''
-          True iff `nixling.vms.<name>.usbip.yubikey` is set. The CLI's
-          `nixling usb` subcommand refuses to run for VMs where this is
+          True iff `d2b.vms.<name>.usbip.yubikey` is set. The CLI's
+          `d2b usb` subcommand refuses to run for VMs where this is
           false.
         '';
       };
@@ -541,7 +541,7 @@ let
       audio = lib.mkOption {
         type = lib.types.bool;
         description = ''
-          True iff `nixling.vms.<name>.audio.enable` is set. Live audio
+          True iff `d2b.vms.<name>.audio.enable` is set. Live audio
           grant state lives in `audioStateFile`, not here — this flag
           only carries the capability bit.
         '';
@@ -582,7 +582,7 @@ let
         description = ''
           True iff this VM is the auto-generated `sys-<env>-net` for
           some env. The CLI uses this to pick the bring-up order
-          (net VMs first) and to skip net VMs in `nixling up <env>`
+          (net VMs first) and to skip net VMs in `d2b up <env>`
           batch operations the same way it skips `_manifest`.
         '';
       };
@@ -599,7 +599,7 @@ let
         type = lib.types.nullOr lib.types.str;
         description = ''
           For workload VMs: IP of the per-env usbipd proxy
-          (`sys-<env>-usbipd`/`proxy` broker runner). The `nixling
+          (`sys-<env>-usbipd`/`proxy` broker runner). The `d2b
           usb` subcommand passes this as `-r <ip>` to `usbip attach`.
           Null for net VMs and legacy VMs.
         '';
@@ -608,11 +608,11 @@ let
       stateDir = lib.mkOption {
         type = lib.types.str;
         description = ''
-          Per-VM state directory (`/var/lib/nixling/vms/<vm>`). Holds
+          Per-VM state directory (`/var/lib/d2b/vms/<vm>`). Holds
           microvm.nix runner state, the `state/audio-state.json` file
           when `audio.enable`, and any per-VM scratch the framework
           owns. Path layout is currently hardcoded; see
-          `nixling.site.stateDir`'s advisory-only note for the v0.2.0
+          `d2b.site.stateDir`'s advisory-only note for the v0.2.0
           threading plan.
         '';
       };
@@ -631,7 +631,7 @@ let
         description = ''
           crosvm-gpu sidecar control socket path
           (`<stateDir>/<vm>-gpu.sock`). Only meaningful when
-          `graphics = true`; null when the runtime provider has no nixling GPU
+          `graphics = true`; null when the runtime provider has no d2b GPU
           sidecar socket.
         '';
       };
@@ -639,14 +639,14 @@ let
       tpmSocket = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         description = ''
-          swtpm vTPM socket path (`/run/nixling/vms/<vm>/tpm.sock`).
+          swtpm vTPM socket path (`/run/d2b/vms/<vm>/tpm.sock`).
           Only meaningful when `tpm = true`. The framework's
           long-lived swtpm sidecar (spawned by the broker) creates
           this socket; cloud-hypervisor connects to it via
           `--tpm <socket>`. Lives under the per-VM runtime dir so
           the existing default ACL grants every per-VM ephemeral
           UID (including cloud-hypervisor) rw on it. Null for providers without
-          nixling-managed TPM state.
+          d2b-managed TPM state.
         '';
       };
 
@@ -656,10 +656,10 @@ let
           Per-VM live audio-grant state file
           (`<stateDir>/state/audio-state.json`). Holds
           `{ "mic": "on"|"off", "speaker": "on"|"off" }`. Read by
-          the host-side `nixling-<vm>-snd.service` sidecar (which
+          the host-side `d2b-<vm>-snd.service` sidecar (which
           re-routes vhost-device-sound's INPUT/OUTPUT links) and
-          written atomically by `nixling audio …` subcommands. Null for
-          providers without the nixling audio sidecar.
+          written atomically by `d2b audio …` subcommands. Null for
+          providers without the d2b audio sidecar.
         '';
       };
 
@@ -667,8 +667,8 @@ let
         type = lib.types.nullOr lib.types.str;
         description = ''
           Name of the host-side per-VM audio sidecar systemd unit
-          (`nixling-<vm>-snd.service`). The CLI restarts this unit
-          on every audio-state change. Null for providers without the nixling
+          (`d2b-<vm>-snd.service`). The CLI restarts this unit
+          on every audio-state change. Null for providers without the d2b
           audio sidecar.
         '';
       };
@@ -678,7 +678,7 @@ let
         description = ''
           The VM's static LAN IP. Derived from `(env, index)` for
           env-attached VMs and from `envMeta.netUplinkIp` for net
-          VMs. Legacy VMs that set `nixling.vms.<vm>.staticIp`
+          VMs. Legacy VMs that set `d2b.vms.<vm>.staticIp`
           directly get that value passed through. Null when neither
           source applies (in which case the CLI cannot SSH and
           subcommands needing SSH refuse to run).
@@ -688,8 +688,8 @@ let
       sshUser = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         description = ''
-          Username for `nixling`-driven SSH into the VM. Mirrors
-          `nixling.vms.<vm>.ssh.user`. Null is permitted (e.g. for
+          Username for `d2b`-driven SSH into the VM. Mirrors
+          `d2b.vms.<vm>.ssh.user`. Null is permitted (e.g. for
           headless net VMs that the CLI never SSH-attaches to);
           subcommands requiring SSH refuse to run when null.
         '';
@@ -709,7 +709,7 @@ let
         description = ''
           Persistent guest shell policy metadata for providers that support the
           authenticated guest-control terminal substrate. Null for runtime
-          providers without nixling guest-control.
+          providers without d2b guest-control.
         '';
       };
     };
@@ -717,16 +717,16 @@ let
 in
 
 {
-  options.nixling.manifest = lib.mkOption {
+  options.d2b.manifest = lib.mkOption {
     type = lib.types.attrsOf manifestEntryType;
     readOnly = true;
     description = ''
       Per-VM metadata manifest, indexed by VM name. The contract a
-      future Rust port of the `nixling` CLI consumes via
-      `/run/current-system/sw/share/nixling/vms.json`.
+      future Rust port of the `d2b` CLI consumes via
+      `/run/current-system/sw/share/d2b/vms.json`.
 
       Computed by `nixos-modules/manifest.nix` from
-      `config.nixling.vms.<name>` plus the per-env metadata produced
+      `config.d2b.vms.<name>` plus the per-env metadata produced
       by `network.nix`. Schema is documented in
       `docs/reference/manifest-schema.md` and formalised in
       `docs/reference/manifest-schema.json` (JSON Schema Draft 2020-12).
@@ -749,7 +749,7 @@ in
     '';
   };
 
-  options.nixling._manifestVersion = lib.mkOption {
+  options.d2b._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
     default = 7;
     internal = true;
@@ -781,7 +781,7 @@ in
           `observability.vsockHostSocket` as the host-owned base
           vsock device used by observability today and guest control in
           later waves. Pinned by
-          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`; the
+          `d2b_core::manifest_v04::MANIFEST_VERSION_CURRENT`; the
           broker / daemon refuse any other value with a
           `manifest-version-mismatch` typed error (no legacy
           compatibility window).
@@ -794,46 +794,46 @@ in
           collector-ingress metadata (`signozUrl`, `signozOtlpGrpcPort`,
           `signozOtlpHttpPort`). The vsock transport contract is
           unchanged. Pinned by
-          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
+          `d2b_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
         * 6 — adds per-VM runtime/provider metadata and provider
           capability summaries, and makes provider-specific socket/vsock
           fields nullable so qemu-media entries do not fabricate Cloud
           Hypervisor, guest-control, SSH, store-sync, key, or
           in-guest-observability artifacts.
-        * 7 — adds per-VM lifecycle.gracefulShutdown metadata so nixlingd
+        * 7 — adds per-VM lifecycle.gracefulShutdown metadata so d2bd
           can apply VM-specific graceful guest-shutdown policy while
           preserving old-manifest compatibility during the v6→v7 rollout.
     '';
   };
 
-  options.nixling._manifestJsonPath = lib.mkOption {
+  options.d2b._manifestJsonPath = lib.mkOption {
     type = lib.types.str;
     default = "";
     internal = true;
     description = ''
       Internal: absolute store path to the rendered
       `vms.json` file. Consumed by `cli.nix` to bake the manifest
-      path into the `nixling` shell wrapper.
+      path into the `d2b` shell wrapper.
     '';
   };
 
-  options.nixling._manifestPkg = lib.mkOption {
+  options.d2b._manifestPkg = lib.mkOption {
     type = lib.types.package;
     internal = true;
     description = ''
       Internal: the derivation that ships
-      `/share/nixling/vms.json`. Added to
+      `/share/d2b/vms.json`. Added to
       `environment.systemPackages` so the file ends up at
-      `/run/current-system/sw/share/nixling/vms.json` at runtime
+      `/run/current-system/sw/share/d2b/vms.json` at runtime
       (the path the future Rust CLI will look at without having to
       consult any other store path).
     '';
   };
 
   config = {
-    nixling.manifest = computedManifest;
-    nixling._manifestJsonPath = "${manifestPkg}/share/nixling/vms.json";
-    nixling._manifestPkg = manifestPkg;
+    d2b.manifest = computedManifest;
+    d2b._manifestJsonPath = "${manifestPkg}/share/d2b/vms.json";
+    d2b._manifestPkg = manifestPkg;
     environment.systemPackages = [ manifestPkg ];
   };
 }

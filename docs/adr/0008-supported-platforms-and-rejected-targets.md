@@ -55,7 +55,7 @@ the first milestone.
    where all pidfds share the same `(st_dev, st_ino)`, so the
    fstat-based identity proof is structurally impossible to satisfy.
    v1.1 operators MUST upgrade their kernel to `>= 6.9` before bumping
-   the nixling flake input; the v1.1 migration guide opens with this
+   the d2b flake input; the v1.1 migration guide opens with this
    requirement, the eval-time gate
    `tests/v1.1-kernel-floor-eval.sh` (future, v1.1-P10) asserts the
    uplift on consumer hosts, and the daemon's pidfs runtime self-probe
@@ -63,10 +63,10 @@ the first milestone.
    floor is correspondingly uplifted: Ubuntu 24.04 LTS users need a
    HWE kernel `>= 6.9` (default 24.04 ships 6.8 at GA but the HWE
    stack tracks newer point releases) or must downgrade to v1.0.
-7. Telemetry posture is none. `nixlingd` makes no outbound network
+7. Telemetry posture is none. `d2bd` makes no outbound network
    connections by default. Any future diagnostics must be explicit
    opt-in and documented in `SECURITY.md`.
-8. Minijail is Nix-built and pinned through the nixling closure. Distro
+8. Minijail is Nix-built and pinned through the d2b closure. Distro
    minijail packages are not relied upon.
 
 ## Consequences
@@ -93,7 +93,7 @@ the first milestone.
   of the intended host and broker implementation surface, and 6.6 is a
   practical Ubuntu 24.04-compatible floor.
 - Depend on distro minijail packages: rejected because minijail version,
-  patches, and CVE response must be tied to the nixling closure.
+  patches, and CVE response must be tied to the d2b closure.
 - Add passive telemetry for alpha diagnostics: rejected because the
   product posture is no outbound network connections by default.
 

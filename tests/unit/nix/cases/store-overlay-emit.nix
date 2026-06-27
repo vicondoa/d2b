@@ -29,16 +29,16 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.${vmName} = {
+    d2b.vms.${vmName} = {
       enable = true;
       env = "work";
       index = index;
@@ -53,7 +53,7 @@ let
 
   chNodeFor = vmName: sys:
     let
-      vms = sys.config.nixling._bundle.processesJson.data.vms;
+      vms = sys.config.d2b._bundle.processesJson.data.vms;
       vm = builtins.head (builtins.filter (v: v.vm == vmName) vms);
     in
     builtins.head (builtins.filter (n: n.id == "cloud-hypervisor") vm.nodes);

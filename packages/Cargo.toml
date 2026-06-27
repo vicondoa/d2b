@@ -1,29 +1,29 @@
 [workspace]
 resolver = "2"
-exclude = ["nixling-priv-broker", "nixling-guest-shell-runner"]
+exclude = ["d2b-priv-broker", "d2b-guest-shell-runner"]
 members = [
-    "nixling-host-activation-helper",
-    "nixling-core",
-    "nixling-constellation-core",
-    "nixling-constellation-provider",
-    "nixling-constellation-transport",
-    "nixling-constellation-codec-protobuf",
-    "nixling-constellation-router",
-    "nixling-daemon-access",
-    "nixling-host-providers",
-    "nixling-provider-aca",
-    "nixling-provider-relay",
-    "nixling-gateway",
-    "nixling-gateway-runtime",
-    "nixling-host",
-    "nixling-guestd",
-    "nixling-userd",
-    "nixling-exec-runner",
-    "nixling-contracts",
-    "nixling",
-    "nixlingd",
-    "nixling-wayland-filter",
-    "nixling-contract-tests",
+    "d2b-host-activation-helper",
+    "d2b-core",
+    "d2b-constellation-core",
+    "d2b-constellation-provider",
+    "d2b-constellation-transport",
+    "d2b-constellation-codec-protobuf",
+    "d2b-constellation-router",
+    "d2b-daemon-access",
+    "d2b-host-providers",
+    "d2b-provider-aca",
+    "d2b-provider-relay",
+    "d2b-gateway",
+    "d2b-gateway-runtime",
+    "d2b-host",
+    "d2b-guestd",
+    "d2b-userd",
+    "d2b-exec-runner",
+    "d2b-contracts",
+    "d2b",
+    "d2bd",
+    "d2b-wayland-filter",
+    "d2b-contract-tests",
     "xtask",
 ]
 
@@ -36,7 +36,7 @@ all = "warn"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 # `test_root` is an opt-in cfg flag used by a small set of
-# nixlingd integration tests that require running as uid 0 (or
+# d2bd integration tests that require running as uid 0 (or
 # with delegated CAP_CHOWN) to exercise broker-owner production
 # policy. Set via `RUSTFLAGS="--cfg test_root" cargo test
 # --features=...` when executing as root. Declaring the
@@ -50,7 +50,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "0.8", features = ["derive"] }
 # W3 host-prepare low-level dependencies. `rustix` lands in the
-# integrator prep so nixling-host stubs can compile and so the supply-
+# integrator prep so d2b-host stubs can compile and so the supply-
 # chain gate (cargo-deny + cargo-audit through flake.nix's pinned
 # advisory DB) covers it before scope agents consume it.
 #
@@ -59,18 +59,18 @@ schemars = { version = "0.8", features = ["derive"] }
 # that first consumes them (s2 for rtnetlink, s3 for nftables) so the
 # license / advisory whitelist update lands in the same commit that
 # adds the consumer. See plan.md §"W3 broker variant additions" — the
-# wire contract for routes/nft is fully encoded in nixling-contracts here,
+# wire contract for routes/nft is fully encoded in d2b-contracts here,
 # so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
 # W3 s2: declared in workspace.dependencies so future scope work (and
-# the eventual production netlink backend in nixling-priv-broker) can
+# the eventual production netlink backend in d2b-priv-broker) can
 # opt into rtnetlink via `{ workspace = true }`. Not yet consumed by
 # any workspace member, so the resolved Cargo.lock is unchanged. The
-# trait-based netlink backend in `nixling_host::netlink` lets the L1c
+# trait-based netlink backend in `d2b_host::netlink` lets the L1c
 # canary matrix exercise every fail-closed path through a fake
 # backend without `CAP_NET_ADMIN`.
 rtnetlink = "0.14"
-# W3 s3: sha2 lands here so nixling-host's nft drift-detection digest
+# W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
 # is byte-stable across builds and consumers. The nftnl native binding
 # is intentionally NOT pulled in — see
 # `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-

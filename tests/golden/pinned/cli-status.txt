@@ -1,8 +1,8 @@
-# cli-status — CLI-contract integration tests for `nixling status`
-# (packages/nixling/tests/status_contract.rs). Successor for the retired
-# cli-rust-native-status.sh bash gate: spawns the real `nixling` binary against
-# the NL_FIXTURES rendered bundle (copied into a hermetic temp bundle so the
-# host's deployed /etc/nixling artifacts cannot shadow the fixture) plus a
+# cli-status — CLI-contract integration tests for `d2b status`
+# (packages/d2b/tests/status_contract.rs). Successor for the retired
+# cli-rust-native-status.sh bash gate: spawns the real `d2b` binary against
+# the D2B_FIXTURES rendered bundle (copied into a hermetic temp bundle so the
+# host's deployed /etc/d2b artifacts cannot shadow the fixture) plus a
 # synthetic system-state/daemon-state fixture, and validates the status JSON
 # envelope strictly against the committed DTOs (deny_unknown_fields). One
 # libtest path per line; checked by tests/tools/assert-pinned-tests.sh.

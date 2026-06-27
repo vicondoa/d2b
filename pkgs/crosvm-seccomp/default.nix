@@ -73,7 +73,7 @@ let
       -exec sed -i '/^statx:/d' {} +
     cat >> $out/share/policy/crosvm/common_device.policy <<'EOF'
 
-# nixpkgs glibc 2.41+ compat — see modules/nixling/graphics.nix
+# nixpkgs glibc 2.41+ compat — see modules/d2b/graphics.nix
 statx: 1
 EOF
 

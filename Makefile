@@ -1,4 +1,4 @@
-# Makefile — nixling repository top-level convenience targets.
+# Makefile — d2b repository top-level convenience targets.
 #
 # Maintainer-facing targets only; CI converges on this stable make-target
 # interface incrementally during the test rearchitecture.
@@ -34,8 +34,8 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 
 ## check — the Layer-1 PR-equivalent done-gate. The manifest runner executes
 ##          check-tier0 first, then safe L1 sub-targets in parallel, then
-##          drift after the parallel phase. Tune with NL_CHECK_JOBS and
-##          NL_FLAKE_JOBS.
+##          drift after the parallel phase. Tune with D2B_CHECK_JOBS and
+##          D2B_FLAKE_JOBS.
 check:
 	bash tests/tools/layer1-jobs run-local
 
@@ -69,7 +69,7 @@ check-tier0:
 #   make test             test-unit + test-integration (full local gate).
 #   make test-integration L2 podman container integration tests.
 #
-# CI and local runs share tests/layer1-jobs.json. Locally, NL_CHECK_JOBS bounds
+# CI and local runs share tests/layer1-jobs.json. Locally, D2B_CHECK_JOBS bounds
 # parallel sub-targets; CI renders .github/workflows/pr-l1-static-fast.yml from
 # the same manifest.
 # ===========================================================================
@@ -88,7 +88,7 @@ test-lint:
 	bash tests/test-lint.sh
 
 ## test-rust — the comprehensive Rust gate (fmt, clippy, cargo test, contract
-## tests with NL_FIXTURES, CLI-contract layer, no-bash-ast-walker, broker
+## tests with D2B_FIXTURES, CLI-contract layer, no-bash-ast-walker, broker
 ## workspace ×3 feature passes, schema-gen reproducibility, cargo-deny/audit,
 ## stub-no-socket, assert-pinned-tests).
 test-rust:
@@ -100,9 +100,9 @@ test-proofs:
 
 ## test-flake — `nix flake check --no-build` for the native system (bounded
 ## memory). CI shards the x86_64 leg one-job-per-check via a dynamic matrix:
-## set NL_FLAKE_CHECK=<name> to instantiate just that one check (the matrix
+## set D2B_FLAKE_CHECK=<name> to instantiate just that one check (the matrix
 ## enumerates names with `make test-flake-list`); the aarch64 PR leg runs only a
-## lightweight smoke eval. Set NL_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every
+## lightweight smoke eval. Set D2B_FLAKE_ALL_SYSTEMS=1 to cross-evaluate every
 ## system locally (like `make check`/static.sh).
 test-flake:
 	bash tests/test-flake.sh
@@ -169,10 +169,10 @@ pr-checklist-gate:
 
 ## test-host-integration — G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
-## real NixOS VM with the nixling daemon surface and asserts live broker /
+## real NixOS VM with the d2b daemon surface and asserts live broker /
 ## daemon / host-posture behaviour (socket activation, bridge isolation,
 ## state-dir ACLs, broker privilege posture) — the hermetic, non-destructive
-## successor to the `NL_LIVE`-against-the-real-host scripts. Needs KVM (a local
+## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
 test-host-integration:
@@ -209,8 +209,8 @@ i3-check:
 	bash tests/unit/meta/no-new-deferral.sh
 
 ## pre-tag — run the full live-VM smoke gate before tagging a release.
-##           Requires: KVM, nixling active, both personal-dev and work-aad VMs declared.
-##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/nixling-smoke-run-log.txt.
+##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
+##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
 ##           ALSO runs the I3 invariant grep gate (ADR 0022 + panel-docs R1).
 pre-tag: i3-check
 	bash tests/integration/live/live-vm-smoke.sh --full

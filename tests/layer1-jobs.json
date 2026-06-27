@@ -80,7 +80,7 @@
       "displayName": "Rust workspace gate",
       "makeTarget": "test-rust",
       "localEnv": {
-        "NL_SKIP_FIXTURE_BUILD": "1"
+        "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust",
       "ciJobId": "test-rust",
@@ -101,7 +101,7 @@
       "displayName": "Local sharded flake gate",
       "makeTarget": "test-flake",
       "localEnv": {
-        "NL_FLAKE_LOCAL_SHARDS": "1"
+        "D2B_FLAKE_LOCAL_SHARDS": "1"
       }
     },
     "flake-eval-discover": {

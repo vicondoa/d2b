@@ -2,8 +2,8 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   obsCfg = cfg.observability;
   vmStateDir = name: "${cfg.store.stateDir}/${name}";
   apiSocketPath = name: "${vmStateDir name}/${name}.sock";
@@ -20,7 +20,7 @@ let
     lib.attrNames
       (lib.filterAttrs (_: vm: vm.enable && vm.observability.enable) cfg.vms);
 
-  enabledVmNames = lib.attrNames (nl.normalNixosVms cfg.vms);
+  enabledVmNames = lib.attrNames (d2bLib.normalNixosVms cfg.vms);
 
   obsVmEnabled =
     obsCfg.enable
@@ -61,7 +61,7 @@ let
   shellArray = values: lib.concatStringsSep " " (map lib.escapeShellArg values);
 
   otelAclRefresh = pkgs.writeShellApplication {
-    name = "nixling-otel-acl-refresh";
+    name = "d2b-otel-acl-refresh";
     runtimeInputs = with pkgs; [ acl coreutils gnugrep ];
     # SC2034: the six `*_keep_{dirs,sockets}` arrays below are passed
     # by NAME to `refresh_acl_set` and dereferenced via bash namerefs
@@ -233,8 +233,8 @@ let
           if [ "''${dir##*/}" = ${lib.escapeShellArg obsCfg.vmName} ]; then
             continue
           fi
-          remove_socket_acl_if_present "g:nixling-otel-relay" "$dir/vsock.sock"
-          remove_socket_acl_if_present "g:nixling-otel-bridge" "$dir/vsock.sock"
+          remove_socket_acl_if_present "g:d2b-otel-relay" "$dir/vsock.sock"
+          remove_socket_acl_if_present "g:d2b-otel-bridge" "$dir/vsock.sock"
         done
       fi
 
@@ -242,22 +242,22 @@ let
       # <vm>/vsock.sock_<obsOtlpPort> (CH proxies the workload
       # guest's VSOCK-CONNECT:2:14317 to this LISTEN). Bind requires
       # write+exec on the workload listener dirs, so grant rwx/default
-      # there to nixling-otel-relay. The guest runner
+      # there to d2b-otel-relay. The guest runner
       # (microvm:kvm or the graphics sidecar with
       # SupplementaryGroups=kvm) also needs to connect to the resulting
       # listener socket, so grant kvm on ONLY those workload listener
       # dirs/sockets. Separately, the relay needs traverse on the obs
       # stack state dir plus explicit rw on the stack VM base vsock.sock
       # for the CH textual protocol; do not install a default ACL there.
-      refresh_acl_set "g:nixling-otel-relay" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" rwx
-      refresh_acl_set "g:nixling-otel-relay" relay_stack_keep_dirs relay_stack_keep_sockets "vsock.sock" --x
+      refresh_acl_set "g:d2b-otel-relay" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" rwx
+      refresh_acl_set "g:d2b-otel-relay" relay_stack_keep_dirs relay_stack_keep_sockets "vsock.sock" --x
       refresh_acl_set "g:kvm" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" --x
-      refresh_acl_set "g:nixling-otel-bridge" bridge_keep_dirs bridge_keep_sockets "vsock.sock"
-      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted nixling-ch-exporter.service
-      refresh_acl_set "g:nixling-ch-exporter" ch_keep_dirs ch_keep_sockets "%VM%.sock"
+      refresh_acl_set "g:d2b-otel-bridge" bridge_keep_dirs bridge_keep_sockets "vsock.sock"
+      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted d2b-ch-exporter.service
+      refresh_acl_set "g:d2b-ch-exporter" ch_keep_dirs ch_keep_sockets "%VM%.sock"
     '';
   };
-  otelAclRefreshBin = "${otelAclRefresh}/bin/nixling-otel-acl-refresh";
+  otelAclRefreshBin = "${otelAclRefresh}/bin/d2b-otel-acl-refresh";
 
   lockedSystemUser = description: group: {
     isSystemUser = true;
@@ -270,13 +270,13 @@ let
 in
 lib.mkMerge [
   (lib.mkIf (relayVmNames != [ ]) {
-    users.groups.nixling-otel-relay = { };
+    users.groups.d2b-otel-relay = { };
 
-    users.users.nixling-otel-relay = lockedSystemUser
-      "nixling observability vsock relay"
-      "nixling-otel-relay";
+    users.users.d2b-otel-relay = lockedSystemUser
+      "d2b observability vsock relay"
+      "d2b-otel-relay";
 
-    # The per-VM `nixling-otel-relay@<vm>.service` was deleted; the
+    # The per-VM `d2b-otel-relay@<vm>.service` was deleted; the
     # observability vsock relay is now broker-spawned via
     # SpawnRunner{role: VsockRelay}. The .serviceConfig extension below
     # was a no-op
@@ -284,13 +284,13 @@ lib.mkMerge [
   })
 
   (lib.mkIf obsVmEnabled {
-    users.groups.nixling-otel-bridge = { };
+    users.groups.d2b-otel-bridge = { };
 
-    users.users.nixling-otel-bridge = lockedSystemUser
-      "nixling observability host bridge"
-      "nixling-otel-bridge";
+    users.users.d2b-otel-bridge = lockedSystemUser
+      "d2b observability host bridge"
+      "d2b-otel-bridge";
 
-    # `nixling-otel-host-bridge.service`
+    # `d2b-otel-host-bridge.service`
     # was deleted; the OTel host bridge is now broker-spawned via
     # SpawnRunner{role: OtelHostBridge}.
     # The .serviceConfig extension below was a no-op against a missing
@@ -300,7 +300,7 @@ lib.mkMerge [
   (lib.mkIf (obsVmEnabled || relayVmNames != [ ] || chExporterEnabled) {
     environment.systemPackages = [ otelAclRefresh ];
 
-    system.activationScripts.nixlingOtelSocketAcls =
+    system.activationScripts.d2bOtelSocketAcls =
       lib.stringAfter [ "users" ] otelAclRefreshBin;
   })
 ]

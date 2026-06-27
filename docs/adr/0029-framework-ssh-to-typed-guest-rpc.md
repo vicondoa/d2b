@@ -13,8 +13,8 @@
 > working copy over the typed bounded `ReadGuestFile` RPC; on a VM whose
 > running generation does not declare the guest-control transport it
 > **fails closed** — the operator SSH compatibility transport described
-> below is **not yet wired** into the command. `nixling vm konsole` now
-> runs over guest-control (no SSH) via the shipped admin-only `nixling
+> below is **not yet wired** into the command. `d2b vm konsole` now
+> runs over guest-control (no SSH) via the shipped admin-only `d2b
 > vm exec`. Per-VM SSH keys remain only for the surviving compatibility
 > surfaces (notably `usb attach --apply`). The original decision text
 > below is preserved as the historical record.
@@ -112,7 +112,7 @@ during a compatibility window.
   accounting (size / hash are computed from received bytes).
 - The SSH attack surface shrinks to explicit, audited-by-comment
   operator conveniences during the compatibility window. A later wave
-  removes them once a typed `nixling vm exec` session command lands.
+  removes them once a typed `d2b vm exec` session command lands.
 - Old-generation VMs (no guestd) lose framework readiness and
   `config sync` until they are rebuilt onto a guest-control-capable
   generation; this is intentional fail-closed behaviour, surfaced with a

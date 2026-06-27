@@ -27,7 +27,7 @@
 
   # One consumer-side user. Both VMs SSH in as this account; the
   # framework generates one Ed25519 key per VM under
-  # `nixling.site.keysDir` (default `/var/lib/nixling/keys`).
+  # `d2b.site.keysDir` (default `/var/lib/d2b/keys`).
   users.users.alice = {
     isNormalUser = true;
     uid = 1000;
@@ -36,7 +36,7 @@
   # ---------------------------------------------------------------
   # Site-level knobs.
   # ---------------------------------------------------------------
-  nixling.site = {
+  d2b.site = {
     launcherUsers = [ "alice" ];
     # Headless example — no Wayland forwarding, no host-side Yubikey
     # udev rules. Flip these on for a graphics + USBIP setup.
@@ -47,7 +47,7 @@
   # net-VM DROP rule, so VMs cannot reach the host's neighbours
   # (printer, NAS, other workstations) — not just the host's own IP.
   # Replace with whatever `ip route` says is your physical LAN.
-  nixling.hostLanCidrs = [
+  d2b.hostLanCidrs = [
     "192.168.1.0/24"
   ];
 
@@ -60,7 +60,7 @@
   #   sys-work-net VM (NAT + dnsmasq + nftables, autostarts)
   #   broker-spawned usbipd proxy runner bound to 192.0.2.1:3240
   # ---------------------------------------------------------------
-  nixling.envs.work = {
+  d2b.envs.work = {
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
 
@@ -77,7 +77,7 @@
   # of this example is that these two envs share NOTHING at the
   # network layer.
   # ---------------------------------------------------------------
-  nixling.envs.personal = {
+  d2b.envs.personal = {
     lanSubnet    = "10.30.0.0/24";
     uplinkSubnet = "198.51.100.0/30";
   };
@@ -85,7 +85,7 @@
   # ---------------------------------------------------------------
   # Workload VM #1 — joins `work`. Index 10 → IP 10.20.0.10.
   # ---------------------------------------------------------------
-  nixling.vms.work-app = {
+  d2b.vms.work-app = {
     enable = true;
     env = "work";
     index = 10;
@@ -104,7 +104,7 @@
   # Same `index` as work-app is fine: index uniqueness is scoped
   # per-env.
   # ---------------------------------------------------------------
-  nixling.vms.personal-app = {
+  d2b.vms.personal-app = {
     enable = true;
     env = "personal";
     index = 10;

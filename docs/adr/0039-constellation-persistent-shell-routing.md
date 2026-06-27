@@ -5,7 +5,7 @@
 - Related: ADR 0028 (guest control plane over virtio-vsock), ADR 0029
   (framework SSH to typed guest-control RPCs), ADR 0030 (guest exec runs as
   the workload user), ADR 0031 (bare commands and detached workload-user
-  exec), ADR 0032 (nixling v2 constellation control plane), ADR 0037 (local
+  exec), ADR 0032 (d2b v2 constellation control plane), ADR 0037 (local
   hypervisor runtime seam), ADR 0038 (persistent named guest shell sessions)
 
 ## Context
@@ -21,7 +21,7 @@ Those decisions need one routing rule before implementation continues. A
 provider API such as Azure Container Apps `executeShellCommand` can run a
 one-shot command, but it does not provide ADR 0038 persistence, attach/detach,
 force attach, terminal-v1 flow control, shell event reconciliation, or
-nixling-owned guest audit semantics. Treating that provider API as a special
+d2b-owned guest audit semantics. Treating that provider API as a special
 persistent-shell channel would create a second shell contract and would bypass
 ADR 0032 capability and stream authorization.
 
@@ -34,7 +34,7 @@ routing remain staged behind later implementation waves.
 
 ## Decision
 
-Persistent shells are a semantic nixling operation family that routes through
+Persistent shells are a semantic d2b operation family that routes through
 the ADR 0032 target resolver, operation router, capability model, and stream
 mux. There is no provider-specific shell channel.
 
@@ -72,17 +72,17 @@ operation; callers do not open arbitrary PTY tunnels.
 
 Shell routing follows the same target placement rules as ADR 0032:
 
-1. **Local or host-resident target.** The local `nixlingd` authorizes the
+1. **Local or host-resident target.** The local `d2bd` authorizes the
    caller, checks `persistent-shell`, and re-originates the shell RPC over the
    local authenticated guest-control channel to the workload's `guestd`.
 2. **Remote full-host node.** The gateway or controller sends semantic
    `Shell*` operation frames over the constellation peer session to the remote
-   node's `nixlingd`. The remote daemon authorizes again and re-originates the
+   node's `d2bd`. The remote daemon authorizes again and re-originates the
    local guest-control shell RPC near the guest. Raw guest-control, vsock,
    broker frames, pidfds, and host paths are never forwarded through the
    gateway.
 3. **Provider-managed sandbox.** A sandbox may advertise `persistent-shell`
-   only when it runs a guestd-compatible nixling agent in or adjacent to the
+   only when it runs a guestd-compatible d2b agent in or adjacent to the
    sandbox. That agent exposes the ADR 0038 shell control surface and
    terminal-v1 streams over the ADR 0032 peer transport. It need not be a full
    host daemon and it does not imply broker, KVM, systemd, vsock, virtiofs, or
@@ -97,13 +97,13 @@ Shell routing follows the same target placement rules as ADR 0032:
 ### Guestd-compatible provider agents
 
 A persistent-shell-capable provider sandbox runs a guestd-compatible agent that
-implements the nixling-owned shell service contract:
+implements the d2b-owned shell service contract:
 
 - validates shell names and force/detach/kill semantics exactly as ADR 0038;
 - runs shells as the sandbox workload identity, never as a provider control
   principal;
 - uses shpool or a compatible in-sandbox persistence engine behind the
-  nixling-owned shell API;
+  d2b-owned shell API;
 - preserves terminal-v1 cursor, resize, close, and slow-reader behavior;
 - emits bounded shell event and status records for reconciliation;
 - keeps terminal bytes, argv, env, cwd, provider endpoint details, and
@@ -112,21 +112,21 @@ implements the nixling-owned shell service contract:
 The provider may use its API to create, start, stop, or health-check the
 sandbox and to inject bootstrap configuration. Once a shell attach is active,
 interactive bytes flow only through authorized constellation streams between the
-gateway/controller and the nixling agent. The provider API is not a shell data
+gateway/controller and the d2b agent. The provider API is not a shell data
 plane.
 
 ### CLI and facade behavior
 
-ADR 0039 expands ADR 0038's local `nixling shell <vm> ...` form to the public
-`nixling shell <target> ...` facade. The first positional is interpreted as the
-normal nixling target address. Implementations may stage support: a generation
+ADR 0039 expands ADR 0038's local `d2b shell <vm> ...` form to the public
+`d2b shell <target> ...` facade. The first positional is interpreted as the
+normal d2b target address. Implementations may stage support: a generation
 that only supports local persistent shells may continue to reject gateway-backed
 targets with the existing local usage error.
 Once ADR 0039 routing is implemented, gateway-backed targets are forwarded
 through the selected gateway exactly like other constellation operations and are
 gated by the remote node or provider's `persistent-shell` capability.
 
-`nixling realm enter` and `nixling realm run` remain debugging and scripting
+`d2b realm enter` and `d2b realm run` remain debugging and scripting
 escape hatches, not the persistent-shell transport. Operators should not have to
 manually enter a gateway to use a supported remote shell target after this ADR
 is implemented.
@@ -165,15 +165,15 @@ top-level `tests/*.sh` gates are added for this feature.
   transport contracts.
 - Azure Container Apps `executeShellCommand` remains useful for limited one-shot
   exec, but it is explicitly insufficient for persistent shell.
-- Provider-managed sandboxes that want persistent shell must carry a nixling
+- Provider-managed sandboxes that want persistent shell must carry a d2b
   agent and advertise the new capability; this raises the bar for provider
   support but keeps authz, audit, and terminal semantics uniform.
 - Existing local-shell-only generations may continue to reject gateway-backed
-  `nixling shell` targets until the reserved routing contract is implemented.
+  `d2b shell` targets until the reserved routing contract is implemented.
 
 ## Alternatives considered
 
-- **Map `nixling shell` to `executeShellCommand`.** Rejected because the provider
+- **Map `d2b shell` to `executeShellCommand`.** Rejected because the provider
   call is synchronous and command-scoped. It cannot preserve named shell state,
   attach/detach, force attach, terminal-v1 backpressure, or shell event
   reconciliation.
@@ -183,7 +183,7 @@ top-level `tests/*.sh` gates are added for this feature.
 - **Add a provider-specific shell stream.** Rejected because it would duplicate
   ADR 0038 terminal behavior, create provider-specific audit gaps, and bypass
   the shared capability and stream authorization model.
-- **Require full nixlingd and broker in every provider sandbox.** Rejected
+- **Require full d2bd and broker in every provider sandbox.** Rejected
   because provider-managed sandboxes do not own the host substrate. A
   guestd-compatible workload agent is enough for shell semantics and does not
   imply host mutation authority.
@@ -194,7 +194,7 @@ top-level `tests/*.sh` gates are added for this feature.
 - [ADR 0029](0029-framework-ssh-to-typed-guest-rpc.md)
 - [ADR 0030](0030-guest-exec-as-workload-user.md)
 - [ADR 0031](0031-bare-command-and-detached-exec.md)
-- [ADR 0032](0032-nixling-v2-constellation-control-plane.md)
+- [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
 - [ADR 0037](0037-local-hypervisor-runtime-seam.md)
 - [ADR 0038](0038-persistent-guest-shell-sessions.md)
 - [Constellation core reference](../reference/constellation-core.md)

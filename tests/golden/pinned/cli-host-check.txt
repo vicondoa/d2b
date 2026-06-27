@@ -1,11 +1,11 @@
-# cli-host-check — `nixling host check` CLI-contract integration tests
+# cli-host-check — `d2b host check` CLI-contract integration tests
 # (host_check_contract.rs). Successor of the retired
-# cli-rust-native-host-check.sh gate: drive the real `nixling host check
+# cli-rust-native-host-check.sh gate: drive the real `d2b host check
 # --read-only` binary with every probe pinned through
-# NIXLING_HOST_CHECK_FIXTURE (exit-code lattice 0/1/2/3, strict
+# D2B_HOST_CHECK_FIXTURE (exit-code lattice 0/1/2/3, strict
 # HostCheckOutputV2 deserialize == the host-check.schema.json check, the
 # internal-io operator error envelope, --human severity grouping) plus three
-# daemon-backed cases against a real KVM-free `nixlingd serve --once`
+# daemon-backed cases against a real KVM-free `d2bd serve --once`
 # (hostCheckResponse summary/checks shape). One bare libtest fn per line;
 # checked by tests/tools/assert-pinned-tests.sh.
 host_check_pass_fixture_exits_zero_and_matches_schema

@@ -45,7 +45,7 @@ pkgs.vhost-device-sound.overrideAttrs (old: rec {
   ];
 
   # Multi-arch: the vhost-device-sound binary itself could in
-  # principle build on aarch64-linux (it's pure Rust), but in nixling
+  # principle build on aarch64-linux (it's pure Rust), but in d2b
   # it is only ever wired into a cloud-hypervisor VM via the
   # `--generic-vhost-user` flag added in CH v52. The spectrum-ch
   # build that ships that flag is x86_64-only (see

@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#nm-managed-foreign-conflict",
   "exit_code": 1,
   "kind": "host-check-error",
-  "observed_state": "NetworkManager reports a managed connection on an interface declared as nixling-owned.",
-  "remediation": "Add the interface to /etc/NetworkManager/conf.d/nixling-unmanaged.conf and `nmcli general reload`.",
-  "what_was_checked": "Whether a foreign NetworkManager profile is managing a nixling-owned interface."
+  "observed_state": "NetworkManager reports a managed connection on an interface declared as d2b-owned.",
+  "remediation": "Add the interface to /etc/NetworkManager/conf.d/d2b-unmanaged.conf and `nmcli general reload`.",
+  "what_was_checked": "Whether a foreign NetworkManager profile is managing a d2b-owned interface."
 }

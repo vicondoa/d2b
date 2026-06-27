@@ -1,10 +1,10 @@
-# nixling cargo config.
+# d2b cargo config.
 #
 # Each git worktree keeps its OWN packages/target/ for isolation (so
 # different SHAs don't stomp on each other's incremental cache).
 # Compiled rustc outputs are deduplicated across worktrees via sccache:
 # same crate version + same flags -> one cache entry in
-# $SCCACHE_DIR (default ~/.cache/nixling-sccache), reused by every
+# $SCCACHE_DIR (default ~/.cache/d2b-sccache), reused by every
 # worktree's build.
 #
 # Why not shared target-dir: cargo's target-dir lock is workspace-wide;

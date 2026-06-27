@@ -2,6 +2,6 @@ error: host-prepare-apply-error
   code: dnsmasq-not-bound
   exit_code: 1
   what_was_checked: Whether the per-env dnsmasq is bound to its bridge after reconcile.
-  observed_state: ss -lnp probe shows no dnsmasq listening on the nl-* bridge IP.
-  remediation: Inspect systemctl status nixling-dnsmasq@<env>.service and retry `host prepare --apply`.
+  observed_state: ss -lnp probe shows no dnsmasq listening on the d2b-* bridge IP.
+  remediation: Inspect systemctl status d2b-dnsmasq@<env>.service and retry `host prepare --apply`.
   docs_anchor: docs/reference/error-codes.md#dnsmasq-not-bound

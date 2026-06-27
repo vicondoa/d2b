@@ -4,6 +4,6 @@
   "exit_code": 1,
   "kind": "host-check-error",
   "observed_state": "Broker observed a modprobe request for a module not present in modprobeAllowed.",
-  "remediation": "Add the module to nixling.kernelModules.allowed or remove its consumer.",
+  "remediation": "Add the module to d2b.kernelModules.allowed or remove its consumer.",
   "what_was_checked": "Whether every modprobe target is declared in the W3 kernel-module matrix."
 }

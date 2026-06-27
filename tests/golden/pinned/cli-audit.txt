@@ -1,7 +1,7 @@
-# cli-audit — `nixling audit` CLI-contract integration tests (audit_contract.rs).
+# cli-audit — `d2b audit` CLI-contract integration tests (audit_contract.rs).
 # Successor of cli-rust-native-audit.sh: daemon-down envelope + no-bash-fallback,
 # --strict not-yet-implemented, daemon auditResponse relay (in-process SEQPACKET
-# mock), and live nixlingd --once admin-rejected authz. One bare libtest fn per
+# mock), and live d2bd --once admin-rejected authz. One bare libtest fn per
 # line; checked by tests/tools/assert-pinned-tests.sh.
 audit_reports_daemon_down_without_bash_fallback
 audit_strict_returns_not_yet_implemented_envelope

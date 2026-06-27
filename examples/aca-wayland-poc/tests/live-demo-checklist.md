@@ -21,12 +21,12 @@ commit raw artifacts — they can leak resource metadata).
 ## 1. Provision (Bicep)
 ```bash
 cd examples/aca-wayland-poc/azure
-az group create -n rg-nixling-centralus -l centralus
-az deployment group create -g rg-nixling-centralus \
+az group create -n rg-d2b-centralus -l centralus
+az deployment group create -g rg-d2b-centralus \
   -f main.bicep -p main.bicepparam -p operatorPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
 ```
 This creates the ACR, the managed identity (AcrPull + SandboxGroup Data
-Owner), the sandbox group, and the Relay namespace + `hc-nixling-display`
+Owner), the sandbox group, and the Relay namespace + `hc-d2b-display`
 hybrid connection with `gateway-listen` (Listen) and `gateway-send` (Send)
 SAS rules. Grant yourself the **Container Apps SandboxGroup Data Owner** role
 on the sandbox group (the `operatorPrincipalId` param does this).
@@ -39,10 +39,10 @@ cd examples/aca-wayland-poc/container
 
 ## 3. Register a sandbox disk + create a sandbox
 ```bash
-export ACA_SUBSCRIPTION=<sub> ACA_RESOURCE_GROUP=rg-nixling-centralus \
+export ACA_SUBSCRIPTION=<sub> ACA_RESOURCE_GROUP=rg-d2b-centralus \
        ACA_SANDBOX_GROUP=<sandbox-group> ACA_REGION=centralus
 TOKEN=$(az acr login -n <registry> --expose-token --query accessToken -o tsv)
-aca sandboxgroup disk create --image <login-server>/nixling-wayland:latest \
+aca sandboxgroup disk create --image <login-server>/d2b-wayland:latest \
   --username 00000000-0000-0000-0000-000000000000 --token "$TOKEN"
 aca sandbox create --disk-id <disk-id> --cpu 1000m --memory 2048Mi
 ```
@@ -50,7 +50,7 @@ aca sandbox create --disk-id <disk-id> --cpu 1000m --memory 2048Mi
 ## 4. Start the host display receivers
 ```bash
 cd examples/aca-wayland-poc/relay-bridge && cargo build --release && cd -
-export NIXLING_RELAY_NS=<namespace>.servicebus.windows.net
+export D2B_RELAY_NS=<namespace>.servicebus.windows.net
 examples/aca-wayland-poc/host/run-host-display.sh up
 ```
 
@@ -59,27 +59,27 @@ Run the baked-in agent through the sandbox data plane, handing it a
 short-lived **Send** SAS token (never the host's Listen key, never a
 provider identity):
 ```bash
-SEND_KEY=$(az relay hyco authorization-rule keys list -g rg-nixling-centralus \
-  --namespace-name <namespace> --hybrid-connection-name hc-nixling-display \
+SEND_KEY=$(az relay hyco authorization-rule keys list -g rg-d2b-centralus \
+  --namespace-name <namespace> --hybrid-connection-name hc-d2b-display \
   --name gateway-send --query primaryKey -o tsv)
 aca sandbox exec --id <sandbox-id> -c "sh -c '
-  NIXLING_RELAY_NS=<namespace>.servicebus.windows.net \
-  NIXLING_RELAY_ENTITY=hc-nixling-display \
-  NIXLING_RELAY_KEYNAME=gateway-send \
-  NIXLING_RELAY_KEY=$SEND_KEY \
-  ( /bin/nixling-sandbox-agent </dev/null >/tmp/agent.log 2>&1 & ); sleep 6; cat /tmp/agent.log'"
+  D2B_RELAY_NS=<namespace>.servicebus.windows.net \
+  D2B_RELAY_ENTITY=hc-d2b-display \
+  D2B_RELAY_KEYNAME=gateway-send \
+  D2B_RELAY_KEY=$SEND_KEY \
+  ( /bin/d2b-sandbox-agent </dev/null >/tmp/agent.log 2>&1 & ); sleep 6; cat /tmp/agent.log'"
 ```
 A `foot` window from the sandbox appears on the host compositor. Override
-`NIXLING_APP_CMD` to run a different command under foot (e.g. a banner that
+`D2B_APP_CMD` to run a different command under foot (e.g. a banner that
 prints the sandbox hostname/kernel, as in the reference screenshot).
 
 ## 6. Verify
 - The forwarded window is present on the host compositor (e.g.
   `niri msg windows | grep -c 'App ID: "foot"'` increments).
 - The Azure portal "Network Audit" for the sandbox shows an **allowed**
-  egress to `…servicebus.windows.net/$hc/hc-nixling-display`.
+  egress to `…servicebus.windows.net/$hc/hc-d2b-display`.
 - `agent.log` shows `waypipe …server` launched after the relay bridge began
-  listening on `unix-listen:/run/nixling/wp.sock` (no socat, no bind race).
+  listening on `unix-listen:/run/d2b/wp.sock` (no socat, no bind race).
 
 ## 7. Clean up (always)
 ```bash

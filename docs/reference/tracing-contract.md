@@ -4,8 +4,8 @@
 > `tests/tracing-contract-lint.sh`. Tracked on the
 > observability roadmap.
 
-The nixling daemon (`nixlingd`) and the privileged broker
-(`nixling-priv-broker`) both emit OpenTelemetry spans and structured
+The d2b daemon (`d2bd`) and the privileged broker
+(`d2b-priv-broker`) both emit OpenTelemetry spans and structured
 `tracing` events. Those spans flow to the native SigNoz backend through
 the `OtelHostBridge` broker role and the `sys-obs` collector. To keep
 the backend's ClickHouse cardinality budget bounded **and** to prevent
@@ -52,7 +52,7 @@ allowlist.
 | `nft`/`route`/`sysctl`/`tap`/`bridge` (intent counts) | numeric            | numeric scalar                      |
 
 Per-VM bounded paths (e.g. `path = %spec.path` for the canonical
-ownership matrix, `/var/lib/nixling/state/<vm>/<leaf>`) are tolerated
+ownership matrix, `/var/lib/d2b/state/<vm>/<leaf>`) are tolerated
 **only** when the path is statically bounded by the
 `(vm, canonical-leaf)` cross product — never an arbitrary `/nix/store`
 path or operator-supplied path. New tracing sites SHOULD prefer
@@ -94,7 +94,7 @@ than emitting the path itself.
 
 ### Broker bundle-load span (canonical reference)
 
-Before (`packages/nixling-priv-broker/src/runtime.rs`, pre-`b6f4ac9`):
+Before (`packages/d2b-priv-broker/src/runtime.rs`, pre-`b6f4ac9`):
 
 ```rust
 tracing::info!(
@@ -150,7 +150,7 @@ for the per-VM key drift event. The `drift_kind` is a typed
    working directory, provider endpoint, provider credential, provider
    resource id, or child output:
    route it through the typed error envelope
-   (`packages/nixling-core/src/error.rs`) and the broker audit log,
+   (`packages/d2b-core/src/error.rs`) and the broker audit log,
    not the span.
 3. Run `bash tests/tracing-contract-lint.sh` locally before pushing.
 4. If you genuinely need a new bounded attr name, add a row to the

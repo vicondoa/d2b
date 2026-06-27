@@ -1,8 +1,8 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
-  nl = import ./lib.nix { inherit lib; };
+  cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   envMeta = cfg._envMeta;
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
   anyGraphics = builtins.any (vm: vm.graphics.enable) (lib.attrValues enabledVms);
@@ -72,8 +72,8 @@ let
   # fall back to the legacy hash algorithm; impure live evals prefer the
   # runtime artifact when it exists.
   hostRuntimePath =
-    let override = builtins.getEnv "NIXLING_HOST_RUNTIME_PATH";
-    in if override != "" then override else "/var/lib/nixling/runtime/host-runtime.json";
+    let override = builtins.getEnv "D2B_HOST_RUNTIME_PATH";
+    in if override != "" then override else "/var/lib/d2b/runtime/host-runtime.json";
 
   hostRuntimeIfnames =
     if builtins.pathExists hostRuntimePath then
@@ -84,13 +84,13 @@ let
   derivedIfNameRoleTag = inputRole:
     if inputRole == "br" || inputRole == "up" then "b"
     else if inputRole == "tap" then "t"
-    else throw "nixling host.json: unknown derivedIfName role '${inputRole}'";
+    else throw "d2b host.json: unknown derivedIfName role '${inputRole}'";
 
   derivedIfNameRuntimeRoleTag = inputRole:
     if inputRole == "br" then "nvl"
     else if inputRole == "up" then "upl"
     else if inputRole == "tap" then "wkl"
-    else throw "nixling host.json: unknown derivedIfName role '${inputRole}'";
+    else throw "d2b host.json: unknown derivedIfName role '${inputRole}'";
 
   legacyDerivedIfName = inputRole: envName: vmName:
     let
@@ -99,7 +99,7 @@ let
       hashLower = builtins.substring 0 8 (builtins.hashString "sha256" input);
       hashUpper = lib.toUpper hashLower;
       tag = derivedIfNameRoleTag inputRole;
-    in "nl-${tag}${hashUpper}";
+    in "d2b-${tag}${hashUpper}";
 
   derivedIfName = inputRole: envName: vmName:
     let
@@ -115,7 +115,7 @@ let
 
   # One IfNameMapping row per managed bridge/TAP. Exposed under
   # `host.json.ifNameMappings` so the broker can re-validate
-  # collision-freeness and so `nixling host check` / `status` can
+  # collision-freeness and so `d2b host check` / `status` can
   # surface the user-visible ↔ derived pair.
   envMappings = envName: m:
     let
@@ -149,7 +149,7 @@ let
 
   runtimeProviders = lib.sortOn (provider: provider.provider.id)
     (map (provider: builtins.removeAttrs provider [ "_hypervisorService" ])
-      (lib.attrValues nl.runtimeProviderCatalog));
+      (lib.attrValues d2bLib.runtimeProviderCatalog));
 
   qemuMediaSourceId = vmName: slotName: source:
     if source.kind == "physical-usb"
@@ -188,14 +188,14 @@ let
     in bootRows ++ slotRows;
 
   qemuMediaSources = lib.sortOn (row: "${row.vm}/${row.mediaRef}/${row.slot}")
-    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm (nl.qemuMediaVms cfg.vms)));
+    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm (d2bLib.qemuMediaVms cfg.vms)));
 
   vmRuntimeRows = lib.sortOn (row: row.vm) (lib.mapAttrsToList
     (name: vm:
       let manifest = cfg.manifest.${name};
       in {
         vm = name;
-        runtime = nl.vmRuntimeMetadata name vm;
+        runtime = d2bLib.vmRuntimeMetadata name vm;
         env = manifest.env;
         stateDir = manifest.stateDir;
         tap = manifest.tap;
@@ -211,10 +211,10 @@ let
       derivedIfNameList);
 
   # Emitter-time collision detection. The broker also
-  # re-runs `nixling_host::ifname::detect_collisions` against the
+  # re-runs `d2b_host::ifname::detect_collisions` against the
   # trusted bundle copy at runtime; this assert is the first gate.
   ifNameCollisionMessage =
-    "nixling host.json: hash-derived ifname collision detected: ${
+    "d2b host.json: hash-derived ifname collision detected: ${
       builtins.toJSON duplicateDerived
     }. Rename one of the colliding env/VM scopes to break the SHA-256 prefix tie.";
 
@@ -268,10 +268,10 @@ let
     };
 
   # ownership marker. Stable per-host id used in
-  # nft rule comment markers (`comment "nixling managed: <ownership-id>"`).
-  ownershipId = "nixling-${
+  # nft rule comment markers (`comment "d2b managed: <ownership-id>"`).
+  ownershipId = "d2b-${
     builtins.substring 0 8 (builtins.hashString "sha256" (
-      "nixling:${toString cfg.site.allowUnsafeEastWest}:${
+      "d2b:${toString cfg.site.allowUnsafeEastWest}:${
         builtins.concatStringsSep "," (lib.attrNames envMeta)
       }"
     ))
@@ -283,13 +283,13 @@ let
       allowUnsafeEastWest = cfg.site.allowUnsafeEastWest;
     };
     environments = lib.mapAttrsToList envInfo envMeta;
-    # 4-chain `inet nixling` layout. Plan
-    # §" `inet nixling` chain layout". No raw/mangle/nat hooks.
-    # All rules carry a `comment "nixling managed: <ownership-id>"`
+    # 4-chain `inet d2b` layout. Plan
+    # §" `inet d2b` chain layout". No raw/mangle/nat hooks.
+    # All rules carry a `comment "d2b managed: <ownership-id>"`
     # marker; foreign tables/chains are never flushed.
     nftables = {
       family = "inet";
-      table = "nixling";
+      table = "d2b";
       ownershipId = ownershipId;
       tableHashAfterApply = null;
       chains = [
@@ -298,21 +298,21 @@ let
           hook = "prerouting";
           priority = -150;
           policy = "accept";
-          purpose = "Filter-class prerouting chain at priority -150 (equal to mangle). Reserved for nixling-marked classification; no NAT/mangle hooks.";
+          purpose = "Filter-class prerouting chain at priority -150 (equal to mangle). Reserved for d2b-marked classification; no NAT/mangle hooks.";
         }
         {
           name = "forward";
           hook = "forward";
           priority = -5;
           policy = "drop";
-          purpose = "Default-drop forward chain at priority -5 carrying per-env nixling forward policy. Foreign chains preserved untouched.";
+          purpose = "Default-drop forward chain at priority -5 carrying per-env d2b forward policy. Foreign chains preserved untouched.";
         }
         {
           name = "output";
           hook = "output";
           priority = -5;
           policy = "accept";
-          purpose = "Host-originated nixling output chain at priority -5; default accept with marked drops as needed.";
+          purpose = "Host-originated d2b output chain at priority -5; default accept with marked drops as needed.";
         }
         {
           name = "input";
@@ -324,33 +324,33 @@ let
       ];
     };
     networkManager = {
-      filePath = "/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf";
+      filePath = "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf";
       matchCriteria = lib.unique (lib.flatten (lib.mapAttrsToList
         (envName: m: map (ifName: "interface-name:${ifName}") (envIfNames envName m))
         envMeta));
-      reloadBehavior = "Reload NetworkManager after replacing the nixling-managed unmanaged-devices file when the service is active.";
+      reloadBehavior = "Reload NetworkManager after replacing the d2b-managed unmanaged-devices file when the service is active.";
       ownership = {
         owner = "root";
         group = "root";
         mode = "0644";
-        driftPolicy = "Replace only the nixling-managed generated file; do not edit foreign NetworkManager config.";
+        driftPolicy = "Replace only the d2b-managed generated file; do not edit foreign NetworkManager config.";
       };
     };
     hostsFile = {
-      startMarker = "# nixling-managed begin";
-      endMarker = "# nixling-managed end";
-      rule = "Replace only the deterministic nixling-managed block between sentinels and preserve foreign /etc/hosts lines.";
+      startMarker = "# d2b-managed begin";
+      endMarker = "# d2b-managed end";
+      rule = "Replace only the deterministic d2b-managed block between sentinels and preserve foreign /etc/hosts lines.";
     };
     kernelModules = [
-      (moduleRow "kvm" "cloud-hypervisor" "required" "All nixling VMs require the base KVM module." [ ] false)
+      (moduleRow "kvm" "cloud-hypervisor" "required" "All d2b VMs require the base KVM module." [ ] false)
       (moduleRow "kvm_intel" "cloud-hypervisor-intel" "alternatives" "host-cpu-vendor=intel" [ ] false)
       (moduleRow "kvm_amd" "cloud-hypervisor-amd" "alternatives" "host-cpu-vendor=amd" [ ] false)
       (moduleRow "tun" "tap" "required" "All env-backed VMs require TAP devices on the host." [ ] false)
       (moduleRow "vhost_net" "virtio-net" "required" "Required when vhost-net acceleration is used for Cloud Hypervisor TAP handoff." [ ] false)
       (moduleRow "fuse" "virtiofs" "required" "Required for the per-VM virtiofs store views served by virtiofsd." [ ] false)
-      (moduleRow "nf_tables" "nftables" "required" "Required for the marker-owned inet nixling table." [ ] false)
+      (moduleRow "nf_tables" "nftables" "required" "Required for the marker-owned inet d2b table." [ ] false)
       (moduleRow "bridge" "linux-bridge" "required" "Required for every env LAN and uplink bridge." [ ] false)
-      (moduleRow "br_netfilter" "bridge-netfilter" "optional" "Optional, but if present nixling fails closed unless all bridge-nf-call sysctls are zero." [
+      (moduleRow "br_netfilter" "bridge-netfilter" "optional" "Optional, but if present d2b fails closed unless all bridge-nf-call sysctls are zero." [
         "net.bridge.bridge-nf-call-iptables=0"
         "net.bridge.bridge-nf-call-ip6tables=0"
         "net.bridge.bridge-nf-call-arptables=0"
@@ -384,14 +384,14 @@ let
       (fdRow "tap" "CreateTapFd" "cloud-hypervisor" "SCM_RIGHTS preferred; CreatePersistentTap fallback" false "The broker owns TAP creation so long-lived payloads do not retain CAP_NET_ADMIN.")
       (fdRow "/dev/vhost-net" "OpenVhostNet" "cloud-hypervisor" "SCM_RIGHTS with the TAP fd" false "vhost-net acceleration is handed off as an fd, not a visible device node.")
       (fdRow "/dev/fuse" "OpenFuse" "virtiofsd" "SCM_RIGHTS" false "virtiofsd receives /dev/fuse through the broker instead of a broad device namespace.")
-      (fdRow "cgroup-dirfd" "OpenCgroupDir" "nixlingd" "SCM_RIGHTS or delegated path" false "The broker opens only the delegated nixling cgroup subtree for daemon-owned role placement.")
+      (fdRow "cgroup-dirfd" "OpenCgroupDir" "d2bd" "SCM_RIGHTS or delegated path" false "The broker opens only the delegated d2b cgroup subtree for daemon-owned role placement.")
     ];
     runtimeProviders = runtimeProviders;
     vmRuntimes = vmRuntimeRows;
     qemuMedia =
       if qemuMediaSources == [ ] then null else {
-        registryDir = "/var/lib/nixling/media-registry";
-        runtimeRulesPath = "/run/udev/rules.d/99-nixling-media-ignore.rules";
+        registryDir = "/var/lib/d2b/media-registry";
+        runtimeRulesPath = "/run/udev/rules.d/99-d2b-media-ignore.rules";
         reloadBehavior = "Broker writes root-only runtime udev rules with UDISKS_IGNORE=1 and reloads udev rules after physical USB resolution; direct image-file paths do not use runtime USB rules.";
         sources = qemuMediaSources;
       };
@@ -447,11 +447,11 @@ let
   };
 
   jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-host.json" jsonText;
+  jsonFile = pkgs.writeText "d2b-host.json" jsonText;
 in
 {
   config = {
-    nixling._bundle.hostJson = {
+    d2b._bundle.hostJson = {
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "host.json";

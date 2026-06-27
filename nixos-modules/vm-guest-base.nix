@@ -1,6 +1,6 @@
 # nixos-modules/vm-guest-base.nix
 #
-# nixling-owned per-VM guest-side baseline. Replaces the
+# d2b-owned per-VM guest-side baseline. Replaces the
 # guest-side portion of `microvm.nix`'s
 # `microvm.nixosModules.microvm` (the per-VM eval module that
 # upstream `microvm.nixosModules.host` injected into every VM's
@@ -22,18 +22,18 @@
 # Modeled after upstream microvm.nix's `microvm/system.nix` +
 # `microvm/mounts.nix` (see
 # `/nix/store/.../microvm.nix-source/nixos-modules/microvm/`)
-# but stripped to only the bits nixling's broker SpawnRunner
+# but stripped to only the bits d2b's broker SpawnRunner
 # substrate actually needs. The upstream module pulled in
 # `microvm.runner`, `boot-disk`, `store-disk`, `interfaces`,
 # `pci-devices`, `virtiofsd`, `graphics`, `rosetta`, `ssh-deploy`,
 # `vsock-ssh` — none of those are needed for the daemon-native
 # substrate because the broker owns hypervisor argv generation
-# (`packages/nixling-host/src/*_argv.rs`) and runtime supervision.
+# (`packages/d2b-host/src/*_argv.rs`) and runtime supervision.
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.microvm;
-  nl = import ./lib.nix { inherit lib; };
+  d2bLib = import ./lib.nix { inherit lib; };
 
   # Find the host-store share (source == "/nix/store") — required
   # to be present by `store.nix` / `host.nix`'s composeVm pass; it
@@ -50,7 +50,7 @@ let
 
   volumeFileSystems = builtins.listToAttrs (map (volume: {
     name = volume.mountPoint;
-    value = nl.volumeFileSystem volume;
+    value = d2bLib.volumeFileSystem volume;
   }) cfg.volumes);
 in
 
@@ -145,7 +145,7 @@ in
       # /dev/disk/by-id/virtio-rootfs.  Mount it at the overlay path
       # so the upperdir/workdir live on a real filesystem (ext4 — the
       # broker's DiskInit op runs mkfs.ext4 when creating the image;
-      # see packages/nixling-priv-broker/src/ops/disk_init.rs).
+      # see packages/d2b-priv-broker/src/ops/disk_init.rs).
       # Without this mount the overlay upper/work live on the rootfs
       # tmpfs and are wiped on every reboot, which defeats the
       # writableStoreOverlay design.

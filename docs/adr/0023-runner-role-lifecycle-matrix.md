@@ -60,7 +60,7 @@ a review blocking finding.
 | # | Field | Allowed values / format |
 |---|-------|------------------------|
 | 1 | **Fork model** | `clone3` (flags) \| `posix_spawn` (flags) |
-| 2 | **Wait/reap owner** | `broker` \| `nixlingd` \| `both` \| `pidfd-handoff (broker → nixlingd)` |
+| 2 | **Wait/reap owner** | `broker` \| `d2bd` \| `both` \| `pidfd-handoff (broker → d2bd)` |
 | 3 | **In-NS mount-action** | `apply` \| `skip` \| `N/A` — with a brief note on what is applied or why skipped |
 | 4 | **Capability bounding set** | comma-separated CAP names, or `empty` |
 | 5 | **Ambient capability set** | comma-separated CAP names, or `empty` |
@@ -74,15 +74,15 @@ a review blocking finding.
 ## Backfill — existing roles
 
 Backfill matrices are sourced from `nixos-modules/minijail-profiles.nix`
-(HEAD `588a913`) and the broker's `packages/nixling-priv-broker/src/sys.rs`
+(HEAD `588a913`) and the broker's `packages/d2b-priv-broker/src/sys.rs`
 `clone3_spawn_runner` path.
 
 All five roles below are spawned by the broker via
 `clone3_pidfd_or_fork_fallback_with_cgroup` (kernel ≥ 5.7 path),
 which combines `CLONE_PIDFD` + `CLONE_INTO_CGROUP` + role-specific
 namespace flags. The broker holds the pidfd briefly and then hands it
-to nixlingd over `SCM_RIGHTS` via the `OpenPidfd` op (ADR 0011
-§"pidfd handoff"). `nixlingd` is therefore the long-term reap owner;
+to d2bd over `SCM_RIGHTS` via the `OpenPidfd` op (ADR 0011
+§"pidfd handoff"). `d2bd` is therefore the long-term reap owner;
 the broker initiates the spawn and the pidfd transfer, but does not
 `waitid`. **D7** (v1.2) will add `waitid(P_PIDFD)` on the broker
 side for one-shot roles, changing the reap owner to `both` for that
@@ -93,14 +93,14 @@ subset; this ADR will be updated when D7 lands.
 ### cloud-hypervisor
 
 **Role ID**: `cloud-hypervisor-runner`
-**Principal**: `nixling-<vm>-runner`
+**Principal**: `d2b-<vm>-runner`
 **Source profile**: `mkProfile` at `nixos-modules/minijail-profiles.nix`
 line ~247; companion ADR 0004.
 
 | Field | Value |
 |-------|-------|
 | Fork model | `clone3` (`CLONE_PIDFD \| CLONE_INTO_CGROUP \| CLONE_NEWIPC \| CLONE_NEWNS`) — no `CLONE_NEWUSER`, no `CLONE_NEWNET`, no `CLONE_NEWPID`, no `CLONE_NEWUTS` |
-| Wait/reap owner | `pidfd-handoff (broker → nixlingd)` — broker transfers pidfd via `OpenPidfd`; nixlingd reaps |
+| Wait/reap owner | `pidfd-handoff (broker → d2bd)` — broker transfers pidfd via `OpenPidfd`; d2bd reaps |
 | In-NS mount-action | **apply** — broker bind-mounts `/dev/kvm`, `/dev/vhost-net`, `/dev/net/tun` (device nodes) and the VM state dir (RW); `/nix/store` (RO) |
 | Capability bounding set | `CAP_NET_ADMIN` (setup-time union for `SCM_RIGHTS` TAP-fd recv and `TUNSETIFF`; CH drops it before entering its main loop — see note ①) |
 | Ambient capability set | `empty` — broker does not raise ambient caps; minijail does not configure an ambient set for this role |
@@ -109,7 +109,7 @@ line ~247; companion ADR 0004.
 | umask value | `inherit` (broker default; no socket-binding constraint) |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** — `nixling.slice/<vm>/cloud-hypervisor` |
+| CLONE_INTO_CGROUP usage | **yes** — `d2b.slice/<vm>/cloud-hypervisor` |
 
 **Note ①**: CH's published behaviour is to drop `CAP_NET_ADMIN`
 before entering its main loop (after device-init and TAP
@@ -128,14 +128,14 @@ tests (D15) catch argv drift in v1.2.
 ### virtiofsd
 
 **Role ID**: `virtiofsd`
-**Principal**: `nixling-<vm>-runner` (same ephemeral UID as the CH runner)
+**Principal**: `d2b-<vm>-runner` (same ephemeral UID as the CH runner)
 **Source profile**: `virtiofsdProfiles` at `nixos-modules/minijail-profiles.nix`
 line ~184; companion ADR 0021.
 
 | Field | Value |
 |-------|-------|
 | Fork model | `clone3` (`CLONE_PIDFD \| CLONE_INTO_CGROUP \| CLONE_NEWUSER \| CLONE_NEWIPC \| CLONE_NEWNS`) — broker pre-establishes user-NS; `CLONE_NEWNS` IS in the clone3 flag set here because minijail requests a mount namespace; the user-NS sync-pipe sequence gates the child from acting until `uid_map`/`gid_map` are written (ADR 0021 §"Implementation contract") |
-| Wait/reap owner | `pidfd-handoff (broker → nixlingd)` |
+| Wait/reap owner | `pidfd-handoff (broker → d2bd)` |
 | In-NS mount-action | **apply (user-NS gated)** — child blocks on sync-pipe until parent writes `uid_map`/`gid_map`; after unblocking, child calls `unshare(CLONE_NEWNS)` then broker applies bind-mounts (state dir + runtime dir); `--sandbox=chroot` + `--inode-file-handles=never` inside the NS |
 | Capability bounding set | `empty` on the host; **full** inside the single-entry user namespace (fake-root at NS-UID 0) |
 | Ambient capability set | `empty` on the host; not applicable inside the user-NS (capabilities are derived from the user-NS, not the ambient set) |
@@ -144,7 +144,7 @@ line ~184; companion ADR 0021.
 | umask value | `inherit` |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** — `nixling.slice/<vm>/virtiofsd-<share-tag>` |
+| CLONE_INTO_CGROUP usage | **yes** — `d2b.slice/<vm>/virtiofsd-<share-tag>` |
 
 **Context for in-NS mount-action**: fu27 was the live-deploy failure
 where the mount-action skip branch (triggered when the role enters a
@@ -161,7 +161,7 @@ strategy is documented as a placeholder in §"Future work".
 ### swtpm
 
 **Role ID**: `swtpm`
-**Principal**: `nixling-<vm>-swtpm`
+**Principal**: `d2b-<vm>-swtpm`
 **Source profile**: `mkProfile` at `nixos-modules/minijail-profiles.nix`
 line ~345. See also the `swtpm-flush` profile (same principal and
 seccomp ref, short-lived pre-start flush process).
@@ -169,8 +169,8 @@ seccomp ref, short-lived pre-start flush process).
 | Field | Value |
 |-------|-------|
 | Fork model | `clone3` (`CLONE_PIDFD \| CLONE_INTO_CGROUP \| CLONE_NEWIPC \| CLONE_NEWNS`) — no `CLONE_NEWUSER` (namespaces.user = false); no `CLONE_NEWPID` |
-| Wait/reap owner | `pidfd-handoff (broker → nixlingd)` |
-| In-NS mount-action | **apply** — swtpm state dir (`/var/lib/nixling/vms/<vm>/swtpm`) and runtime dir (`/run/nixling/vms/<vm>/`) bound RW; state dir is a **stable RW bind** (NOT tmpfs), preserving TPM 2.0 NVRAM + EK seed across daemon restarts |
+| Wait/reap owner | `pidfd-handoff (broker → d2bd)` |
+| In-NS mount-action | **apply** — swtpm state dir (`/var/lib/d2b/vms/<vm>/swtpm`) and runtime dir (`/run/d2b/vms/<vm>/`) bound RW; state dir is a **stable RW bind** (NOT tmpfs), preserving TPM 2.0 NVRAM + EK seed across daemon restarts |
 | Capability bounding set | `empty` — `capabilities = [ ]` (default; explicitly preserved per kernel-r2-4; do NOT add capability overrides without a dedicated ADR finding) |
 | Ambient capability set | `empty` |
 | Seccomp profile reference | `w1-swtpm` |
@@ -178,22 +178,22 @@ seccomp ref, short-lived pre-start flush process).
 | umask value | `0o007` (v1.1.2fu36: swtpm binds control socket with mode 0660; combined with the per-VM runtime dir default ACL, lets CH connect to `snd.sock` without operator intervention) |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** — `nixling.slice/<vm>/swtpm` |
+| CLONE_INTO_CGROUP usage | **yes** — `d2b.slice/<vm>/swtpm` |
 
 ---
 
 ### gpu (crosvm GPU sidecar)
 
 **Role ID**: `gpu`
-**Principal**: `nixling-<vm>-gpu`
+**Principal**: `d2b-<vm>-gpu`
 **Source profile**: `mkProfile` at `nixos-modules/minijail-profiles.nix`
 line ~367.
 
 | Field | Value |
 |-------|-------|
 | Fork model | `clone3` (`CLONE_PIDFD \| CLONE_INTO_CGROUP \| CLONE_NEWIPC \| CLONE_NEWNS`) — no `CLONE_NEWUSER`; no `CLONE_NEWPID` |
-| Wait/reap owner | `pidfd-handoff (broker → nixlingd)` |
-| In-NS mount-action | **apply** — device nodes (`/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`) bound into mount-NS; state dir and GPU runtime dir (`/run/nixling-gpu/<vm>/`) RW; Wayland socket (`/run/user/<waylandUid>/wayland-0`) bind-mounted inside sandbox at role-local path to prevent `../` traversal |
+| Wait/reap owner | `pidfd-handoff (broker → d2bd)` |
+| In-NS mount-action | **apply** — device nodes (`/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`) bound into mount-NS; state dir and GPU runtime dir (`/run/d2b-gpu/<vm>/`) RW; Wayland socket (`/run/user/<waylandUid>/wayland-0`) bind-mounted inside sandbox at role-local path to prevent `../` traversal |
 | Capability bounding set | `empty` — original matrix carried `CAP_SYS_NICE`; per-role smoke confirmed no NICE is required (virgl/venus/cross-domain run under `SCHED_OTHER`) |
 | Ambient capability set | `empty` |
 | Seccomp profile reference | `w1-gpu` |
@@ -201,30 +201,30 @@ line ~367.
 | umask value | `0o007` (v1.1.2fu36: crosvm GPU sidecar binds vhost-user socket at `gpu.sock`; umask 0o007 → mode 0660; named-user ACL entry grants CH rw access) |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** — `nixling.slice/<vm>/gpu` |
+| CLONE_INTO_CGROUP usage | **yes** — `d2b.slice/<vm>/gpu` |
 
 ---
 
 ### audio (vhost-device-sound sidecar)
 
 **Role ID**: `audio`
-**Principal**: `nixling-<vm>-snd`
+**Principal**: `d2b-<vm>-snd`
 **Source profile**: `mkProfile` at `nixos-modules/minijail-profiles.nix`
 line ~435.
 
 | Field | Value |
 |-------|-------|
 | Fork model | `clone3` (`CLONE_PIDFD \| CLONE_INTO_CGROUP \| CLONE_NEWIPC \| CLONE_NEWNS`) — no `CLONE_NEWUSER`; no `CLONE_NEWPID` |
-| Wait/reap owner | `pidfd-handoff (broker → nixlingd)` |
-| In-NS mount-action | **apply** — state dir (`/var/lib/nixling/vms/<vm>/state`) and audio runtime dir (`/run/nixling/vms/<vm>/`) RW; `/run/user/<waylandUid>/` bound RW so libpipewire `connect()` to the PipeWire socket succeeds inside the mount-NS (v1.1.1fu11 Option B) |
+| Wait/reap owner | `pidfd-handoff (broker → d2bd)` |
+| In-NS mount-action | **apply** — state dir (`/var/lib/d2b/vms/<vm>/state`) and audio runtime dir (`/run/d2b/vms/<vm>/`) RW; `/run/user/<waylandUid>/` bound RW so libpipewire `connect()` to the PipeWire socket succeeds inside the mount-NS (v1.1.1fu11 Option B) |
 | Capability bounding set | `CAP_NET_RAW` — vhost-device-sound's libpipewire client opens `AF_NETLINK` for the virtio-snd backend probe; `CAP_NET_RAW` gates that bind |
 | Ambient capability set | `empty` |
 | Seccomp profile reference | `w1-audio` |
 | FD lifetime | `close-on-exec` |
-| umask value | `0o007` (v1.1.2fu36: vhost-device-sound binds `snd.sock` at `/run/nixling/vms/<vm>/snd.sock`; umask 0o007 → mode 0660; per-VM default ACL makes CH's named-user entry effective) |
+| umask value | `0o007` (v1.1.2fu36: vhost-device-sound binds `snd.sock` at `/run/d2b/vms/<vm>/snd.sock`; umask 0o007 → mode 0660; per-VM default ACL makes CH's named-user entry effective) |
 | RLIMIT_NPROC value | `inherit` |
 | oom_score_adj value | `inherit` (0) |
-| CLONE_INTO_CGROUP usage | **yes** — `nixling.slice/<vm>/audio` |
+| CLONE_INTO_CGROUP usage | **yes** — `d2b.slice/<vm>/audio` |
 
 ## Consequences
 
@@ -279,5 +279,5 @@ Negative:
   update those rows in this ADR.
 - **D7 `waitid(P_PIDFD)` on broker side**: when D7 lands, the
   Wait/reap owner field for one-shot roles will change from
-  `pidfd-handoff (broker → nixlingd)` to `both`. The D7 commit
+  `pidfd-handoff (broker → d2bd)` to `both`. The D7 commit
   must update the affected rows.

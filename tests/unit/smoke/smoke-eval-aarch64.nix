@@ -10,14 +10,14 @@
 #
 # The matching positive failure case — `graphics.enable = true` or
 # `audio.enable = true` on aarch64-linux — is verified by the
-# `nixling-platform-gate` block in tests/assertions-eval.sh (not by
+# `d2b-platform-gate` block in tests/assertions-eval.sh (not by
 # this file; this file's job is to keep the "headless eval passes"
 # invariant green).
 #
 # Returns `system.build.toplevel`, just like the x86_64 smoke test.
 # `nix eval --raw -f` on the resulting attribute forces the full
 # module-system evaluation but does NOT trigger a build, which is
-# important because nixling's x86_64-only build inputs are not
+# important because d2b's x86_64-only build inputs are not
 # available on aarch64.
 #
 # Run via:
@@ -61,7 +61,7 @@ let
       ({ lib, ... }: {
         # Minimal NixOS baseline so the eval graph can resolve. Same
         # set as smoke-eval.nix — these knobs aren't exercised by
-        # nixling itself, they just make `system.build.toplevel`
+        # d2b itself, they just make `system.build.toplevel`
         # reachable without a real disk or bootloader.
         boot.loader.grub.enable = false;
         boot.loader.systemd-boot.enable = false;
@@ -88,14 +88,14 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
+        d2b.site = {
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
         # One env — exercises network.nix materialisation, the
         # route preflight unit, and the CIDR validation chain.
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
@@ -105,7 +105,7 @@ let
         # readability marker). The host.nix platform gate
         # lets this through; any future regression that adds an
         # unconditional graphics/audio import will surface here.
-        nixling.vms.headless-vm = {
+        d2b.vms.headless-vm = {
           enable = true;
           env = "work";
           index = 10;

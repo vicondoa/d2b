@@ -18,16 +18,16 @@ let
       })
     ];
 
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.demo = {
+    d2b.vms.demo = {
       enable = true;
       env = "work";
       index = 10;
@@ -44,7 +44,7 @@ let
 in
 {
   "vm-eval-overlays/guest-inherits-host-overlays" = {
-    expr = cfg.nixling._computed.demo.config.environment.etc."overlay-probe".text;
+    expr = cfg.d2b._computed.demo.config.environment.etc."overlay-probe".text;
     expected = "guest-overlay-visible";
   };
 }

@@ -1,9 +1,9 @@
 # `examples/with-observability` — workload VM plus native SigNoz
 
 This example is a complete, copy-pasteable NixOS configuration that
-turns on nixling observability end-to-end. The host enables
-`nixling.observability.enable = true`, `work-app` opts in with
-`nixling.vms.work-app.observability.enable = true`, and nixling
+turns on d2b observability end-to-end. The host enables
+`d2b.observability.enable = true`, `work-app` opts in with
+`d2b.vms.work-app.observability.enable = true`, and d2b
 auto-declares `sys-obs` with native SigNoz, ClickHouse, ZooKeeper, schema
 migrations, and the SigNoz OTel Collector.
 
@@ -19,14 +19,14 @@ host: demo
    └─ sys-obs (SigNoz http://10.40.0.10:8080, obs vsock CID 1000)
 
 work-app guest OTel collector
-  → /run/nixling/otel/otlp-egress.sock
+  → /run/d2b/otel/otlp-egress.sock
   → workload CH-vsock relay on host port 14317
   → sys-obs source-specific ingress port 14318
   → signoz-otel-collector
   → ClickHouse
 
 host OTel collector
-  → /run/nixling/otel/host-egress.sock
+  → /run/d2b/otel/host-egress.sock
   → broker-spawned OtelHostBridge
   → sys-obs source-specific ingress port 14317
   → signoz-otel-collector
@@ -49,8 +49,8 @@ host OTel collector
 2. Replace the bootloader, `fileSystems."/"`, and `machine-id` stubs in
    `configuration.nix` with your real host hardware configuration.
 3. Replace the `alice` placeholder user with your own login.
-4. Swap `nixling.url = "path:../.."` in `flake.nix` for a real ref, for
-   example `github:vicondoa/nixling/v1.0.0`.
+4. Swap `d2b.url = "path:../.."` in `flake.nix` for a real ref, for
+   example `github:vicondoa/d2b/v1.0.0`.
 5. Build and switch:
 
    ```bash
@@ -61,12 +61,12 @@ host OTel collector
 
 - The auto-declared `obs` env and `sys-obs` microVM are materialized.
 - `sys-obs` runs ClickHouse, ZooKeeper, SigNoz, SigNoz OTel Collector,
-  and source-specific `nixling-otel-vsock-in-*` relay services.
-- `work-app` runs `nixling-otel-collector.service` and
-  `nixling-otel-vsock-out.service`.
+  and source-specific `d2b-otel-vsock-in-*` relay services.
+- `work-app` runs `d2b-otel-collector.service` and
+  `d2b-otel-vsock-out.service`.
 - SigNoz is reachable from the host at `http://10.40.0.10:8080`.
 - The generated SigNoz root password is host-local under
-  `${nixling.site.stateDir}/observability/signoz-root-password`.
+  `${d2b.site.stateDir}/observability/signoz-root-password`.
 
 ## Validation
 

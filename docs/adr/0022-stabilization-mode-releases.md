@@ -10,7 +10,7 @@
 
 ## Context
 
-Nixling follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+D2b follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 Under that spec, a MINOR version increment signals backward-compatible
 changes. A **stabilization release** is a specific flavour of MINOR
 bump: it introduces no new public surface, carries no new feature work,
@@ -97,9 +97,9 @@ No v1.2.x tag is cut without a passing run of
 - Validates the functional sidecar probes listed in ADR 0023's
   lifecycle matrix: virtiofsd file-IO, TPM `tpm2_getrandom`, CH HTTP
   API liveness, CAP_NET_ADMIN bit-clear, pidfd-table snapshot, zero
-  zombies, `nixling host doctor --read-only` exit 0, and teardown
+  zombies, `d2b host doctor --read-only` exit 0, and teardown
   cleanliness.
-- Records the result in `${TMPDIR:-/tmp}/nixling-smoke-run-log.txt` as a single line:
+- Records the result in `${TMPDIR:-/tmp}/d2b-smoke-run-log.txt` as a single line:
   `<HEAD-SHA> <ISO-timestamp> {PASS|FAIL} {lite|full}`.
 
 Panel sub-agents verify the smoke gate at each panel round (I5) by

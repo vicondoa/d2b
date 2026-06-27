@@ -16,7 +16,7 @@ in
 
   microvm.cloud-hypervisor.extraArgs = lib.mkAfter [
     "--vhost-user-media"
-    "socket=/run/nixling-video/${vmName}/video.sock"
+    "socket=/run/d2b-video/${vmName}/video.sock"
   ];
 
   boot.extraModulePackages = [ virtioMediaModule ];

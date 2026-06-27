@@ -1,14 +1,14 @@
-# `nixling.vms.<vm>.usbip.*`
+# `d2b.vms.<vm>.usbip.*`
 
 > Reference for the `usbip` component module (YubiKey passthrough).
 > Source: [`nixos-modules/components/usbip.nix`](../../nixos-modules/components/usbip.nix)
 > Host-side wiring: [`nixos-modules/network.nix`](../../nixos-modules/network.nix), [`nixos-modules/host.nix`](../../nixos-modules/host.nix)
-> CLI integration: [`packages/nixling/src/lib.rs`](../../packages/nixling/src/lib.rs) (`nixling usb attach|detach|probe`). There is no bash helper for this surface.
+> CLI integration: [`packages/d2b/src/lib.rs`](../../packages/d2b/src/lib.rs) (`d2b usb attach|detach|probe`). There is no bash helper for this surface.
 
 ## What this component does
 
 Enables on-demand passthrough of a host-side YubiKey (USB vendor ID
-`1050`) into a VM via USBIP. When `nixling.site.yubikey.enable = true`
+`1050`) into a VM via USBIP. When `d2b.site.yubikey.enable = true`
 and some enabled VM in an env sets `usbip.yubikey = true`, the host
 materializes a broker-spawned per-env `usbipd` backend listening on TCP
 `<backendPort>` (usbipd has no `--host` flag, so it binds to
@@ -18,10 +18,10 @@ of a loopback bind but enforced via netfilter rather than by the
 socket). A broker-spawned per-env `socat` proxy binds exactly the env's
 uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd`, ships the
 `usbip` CLI, and advertises guestd's `UsbipImport` capability so
-`nixlingd` can import/detach through authenticated guest-control. The
+`d2bd` can import/detach through authenticated guest-control. The
 hot-plug ceremony is daemon-owned: host bind/unbind and firewall/proxy
 reconcile go through the privileged broker, while guest attach/detach goes
-through guestd. The CLI sends one intent to `nixlingd`; it never SSHes into
+through guestd. The CLI sends one intent to `d2bd`; it never SSHes into
 the guest for USBIP.
 
 The component itself only declares the **guest-side** wiring. All
@@ -38,11 +38,11 @@ USBIP state is reported as separate layers because they have different
 owners and remediation:
 
 - **Session claim** — the broker-owned per-busid lock under
-  `/run/nixling/locks/usbip/<busid>`. It records which VM owns the right
+  `/run/d2b/locks/usbip/<busid>`. It records which VM owns the right
   to expose the physical device for the current host boot/session. The claim
   survives VM stop/restart and daemon restart, but not host reboot because the
   backing path is under `/run`. Only explicit
-  `nixling usb detach <vm> <busid> --apply` releases a healthy claim during
+  `d2b usb detach <vm> <busid> --apply` releases a healthy claim during
   that host session.
 - **Active carrier** — transient host/guest state that can disappear across
   unplug, VM stop, daemon restart, or guest-control restart: the
@@ -59,22 +59,22 @@ the same-VM session claim for manual recovery. VM start reconciles same-VM
 session claims from the current host session after guest-control readiness by
 replaying host bind/proxy state and re-importing in the guest. Runtime absence,
 proxy/backend unavailability, or guest import unavailability degrades
-`nixling usb probe` / `nixling status` without pretending the row is healthy.
+`d2b usb probe` / `d2b status` without pretending the row is healthy.
 Required policy/topology failures remain fail-closed.
 
 ## Options (host-side)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.vms.<vm>.usbip.yubikey` | bool | `false` | YubiKey USBIP passthrough opt-in for this VM. Loads `vhci_hcd` in the guest and installs `usbip` so the USB CLI can redirect a plugged-in Yubico device. |
-| `nixling.vms.<vm>.usbip.busids` | list of string | `[]` | Exact USBIP busids the daemon should advertise for this VM in `host.json.environments[].usbipBusidLocks[].busIds`. Leave empty to preserve the legacy `pending` fallback for older fixtures. |
-| `nixling.host.usbip.allowlist` | list of `{ vendor, product }` | `[]` | Host-wide vendor:product policy copied into each `host.json.environments[].usbipBusidLocks[].vendorProductAllowlist` row. Use hex strings such as `0x1050` / `0x0407` to allow only specific hardware families even when busids change across replug events. |
+| `d2b.vms.<vm>.usbip.yubikey` | bool | `false` | YubiKey USBIP passthrough opt-in for this VM. Loads `vhci_hcd` in the guest and installs `usbip` so the USB CLI can redirect a plugged-in Yubico device. |
+| `d2b.vms.<vm>.usbip.busids` | list of string | `[]` | Exact USBIP busids the daemon should advertise for this VM in `host.json.environments[].usbipBusidLocks[].busIds`. Leave empty to preserve the legacy `pending` fallback for older fixtures. |
+| `d2b.host.usbip.allowlist` | list of `{ vendor, product }` | `[]` | Host-wide vendor:product policy copied into each `host.json.environments[].usbipBusidLocks[].vendorProductAllowlist` row. Use hex strings such as `0x1050` / `0x0407` to allow only specific hardware families even when busids change across replug events. |
 
 Site-level dependency:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.site.yubikey.enable` | bool | `true` | Host-side Yubikey support: Yubico udev rules for vendor `1050` (GROUP=kvm, MODE=0660, TAG+=uaccess). The `usbip-host` kernel module is loaded only when this option is on **and** at least one enabled VM sets `usbip.yubikey = true`. Set `false` on hosts that do not use YubiKeys — per-VM `usbip.yubikey = true` still pulls in the guest-side bits, but the host has no Yubikey-specific machinery loaded. |
+| `d2b.site.yubikey.enable` | bool | `true` | Host-side Yubikey support: Yubico udev rules for vendor `1050` (GROUP=kvm, MODE=0660, TAG+=uaccess). The `usbip-host` kernel module is loaded only when this option is on **and** at least one enabled VM sets `usbip.yubikey = true`. Set `false` on hosts that do not use YubiKeys — per-VM `usbip.yubikey = true` still pulls in the guest-side bits, but the host has no Yubikey-specific machinery loaded. |
 
 ## Options (guest-side propagation)
 
@@ -84,11 +84,11 @@ config by `host.nix` (`++ lib.optional vm'.usbip.yubikey
 
 ## Host-side resources created
 
-Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); materialized only when `nixling.site.yubikey.enable = true` and at least one enabled VM in that env sets `usbip.yubikey = true`):
+Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); materialized only when `d2b.site.yubikey.enable = true` and at least one enabled VM in that env sets `usbip.yubikey = true`):
 
-> There are no `nixling-sys-<env>-usbipd-{backend,proxy}` systemd
+> There are no `d2b-sys-<env>-usbipd-{backend,proxy}` systemd
 > units. The broker spawns backend/proxy runners under
-> `nixling.slice/sys-<env>/usbipd-*`, and the hardening shape
+> `d2b.slice/sys-<env>/usbipd-*`, and the hardening shape
 > documented below is enforced as the runner contract.
 >
 > `ModprobeIfAllowed{module: "usbip-host"}` runs before the first
@@ -115,7 +115,7 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > Successful `UsbipBind` broker audit records include a root-only forensics
 > projection: normalized VID/PID, a boolean `serialObserved`, and HMAC-SHA256
 > serial correlations when a serial descriptor exists. The HMAC keyring lives
-> under `${nixling.site.stateDir}/secrets/usb-audit-serial-hmac/` as
+> under `${d2b.site.stateDir}/secrets/usb-audit-serial-hmac/` as
 > root-only `current.key` plus optional `previous.key`. The broker reads the
 > files on each bind, so key reload is per-request; no non-root observability
 > unit receives key material through systemd credentials, environment variables,
@@ -127,9 +127,9 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > key IDs, active-key count, grace-window length, and the closed correlation
 > version.
 
-- **`nixling.slice/sys-<env>/usbipd-backend` runner** — runs
+- **`d2b.slice/sys-<env>/usbipd-backend` runner** — runs
   `usbipd -4 --tcp-port <backendPort>`. usbipd has no `--host` flag
-  so it binds to `0.0.0.0`; the broker-managed `inet nixling`
+  so it binds to `0.0.0.0`; the broker-managed `inet d2b`
   `input` chain drops non-loopback ingress to each backend port, so
   the effective path is host-local proxy → `127.0.0.1:<backendPort>`.
   Pre-spawn: host-prep DAG op `ModprobeIfAllowed{module:
@@ -137,7 +137,7 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
   mount + PID namespace with seccomp, `CAP_NET_RAW` only, masked host
   secret directories, a fresh procfs, a masked `/dev`, and only the
   locked USB device node visible.
-- **`nixling.slice/sys-<env>/usbipd-proxy` runner** —
+- **`d2b.slice/sys-<env>/usbipd-proxy` runner** —
   `socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr
   TCP:127.0.0.1:<backendPort>`. Requires + after the matching backend
   runner. `CapabilityBoundingSet = ""`. The listener is never wildcard
@@ -145,8 +145,8 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
   generic L4 TCP forwarder; it does not parse USBIP packets and cannot
   selectively identify one busid stream by itself.
 
-Firewall carve-outs (canonical `inet nixling` table per ADR 0013 +
-[`inet-nixling-chains.md`](./inet-nixling-chains.md)):
+Firewall carve-outs (canonical `inet d2b` table per ADR 0013 +
+[`inet-d2b-chains.md`](./inet-d2b-chains.md)):
 
 The broker emits these source-based carve-outs through the existing
 `UsbipBindFirewallRule` broker op. Single-busid revocation is allowed to
@@ -154,7 +154,7 @@ kill an established stream only after the firewall carve-out has been
 blocked or withdrawn; if the daemon cannot prove that ordering and an exact
 VM/proxy cleanup tuple, detach fails closed instead of killing the shared
 per-env proxy listener. The carve-outs land in the canonical `input` chain
-inside the `inet nixling` table BEFORE the generic TCP/3240 drop rule. The
+inside the `inet d2b` table BEFORE the generic TCP/3240 drop rule. The
 carve-out matrix is:
 
 - DROP source ≠ 127.0.0.1 to the env's backend loopback port.
@@ -175,10 +175,10 @@ uplink IPs or the uplink bridge-port anti-spoofing shape
 The legacy iptables `nixos-fw` rules (an interim implementation
 that inserted at position 1 in `nixos-fw` to win first-match
 against NixOS's generated accepts) were retired in favour of the
-daemon-owned broker `inet nixling` table.
+daemon-owned broker `inet d2b` table.
 Implementations MUST emit via the broker `UsbipBindFirewallRule`
 broker op so the carve-out ordering is enforced by
-`nixling_host::nftables::NftBatch::assert_carveout_ordering`.
+`d2b_host::nftables::NftBatch::assert_carveout_ordering`.
 The op is invoked by the host-prep DAG (before the
 `UsbipBackend` SpawnRunner starts for each env) and by the
 per-attach state machine (before `UsbipBindOneShot` SpawnRunner
@@ -187,18 +187,18 @@ runs); see [ADR 0018](../adr/0018-microvm-nix-removal.md) §
 
 Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 
-- When `nixling.site.yubikey.enable = true`, udev rules for vendor
+- When `d2b.site.yubikey.enable = true`, udev rules for vendor
   `1050` on `hidraw` + `usb` subsystems:
   `GROUP="kvm" MODE="0660" TAG+="uaccess"`.
 - `boot.kernelModules += [ "usbip-host" ]` only when
-  `nixling.site.yubikey.enable = true` **and** at least one enabled
+  `d2b.site.yubikey.enable = true` **and** at least one enabled
   VM sets `usbip.yubikey = true`.
 - The `/dev/kvm` lock-down rule (`KERNEL=="kvm", GROUP="kvm",
   MODE="0660"`) is unconditional and not part of the yubikey gate.
 
 ## Runtime prerequisite contract
 
-For `nixling usb attach <vm> <busid> --apply` to expose a device, all of
+For `d2b usb attach <vm> <busid> --apply` to expose a device, all of
 these must be true:
 
 1. the target VM is running and guest-control advertises USBIP status/import;
@@ -214,9 +214,9 @@ Stable operator remediation uses lifecycle verbs rather than direct lock or
 sysfs mutation. Keep procedural recovery in the how-to runbook:
 [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md).
 
-CLI contract (`nixling usb attach|detach|probe` in the Rust CLI):
+CLI contract (`d2b usb attach|detach|probe` in the Rust CLI):
 
-- Sends one apply/dry-run intent to `nixlingd`.
+- Sends one apply/dry-run intent to `d2bd`.
 - `attach --apply`: guestd first detaches any stale matching import, the
   broker binds/locks the host busid and reconciles firewall/proxy state, then
   guestd imports the device inside the VM.
@@ -234,7 +234,7 @@ CLI contract (`nixling usb attach|detach|probe` in the Rust CLI):
 The current proxy is per-env, not per-busid: a `socat` L4 listener forwards
 `<env.hostUplinkIp>:3240` to that env's loopback backend port. Synchronization
 therefore follows the conservative daemon plan in
-`packages/nixlingd/src/usbip_reconcile_state.rs`:
+`packages/d2bd/src/usbip_reconcile_state.rs`:
 
 1. normal attach or single-VM restart performs an optimistic backend/export
    refresh and verifies that the per-env proxy is listening;
@@ -263,7 +263,7 @@ The entire `components/usbip.nix` is two lines of payload:
 {
   boot.kernelModules = [ "vhci_hcd" ];
   environment.systemPackages = [ pkgs.linuxPackages.usbip ];
-  nixling.guestControl.usbipPath = ".../bin/usbip";
+  d2b.guestControl.usbipPath = ".../bin/usbip";
 }
 ```
 
@@ -293,7 +293,7 @@ The entire `components/usbip.nix` is two lines of payload:
 
 - Backend listens on TCP `<backendPort>` (bound to `0.0.0.0`
   because usbipd has no `--host` flag); the broker-managed nftables
-  `inet nixling` input chain explicitly drops non-loopback ingress to
+  `inet d2b` input chain explicitly drops non-loopback ingress to
   backend ports, making the backend effectively loopback-only even
   though the socket itself is all-interface-bound. Each env's proxy is
   a bounded `socat` instance with an empty capability set.
@@ -303,15 +303,15 @@ The entire `components/usbip.nix` is two lines of payload:
   the smallest set that lets `usbip bind` work without `sudo` for
   the launcher user. The `usbip bind/unbind` step itself is
   dispatched through the broker `SpawnRunner` runner on the per-env
-  DAG (`nixling.slice/sys-<env>/usbip-bind`), so no `sudo`
+  DAG (`d2b.slice/sys-<env>/usbip-bind`), so no `sudo`
   escalation is required.
-- The `nixling-<vm>-gpu` user is not in the kvm group strictly for
+- The `d2b-<vm>-gpu` user is not in the kvm group strictly for
   USB; it's there for `/dev/kvm`. USBIP traffic flows over TCP, not
   device-node ACLs.
 
 ## Failure-mode reference
 
-`nixling usb probe` is the stable read-only diagnostic surface. It reports
+`d2b usb probe` is the stable read-only diagnostic surface. It reports
 session claim state, active host carrier/bind/proxy state, guest import state,
 topology/policy state, degraded reasons, and copy-paste remediation commands.
 See [`cli-output/usb-probe.md`](./cli-output/usb-probe.md) for the JSON field
@@ -326,7 +326,7 @@ for operator procedures.
 - [Design / threat model](../explanation/design.md)
 - [Manifest schema](./manifest-schema.md) — `units.usbipBackend` /
   `units.usbipProxy` (per-env, not per-VM).
-- [CLI contract](./cli-contract.md) — `nixling usb attach|detach|probe` subcommands.
+- [CLI contract](./cli-contract.md) — `d2b usb attach|detach|probe` subcommands.
 - [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md) —
   operator recovery workflow.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —

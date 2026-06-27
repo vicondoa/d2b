@@ -1,0 +1,30 @@
+[package]
+name = "d2b-host-providers"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Host-side provider adapters (ADR 0032): LocalMicroVmProvider
+# (RuntimeProvider) and LocalCrossDomainWaylandProvider (DisplayProvider),
+# behavior-preserving wrappers over the existing d2b-host argv/plan
+# generators. This crate legitimately depends on d2b-host (it is the
+# host adapter); the dependency-direction gate does NOT treat it as a pure
+# contract crate, so the provider TRAIT crates never gain a host edge.
+[dependencies]
+d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+serde_json.workspace = true

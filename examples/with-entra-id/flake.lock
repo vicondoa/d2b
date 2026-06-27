@@ -47,7 +47,7 @@
     "home-manager": {
       "inputs": {
         "nixpkgs": [
-          "nixling",
+          "d2b",
           "nixpkgs"
         ]
       },
@@ -65,7 +65,7 @@
         "type": "github"
       }
     },
-    "nixling": {
+    "d2b": {
       "inputs": {
         "home-manager": "home-manager",
         "nixpkgs": [
@@ -101,7 +101,7 @@
     "root": {
       "inputs": {
         "entrablau": "entrablau",
-        "nixling": "nixling",
+        "d2b": "d2b",
         "nixpkgs": "nixpkgs"
       }
     }

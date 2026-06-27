@@ -3,7 +3,7 @@
   "docs_anchor": "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
   "exit_code": 78,
   "kind": "host-destroy-apply-error",
-  "observed_state": "host.tier == 0 / legacy but nixlingd.service was asked to tear the host down.",
+  "observed_state": "host.tier == 0 / legacy but d2bd.service was asked to tear the host down.",
   "remediation": "Use the NixOS module path on Tier-0 all-legacy hosts.",
   "what_was_checked": "Whether a Tier-0 all-legacy host is invoking the W3 destroy path."
 }

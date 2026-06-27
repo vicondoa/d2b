@@ -3,7 +3,7 @@ wall           cumulative     label
 00:00.974      00:00.974      shared rust toolchain bootstrap
 00:00.048      00:01.040      tests/tools/preflight-disk-space.sh
 00:01.589      00:02.712      nix-instantiate --parse
-00:06.298      00:09.025      shellcheck --severity=warning on all nixling shell scripts
+00:06.298      00:09.025      shellcheck --severity=warning on all d2b shell scripts
 00:00.793      00:09.835      readOnly + default + config trio lint
 01:01.164      01:11.019      nix flake check --no-build --all-systems
 00:18.083      01:29.117      tests/unit/smoke/smoke-eval.nix

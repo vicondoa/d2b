@@ -1,13 +1,13 @@
 # nix-unit cases migrated from tests/guest-config-containment-eval.sh.
 #
 # Eval-time containment gate for the per-VM guest-editable
-# `nixling.vms.<vm>.guestConfigFile`. That file is the guest-editable OS
+# `d2b.vms.<vm>.guestConfigFile`. That file is the guest-editable OS
 # layer (the surface the in-VM config-sync workflow edits) and MUST be
 # CONTAINED: it may set only guest OS options, never host-owned
-# `microvm.*` / `nixling.*` options. `assertions.nix` enforces this with a
+# `microvm.*` / `d2b.*` options. `assertions.nix` enforces this with a
 # hard assertion driven by `lib.nix`'s `guestConfigForbiddenNamespaces`
 # check, which evaluates the guest file over the real NixOS module set
-# (with `microvm` / `nixling` redeclared as detector options) and reports
+# (with `microvm` / `d2b` redeclared as detector options) and reports
 # any forbidden namespace the guest defines — by DEFINITION-EXISTENCE, so
 # imports / `builtins.toFile`-generated modules / `_file` spoofing are all
 # caught.
@@ -35,16 +35,16 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.vms.corp-vm = {
+    d2b.vms.corp-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -92,13 +92,13 @@ in
     expected = true;
   };
 
-  # --- guest sets nixling.*: rejected, naming the option ------------
-  "guest-config-containment/sets-nixling-fires" = {
-    expr = lib.hasInfix "may only set" (joined "sets-nixling.nix");
+  # --- guest sets d2b.*: rejected, naming the option ------------
+  "guest-config-containment/sets-d2b-fires" = {
+    expr = lib.hasInfix "may only set" (joined "sets-d2b.nix");
     expected = true;
   };
-  "guest-config-containment/sets-nixling-names-ssh-user" = {
-    expr = lib.hasInfix "nixling.sshUser" (joined "sets-nixling.nix");
+  "guest-config-containment/sets-d2b-names-ssh-user" = {
+    expr = lib.hasInfix "d2b.sshUser" (joined "sets-d2b.nix");
     expected = true;
   };
 

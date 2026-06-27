@@ -1,7 +1,7 @@
-# runner-shape-preflight — nixling-host runner_shape #[test]s.
+# runner-shape-preflight — d2b-host runner_shape #[test]s.
 # Successor of tests/runner-shape-preflight.sh: that gate only looped
-# `cargo test -p nixling-host --all-features --lib runner_shape::tests::<t>`
-# over these names (nixling-host's fake-backends is #[cfg(any(test, feature))]
+# `cargo test -p d2b-host --all-features --lib runner_shape::tests::<t>`
+# over these names (d2b-host's fake-backends is #[cfg(any(test, feature))]
 # so they run under the default `cargo test --workspace` pass in
 # tests/tools/rust-workspace-checks.sh). Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh.

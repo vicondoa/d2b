@@ -6,22 +6,22 @@ let
   realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
 in
 {
-  options.nixling._hostToolPackages = {
-    nixling = lib.mkOption {
+  options.d2b._hostToolPackages = {
+    d2b = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
       internal = true;
-      description = "Internal: resolved host nixling CLI package.";
+      description = "Internal: resolved host d2b CLI package.";
     };
 
-    nixlingd = lib.mkOption {
+    d2bd = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
       internal = true;
-      description = "Internal: resolved host nixlingd package.";
+      description = "Internal: resolved host d2bd package.";
     };
 
-    nixlingGatewayRuntime = lib.mkOption {
+    d2bGatewayRuntime = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
       internal = true;
@@ -29,10 +29,10 @@ in
     };
   };
 
-  options.nixling.gateways = lib.mkOption {
+  options.d2b.gateways = lib.mkOption {
     description = ''
       Realm gateway guests. Each enabled entry auto-declares a dedicated
-      nixling VM that holds realm provider/relay credentials inside the guest
+      d2b VM that holds realm provider/relay credentials inside the guest
       boundary. The host declaration carries only non-secret coordinates and
       state-directory paths; plaintext credentials are never represented in the
       host Nix store.
@@ -60,7 +60,7 @@ in
           type = lib.types.str;
           example = "work";
           description = ''
-            Existing nixling env the gateway VM joins. The gateway lives inside
+            Existing d2b env the gateway VM joins. The gateway lives inside
             the same isolated env as the workloads it fronts.
           '';
         };
@@ -86,20 +86,20 @@ in
 
         stateDir = lib.mkOption {
           type = lib.types.str;
-          default = "/var/lib/nixling/gateways/${name}";
+          default = "/var/lib/d2b/gateways/${name}";
           description = ''
             Gateway guest runtime state directory. Must live under
-            `nixling.site.stateDir`, outside the per-VM state root; assertions
+            `d2b.site.stateDir`, outside the per-VM state root; assertions
             reject `/nix/store`, `..` path components, trailing slashes, or
             secret-looking inline values. The host does not manage gateway
             credential files or their sealing key; the gateway guest creates
-            and owns that runtime state as `nixlingd:nixlingd`.
+            and owns that runtime state as `d2bd:d2bd`.
           '';
         };
 
         credentialPath = lib.mkOption {
           type = lib.types.str;
-          default = "/var/lib/nixling/gateways/${name}/credential.sealed.json";
+          default = "/var/lib/d2b/gateways/${name}/credential.sealed.json";
           description = ''
             Guest runtime path for the sealed gateway credential envelope. This
             is not plaintext Nix data. Assertions require it to
@@ -110,7 +110,7 @@ in
 
         sealKeyPath = lib.mkOption {
           type = lib.types.str;
-          default = "/var/lib/nixling/gateways/${name}/seal.key";
+          default = "/var/lib/d2b/gateways/${name}/seal.key";
           description = ''
             Guest-local sealing key path for the encrypted gateway credential
             envelope. The key is created by the in-guest enrollment flow with
@@ -140,7 +140,7 @@ in
           entity = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "hc-nixling-display";
+            example = "hc-d2b-display";
             description = "Azure Relay hybrid-connection entity name (non-secret).";
           };
         };
@@ -167,14 +167,14 @@ in
           resourceGroup = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "rg-nixling-centralus";
+            example = "rg-d2b-centralus";
             description = "Azure resource group containing the ACA sandbox group (non-secret).";
           };
 
           sandboxGroup = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "casbx-nixling-demo";
+            example = "casbx-d2b-demo";
             description = "ACA sandbox group name (non-secret).";
           };
 
@@ -199,21 +199,21 @@ in
           image = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "registry.example.azurecr.io/nixling-wayland:mi";
+            example = "registry.example.azurecr.io/d2b-wayland:mi";
             description = "Container image reference registered as an ACA disk image (non-secret).";
           };
 
           diskName = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "nixling-wayland-mi";
+            example = "d2b-wayland-mi";
             description = "Stable ACA disk image label/name used for idempotent disk reuse.";
           };
 
           managedIdentityResourceId = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/nixling";
+            example = "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/d2b";
             description = ''
               Optional user-assigned managed identity resource id used by ACA
               to pull the configured private image. This is an Azure resource

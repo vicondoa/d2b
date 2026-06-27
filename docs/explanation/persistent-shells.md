@@ -1,12 +1,12 @@
 # Persistent shell sessions
 
-> Diataxis: explanation. Conceptual model for `nixling shell`.
+> Diataxis: explanation. Conceptual model for `d2b shell`.
 
-`nixling shell` attaches an admin's terminal to a named shell session for a
+`d2b shell` attaches an admin's terminal to a named shell session for a
 target workload. The user-facing surface is:
 
 ```text
-nixling shell <target> [ACTION]
+d2b shell <target> [ACTION]
 ```
 
 where `ACTION` is `attach`, `list`, `detach`, or `kill`. Omitting `ACTION`
@@ -28,21 +28,21 @@ It is not expected to survive:
 
 - VM reboot or target workload recreation;
 - shell-pool daemon restart or loss;
-- explicit `nixling shell <target> kill --name <name>`;
+- explicit `d2b shell <target> kill --name <name>`;
 - `exit` or `Ctrl-D` inside the shell.
 
-This is intentionally different from `nixling vm exec -it`, whose command is
+This is intentionally different from `d2b vm exec -it`, whose command is
 connection-owned and exits with the command's status.
 
 ## Local dispatch and network surface
 
-The host CLI connects to the local `nixlingd` public socket for local targets.
+The host CLI connects to the local `d2bd` public socket for local targets.
 For gateway-backed `list`, `detach`, and `kill`, it enters the realm trust
-boundary by running the same `nixling shell <target> ...` command inside the
+boundary by running the same `d2b shell <target> ...` command inside the
 gateway VM over the typed guest-control exec path. The host still does not load
 realm credentials or provider transports. Gateway-backed interactive attach
 fails closed on the host facade; operators can enter the realm gateway and run
-`nixling shell <target>` there until the semantic ADR 0039 attach stream lands.
+`d2b shell <target>` there until the semantic ADR 0039 attach stream lands.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing

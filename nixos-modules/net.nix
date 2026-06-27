@@ -1,6 +1,6 @@
-# Guest-side baseline for nixling per-env net VMs.
+# Guest-side baseline for d2b per-env net VMs.
 #
-# Auto-instantiated by network.nix for each `nixling.envs.<env>`.
+# Auto-instantiated by network.nix for each `d2b.envs.<env>`.
 # The env's metadata + extraNetConfig come through specialArgs
 # as `envMeta` and `envExtraConfig`.
 #
@@ -103,7 +103,7 @@ in
   networking.nftables = {
     enable = true;
     ruleset = ''
-      # IPv6 default-drop. nixling is IPv4-only by construction
+      # IPv6 default-drop. d2b is IPv4-only by construction
       # (bridges, dnsmasq, hostBlocklist CIDRs are all v4); explicit
       # drop on every chain in the `ip6 filter` table closes the door
       # on any v6 traffic that may have slipped past the guest's
@@ -148,7 +148,7 @@ in
 
           # Opt-in same-env east-west traffic. This complements the
           # host bridge's `Isolated = false` path when
-          # `nixling.envs.<env>.lan.allowEastWest = true`.
+          # `d2b.envs.<env>.lan.allowEastWest = true`.
           ${lib.optionalString m.allowEastWest ''
           iifname "eth1" oifname "eth1" ct state new accept
           ''}
@@ -375,7 +375,7 @@ in
 
   # Small VM. No graphics, no TPM, no usbip — just routing.
   # The `microvm.shares` block (read-only /nix/store via virtiofs) is
-  # injected by modules/nixling/store.nix as a per-VM hardlink farm so
+  # injected by modules/d2b/store.nix as a per-VM hardlink farm so
   # this net VM only sees its own closure.
   microvm = {
     hypervisor = lib.mkDefault "cloud-hypervisor";
@@ -408,16 +408,16 @@ in
   # host for the rare cases recovery needs it.
   services.openssh.settings.PermitRootLogin = lib.mkForce "prohibit-password";
   # Authorized keys for root in the net VM come from
-  # `nixling.site.userAuthorizedKeys` via the `nixling-load-host-keys`
+  # `d2b.site.userAuthorizedKeys` via the `d2b-load-host-keys`
   # service (declared in base.nix); we keep
   # the keyFiles list empty here so a stale public-flake key never
   # accidentally winds up trusted.
   users.users.root.openssh.authorizedKeys.keyFiles = [ ];
 
-  # The nixling-managed root SSH key + any consumer-supplied
-  # `nixling.site.userAuthorizedKeys` are injected at boot by the
-  # guest's `nixling-load-host-keys.service` (see base.nix), which
-  # reads them from the virtiofs share at `/run/nixling-host-keys/`.
+  # The d2b-managed root SSH key + any consumer-supplied
+  # `d2b.site.userAuthorizedKeys` are injected at boot by the
+  # guest's `d2b-load-host-keys.service` (see base.nix), which
+  # reads them from the virtiofs share at `/run/d2b-host-keys/`.
   # At NixOS module-eval time, root has neither password nor
   # authorized_keys — that would normally trip the
   # `users.allowNoPasswordLogin` assertion. Set the flag here with

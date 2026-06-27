@@ -1,8 +1,8 @@
-# `nixling auth status` output
+# `d2b auth status` output
 
 Schema: [`auth-status.schema.json`](./auth-status.schema.json)
 
-`nixling auth status --json` reports how the daemon maps the current
+`d2b auth status --json` reports how the daemon maps the current
 caller: role, socket reachability/version, the allowed subcommand set,
 and explicit denial hints.
 
@@ -11,7 +11,7 @@ and explicit denial hints.
 | Field | Type | Meaning | Stability |
 | --- | --- | --- | --- |
 | `role` | string enum | One of `none`, `launcher`, or `admin`. | Stable wire contract. |
-| `publicSocket.path` | string | Public socket path, normally `/run/nixling/public.sock`. | Stable wire contract. |
+| `publicSocket.path` | string | Public socket path, normally `/run/d2b/public.sock`. | Stable wire contract. |
 | `publicSocket.reachable` | boolean | Whether the daemon answered the reachability probe. | Stable wire contract. |
 | `publicSocket.serverVersion` | string | Daemon-reported implementation version. | Stable wire contract. |
 | `publicSocket.selectedVersion` | string | Protocol version selected by handshake negotiation. | Stable wire contract. |
@@ -35,12 +35,12 @@ not silently change the underlying authorization decision.
 ## Human example
 
 ```text
-$ nixling auth status
+$ d2b auth status
 role: launcher
-public socket: /run/nixling/public.sock (reachable, server=0.2.0-w2, selected=0.2.0)
+public socket: /run/d2b/public.sock (reachable, server=0.2.0-w2, selected=0.2.0)
 allowed commands: auth status, host check, list, status
 denied commands:
-- audit: requires admin role in nixling.site.adminUsers
+- audit: requires admin role in d2b.site.adminUsers
 ```
 
 ## JSON example
@@ -49,7 +49,7 @@ denied commands:
 {
   "role": "launcher",
   "publicSocket": {
-    "path": "/run/nixling/public.sock",
+    "path": "/run/d2b/public.sock",
     "reachable": true,
     "serverVersion": "0.2.0-w2",
     "selectedVersion": "0.2.0"
@@ -63,7 +63,7 @@ denied commands:
   "deniedCommands": [
     {
       "command": "audit",
-      "reason": "requires admin role in nixling.site.adminUsers"
+      "reason": "requires admin role in d2b.site.adminUsers"
     }
   ]
 }

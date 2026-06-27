@@ -1,9 +1,9 @@
-# `nixling host doctor` — probe reference
+# `d2b host doctor` — probe reference
 
 **Diataxis category:** reference.
 
-> Read-only diagnostic probes run by `nixling host doctor --read-only`.
-> Implementation: [`packages/nixling/src/doctor.rs`](../../packages/nixling/src/doctor.rs).
+> Read-only diagnostic probes run by `d2b host doctor --read-only`.
+> Implementation: [`packages/d2b/src/doctor.rs`](../../packages/d2b/src/doctor.rs).
 
 Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 `1` = at least one warn (no fail), `2` = at least one fail.
@@ -17,7 +17,7 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 | Field | Value |
 |-------|-------|
 | Invariant | Broker socket is reachable |
-| Source | `connect(AF_UNIX, SOCK_SEQPACKET)` to `NIXLING_BROKER_SOCKET` |
+| Source | `connect(AF_UNIX, SOCK_SEQPACKET)` to `D2B_BROKER_SOCKET` |
 | Pass | Socket connect succeeds, or the socket exists and correctly denies direct unprivileged access |
 | Fail | Socket is absent, is not bound in `/proc/net/unix`, or connect fails for a reason other than permission denied |
 
@@ -26,7 +26,7 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 | Field | Value |
 |-------|-------|
 | Invariant | Public daemon socket is reachable |
-| Source | `connect(AF_UNIX, SOCK_SEQPACKET)` to `NIXLING_PUBLIC_SOCKET` |
+| Source | `connect(AF_UNIX, SOCK_SEQPACKET)` to `D2B_PUBLIC_SOCKET` |
 | Pass | Socket connect succeeds |
 | Warn | Socket connect fails (non-fatal for read-only doctor) |
 
@@ -35,7 +35,7 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 | Field | Value |
 |-------|-------|
 | Invariant | Prometheus text-format scrape endpoint returns HTTP 200 |
-| Source | `GET /metrics` to `NIXLING_METRICS_URL` (default `http://127.0.0.1:9101/metrics`) |
+| Source | `GET /metrics` to `D2B_METRICS_URL` (default `http://127.0.0.1:9101/metrics`) |
 | Pass | HTTP 200, or connection failure while the optional scrape endpoint is not serving |
 | Warn | Non-200 HTTP response from a reachable metrics server |
 
@@ -114,10 +114,10 @@ VM/role details remain in `data.issues[]` only.
 | Fail | Graceful shutdown timed out, empty-VMM cleanup failed, or a resource-holding runner/cgroup stayed populated after bounded cleanup |
 
 Remediation distinguishes guest-level and host-level failures. Guest shutdown
-timeouts point to fixing the in-guest OS and retrying `nixling vm stop <vm>
---apply`, or intentionally bypassing the wait with `nixling vm stop <vm>
+timeouts point to fixing the in-guest OS and retrying `d2b vm stop <vm>
+--apply`, or intentionally bypassing the wait with `d2b vm stop <vm>
 --force --apply`. Empty-VMM cleanup failures point to host runner cleanup and
-may require `nixling host doctor` plus a focused force stop; they are not
+may require `d2b host doctor` plus a focused force stop; they are not
 reported as guest OS failures.
 
 ---
@@ -193,9 +193,9 @@ will never remain in state `Z` for more than one SIGCHLD delivery
 interval.
 
 **Broker replay-buffer depth**: the D7 `ChildReaped` replay-buffer depth
-(in-memory ring of up to 256 events, used to handle nixlingd
+(in-memory ring of up to 256 events, used to handle d2bd
 disconnect/reconnect) is **not yet observable** via a stable CLI command
-(`nixling-priv-broker --report-state` is not implemented in v1.2). The
+(`d2b-priv-broker --report-state` is not implemented in v1.2). The
 `data.bufferDepth` field in the JSON output is always `null` for v1.2.
 When D7 fully lands the IPC mechanism, this field will carry the actual
 depth and the probe will add Warn (buffer ≥ 200 of 256) and Fail (buffer
@@ -213,7 +213,7 @@ are gone (already reaped) are silently skipped.
 
 | Field | Value |
 |-------|-------|
-| Invariant | Every declared nixling bridge has `net.ipv6.conf.<bridge>.disable_ipv6 = 1` |
+| Invariant | Every declared d2b bridge has `net.ipv6.conf.<bridge>.disable_ipv6 = 1` |
 | Closes | D8 — bridge IPv6 sysctl boot-time application and persistence guard |
 | Source data | `sysctl -n net.ipv6.conf.<bridge>.disable_ipv6` for each bridge discovered from `<daemon-state-dir>/envs.json` (or `/sys/class/net/` fallback) |
 | Pass | All discovered bridges return `1` |
@@ -226,10 +226,10 @@ are gone (already reaped) are silently skipped.
    successfully (even with an empty `envs` list), the sysfs fallback
    is suppressed.
 2. If `envs.json` is absent or unparseable: scan `/sys/class/net/` for
-   interfaces matching the nixling naming pattern `br-<env>-lan` or
+   interfaces matching the d2b naming pattern `br-<env>-lan` or
    `br-<env>-up`.
 
-**Why IPv6 must be disabled on nixling bridges**: nixling bridges carry
+**Why IPv6 must be disabled on d2b bridges**: d2b bridges carry
 L2 frames between the host tap and the per-env `net VM`'s uplink. IPv6
 link-local autoconfiguration (`fe80::/10`) on the bridge would allow the
 host kernel to respond to NDP solicitations destined for VM traffic,
@@ -247,7 +247,7 @@ with a descriptive error rather than Fail.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `NIXLING_BROKER_SOCKET` | `/run/nixling/priv.sock` | Override broker socket path |
-| `NIXLING_PUBLIC_SOCKET` | `/run/nixling/public.sock` | Override public socket path |
-| `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state` | Override daemon state directory |
-| `NIXLING_METRICS_URL` | `http://127.0.0.1:9101/metrics` | Override daemon metrics scrape URL |
+| `D2B_BROKER_SOCKET` | `/run/d2b/priv.sock` | Override broker socket path |
+| `D2B_PUBLIC_SOCKET` | `/run/d2b/public.sock` | Override public socket path |
+| `D2B_DAEMON_STATE_DIR` | `/var/lib/d2b/daemon-state` | Override daemon state directory |
+| `D2B_METRICS_URL` | `http://127.0.0.1:9101/metrics` | Override daemon metrics scrape URL |

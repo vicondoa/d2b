@@ -13,7 +13,7 @@
 # (which flake.checks.<sys>.guest-control-vsock already builds for the
 # positive "base" scenario) by importing it with a synthetic `flake` shim
 # whose `inputs.nixpkgs.lib.nixosSystem` routes through the harness `mkEval`
-# (== nixosSystem with the nixling module set). This keeps the eval 100%
+# (== nixosSystem with the d2b module set). This keeps the eval 100%
 # faithful to the retired bash gate's `nix eval` of each scenario while
 # staying hermetic (no `builtins.getFlake`). The positive "base" scenario
 # asserts the exact evidence JSON; each override scenario asserts the eval
@@ -42,7 +42,7 @@ in
   # --- base: CID/socket parity, CID ladder, tmpfiles, readiness ------
   "guest-control-vsock/base-positive" = {
     expr = vsock "base";
-    expected = "{\"alphaArgv\":[\"cid=110,socket=/var/lib/nixling/vms/alpha-vm/vsock.sock\"],\"betaCid\":1110,\"legacyCid\":9723643,\"netCid\":101,\"obsCid\":1000,\"vsockCid\":110,\"vsockHostSocket\":\"/var/lib/nixling/vms/alpha-vm/vsock.sock\"}";
+    expected = "{\"alphaArgv\":[\"cid=110,socket=/var/lib/d2b/vms/alpha-vm/vsock.sock\"],\"betaCid\":1110,\"legacyCid\":9723643,\"netCid\":101,\"obsCid\":1000,\"vsockCid\":110,\"vsockHostSocket\":\"/var/lib/d2b/vms/alpha-vm/vsock.sock\"}";
   };
 
   # --- override guards: each must reject at eval time ----------------

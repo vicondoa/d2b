@@ -1,3 +1,3 @@
 { pkgs, self, system }:
 
-self.packages.${system}.nixling-guestd-static
+self.packages.${system}.d2b-guestd-static

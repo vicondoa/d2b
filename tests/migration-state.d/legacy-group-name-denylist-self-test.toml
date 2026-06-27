@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist_rejects_forbidden_line (negative coverage: a forbidden legacy launcher group-name reference in a non-allowlisted source path is flagged, while allowlisted migration-tombstone lines are not); gated via the NL_FIXTURES contract step in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist_rejects_forbidden_line (negative coverage: a forbidden legacy launcher group-name reference in a non-allowlisted source path is flagged, while allowlisted migration-tombstone lines are not); gated via the D2B_FIXTURES contract step in tests/tools/rust-workspace-checks.sh"]

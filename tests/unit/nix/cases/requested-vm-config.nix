@@ -5,14 +5,14 @@ let
     (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
   ];
   cfg = requested.config;
-  vm = cfg.nixling.vms."dark-live";
-  hostJson = cfg.nixling._bundle.hostJson.data;
-  processes = cfg.nixling._bundle.processesJson.data.vms;
+  vm = cfg.d2b.vms."dark-live";
+  hostJson = cfg.d2b._bundle.hostJson.data;
+  processes = cfg.d2b._bundle.processesJson.data.vms;
   darkProcess = lib.findFirst (entry: entry.vm == "dark-live") null processes;
   darkQemuNode = lib.findFirst (node: node.id == "qemu-media") null darkProcess.nodes;
   netProcess = lib.findFirst (entry: entry.vm == "sys-dark-net") null processes;
   netCloudHypervisorNode = lib.findFirst (node: node.id == "cloud-hypervisor") null netProcess.nodes;
-  kdl = cfg.environment.etc."nixling/niri-vm-borders.kdl".text;
+  kdl = cfg.environment.etc."d2b/niri-vm-borders.kdl".text;
   rawArtifactText = builtins.toJSON {
     inherit (hostJson) qemuMedia vmRuntimes;
     niri = kdl;
@@ -26,7 +26,7 @@ in
 
   "requested-vm-config/dark-env-declared" = {
     expr = {
-      inherit (cfg.nixling.envs.dark) enable lanSubnet uplinkSubnet;
+      inherit (cfg.d2b.envs.dark) enable lanSubnet uplinkSubnet;
     };
     expected = {
       enable = true;
@@ -42,10 +42,10 @@ in
       bootDriveSlot = vm.qemuMedia.bootDrive.slot;
       qemuHypervisorService =
         lib.findFirst (service: service.role == "hypervisor") null
-          cfg.nixling.manifest."dark-live".runtime.services;
+          cfg.d2b.manifest."dark-live".runtime.services;
       cloudHypervisorService =
         lib.findFirst (service: service.role == "hypervisor") null
-          cfg.nixling.manifest."sys-dark-net".runtime.services;
+          cfg.d2b.manifest."sys-dark-net".runtime.services;
       processNodes = {
         qemu = {
           inherit (darkQemuNode) id role;
@@ -154,7 +154,7 @@ in
         bootHasStartSelector = boot.usbSelector.byIdName != null;
         backupHotplugSourcePresent = backup != null && backup.sourceKind == "physical-usb";
         qemuRuntimeUsbHotplug =
-          cfg.nixling.manifest."dark-live".runtime.operationCapabilities.media.usbHotplug;
+          cfg.d2b.manifest."dark-live".runtime.operationCapabilities.media.usbHotplug;
       };
     expected = {
       bootHasStartSelector = true;
@@ -188,7 +188,7 @@ in
   "requested-vm-config/purple-qemu-media-niri-border" = {
     expr =
       lib.hasInfix "// Borders for qemu-media VM host window: dark-live" kdl
-      && lib.hasInfix ''match app-id=r#"^nixling\.dark-live\."#'' kdl
+      && lib.hasInfix ''match app-id=r#"^d2b\.dark-live\."#'' kdl
       && lib.hasInfix ''active-color "#301934"'' kdl;
     expected = true;
   };

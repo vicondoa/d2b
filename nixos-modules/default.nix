@@ -1,4 +1,4 @@
-# nixling: a generic framework for declaring microVMs on this host.
+# d2b: a generic framework for declaring microVMs on this host.
 #
 # This module is the public entry point — pulled in by
 # `nixosModules.default = import ./nixos-modules { inherit inputs; }`
@@ -38,15 +38,15 @@
     # host-otel-relay-acl.nix retired per ADR 0018.
     # The OTel host-bridge + per-VM relay ACL contract moved into the
     # broker pre-spawn pipeline (`SpawnRunner{role: OtelHostBridge}`
-    # in `packages/nixling-priv-broker/src/runtime.rs`). The retired
+    # in `packages/d2b-priv-broker/src/runtime.rs`). The retired
     # module file is kept as a stub for one release for diff
     # readability; consumers should not import it directly. A future
     # commit deletes the stub file outright.
     # ./host-otel-relay-acl.nix
     # ./vms.nix is INTENTIONALLY OMITTED from the public flake — VM
     # registrations are consumer-specific. Downstream users declare
-    # their VMs via `nixling.vms.<name> = ...` in their own NixOS
-    # module, which is merged into nixling.vms here via option-system
+    # their VMs via `d2b.vms.<name> = ...` in their own NixOS
+    # module, which is merged into d2b.vms here via option-system
     # semantics. There is no public file with example VMs (yet —
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
@@ -76,10 +76,10 @@
   # the sibling `vicondoa/entrablau.nix` flake. Consumers bring
   # it in per-VM
   #
-  #   nixling.vms.<vm>.config.imports = [
+  #   d2b.vms.<vm>.config.imports = [
   #     inputs.entrablau.nixosModules.default
   #   ];
   #
-  # That keeps the himmelblau NixOS module out of nixling's eval
+  # That keeps the himmelblau NixOS module out of d2b's eval
   # graph entirely.
 }

@@ -1,7 +1,7 @@
 error: host-check-error
   code: missing-group
   exit_code: 1
-  what_was_checked: Whether the `nixling` group exists on the host.
-  observed_state: getent group nixling returned nothing.
-  remediation: Create the group via the NixOS module (it manages users.groups.nixling).
+  what_was_checked: Whether the `d2b` group exists on the host.
+  observed_state: getent group d2b returned nothing.
+  remediation: Create the group via the NixOS module (it manages users.groups.d2b).
   docs_anchor: docs/reference/error-codes.md#missing-group

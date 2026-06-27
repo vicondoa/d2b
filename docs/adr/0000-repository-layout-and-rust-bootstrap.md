@@ -14,11 +14,11 @@ The v0.4.0 baseline is a NixOS-host framework organized around
 NixOS users and sibling flakes, so W0a must add Rust structure without
 moving or renaming the existing public surface.
 
-The existing bash `nixling` CLI and systemd-backed lifecycle remain the
+The existing bash `d2b` CLI and systemd-backed lifecycle remain the
 only user-facing implementation before W0a. The portability plan needs a
 Rust control-plane bootstrap, but the W0a binaries are only stubs that
 prove layout, packaging, and gates; they must not create sockets,
-request authorization, or write `/run/nixling` artifacts.
+request authorization, or write `/run/d2b` artifacts.
 
 The plan also calls out `docs/reference/cli-contract.md` as the stable
 contract a future Rust CLI must match. Keeping Rust crates under a
@@ -38,13 +38,13 @@ accepted decisions instead of relying on one large portability plan.
    `rust-toolchain.toml` lives at `packages/rust-toolchain.toml`, and
    every cargo invocation in CI and docs uses
    `--manifest-path packages/Cargo.toml` or `(cd packages && cargo ...)`.
-3. W0a workspace members are `nixling-core`, `nixling-contracts`, `xtask`,
-   `nixling`, and `nixlingd`.
+3. W0a workspace members are `d2b-core`, `d2b-contracts`, `xtask`,
+   `d2b`, and `d2bd`.
 4. The workspace sets `unsafe_code = "forbid"`; per-crate exceptions are
    allowed only through future ADRs.
-5. The W0a `nixling` and `nixlingd` binaries are version-stub binaries
-   with no sockets, no authorization, and no `/run/nixling` artifacts.
-6. The v0.4.0 bash CLI remains the only user-facing nixling entry point,
+5. The W0a `d2b` and `d2bd` binaries are version-stub binaries
+   with no sockets, no authorization, and no `/run/d2b` artifacts.
+6. The v0.4.0 bash CLI remains the only user-facing d2b entry point,
    and the flake exposes Rust crates only as
    `checks.<system>.rust-*` until W2.
 7. `docs/adr/` is the repository home for architecture decision records.

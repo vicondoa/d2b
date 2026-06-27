@@ -4,11 +4,11 @@ Schema: [`storage.json`](./storage.json)
 
 `storage.json` is the private storage lifecycle contract selected by
 [ADR 0034](../../adr/0034-storage-lifecycle-restart-and-synchronization.md).
-It inventories nixling-managed paths, their lifecycle, owners, ACL posture,
+It inventories d2b-managed paths, their lifecycle, owners, ACL posture,
 cleanup policy, restart/adoption policy, degraded-state taxonomy, and static
 remediation IDs.
 
-The artifact is private (`root:nixlingd` `0640`) and is broker authority
+The artifact is private (`root:d2bd` `0640`) and is broker authority
 only when referenced through opaque bundle ids. Daemon-owned degraded ledgers
 and operator-facing status output are diagnostics, not privileged repair
 authority.
@@ -16,8 +16,8 @@ authority.
 ## Top-level fields
 
 - `schemaVersion` — schema version for this artifact.
-- `roots` — declared root directories such as `/etc/nixling`,
-  `/var/lib/nixling`, and `/run/nixling`.
+- `roots` — declared root directories such as `/etc/d2b`,
+  `/var/lib/d2b`, and `/run/d2b`.
 - `paths` — storage path specs with kind, lifecycle, owner/group/mode,
   access/default ACLs, cleanup/repair/restart/adoption policy, sensitivity,
   and invariants.

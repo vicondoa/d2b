@@ -16,7 +16,7 @@ normalize_for_local_diff() {
   jq 'del(._comment)
     | .kernel_version.detail = "<expected-to-differ: running kernel>"
     | .nftables.detail = "<expected-to-differ: command version/path>"
-    | .nftables_table_nixling.detail = "<expected-to-differ: local nft state>"
+    | .nftables_table_d2b.detail = "<expected-to-differ: local nft state>"
     | .firewalld_coexistence.detail = "<expected-to-differ: local firewall tools>"
     | .network_manager_unmanaged.detail = "<expected-to-differ: local NetworkManager state>"
     | .bridge_tap_port_flag_readback.detail = "<expected-to-differ: local ip/jq capability>"

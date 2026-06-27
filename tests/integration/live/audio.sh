@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2126
-# Layer-2 audio tests for nixling.
+# Layer-2 audio tests for d2b.
 #
 # Each `test_*` is one function. Idempotent. Safe to re-run on the
 # live host. Each test cleans up after itself.
 #
 # Usage:
-#   modules/nixling/tests/integration/live/audio.sh                 # full run
-#   modules/nixling/tests/integration/live/audio.sh --quick         # smoke subset
-#   modules/nixling/tests/integration/live/audio.sh --only test_X   # one test
-#   modules/nixling/tests/integration/live/audio.sh --list
+#   modules/d2b/tests/integration/live/audio.sh                 # full run
+#   modules/d2b/tests/integration/live/audio.sh --quick         # smoke subset
+#   modules/d2b/tests/integration/live/audio.sh --only test_X   # one test
+#   modules/d2b/tests/integration/live/audio.sh --list
 #
 # Tests that need a running audio-enabled VM auto-SKIP when none is up.
 #
@@ -18,24 +18,24 @@
 #     during this session (the rebuild's user-units reload dropped
 #     ALSA card visibility). A pipewire/wireplumber restart recovered.
 #     We want regression coverage so the next ambient breakage gets
-#     caught by `nixling-test-audio`, not by the user noticing silence.
+#     caught by `d2b-test-audio`, not by the user noticing silence.
 #
 # Layers tested:
 #   1. Host audio surface (pipewire/wireplumber)
 #       - The host has at least one Audio Device, at least one Sink,
 #         at least one Source.
 #   2. Audio sidecar lifecycle
-#       - `systemctl start nixling-<vm>-snd.service` (system service) creates
+#       - `systemctl start d2b-<vm>-snd.service` (system service) creates
 #         the listening UDS under /run/user/<uid>/ with group=kvm
 #         mode=0660; stop removes it.
 #       - The .service auto-activates via socket activation when
 #         something connects.
-#   3. `nixling audio` CLI smoke
-#       - `nixling audio status <vm>` reports a clean baseline
-#       - `nixling audio mic on <vm>` -> state file updated, sidecar
+#   3. `d2b audio` CLI smoke
+#       - `d2b audio status <vm>` reports a clean baseline
+#       - `d2b audio mic on <vm>` -> state file updated, sidecar
 #         socket created
-#       - `nixling audio speaker off <vm>` -> state file updated
-#       - `nixling audio off <vm>` -> state file cleared, socket gone
+#       - `d2b audio speaker off <vm>` -> state file updated
+#       - `d2b audio off <vm>` -> state file cleared, socket gone
 #   4. Capability matrix
 #       - cloud-hypervisor has `--generic-vhost-user` (required for
 #         audio attach) AND `--gpu` (required for graphics VMs)
@@ -54,7 +54,7 @@ ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-_AUDIO_GITCFG=$(nl_mktemp .audio-gitcfg.XXXXXX)
+_AUDIO_GITCFG=$(d2b_mktemp .audio-gitcfg.XXXXXX)
 install -d -m 0700 "$_AUDIO_GITCFG/git"
 printf "[safe]\n\tdirectory = %s\n" "$ROOT" > "$_AUDIO_GITCFG/git/config"
 export XDG_CONFIG_HOME="$_AUDIO_GITCFG"
@@ -62,35 +62,35 @@ export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0=safe.directory
 export GIT_CONFIG_VALUE_0="$ROOT"
 
-NL_HOST_CONFIG=${NL_HOST_CONFIG:-desktop}
+D2B_HOST_CONFIG=${D2B_HOST_CONFIG:-desktop}
 
-STATE_ROOT=/var/lib/nixling/vms
+STATE_ROOT=/var/lib/d2b/vms
 
 # Resolve the Wayland session user. Audio tests need a real user-systemd
 # manager + PipeWire/WirePlumber session, so we re-exec as that user
 # when invoked by root. Resolution order:
-#   1. $NL_WAYLAND_USER if explicitly set.
-#   2. nix eval of nixling.site.waylandUser on the live host config.
+#   1. $D2B_WAYLAND_USER if explicitly set.
+#   2. nix eval of d2b.site.waylandUser on the live host config.
 #   3. $SUDO_USER (if running under sudo).
 #   4. The invoking non-root user.
-NL_WAYLAND_USER=${NL_WAYLAND_USER:-}
-if [ -z "$NL_WAYLAND_USER" ]; then
-  NL_WAYLAND_USER=$(nix eval --raw \
-    "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.nixling.site.waylandUser" \
+D2B_WAYLAND_USER=${D2B_WAYLAND_USER:-}
+if [ -z "$D2B_WAYLAND_USER" ]; then
+  D2B_WAYLAND_USER=$(nix eval --raw \
+    "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.d2b.site.waylandUser" \
     2>/dev/null || true)
 fi
-if [ -z "$NL_WAYLAND_USER" ] && [ -n "${SUDO_USER:-}" ]; then
-  NL_WAYLAND_USER=$SUDO_USER
+if [ -z "$D2B_WAYLAND_USER" ] && [ -n "${SUDO_USER:-}" ]; then
+  D2B_WAYLAND_USER=$SUDO_USER
 fi
-if [ -z "$NL_WAYLAND_USER" ] && [ "$(id -u)" != "0" ]; then
-  NL_WAYLAND_USER=$(id -un)
+if [ -z "$D2B_WAYLAND_USER" ] && [ "$(id -u)" != "0" ]; then
+  D2B_WAYLAND_USER=$(id -un)
 fi
 
 # Pick test VMs that have audio.enable=true. The CLI manifest is the
 # ground truth.
 audio_vms() {
   jq -r '. as $m | to_entries[] | select(.value.audio == true) | .key' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null
 }
 TEST_VMS=$(audio_vms || true)
 if [ -z "$TEST_VMS" ]; then
@@ -102,59 +102,59 @@ skip() { log "  SKIP: $*"; }
 # Pre-flight: audio tests need a real user session (user-systemd,
 # XDG_RUNTIME_DIR, PipeWire/WirePlumber as user services). If the
 # runner was invoked as root (e.g. `sudo runner.sh --quick`), step
-# DOWN to the resolved Wayland user (`$NL_WAYLAND_USER`) automatically
+# DOWN to the resolved Wayland user (`$D2B_WAYLAND_USER`) automatically
 # so this script stays green in the aggregate suite. If no Wayland
 # user can be resolved, or it has no active login session, we SKIP
 # cleanly (exit 0) rather than FATAL — that way the suite still
 # reports clean on hosts where audio isn't expected to work (e.g. CI
 # without a desktop session) instead of breaking the whole runner.
 if [ "$(id -u)" = "0" ]; then
-  if [ -z "$NL_WAYLAND_USER" ]; then
-    printf '%s SKIP: audio tests require NL_WAYLAND_USER (or nixling.site.waylandUser) to be set\n' \
+  if [ -z "$D2B_WAYLAND_USER" ]; then
+    printf '%s SKIP: audio tests require D2B_WAYLAND_USER (or d2b.site.waylandUser) to be set\n' \
       "$(date +%H:%M:%S)" >&2
     exit 0
   fi
-  if ! getent passwd "$NL_WAYLAND_USER" >/dev/null 2>&1; then
+  if ! getent passwd "$D2B_WAYLAND_USER" >/dev/null 2>&1; then
     printf '%s SKIP: audio tests require user %s (not present on this host)\n' \
-      "$(date +%H:%M:%S)" "$NL_WAYLAND_USER" >&2
+      "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" >&2
     exit 0
   fi
-  _wu_uid=$(id -u "$NL_WAYLAND_USER")
-  _wu_home=$(getent passwd "$NL_WAYLAND_USER" | cut -d: -f6)
+  _wu_uid=$(id -u "$D2B_WAYLAND_USER")
+  _wu_home=$(getent passwd "$D2B_WAYLAND_USER" | cut -d: -f6)
   _wu_runtime="/run/user/$_wu_uid"
   if [ ! -d "$_wu_runtime" ] || [ ! -S "$_wu_runtime/bus" ]; then
     printf '%s SKIP: audio tests require an active %s session (no %s or its DBus bus)\n' \
-      "$(date +%H:%M:%S)" "$NL_WAYLAND_USER" "$_wu_runtime" >&2
+      "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" "$_wu_runtime" >&2
     exit 0
   fi
-  # lib.sh logs via `tee -a "$NL_LOG"`. The runner.sh sets NL_LOG to a
+  # lib.sh logs via `tee -a "$D2B_LOG"`. The runner.sh sets D2B_LOG to a
   # root-owned 0700 file under $RUN_DIR, so after we drop privs `tee`
-  # would spam permission-denied on every line. Redirect NL_LOG to a
+  # would spam permission-denied on every line. Redirect D2B_LOG to a
   # user-writable temp file BEFORE re-exec. The runner's per-script
   # log (`$RUN_DIR/audio.log`) is still captured via the runner's
   # FD-level stdout/stderr redirect, which the dropped-priv child
   # inherits across the privilege drop, so nothing is lost.
-  reexec_log=$(mktemp -t nixling-audio-reexec.XXXXXX.log)
-  chown "$NL_WAYLAND_USER:users" "$reexec_log" 2>/dev/null || true
+  reexec_log=$(mktemp -t d2b-audio-reexec.XXXXXX.log)
+  chown "$D2B_WAYLAND_USER:users" "$reexec_log" 2>/dev/null || true
   chmod 0644 "$reexec_log" 2>/dev/null || true
-  printf '%s audio.sh: stepping down root -> %s (NL_LOG=%s, XDG_RUNTIME_DIR=%s)\n' \
-    "$(date +%H:%M:%S)" "$NL_WAYLAND_USER" "$reexec_log" "$_wu_runtime" >&2
-  exec runuser -u "$NL_WAYLAND_USER" -- env \
+  printf '%s audio.sh: stepping down root -> %s (D2B_LOG=%s, XDG_RUNTIME_DIR=%s)\n' \
+    "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" "$reexec_log" "$_wu_runtime" >&2
+  exec runuser -u "$D2B_WAYLAND_USER" -- env \
     HOME="$_wu_home" \
-    USER="$NL_WAYLAND_USER" \
-    LOGNAME="$NL_WAYLAND_USER" \
+    USER="$D2B_WAYLAND_USER" \
+    LOGNAME="$D2B_WAYLAND_USER" \
     XDG_RUNTIME_DIR="$_wu_runtime" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$_wu_runtime/bus" \
     PATH="${PATH:-/run/current-system/sw/bin:/usr/bin}" \
     TERM="${TERM:-dumb}" \
-    NL_LOG="$reexec_log" \
-    NL_WAYLAND_USER="$NL_WAYLAND_USER" \
-    NL_HOST_CONFIG="$NL_HOST_CONFIG" \
+    D2B_LOG="$reexec_log" \
+    D2B_WAYLAND_USER="$D2B_WAYLAND_USER" \
+    D2B_HOST_CONFIG="$D2B_HOST_CONFIG" \
     ROOT="$ROOT" \
     bash "$0" "$@"
   # exec failed — keep the old FATAL so the regression is visible
   printf '%s FATAL: runuser -u %s failed; audio tests cannot run as root\n' \
-    "$(date +%H:%M:%S)" "$NL_WAYLAND_USER" >&2
+    "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" >&2
   exit 2
 fi
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
@@ -164,31 +164,31 @@ fi
 
 # Shared scratch VM name we use for sidecar lifecycle tests. Doesn't
 # need to be a real VM (the .socket template instantiates per any name).
-SCRATCH_VM=__nixling_test_audio__
+SCRATCH_VM=__d2b_test_audio__
 
 # ---------------------------------------------------------------------
 # Cleanups: at exit, stop the scratch sidecar and reset every
 # audio-enabled VM's state file to what we found it as.
 # ---------------------------------------------------------------------
-declare -A NL_AUDIO_BASELINE=()
+declare -A D2B_AUDIO_BASELINE=()
 for vm in $TEST_VMS; do
   f="$STATE_ROOT/$vm/state/audio-state.json"
   if [ -r "$f" ]; then
-    NL_AUDIO_BASELINE[$vm]=$(cat "$f")
+    D2B_AUDIO_BASELINE[$vm]=$(cat "$f")
   fi
 done
 
 cleanup_audio() {
-  systemctl stop "nixling-${SCRATCH_VM}-snd.service" 2>/dev/null || true
-  systemctl reset-failed "nixling-${SCRATCH_VM}-snd.service" 2>/dev/null || true
-  for vm in "${!NL_AUDIO_BASELINE[@]}"; do
+  systemctl stop "d2b-${SCRATCH_VM}-snd.service" 2>/dev/null || true
+  systemctl reset-failed "d2b-${SCRATCH_VM}-snd.service" 2>/dev/null || true
+  for vm in "${!D2B_AUDIO_BASELINE[@]}"; do
     local f="$STATE_ROOT/$vm/state/audio-state.json"
-    local baseline="${NL_AUDIO_BASELINE[$vm]}"
+    local baseline="${D2B_AUDIO_BASELINE[$vm]}"
     if [ "$(cat "$f" 2>/dev/null)" != "$baseline" ]; then
       log "cleanup: restoring $vm audio state to baseline $baseline"
       tmp=$(mktemp)
       printf '%s\n' "$baseline" > "$tmp"
-      sudo -A install -m 0640 -o root -g nixling -- "$tmp" "$f"
+      sudo -A install -m 0640 -o root -g d2b -- "$tmp" "$f"
       rm -f "$tmp"
       # IMPORTANT: do NOT stop the sidecar of a real VM in cleanup.
       # vhost-user is a one-shot connection: CH binds the socket once
@@ -201,7 +201,7 @@ cleanup_audio() {
       #
       # The state-file change we just restored is enough: the
       # sidecar is one-process-per-VM and its lifecycle is owned by
-      # `nixling up` / `nixling down`, not by transient state-file
+      # `d2b up` / `d2b down`, not by transient state-file
       # tweaks. If the VM happens to be down, the sidecar is already
       # gone; if it's up, leave it alone.
     fi
@@ -242,8 +242,8 @@ host_audio_snapshot() {
   printf '%s %s %s' "$devs" "$sinks" "$sources"
 }
 
-NL_AUDIO_PRE_SNAPSHOT=$(host_audio_snapshot)
-log "host audio snapshot at start: $NL_AUDIO_PRE_SNAPSHOT (devices sinks sources)"
+D2B_AUDIO_PRE_SNAPSHOT=$(host_audio_snapshot)
+log "host audio snapshot at start: $D2B_AUDIO_PRE_SNAPSHOT (devices sinks sources)"
 
 # =====================================================================
 # Layer 1: host audio surface
@@ -284,7 +284,7 @@ test_host_has_audio_devices() {
   local n
   n=$(printf '%s\n' "$devs" | grep -c -E '\[alsa\]|\[v4l2\]|\[bluez5\]')
   log "  host has $n audio device(s):"
-  printf '%s\n' "$devs" | sed 's/^/    /' | tee -a "$NL_LOG" >&2
+  printf '%s\n' "$devs" | sed 's/^/    /' | tee -a "$D2B_LOG" >&2
   assert_ge "$n" 1 "host has >= 1 audio device"
 }
 
@@ -323,20 +323,20 @@ test_host_has_audio_sinks_and_sources() {
 
 test_sidecar_unit_present() {
   log "test_sidecar_unit_present"
-  # nixling-<vm>-snd.service is now a per-VM system service (not
+  # d2b-<vm>-snd.service is now a per-VM system service (not
   # a template, not user). Look for at least one such unit.
-  if ! systemctl list-unit-files 'nixling-*-snd.service' --no-pager \
-       --no-legend 2>/dev/null | grep -q 'nixling-.*-snd.service'; then
-    fail "no nixling-<vm>-snd.service unit registered"
+  if ! systemctl list-unit-files 'd2b-*-snd.service' --no-pager \
+       --no-legend 2>/dev/null | grep -q 'd2b-.*-snd.service'; then
+    fail "no d2b-<vm>-snd.service unit registered"
   else
-    ok "nixling-<vm>-snd.service unit(s) registered"
+    ok "d2b-<vm>-snd.service unit(s) registered"
   fi
 }
 
 test_sidecar_socket_lifecycle() {
   log "test_sidecar_socket_lifecycle"
-  # nixling-<vm>-snd.service is a per-VM system service with
-  # User=nixling-<vm>-snd.  Synthetic VM names (SCRATCH_VM) have no
+  # d2b-<vm>-snd.service is a per-VM system service with
+  # User=d2b-<vm>-snd.  Synthetic VM names (SCRATCH_VM) have no
   # declared system user so systemd refuses to start them ("Access denied").
   # Use the first stopped audio-enabled manifest VM instead so the user
   # exists and the sidecar starts cleanly without disrupting a running VM.
@@ -353,8 +353,8 @@ test_sidecar_socket_lifecycle() {
   fi
 
   local sock
-  sock="/run/nixling/vms/${test_vm}/snd.sock"
-  local svc="nixling-${test_vm}-snd.service"
+  sock="/run/d2b/vms/${test_vm}/snd.sock"
+  local svc="d2b-${test_vm}-snd.service"
   systemctl stop "$svc" 2>/dev/null || true
   systemctl reset-failed "$svc" 2>/dev/null || true
 
@@ -365,7 +365,7 @@ test_sidecar_socket_lifecycle() {
   ok "systemctl start $svc succeeded"
 
   # Wait for the service to be fully active and the socket to appear.
-  # The sidecar dir is owned by nixling-<vm>-snd and not traversable by
+  # The sidecar dir is owned by d2b-<vm>-snd and not traversable by
   # the Wayland user, so use sudo -A for socket existence and ownership checks.
   for _ in 1 2 3 4 5; do
     sudo -A test -S "$sock" 2>/dev/null && break
@@ -380,7 +380,7 @@ test_sidecar_socket_lifecycle() {
 
   local owner
   owner=$(sudo -A stat -c '%U' "$sock" 2>/dev/null)
-  assert_eq "$owner" "nixling-${test_vm}-snd" "socket owner nixling-${test_vm}-snd"
+  assert_eq "$owner" "d2b-${test_vm}-snd" "socket owner d2b-${test_vm}-snd"
 
   systemctl stop "$svc"
   sleep 0.5
@@ -404,9 +404,9 @@ test_cli_status_smoke() {
   local vm
   vm=$(printf '%s\n' "$TEST_VMS" | head -1)
   local out
-  out=$(nixling audio status "$vm" 2>&1)
-  log "  nixling audio status $vm ->"
-  printf '%s\n' "$out" | sed 's/^/    /' | tee -a "$NL_LOG" >&2
+  out=$(d2b audio status "$vm" 2>&1)
+  log "  d2b audio status $vm ->"
+  printf '%s\n' "$out" | sed 's/^/    /' | tee -a "$D2B_LOG" >&2
   assert_contains "$out" "audio:    enabled" "status reports audio enabled"
   assert_contains "$out" "mic:"             "status has mic line"
   assert_contains "$out" "speaker:"         "status has speaker line"
@@ -422,16 +422,16 @@ test_cli_grant_revoke() {
   vm=$(printf '%s\n' "$TEST_VMS" | head -1)
   local f="$STATE_ROOT/$vm/state/audio-state.json"
   local sock
-  sock="/run/nixling/vms/${vm}/snd.sock"
-  local svc="nixling-${vm}-snd.service"
+  sock="/run/d2b/vms/${vm}/snd.sock"
+  local svc="d2b-${vm}-snd.service"
 
   # baseline reset (also tears down any stale sidecar). reset-failed
   # so the next start isn't blocked by start-limit-hit.
-  nixling audio off "$vm" >/dev/null
+  d2b audio off "$vm" >/dev/null
   systemctl reset-failed "$svc" 2>/dev/null || true
 
   # grant mic
-  nixling audio mic on "$vm" >/dev/null
+  d2b audio mic on "$vm" >/dev/null
   local state
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"on","speaker":"off"}' "state after mic on" || rc=1
@@ -442,7 +442,7 @@ test_cli_grant_revoke() {
   # systemd service instead. If no VM is currently connected the
   # daemon's outer loop binds a fresh socket file each iteration, so
   # the file should appear within a couple of seconds.
-  # nixling-<vm>-snd is a SYSTEM service (not user); use systemctl without --user.
+  # d2b-<vm>-snd is a SYSTEM service (not user); use systemctl without --user.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     systemctl is-active --quiet "$svc" && break
     sleep 0.5
@@ -455,12 +455,12 @@ test_cli_grant_revoke() {
   fi
 
   # grant speaker too
-  nixling audio speaker on "$vm" >/dev/null
+  d2b audio speaker on "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"on","speaker":"on"}' "state after speaker on" || rc=1
 
   # mic off, speaker still on -> sidecar should stay up
-  nixling audio mic off "$vm" >/dev/null
+  d2b audio mic off "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"off","speaker":"on"}' "state after mic off" || rc=1
   if ! systemctl is-active --quiet "$svc"; then
@@ -471,7 +471,7 @@ test_cli_grant_revoke() {
   fi
 
   # revoke all
-  nixling audio off "$vm" >/dev/null
+  d2b audio off "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"off","speaker":"off"}' "state after off" || rc=1
   sleep 0.5
@@ -490,13 +490,13 @@ test_cli_rejects_audio_disabled_vm() {
   # Pick a VM that does NOT have audio enabled.
   local non
   non=$(jq -r '. as $m | to_entries[] | select(.value.audio != true) | .key' \
-    /run/current-system/sw/share/nixling/vms.json 2>/dev/null | head -1)
+    /run/current-system/sw/share/d2b/vms.json 2>/dev/null | head -1)
   if [ -z "$non" ]; then
     skip "every VM has audio enabled — no negative case to test"
     return
   fi
   local out rc=0
-  out=$(nixling audio mic on "$non" 2>&1) || rc=$?
+  out=$(d2b audio mic on "$non" 2>&1) || rc=$?
   if [ "$rc" -eq 0 ]; then
     fail "CLI accepted mic on for audio-disabled VM $non (exit 0)"
     return
@@ -516,14 +516,14 @@ test_cloud_hypervisor_capabilities() {
   # pick the first one so we don't hardcode a maintainer-specific VM name.
   local ch probe_vm
   probe_vm=$(nix eval --json \
-    "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.microvm.vms" 2>/dev/null \
+    "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.microvm.vms" 2>/dev/null \
     | jq -r 'keys[0] // empty')
   if [ -z "$probe_vm" ]; then
     skip "no microvm.vms entries declared — cannot probe CH binary"
     return 0
   fi
   ch=$(nix eval --raw \
-    "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.microvm.vms.$probe_vm.config.config.microvm.cloud-hypervisor.package.outPath" \
+    "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.microvm.vms.$probe_vm.config.config.microvm.cloud-hypervisor.package.outPath" \
     2>/dev/null)/bin/cloud-hypervisor
   if [ ! -x "$ch" ]; then
     fail "cloud-hypervisor binary not found at $ch"
@@ -585,7 +585,7 @@ test_guest_sees_virtio_snd() {
     return
   fi
 
-  # Probe the guest. ssh_vm uses nixling status to find creds.
+  # Probe the guest. ssh_vm uses d2b status to find creds.
   local out
   out=$(ssh_vm "$running" 'cat /proc/asound/cards 2>/dev/null' 2>&1) || {
     skip "$running: SSH probe failed — VM may not yet be sshable"
@@ -593,11 +593,11 @@ test_guest_sees_virtio_snd() {
   }
   if printf '%s' "$out" | grep -qE 'VIRT|virtio'; then
     ok "$running: guest /proc/asound/cards reports virtio-snd"
-    printf '%s\n' "$out" | sed 's/^/    /' | tee -a "$NL_LOG" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' | tee -a "$D2B_LOG" >&2
   else
     fail "$running: guest /proc/asound/cards does NOT report virtio-snd"
     log "    /proc/asound/cards output:"
-    printf '%s\n' "$out" | sed 's/^/      /' | tee -a "$NL_LOG" >&2
+    printf '%s\n' "$out" | sed 's/^/      /' | tee -a "$D2B_LOG" >&2
   fi
 }
 
@@ -610,11 +610,11 @@ test_zzz_host_audio_unchanged() {
   sleep 1
   local post
   post=$(host_audio_snapshot)
-  log "  pre: '$NL_AUDIO_PRE_SNAPSHOT'  post: '$post'"
+  log "  pre: '$D2B_AUDIO_PRE_SNAPSHOT'  post: '$post'"
 
   # Parse "<devs> <sinks> <sources>"
   local pre_d pre_s pre_so post_d post_s post_so
-  read -r pre_d  pre_s  pre_so  <<<"$NL_AUDIO_PRE_SNAPSHOT"
+  read -r pre_d  pre_s  pre_so  <<<"$D2B_AUDIO_PRE_SNAPSHOT"
   read -r post_d post_s post_so <<<"$post"
 
   if [ "$post_d" -lt "$pre_d" ]; then
@@ -639,25 +639,25 @@ test_zzz_host_audio_unchanged() {
 # M7 fail-closed: audio-state.json edge-case tests (Finding M7)
 # =====================================================================
 #
-# These tests exercise nixling_read_audio_state (from lib.nix) for all
+# These tests exercise d2b_read_audio_state (from lib.nix) for all
 # the fail-closed edge cases mandated by the security audit. They create
 # a scratch state directory with controlled content, invoke the helper,
 # and assert correct behaviour.
 #
-# Tests run as $NL_WAYLAND_USER (after re-exec). Writing to /var/lib/nixling/
-# requires sudo -A install to set root:nixling 0640 ownership.
+# Tests run as $D2B_WAYLAND_USER (after re-exec). Writing to /var/lib/d2b/
+# requires sudo -A install to set root:d2b 0640 ownership.
 
-_M7_SCRATCH_VM="__nixling_m7test__"
+_M7_SCRATCH_VM="__d2b_m7test__"
 _M7_SCRATCH_DIR="$STATE_ROOT/$_M7_SCRATCH_VM"
 _M7_STATE_FILE="$_M7_SCRATCH_DIR/state/audio-state.json"
 
 _m7_write_state() {
   sudo -A install -d -m 0755 -o root -g root "$_M7_SCRATCH_DIR" 2>/dev/null || true
-  sudo -A install -d -m 0750 -o root -g nixling "$_M7_SCRATCH_DIR/state" 2>/dev/null || true
+  sudo -A install -d -m 0750 -o root -g d2b "$_M7_SCRATCH_DIR/state" 2>/dev/null || true
   local tmp
   tmp=$(mktemp)
   printf '%s\n' "$1" > "$tmp"
-  sudo -A install -m 0640 -o root -g nixling "$tmp" "$_M7_STATE_FILE"
+  sudo -A install -m 0640 -o root -g d2b "$tmp" "$_M7_STATE_FILE"
   rm -f "$tmp"
 }
 
@@ -668,24 +668,24 @@ _m7_remove_state() {
 _m7_cleanup() { sudo -A rm -rf "$_M7_SCRATCH_DIR" 2>/dev/null || true; }
 add_cleanup _m7_cleanup
 
-# Run nixling_read_audio_state for the scratch VM by sourcing the
+# Run d2b_read_audio_state for the scratch VM by sourcing the
 # helper from the Nix store. Returns 77 if the helper is not built yet
 # (pre-rebuild) so callers can SKIP cleanly.
 _m7_run_helper() {
   local helper_path
-  # The `nixling.audioStateHelperPath`
+  # The `d2b.audioStateHelperPath`
   # internal option was retired together with the bash CLI surface,
   # so we no longer eval it out of the live config. Instead, locate
-  # the helper by greping the nixling binary in the current system
-  # generation (the daemon-managed `nixling` references it directly).
-  local nixling_bin
-  nixling_bin=$(command -v nixling 2>/dev/null || echo /run/current-system/sw/bin/nixling)
-  helper_path=$(grep -o '/nix/store/[^ ]*nixling-read-audio-state\.sh' \
-    "$nixling_bin" 2>/dev/null | head -1) || helper_path=""
+  # the helper by greping the d2b binary in the current system
+  # generation (the daemon-managed `d2b` references it directly).
+  local d2b_bin
+  d2b_bin=$(command -v d2b 2>/dev/null || echo /run/current-system/sw/bin/d2b)
+  helper_path=$(grep -o '/nix/store/[^ ]*d2b-read-audio-state\.sh' \
+    "$d2b_bin" 2>/dev/null | head -1) || helper_path=""
   if [ -z "$helper_path" ] || [ ! -f "$helper_path" ]; then
     return 77
   fi
-  bash -c ". \"$helper_path\"; nixling_read_audio_state \"$_M7_SCRATCH_VM\""
+  bash -c ". \"$helper_path\"; d2b_read_audio_state \"$_M7_SCRATCH_VM\""
 }
 
 test_audio_state_fail_closed_missing() {
@@ -694,7 +694,7 @@ test_audio_state_fail_closed_missing() {
   local out rc=0
   out=$(_m7_run_helper); rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 77 ]; then skip "nixling-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
+    if [ "$rc" -eq 77 ]; then skip "d2b-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
   fi
   assert_eq "$out" "mic=off speaker=off" "missing state file -> mic=off speaker=off" || rc=1
   return $rc
@@ -706,7 +706,7 @@ test_audio_state_fail_closed_garbage() {
   local out rc=0
   out=$(_m7_run_helper); rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 77 ]; then skip "nixling-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
+    if [ "$rc" -eq 77 ]; then skip "d2b-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
   fi
   assert_eq "$out" "mic=off speaker=off" "garbage JSON -> mic=off speaker=off" || rc=1
   return $rc
@@ -718,7 +718,7 @@ test_audio_state_fail_closed_unexpected_value() {
   local out rc=0
   out=$(_m7_run_helper); rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 77 ]; then skip "nixling-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
+    if [ "$rc" -eq 77 ]; then skip "d2b-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
   fi
   assert_eq "$out" "mic=off speaker=off" 'unexpected field values {"mic":"true","speaker":1} -> mic=off speaker=off' || rc=1
   return $rc
@@ -730,7 +730,7 @@ test_audio_state_open_when_valid() {
   local out rc=0
   out=$(_m7_run_helper); rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 77 ]; then skip "nixling-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
+    if [ "$rc" -eq 77 ]; then skip "d2b-read-audio-state.sh not in store (rebuild needed)"; return 0; fi
   fi
   assert_eq "$out" "mic=on speaker=on" 'valid on/on -> mic=on speaker=on' || rc=1
   return $rc
@@ -755,7 +755,7 @@ test_audio_state_file_mode() {
       rc=1
       continue
     fi
-    assert_eq "$mode_owner" "640 root:nixling" "$vm: audio-state.json is mode 640 owner root:nixling" || rc=1
+    assert_eq "$mode_owner" "640 root:d2b" "$vm: audio-state.json is mode 640 owner root:d2b" || rc=1
   done
   return $rc
 }
@@ -764,7 +764,7 @@ test_audio_state_file_mode() {
 # security-r8-audio: end-to-end signal-path tests.
 #
 # History: the refactor (audio sidecar moved from user service to
-# system service with nixling-<vm>-snd system user + ACL-gated socket)
+# system service with d2b-<vm>-snd system user + ACL-gated socket)
 # silently broke the audio path in three distinct ways that all
 # slipped past the existing tests because none of them verified the
 # LIVE signal:
@@ -773,10 +773,10 @@ test_audio_state_file_mode() {
 #      to create its listen socket → ACL never applied → CH bailed
 #      with EACCES on connect (security-r8-audio-1).
 #   2. audioArgsScript inside microvm-run tried to `systemctl start`
-#      the sidecar as nixling-<vm>-gpu, which triggered polkit
+#      the sidecar as d2b-<vm>-gpu, which triggered polkit
 #      password prompts on every VM boot (security-r8-audio-2/-3).
 #   3. A broad WirePlumber stream rule null-targeted EVERY
-#      `nixling-*` capture stream forever, so mic=on had no effect
+#      `d2b-*` capture stream forever, so mic=on had no effect
 #      even after audio.nix correctly emitted --generic-vhost-user
 #      (security-r8-audio-6).
 #
@@ -818,7 +818,7 @@ test_e2e_ch_has_generic_vhost_user() {
   fi
   local vm="$RUNNING_AUDIO_VM"
   local mic spk
-  read -r mic spk < <(nixling audio status "$vm" 2>/dev/null \
+  read -r mic spk < <(d2b audio status "$vm" 2>/dev/null \
     | awk '/^mic:/{m=$2} /^speaker:/{s=$2} END{print m, s}')
   if [ "$mic" != "on" ] && [ "$spk" != "on" ]; then
     skip "$vm: mic=$mic spk=$spk; --generic-vhost-user not expected"
@@ -846,14 +846,14 @@ test_e2e_sidecar_socket_acl() {
   fi
   local vm="$RUNNING_AUDIO_VM"
   local mic spk
-  read -r mic spk < <(nixling audio status "$vm" 2>/dev/null \
+  read -r mic spk < <(d2b audio status "$vm" 2>/dev/null \
     | awk '/^mic:/{m=$2} /^speaker:/{s=$2} END{print m, s}')
   if [ "$mic" != "on" ] && [ "$spk" != "on" ]; then
     skip "$vm: mic=$mic spk=$spk; sidecar socket not expected to exist"
     return 0
   fi
-  if ! sudo -A test -d "/run/nixling/vms/$vm"; then
-    fail "$vm: /run/nixling/vms/$vm does not exist despite mic=$mic spk=$spk"
+  if ! sudo -A test -d "/run/d2b/vms/$vm"; then
+    fail "$vm: /run/d2b/vms/$vm does not exist despite mic=$mic spk=$spk"
     return 1
   fi
   # Sidecar's vhost-user listen socket gets CONSUMED on CH connect
@@ -862,25 +862,25 @@ test_e2e_sidecar_socket_acl() {
   # inside both processes. The post-connect invariant we CAN check:
   # CH process holds a socket FD AND --generic-vhost-user was on its
   # cmdline (the latter is test_e2e_ch_has_generic_vhost_user). We
-  # check the directory ACL for nixling-<vm>-gpu:--x which is set
+  # check the directory ACL for d2b-<vm>-gpu:--x which is set
   # by ExecStartPost and is durable.
   #
   # If the socket FILE still exists (e.g. CH hasn't connected yet, or
   # restart raced) verify both ACLs.
   local dacl sacl
-  dacl=$(sudo -A getfacl -p "/run/nixling/vms/$vm" 2>/dev/null) || dacl=""
-  if ! printf '%s' "$dacl" | grep -qE "^user:nixling-${vm}-gpu:--x"; then
-    fail "$vm: socket dir ACL missing nixling-${vm}-gpu:x (regression of security-r8-audio-1)"
+  dacl=$(sudo -A getfacl -p "/run/d2b/vms/$vm" 2>/dev/null) || dacl=""
+  if ! printf '%s' "$dacl" | grep -qE "^user:d2b-${vm}-gpu:--x"; then
+    fail "$vm: socket dir ACL missing d2b-${vm}-gpu:x (regression of security-r8-audio-1)"
     log "    getfacl: $dacl"
     return 1
   fi
-  ok "$vm: socket dir ACL grants nixling-${vm}-gpu:x (security-r8-audio-1 invariant)"
-  if sudo -A test -S "/run/nixling/vms/$vm/snd.sock"; then
-    sacl=$(sudo -A getfacl -p "/run/nixling/vms/$vm/snd.sock" 2>/dev/null) || sacl=""
-    if printf '%s' "$sacl" | grep -qE "^user:nixling-${vm}-gpu:rw"; then
-      ok "$vm: snd.sock present with nixling-${vm}-gpu:rw ACL (CH not yet attached)"
+  ok "$vm: socket dir ACL grants d2b-${vm}-gpu:x (security-r8-audio-1 invariant)"
+  if sudo -A test -S "/run/d2b/vms/$vm/snd.sock"; then
+    sacl=$(sudo -A getfacl -p "/run/d2b/vms/$vm/snd.sock" 2>/dev/null) || sacl=""
+    if printf '%s' "$sacl" | grep -qE "^user:d2b-${vm}-gpu:rw"; then
+      ok "$vm: snd.sock present with d2b-${vm}-gpu:rw ACL (CH not yet attached)"
     else
-      fail "$vm: snd.sock present but ACL missing nixling-${vm}-gpu:rw"
+      fail "$vm: snd.sock present but ACL missing d2b-${vm}-gpu:rw"
       log "    getfacl: $sacl"
       return 1
     fi
@@ -896,7 +896,7 @@ test_e2e_node_name_per_vm() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM"
-  if ! systemctl is-active --quiet "nixling-${vm}-snd.service"; then
+  if ! systemctl is-active --quiet "d2b-${vm}-snd.service"; then
     skip "$vm: sidecar not active"
     return 0
   fi
@@ -912,7 +912,7 @@ test_e2e_node_name_per_vm() {
   # CLIENT-level check (what pavucontrol / KDE audio applet display)
   # ---------------------------------------------------------------------
   # The PipeWire client for the sidecar must show application.name =
-  # "nixling-<vm>" — NOT the generic "vhost-device-sound" inherited from
+  # "d2b-<vm>" — NOT the generic "vhost-device-sound" inherited from
   # argv[0]. In pavucontrol the
   # Applications tab labels each stream by its CLIENT application.name,
   # so two VMs both showing "vhost-device-sound" are indistinguishable.
@@ -920,22 +920,22 @@ test_e2e_node_name_per_vm() {
   # security-r8-audio-7: libpipewire derives application.name from
   # argv[0]'s basename (program_invocation_short_name). PIPEWIRE_PROPS
   # does NOT override this for clients (it only covers streams/filters).
-  # The unit wraps ExecStart with `bash -c 'exec -a nixling-<vm> ...'`
+  # The unit wraps ExecStart with `bash -c 'exec -a d2b-<vm> ...'`
   # so the kernel-visible argv[0] is the per-VM name.
   local client_app
   client_app=$(printf '%s' "$dump" \
-    | jq -r --arg user "nixling-$vm-snd" '
+    | jq -r --arg user "d2b-$vm-snd" '
         first(.[]
           | select(.type == "PipeWire:Interface:Client"
                    and .info.props["application.process.user"] == $user)
           | .info.props["application.name"]) // empty' 2>/dev/null)
-  if [ "$client_app" = "nixling-$vm" ]; then
-    ok "$vm: PipeWire Client application.name=\"nixling-${vm}\" (visible in pavucontrol/wpctl)"
+  if [ "$client_app" = "d2b-$vm" ]; then
+    ok "$vm: PipeWire Client application.name=\"d2b-${vm}\" (visible in pavucontrol/wpctl)"
   elif [ -z "$client_app" ]; then
-    fail "$vm: no PipeWire Client owned by nixling-$vm-snd found"
+    fail "$vm: no PipeWire Client owned by d2b-$vm-snd found"
     return 1
   else
-    fail "$vm: PipeWire Client application.name is \"$client_app\", expected \"nixling-${vm}\" (regression of security-r8-audio-7 exec-a wrapping)"
+    fail "$vm: PipeWire Client application.name is \"$client_app\", expected \"d2b-${vm}\" (regression of security-r8-audio-7 exec-a wrapping)"
     return 1
   fi
 
@@ -956,19 +956,19 @@ test_e2e_node_name_per_vm() {
 
   local found
   found=$(printf '%s' "$dump" \
-    | jq -r --arg an "nixling-$vm" '[.[]
+    | jq -r --arg an "d2b-$vm" '[.[]
         | select(.type == "PipeWire:Interface:Node"
                  and .info.props["application.name"] == $an
                  and .info.props["node.name"] == $an)] | length' 2>/dev/null)
   if [ -n "$found" ] && [ "$found" -ge 1 ]; then
-    ok "$vm: PipeWire stream node.name=\"nixling-${vm}\" (per-VM identity, $found stream(s))"
+    ok "$vm: PipeWire stream node.name=\"d2b-${vm}\" (per-VM identity, $found stream(s))"
   else
     # Fall back: maybe streams weren't created. Verify static
     # config intent so we still catch a missing env file.
-    local env_file="/run/nixling/vms/$vm/snd.env"
+    local env_file="/run/d2b/vms/$vm/snd.env"
     if sudo -A test -r "$env_file" \
-       && sudo -A grep -q "\"node.name\":\"nixling-$vm\"" "$env_file"; then
-      ok "$vm: env file requests node.name=\"nixling-${vm}\" (no active streams to verify live)"
+       && sudo -A grep -q "\"node.name\":\"d2b-$vm\"" "$env_file"; then
+      ok "$vm: env file requests node.name=\"d2b-${vm}\" (no active streams to verify live)"
     else
       fail "$vm: PIPEWIRE_PROPS env file missing per-VM node.name request"
       return 1
@@ -980,11 +980,11 @@ test_e2e_node_name_per_vm() {
 # whether the caller is that user or root.
 _e2e_pw_dump() {
   local wu_uid
-  wu_uid=$(id -u "$NL_WAYLAND_USER" 2>/dev/null) || wu_uid="1000"
-  if [ "$(id -un)" = "$NL_WAYLAND_USER" ]; then
+  wu_uid=$(id -u "$D2B_WAYLAND_USER" 2>/dev/null) || wu_uid="1000"
+  if [ "$(id -un)" = "$D2B_WAYLAND_USER" ]; then
     env XDG_RUNTIME_DIR="/run/user/$wu_uid" pw-dump 2>/dev/null
   else
-    sudo -A -u "$NL_WAYLAND_USER" env XDG_RUNTIME_DIR="/run/user/$wu_uid" pw-dump 2>/dev/null
+    sudo -A -u "$D2B_WAYLAND_USER" env XDG_RUNTIME_DIR="/run/user/$wu_uid" pw-dump 2>/dev/null
   fi
 }
 
@@ -993,11 +993,11 @@ _e2e_pw_dump() {
 _e2e_stream_linked() {
   local vm="$1" class="$2"  # class: Stream/Input/Audio | Stream/Output/Audio
   local dump wu_uid
-  wu_uid=$(id -u "$NL_WAYLAND_USER" 2>/dev/null) || wu_uid="1000"
-  dump=$(runuser -u "$NL_WAYLAND_USER" -- env XDG_RUNTIME_DIR="/run/user/$wu_uid" pw-dump 2>/dev/null) || return 2
-  # Find the node id whose props contain BOTH application.name=nixling-<vm>
+  wu_uid=$(id -u "$D2B_WAYLAND_USER" 2>/dev/null) || wu_uid="1000"
+  dump=$(runuser -u "$D2B_WAYLAND_USER" -- env XDG_RUNTIME_DIR="/run/user/$wu_uid" pw-dump 2>/dev/null) || return 2
+  # Find the node id whose props contain BOTH application.name=d2b-<vm>
   # AND media.class=<class>. Then look for any link involving that node.
-  printf '%s' "$dump" | jq -re --arg an "nixling-$vm" --arg mc "$class" '
+  printf '%s' "$dump" | jq -re --arg an "d2b-$vm" --arg mc "$class" '
     [.[] | select(.type == "PipeWire:Interface:Node"
                   and .info.props["application.name"] == $an
                   and .info.props["media.class"] == $mc)] as $nodes
@@ -1018,7 +1018,7 @@ test_e2e_speaker_routes_when_on() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM" spk
-  spk=$(nixling audio status "$vm" 2>/dev/null | awk '/^speaker:/{print $2}')
+  spk=$(d2b audio status "$vm" 2>/dev/null | awk '/^speaker:/{print $2}')
   if [ "$spk" != "on" ]; then
     skip "$vm: speaker=$spk; auto-route test not applicable"
     return 0
@@ -1028,7 +1028,7 @@ test_e2e_speaker_routes_when_on() {
   # routing). Check the live node props.
   local nd dump
   dump=$(_e2e_pw_dump) || dump=""
-  nd=$(printf '%s' "$dump" | jq -re --arg an "nixling-$vm" '
+  nd=$(printf '%s' "$dump" | jq -re --arg an "d2b-$vm" '
     .[] | select(.type == "PipeWire:Interface:Node"
                  and .info.props["application.name"] == $an
                  and .info.props["media.class"] == "Stream/Output/Audio")
@@ -1047,7 +1047,7 @@ test_e2e_mic_routes_when_on() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM" mic
-  mic=$(nixling audio status "$vm" 2>/dev/null | awk '/^mic:/{print $2}')
+  mic=$(d2b audio status "$vm" 2>/dev/null | awk '/^mic:/{print $2}')
   if [ "$mic" != "on" ]; then
     skip "$vm: mic=$mic; auto-route test not applicable"
     return 0
@@ -1057,7 +1057,7 @@ test_e2e_mic_routes_when_on() {
   # default source and arecord in the guest returns I/O error.
   local nd dump
   dump=$(_e2e_pw_dump) || dump=""
-  nd=$(printf '%s' "$dump" | jq -re --arg an "nixling-$vm" '
+  nd=$(printf '%s' "$dump" | jq -re --arg an "d2b-$vm" '
     .[] | select(.type == "PipeWire:Interface:Node"
                  and .info.props["application.name"] == $an
                  and .info.props["media.class"] == "Stream/Input/Audio")
@@ -1076,7 +1076,7 @@ test_e2e_guest_can_play() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM" spk
-  spk=$(nixling audio status "$vm" 2>/dev/null | awk '/^speaker:/{print $2}')
+  spk=$(d2b audio status "$vm" 2>/dev/null | awk '/^speaker:/{print $2}')
   if [ "$spk" != "on" ]; then
     skip "$vm: speaker=$spk; playback test not applicable"
     return 0
@@ -1118,7 +1118,7 @@ test_e2e_guest_can_record() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM" mic
-  mic=$(nixling audio status "$vm" 2>/dev/null | awk '/^mic:/{print $2}')
+  mic=$(d2b audio status "$vm" 2>/dev/null | awk '/^mic:/{print $2}')
   if [ "$mic" != "on" ]; then
     skip "$vm: mic=$mic; capture test not applicable"
     return 0
@@ -1131,7 +1131,7 @@ test_e2e_guest_can_record() {
     if ! command -v arecord >/dev/null 2>&1; then
       echo "MISSING arecord"; exit 77
     fi
-    tmp=$(mktemp /tmp/nixling-cap.XXXXXX.wav)
+    tmp=$(mktemp /tmp/d2b-cap.XXXXXX.wav)
     if timeout 5 arecord -q -D plughw:0,0 -d 1 -f S16_LE -c 1 -r 48000 "$tmp" >/dev/null 2>&1; then
       sz=$(stat -c "%s" "$tmp")
       rm -f "$tmp"
@@ -1176,7 +1176,7 @@ test_audio_off_no_virtio_snd() {
   fi
   # Check current audio state for the running VM.
   local state_out mic spk
-  state_out=$(nixling audio status "$running" 2>/dev/null) || state_out=""
+  state_out=$(d2b audio status "$running" 2>/dev/null) || state_out=""
   mic=$(printf '%s\n' "$state_out" | awk '/^mic:/{print $2}')
   spk=$(printf '%s\n' "$state_out" | awk '/^speaker:/{print $2}')
   if [ "$mic" = "on" ] || [ "$spk" = "on" ]; then
@@ -1258,7 +1258,7 @@ main() {
     full|*)         local -n SET=ALL_TESTS ;;
   esac
 
-  log "nixling audio test suite — log: $NL_LOG"
+  log "d2b audio test suite — log: $D2B_LOG"
   local pass=0 fail_count=0
   for t in "${SET[@]}"; do
     if [ -n "$only" ] && [ "$t" != "$only" ]; then continue; fi

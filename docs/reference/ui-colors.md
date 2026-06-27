@@ -1,17 +1,17 @@
 # UI color contract
 
-Nixling can emit a compositor-agnostic, resolved UI color contract for
+D2b can emit a compositor-agnostic, resolved UI color contract for
 desktop components that want to share the same host, environment, VM, and
 state colors. Enable the generic artifacts with:
 
 ```nix
-nixling.site.ui.enable = true;
+d2b.site.ui.enable = true;
 ```
 
 The niri backend also enables the resolved color model:
 
 ```nix
-nixling.site.ui.compositors.niri.enable = true;
+d2b.site.ui.compositors.niri.enable = true;
 ```
 
 ## Source options
@@ -20,12 +20,12 @@ Configure colors through typed NixOS options, not compositor-specific
 strings:
 
 ```nix
-nixling.site.ui.colors.hostAccent = "#89b4fa";
-nixling.site.ui.colors.states.running = "#a6e3a1";
+d2b.site.ui.colors.hostAccent = "#89b4fa";
+d2b.site.ui.colors.states.running = "#a6e3a1";
 
-nixling.envs.work.ui.accentColor = "#ffa500";
+d2b.envs.work.ui.accentColor = "#ffa500";
 
-nixling.vms.workstation.ui.border = {
+d2b.vms.workstation.ui.border = {
   activeColor = "#ffa500";
   inactiveColor = "#ffa500";
   urgentColor = "#ffa500";
@@ -35,7 +35,7 @@ nixling.vms.workstation.ui.border = {
 Every source color must be a six-digit CSS hex string (`#rrggbb`).
 Resolved artifacts normalize colors to lowercase.
 
-If a VM border color is omitted, nixling resolves it as follows:
+If a VM border color is omitted, d2b resolves it as follows:
 
 | Field | Resolution |
 | --- | --- |
@@ -45,12 +45,12 @@ If a VM border color is omitted, nixling resolves it as follows:
 
 The inactive default intentionally preserves VM identity coloring when a
 window loses focus. Operators who prefer a neutral inactive border should
-set `nixling.vms.<vm>.ui.border.inactiveColor` once in nixling instead of
+set `d2b.vms.<vm>.ui.border.inactiveColor` once in d2b instead of
 adding compositor-local override rules.
 
 ## JSON artifact
 
-When enabled, nixling writes `/etc/nixling/ui-colors.json` by default.
+When enabled, d2b writes `/etc/d2b/ui-colors.json` by default.
 The JSON schema is committed at
 [`ui-colors-schema.json`](./ui-colors-schema.json).
 
@@ -90,15 +90,15 @@ it is presentation metadata only.
 
 ## GTK CSS artifact
 
-Nixling also writes `/etc/nixling/ui-colors.css` by default. It exposes
+D2b also writes `/etc/d2b/ui-colors.css` by default. It exposes
 GTK-compatible `@define-color` declarations for bars, launchers, and
 compositor-adjacent stylesheets:
 
 ```css
-@import url("/etc/nixling/ui-colors.css");
+@import url("/etc/d2b/ui-colors.css");
 
 #work {
-  border-left-color: @nixling_env_work_accent;
+  border-left-color: @d2b_env_work_accent;
 }
 ```
 
@@ -107,35 +107,35 @@ Definition names include:
 
 | Definition | Meaning |
 | --- | --- |
-| `nixling_host_accent` | Host identity accent |
-| `nixling_state_running` | Running state accent |
-| `nixling_state_transitioning` | Starting/stopping state accent |
-| `nixling_state_pending_restart` | Pending-restart state accent |
-| `nixling_state_error` | Error state accent |
-| `nixling_state_denied` | Authorization-denied state accent |
-| `nixling_state_unknown` | Unknown/unavailable state accent |
-| `nixling_env_<env>_accent` | Environment identity accent |
-| `nixling_vm_<vm>_border_active` | VM active border color |
-| `nixling_vm_<vm>_border_inactive` | VM inactive border color |
-| `nixling_vm_<vm>_border_urgent` | VM urgent border color |
+| `d2b_host_accent` | Host identity accent |
+| `d2b_state_running` | Running state accent |
+| `d2b_state_transitioning` | Starting/stopping state accent |
+| `d2b_state_pending_restart` | Pending-restart state accent |
+| `d2b_state_error` | Error state accent |
+| `d2b_state_denied` | Authorization-denied state accent |
+| `d2b_state_unknown` | Unknown/unavailable state accent |
+| `d2b_env_<env>_accent` | Environment identity accent |
+| `d2b_vm_<vm>_border_active` | VM active border color |
+| `d2b_vm_<vm>_border_inactive` | VM inactive border color |
+| `d2b_vm_<vm>_border_urgent` | VM urgent border color |
 
 Hyphens in environment and VM names are emitted as underscores in the CSS
 definition name, for example VM `work-aad` becomes
-`nixling_vm_work_aad_border_active`.
+`d2b_vm_work_aad_border_active`.
 
 ## Niri backend
 
 Enable niri output with:
 
 ```nix
-nixling.site.ui.compositors.niri.enable = true;
+d2b.site.ui.compositors.niri.enable = true;
 ```
 
-Nixling writes `/etc/nixling/niri-vm-borders.kdl` by default. The KDL
+D2b writes `/etc/d2b/niri-vm-borders.kdl` by default. The KDL
 renders `active-color`, `inactive-color`, and `urgent-color` from the same
 resolved VM border model used by the JSON and GTK CSS artifacts.
 
-The legacy `nixling.site.niriVmBorders` and `nixling.vms.<vm>.graphics.niriBorderColor`
+The legacy `d2b.site.niriVmBorders` and `d2b.vms.<vm>.graphics.niriBorderColor`
 options remain compatibility inputs for one release, but new
-configuration should use the `nixling.site.ui.*`,
-`nixling.envs.<env>.ui.*`, and `nixling.vms.<vm>.ui.*` paths.
+configuration should use the `d2b.site.ui.*`,
+`d2b.envs.<env>.ui.*`, and `d2b.vms.<vm>.ui.*` paths.

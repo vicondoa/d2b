@@ -8,12 +8,12 @@ ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-MANIFEST=/run/current-system/sw/share/nixling/vms.json
+MANIFEST=/run/current-system/sw/share/d2b/vms.json
 
 skip() { log "  SKIP: $*"; exit 0; }
 fail_now() { fail "$*"; exit 1; }
 
-[ -r "$MANIFEST" ] || skip "manifest missing; nixling not installed on this host"
+[ -r "$MANIFEST" ] || skip "manifest missing; d2b not installed on this host"
 obs_vm=$(jq -r '._observability.vmName // empty' "$MANIFEST")
 [ -n "$obs_vm" ] || skip "observability not enabled"
 vm_running "$obs_vm" || skip "observability VM is not running"
@@ -46,8 +46,8 @@ done < <(
 [ -n "$candidate_vm" ] || skip "no running audit-enabled workload VM with SSH + sudo was found"
 
 nonce="$$-${RANDOM}"
-audit_test_path="/run/nixling-audit-forwarding-test-${nonce}"
-audit_test_key="nixling-audit-test-${nonce}"
+audit_test_path="/run/d2b-audit-forwarding-test-${nonce}"
+audit_test_key="d2b-audit-test-${nonce}"
 remote_audit_script=$(cat <<EOF
 set -eu
 path='$audit_test_path'

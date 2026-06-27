@@ -3,8 +3,8 @@
 **Diataxis category:** reference.
 
 A provider-managed sandbox is a workload unit that a cloud provider
-creates, manages, and destroys on behalf of nixling. The nixling daemon
-routes typed operations to the provider API or to a provider-side nixling
+creates, manages, and destroys on behalf of d2b. The d2b daemon
+routes typed operations to the provider API or to a provider-side d2b
 agent and receives typed responses; it does not own a hypervisor or broker
 for these nodes. The first implemented adapter is Azure Container Apps.
 
@@ -12,7 +12,7 @@ This page documents the capability matrix, supported operations, absent
 capabilities, rate-limit/backoff/circuit behavior, credential boundary,
 safe diagnostics rules, and error shapes for provider-managed sandboxes.
 
-For nodes where nixling owns the full host stack (hypervisor, broker,
+For nodes where d2b owns the full host stack (hypervisor, broker,
 guest-control), see [remote full-host nodes](./remote-full-host-nodes.md).
 
 ---
@@ -21,26 +21,26 @@ guest-control), see [remote full-host nodes](./remote-full-host-nodes.md).
 
 A provider-managed sandbox is a named workload target in a realm whose
 lifecycle (create, start, stop, destroy) is owned by an external provider
-API rather than by a `nixling-priv-broker` running on a locally managed
+API rather than by a `d2b-priv-broker` running on a locally managed
 host. From the daemon's perspective it is a node with a bounded positive
-capability set derived from what that provider API or provider-side nixling
+capability set derived from what that provider API or provider-side d2b
 agent supports. The daemon never provisions, registers, or expects a full
-host `nixlingd`, `nixling-priv-broker`, KVM subsystem, vsock channel, cgroup
+host `d2bd`, `d2b-priv-broker`, KVM subsystem, vsock channel, cgroup
 subtree, namespace hierarchy, full-host lifecycle, or device-hotplug surface
 on a provider-managed node. ADR 0039 defines one exception to the old
 exec-only model: a provider-managed sandbox may advertise persistent shell
-only when it runs a guestd-compatible nixling agent that exposes shell
+only when it runs a guestd-compatible d2b agent that exposes shell
 control and terminal-v1 streams over the constellation peer transport.
 
 This model is distinct from a **remote full-host node** (see
 [remote full-host nodes](./remote-full-host-nodes.md)), which runs its
-own `nixlingd` and full broker stack and is reached through an
+own `d2bd` and full broker stack and is reached through an
 authenticated peer transport session. The following table summarizes the
 key differences:
 
 | Dimension | Provider-managed sandbox | Remote full-host node |
 | --- | --- | --- |
-| Who owns lifecycle | Cloud provider API | Remote `nixlingd` + `nixling-priv-broker` |
+| Who owns lifecycle | Cloud provider API | Remote `d2bd` + `d2b-priv-broker` |
 | Broker presence | None | Full broker on the remote host |
 | Guest-control / vsock | No vsock or raw guest-control tunnel; persistent-shell-capable sandboxes require a guestd-compatible agent over constellation peer transport. | Present |
 | KVM / hypervisor | Absent | Present |
@@ -80,7 +80,7 @@ table is not supported; operations requiring it receive
 | `snapshots` | ✗ | No snapshot API in this adapter. |
 | `hotplug` | ✗ | No device hotplug API. |
 | `ephemeral-sessions` | ✗ | Azure Container Apps sandboxes are selected by workload labels, not ephemeral session slots in this adapter. |
-| `provider-managed-isolation` | ✓ | Advertised so callers can distinguish Azure Container Apps from a full nixling host. |
+| `provider-managed-isolation` | ✓ | Advertised so callers can distinguish Azure Container Apps from a full d2b host. |
 
 For the cross-provider display and virtual I/O capability split, see
 [display and virtual I/O capabilities](./display-io-capabilities.md).
@@ -94,7 +94,7 @@ refused with `UnsupportedFeature` before contacting the provider API.
 
 | Operation | Behavior |
 | --- | --- |
-| `list` | Lists sandboxes selected by deterministic `nixling-workload` / realm labels and maps provider state to `WorkloadSummary`. |
+| `list` | Lists sandboxes selected by deterministic `d2b-workload` / realm labels and maps provider state to `WorkloadSummary`. |
 | `create` | Ensures a workload sandbox exists, creating/reusing the disk image and sandbox through the Azure Container Apps data plane. |
 | `start` | Ensures the sandbox exists and resumes it when idle. |
 | `stop` | Resolves the workload alias to a sandbox and posts Azure Container Apps stop; already-absent/already-stopped is success. |
@@ -120,7 +120,7 @@ typed capability denials for `Shell*` operations.
 A provider-managed sandbox may advertise `persistent-shell` only after its
 provider reports a complete, non-secret guestd-compatible bootstrap contract:
 
-1. The sandbox image places the guestd-compatible nixling agent binary in the
+1. The sandbox image places the guestd-compatible d2b agent binary in the
    image under provider control.
 2. Auth bootstrap material is short-lived and relay-scoped; long-lived realm,
    provider, and Relay rule credentials remain gateway-side only.
@@ -149,11 +149,11 @@ are never routed through this adapter. Requests for them fail closed
 with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
 
 - **No broker operation forwarding.** The adapter never forwards raw
-  `nixling-priv-broker` frames to the container runtime.
+  `d2b-priv-broker` frames to the container runtime.
 - **No raw guest-control or vsock frames.** The current
   executeShellCommand-only Azure Container Apps adapter has no guestd instance
   and no vsock channel to attach or tunnel. Future persistent-shell-capable
-  provider sandboxes must use a guestd-compatible nixling agent over the ADR
+  provider sandboxes must use a guestd-compatible d2b agent over the ADR
   0032 peer transport; they still do not expose raw guest-control frames or a
   provider-specific shell channel.
 - **No exec-to-shell fallback.** `executeShellCommand`,
@@ -166,15 +166,15 @@ with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
 - **No SSH fallback.** No SSH session is opened when the provider API
   is unavailable or when no exec surface is present.
 - **No full-host registration.** The adapter does not register the Azure Container Apps
-  environment as a full nixling host; it does not run `nixlingd`,
-  install packages, or execute `nixling host prepare`.
+  environment as a full d2b host; it does not run `d2bd`,
+  install packages, or execute `d2b host prepare`.
 - **No generic container tunnel.** Raw container exec, Azure Container
   Apps debug proxy, or any other tunnel endpoint is outside scope. The
   adapter uses only the Azure Container Apps management API surfaces listed above.
 - **No device hotplug.** Storage attachment, GPU assignment, and device
   tree mutations are outside scope.
 - **No cgroup or namespace authority.** The provider runtime owns the
-  container lifecycle; nixling does not read, write, or delegate any
+  container lifecycle; d2b does not read, write, or delegate any
   cgroup subtree for these workloads.
 
 ---
@@ -359,7 +359,7 @@ the capability matrix above.
 
 - [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the live core contract for persistent shells on remote/provider targets.
 - [Remote full-host nodes](./remote-full-host-nodes.md) — the model
-  for nodes that run their own `nixlingd`/broker/guest-control stack.
+  for nodes that run their own `d2bd`/broker/guest-control stack.
 - [Azure Relay transport](./transport-azure-relay.md) — the Relay
   WebSocket transport used for sandbox sender connections.
 - [Constellation core](./constellation-core.md) — typed error shapes,

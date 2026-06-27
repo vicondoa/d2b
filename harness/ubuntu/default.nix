@@ -1,6 +1,6 @@
 { pkgs }:
 
-pkgs.runCommand "nixling-harness-ubuntu-skeleton" {
+pkgs.runCommand "d2b-harness-ubuntu-skeleton" {
   src = ./.;
   nativeBuildInputs = [ pkgs.bash pkgs.jq ];
 } ''

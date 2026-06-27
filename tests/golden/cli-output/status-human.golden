@@ -10,7 +10,7 @@ pending-restart: no
 current: (missing)
 booted: (missing)
 declared roles: host-reconcile, store-virtiofs-preflight, virtiofsd, virtiofsd, virtiofsd, virtiofsd, cloud-hypervisor-runner, guest-ssh-readiness
-readiness: component-specific:host state, runtime directories, and bridges are reconciled, command:test -e /var/lib/nixling/vms/corp-vm/store/.nixling-marker-corp-vm, unix-socket-exists:/run/nixling/vms/corp-vm/ro-store.sock, unix-socket-exists:/run/nixling/vms/corp-vm/nl-meta.sock, unix-socket-exists:/run/nixling/vms/corp-vm/nl-hkeys.sock, unix-socket-exists:/run/nixling/vms/corp-vm/nl-ssh-host.sock, api-socket-info:/var/lib/nixling/vms/corp-vm/corp-vm.sock, tcp-port:10.20.0.10:22
+readiness: component-specific:host state, runtime directories, and bridges are reconciled, command:test -e /var/lib/d2b/vms/corp-vm/store/.d2b-marker-corp-vm, unix-socket-exists:/run/d2b/vms/corp-vm/ro-store.sock, unix-socket-exists:/run/d2b/vms/corp-vm/d2b-meta.sock, unix-socket-exists:/run/d2b/vms/corp-vm/d2b-hkeys.sock, unix-socket-exists:/run/d2b/vms/corp-vm/d2b-ssh-host.sock, api-socket-info:/var/lib/d2b/vms/corp-vm/corp-vm.sock, tcp-port:10.20.0.10:22
 runner parity: ok (/nix/store/139kn3xbgap472rgr7nxs3safamq7n78-microvm-qemu-corp-vm)
 
 === Bridge health ===

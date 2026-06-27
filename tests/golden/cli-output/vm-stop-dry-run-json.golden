@@ -44,7 +44,7 @@
     ]
   },
   "mode": "dry-run",
-  "notes": "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015).",
+  "notes": "vm dry-run reports the DAG the supervisor would drive (start: topo order; stop: reverse topo). --apply routes through d2bd → broker (v1.0 daemon-only per ADR 0015).",
   "stopOrder": [
     "guest-control-health",
     "ch",

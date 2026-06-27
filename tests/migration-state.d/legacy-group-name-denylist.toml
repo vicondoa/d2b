@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist (full-line allowlisted denylist scan over nixos-modules/packages/tests rejecting retired legacy launcher group-name references); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist (full-line allowlisted denylist scan over nixos-modules/packages/tests rejecting retired legacy launcher group-name references); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]

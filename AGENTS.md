@@ -1,17 +1,17 @@
 # AGENTS.md
 
 Operating manual for AI coding agents (Copilot CLI, GitHub Copilot,
-Cursor, …) and human contributors working on **`vicondoa/nixling`
-itself**. If you are *consuming* nixling in your own NixOS host
+Cursor, …) and human contributors working on **`vicondoa/d2b`
+itself**. If you are *consuming* d2b in your own NixOS host
 config, start at [README.md](./README.md) instead — this file is for
 people changing the framework.
 
 ## What this is
 
-Nixling is an opinionated NixOS desktop microVM framework that
+d2b is an opinionated NixOS desktop microVM framework that
 owns its microVM substrate end-to-end. The control plane is
-**daemon-only**: `nixlingd` supervises every per-VM DAG and
-`nixling-priv-broker` dispatches every audited host mutation.
+**daemon-only**: `d2bd` supervises every per-VM DAG and
+`d2b-priv-broker` dispatches every audited host mutation.
 There are no per-VM systemd templates, no host-singleton framework
 services, and no legacy bash CLI; see
 [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) for the
@@ -55,18 +55,18 @@ full picture and threat model.
 │       └── audio/{guest,host}.nix  <- vhost-user-sound + PipeWire mediation
 ├── pkgs/                           <- patched cloud-hypervisor / crosvm / vhost-device-sound
 ├── packages/                       <- Rust workspace; pinned rust-toolchain.toml
-│   ├── nixling-core/              <- shared bundle DTOs, typed errors, privilege metadata
-│   ├── nixling-host/              <- host-side lifecycle primitives (argv, hardlink farm, ifnames)
-│   ├── nixling-contracts/          <- public + private wire contracts
-│   ├── nixling/                   <- rust-native CLI
-│   ├── nixlingd/                  <- unprivileged public daemon / supervisor
-│   ├── nixling-priv-broker/       <- privileged broker for audited host mutations
-│   ├── nixling-guest-shell-runner/ <- standalone static guest helper for persistent shell feasibility
+│   ├── d2b-core/              <- shared bundle DTOs, typed errors, privilege metadata
+│   ├── d2b-host/              <- host-side lifecycle primitives (argv, hardlink farm, ifnames)
+│   ├── d2b-contracts/          <- public + private wire contracts
+│   ├── d2b/                   <- rust-native CLI
+│   ├── d2bd/                  <- unprivileged public daemon / supervisor
+│   ├── d2b-priv-broker/       <- privileged broker for audited host mutations
+│   ├── d2b-guest-shell-runner/ <- standalone static guest helper for persistent shell feasibility
 │   └── xtask/                     <- schema / docs codegen helpers; see
 │                                      `docs/adr/0000` + `docs/adr/0009`
 ├── tests/                          <- see "Test layout" below
 ├── examples/                       <- minimal / graphics-workstation / multi-env / with-entra-id
-├── templates/default/              <- `nix flake init -t github:vicondoa/nixling`
+├── templates/default/              <- `nix flake init -t github:vicondoa/d2b`
 └── docs/                           <- Diataxis tree (explanation / how-to / reference)
                                        plus `docs/adr/` architecture decision records
 ```
@@ -120,9 +120,9 @@ make test-host-integration  # runNixOSTest VM checks; NixOS + KVM host
 
 `make test-host-integration` is x86_64-linux only and may fall back to
 slow TCG if `/dev/kvm` is absent. Hardware and live-host tests remain
-explicit manual tiers (`make test-hardware` or `NL_LIVE=1 bash
+explicit manual tiers (`make test-hardware` or `D2B_LIVE=1 bash
 tests/integration/live/<name>.sh`) and require a host with the matching
-devices or deployed nixling state.
+devices or deployed d2b state.
 
 For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](./tests/AGENTS.md).
@@ -146,8 +146,8 @@ enforces this.
 
 Merging to `main` with a new version header in `CHANGELOG.md` triggers:
 1. Auto-creation of git tag `vX.Y.Z`
-2. Build of all host binaries (`nixlingd`, `nixling`, `nixling-priv-broker`,
-   `nixling-wayland-filter`, `nixling-activation-helper`)
+2. Build of all host binaries (`d2bd`, `d2b`, `d2b-priv-broker`,
+   `d2b-wayland-filter`, `d2b-activation-helper`)
 3. GitHub Release with changelog notes + binary tarballs + `SHA256SUMS`
 
 Consumers can fetch pre-built binaries from the release instead of
@@ -166,7 +166,7 @@ the final merge trivial.
 
 ```bash
 # From the primary clone, one worktree per concurrent scope:
-git worktree add -b phase-<name> ../nixling-<name> main
+git worktree add -b phase-<name> ../d2b-<name> main
 ```
 
 Each agent commits inside its own worktree on its own
@@ -188,7 +188,7 @@ clean disjoint scopes.
 A worktree is a workspace, not a destination. When an agent's scope
 is done — implementation green, tests green, panel signed off — the
 agent merges the worktree branch back into `main` in the **primary
-clone (`projects/nixling`)** before declaring the task complete.
+clone (`projects/d2b`)** before declaring the task complete.
 Finished work sitting on a side worktree branch is not done; it is
 "awaiting integration", which is a state the agent owns, not a state
 the agent leaves for the operator.
@@ -197,7 +197,7 @@ Concretely, the agent that owns a worktree:
 
 1. Verifies green on the worktree (`cargo test --workspace`, the
    relevant `tests/*.sh` gates, panel signoff for plan-driven work).
-2. From the primary clone (`/home/paydro/projects/nixling`),
+2. From the primary clone (`/home/paydro/projects/d2b`),
    fast-forwards (or octopus-merges, per the rules above) the
    worktree's `phase-<name>` branch into `main`.
 3. If there is unrelated dirty WIP in the primary clone (operator
@@ -211,29 +211,29 @@ Concretely, the agent that owns a worktree:
 
 Only after the merge lands does the agent call `task_complete`.
 
-### Local host validation after updating nixling
+### Local host validation after updating d2b
 
-When a host configuration switches to a new nixling checkout (for
-example a local `path:/home/paydro/projects/nixling` input), the host
-switch updates `/etc/nixling/*` and the system packages and may restart
-`nixlingd`. That daemon restart is a continuation event: VMs must stay
+When a host configuration switches to a new d2b checkout (for
+example a local `path:/home/paydro/projects/d2b` input), the host
+switch updates `/etc/d2b/*` and the system packages and may restart
+`d2bd`. That daemon restart is a continuation event: VMs must stay
 running, protected by `KillMode=process`, and the restarted daemon
 re-adopts their runner pidfds. Before runtime validation, make sure the
 notify-ready daemon is active on the updated generation:
 
 ```bash
-sudo systemctl restart nixlingd.service
+sudo systemctl restart d2bd.service
 ```
 
 Then restart affected VMs with the normal lifecycle commands (on this
-host, prefer `nixling down <vm> --apply` followed by
-`nixling up <vm> --apply`; `nixling switch <vm>` is not reliable here).
+host, prefer `d2b down <vm> --apply` followed by
+`d2b up <vm> --apply`; `d2b switch <vm>` is not reliable here).
 
 #### Integrator-prep-first pattern (W3 onwards)
 
 For waves whose thematic scopes are NOT file-disjoint by default —
 W3 host-prepare is the canonical example, with scopes s1–s5
-naturally sharing `packages/nixling-contracts`, `packages/nixling-core`
+naturally sharing `packages/d2b-contracts`, `packages/d2b-core`
 DTOs, schemas, and `Cargo.toml` workspace pins — the wave is
 preceded by an **integrator API/contract prep commit landed
 directly on `main`** before any scope worktree is opened. That
@@ -264,7 +264,7 @@ Commit before running `static.sh` / the smoke evals. Two reasons:
 1. Untracked files are invisible to `nix flake check` (and to any
    eval that follows the same code path). Forgetting to `git add` a
    new module is the #1 "why doesn't my change apply?" pitfall.
-2. Consumer hosts that vendor nixling tend to ship auto-backup
+2. Consumer hosts that vendor d2b tend to ship auto-backup
    tooling that catch-all-commits any dirty tree. That's a
    consumer-side concern, but the habit of committing-then-building
    is the right one to carry into framework work too.
@@ -295,16 +295,16 @@ behaviour described here, update this file in the same commit.
 ### Naming conventions
 
 The framework declares **exactly three** root-visible units. There
-is no `nixling@<vm>`-style per-VM unit; `nixlingd` supervises every
+is no `d2b@<vm>`-style per-VM unit; `d2bd` supervises every
 per-VM DAG in-process and hands fds to spawned runners via the
 broker's `SpawnRunner` / `OpenPidfd` ops.
 
 | Resource                                | Pattern                                |
 | --------------------------------------- | -------------------------------------- |
-| Public daemon (supervisor)              | `nixlingd.service`                     |
-| Privileged broker socket                | `nixling-priv-broker.socket`           |
-| Privileged broker service               | `nixling-priv-broker.service`          |
-| Lifecycle permission group              | `nixling` (singleton)                  |
+| Public daemon (supervisor)              | `d2bd.service`                     |
+| Privileged broker socket                | `d2b-priv-broker.socket`           |
+| Privileged broker service               | `d2b-priv-broker.service`          |
+| Lifecycle permission group              | `d2b` (singleton)                  |
 
 VM names are validated at eval time:
 
@@ -332,11 +332,11 @@ flake and is composed per-VM:
   joins (Himmelblau + TPM-bound machine credential).
 
 The composition pattern is intentionally one-way: sibling flakes
-know nothing about nixling, and nixling knows nothing about them.
+know nothing about d2b, and d2b knows nothing about them.
 Consumers compose them on a specific workload VM:
 
 ```nix
-nixling.vms.work.config.imports = [
+d2b.vms.work.config.imports = [
   inputs.entrablau.nixosModules.default
 ];
 ```
@@ -344,7 +344,7 @@ nixling.vms.work.config.imports = [
 If you're tempted to add a new sibling-shaped concern (e.g. a
 specific desktop environment, a particular dev-shell flavour) to
 the core framework, consider whether it belongs in its own flake
-instead. The bar for landing it in core is: "every nixling user
+instead. The bar for landing it in core is: "every d2b user
 plausibly wants this, and the framework cannot do the right thing
 without it."
 
@@ -352,54 +352,54 @@ without it."
 
 ### VM lifecycle (daemon-supervised)
 
-`nixlingd` is the sole supervisor for every per-VM lifecycle DAG.
+`d2bd` is the sole supervisor for every per-VM lifecycle DAG.
 There are no framework-declared per-VM systemd units: child
 processes (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound,
 USBIP attach) are spawned by the broker via `SpawnRunner`, handed
-back to `nixlingd` over `SCM_RIGHTS` as pidfds, and reconciled
+back to `d2bd` over `SCM_RIGHTS` as pidfds, and reconciled
 against the persisted DAG state under
-`/var/lib/nixling/supervisor/state.json`.
+`/var/lib/d2b/supervisor/state.json`.
 
 Stop is provider-aware for local primary VMM runners. Normal
-`nixling vm stop` asks Cloud Hypervisor guests to shut down via the CH
+`d2b vm stop` asks Cloud Hypervisor guests to shut down via the CH
 API and qemu-media guests via broker-mediated QMP before pidfd signal
 cleanup. `--force` is an explicit operator override that skips only
 that graceful guest wait and then uses the standard SIGTERM/SIGKILL
-cleanup path. `nixling.daemon.lifecycle.gracefulShutdown.*` and
-`nixling.vms.<vm>.lifecycle.gracefulShutdown.*` configure the bounded
+cleanup path. `d2b.daemon.lifecycle.gracefulShutdown.*` and
+`d2b.vms.<vm>.lifecycle.gracefulShutdown.*` configure the bounded
 wait; disabled VMs bypass the graceful phase without being marked
 degraded.
 
 The restart policy applies differently to the two daemon units (no
 per-VM units are emitted):
 
-- `nixlingd.service` is `Type=notify` and may restart on switch/update.
+- `d2bd.service` is `Type=notify` and may restart on switch/update.
   Systemd does not report it ready until the public socket is bound and
   the daemon has completed startup/adoption. `KillMode=process` ensures a
   daemon restart kills only the daemon main PID, not VM runner
   descendants; the restarted daemon re-adopts existing runners. The
   existing guarded `ExecStop` host-shutdown hook remains the all-VM
   teardown path and runs only when the system manager is stopping.
-- `nixling-priv-broker.service` is socket-activated. It reloads the
+- `d2b-priv-broker.service` is socket-activated. It reloads the
   current bundle resolver for each accepted request so a running broker
   does not dispatch stale runner intents after a switch, and it never
   holds in-flight session state across requests.
 
 Drift detection moves from per-VM symlinks into the daemon's
-state file. `nixling vm list` flags any VM where the running
+state file. `d2b vm list` flags any VM where the running
 closure differs from the latest declared closure with
-`[pending restart]`; `nixling vm status <vm>` prints both store
-paths and the exact remediation command (`nixling vm restart <vm>`
-for a clean down+up, `nixling vm switch <vm>` for a per-VM closure
+`[pending restart]`; `d2b vm status <vm>` prints both store
+paths and the exact remediation command (`d2b vm restart <vm>`
+for a clean down+up, `d2b vm switch <vm>` for a per-VM closure
 rebuild + live activation).
 
 #### Adding new per-VM behaviour
 
 New per-VM work belongs **inside the daemon's DAG executor**
-(`packages/nixlingd/src/supervisor/`), with any privileged side
-effects routed through a typed `nixling-priv-broker` op declared
-in `packages/nixling-contracts/` and audited in
-`/var/lib/nixling/audit/broker-<utc-date>.jsonl`. Do not introduce
+(`packages/d2bd/src/supervisor/`), with any privileged side
+effects routed through a typed `d2b-priv-broker` op declared
+in `packages/d2b-contracts/` and audited in
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce
 a new `systemd.services.*` declaration in `nixos-modules/` for
 per-VM work — the `tests/legacy-unit-denylist-eval.sh` gate will
 reject it. See
@@ -410,9 +410,9 @@ the broker op catalogue.
 
 Adding or reclassifying a spawned runner `ProcessRole` also requires
 matching process-builder and runner-matrix coverage: add/extend the
-typed Rust argv builder in `packages/nixling-host/src/*_argv.rs` and
+typed Rust argv builder in `packages/d2b-host/src/*_argv.rs` and
 the role coverage policy/contract tests under
-`packages/nixling-contract-tests/tests/` in the same change.
+`packages/d2b-contract-tests/tests/` in the same change.
 
 ## Panel review
 
@@ -544,7 +544,7 @@ form (e.g. `... ( W2fu4 H10 )`).
 One host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
 `/etc/nixos/scripts/panel-aggregate.sh`. That tooling is paydro's
-host-specific implementation, not an upstream nixling dependency;
+host-specific implementation, not an upstream d2b dependency;
 alternative implementations are welcome if they preserve the same
 review contract.
 
@@ -568,7 +568,7 @@ At a glance:
 | `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
 | `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
-| `packages/nixling-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. |
+| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. |
 | `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with the matching `xtask gen-*` command instead of adding another gate. |
 | `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
 | `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not the PR pipeline. |
@@ -660,9 +660,9 @@ they are load-bearing:
   branches (see Commit conventions).
 
 Note the deliberate exception: the consumer-facing
-`nixling.defaultSwitchReadiness.<wave>` option namespace (keys
+`d2b.defaultSwitchReadiness.<wave>` option namespace (keys
 `w4Fu`…`p7`), its `readinessWaveSpecs` schema, and the
-`/var/lib/nixling/validated/<wave>.json` evidence contract use
+`/var/lib/d2b/validated/<wave>.json` evidence contract use
 `wave`/phase tokens as **functional identifiers**. Those are part of
 the public option/schema surface and are not bookkeeping; leave them.
 
@@ -776,7 +776,7 @@ fields that request panel, agent, or model metadata.
 ## Disk hygiene contract
 
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
-  (use the `nl_flake_ref` helper in `tests/lib.sh`), **never**
+  (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
   `path:` fetcher, which copies the ENTIRE working tree into the store —
   including the multi-GiB `packages/target` cargo artifacts (measured:
@@ -793,19 +793,19 @@ fields that request panel, agent, or model metadata.
   so "commit before building" still holds (see "Edit -> commit ->
   validate").
 - Every test script that creates repo-local scratch state MUST use
-  `nl_mktemp` from `tests/lib.sh`; do not call raw
+  `d2b_mktemp` from `tests/lib.sh`; do not call raw
   `mktemp -d -p "$ROOT"`.
 - Per-process bookkeeping (`cleanups.<PID>`, `scratch-registry`)
-  lives in `${NL_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/nixling-bookkeeping}`,
+  lives in `${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}`,
   NOT in `$ROOT`. Parallel-test timing log/status files live in
-  `${TMPDIR:-/tmp}/nixling-static-timing.$$/`. Both moves are
+  `${TMPDIR:-/tmp}/d2b-static-timing.$$/`. Both moves are
   required so volatile files can't race
   `builtins.getFlake (toString $ROOT)` source-capture during
   flake-eval gates (W2fu4 H8/H9).
-- Rust worktrees share `/home/paydro/.cache/nixling-cargo-target/`
+- Rust worktrees share `/home/paydro/.cache/d2b-cargo-target/`
   through the repo-local `.cargo/config.toml` files.
 - The persistent-shell helper is intentionally excluded from the main
-  Rust workspace at `packages/nixling-guest-shell-runner/`. Run it by
+  Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the
   real shpool bridge); the top-level Rust/static/supply-chain gates wire
   it explicitly like the broker workspace.
@@ -826,17 +826,17 @@ fields that request panel, agent, or model metadata.
 - `tests/static.sh` can run an opt-in deep GC after the gate:
 
   ```
-  NL_POST_GATE_DEEP_GC=1 bash tests/static.sh           # user gens only
-  NL_POST_GATE_DEEP_GC=1 \
-  NL_POST_GATE_DEEP_GC_SUDO=1 \
+  D2B_POST_GATE_DEEP_GC=1 bash tests/static.sh           # user gens only
+  D2B_POST_GATE_DEEP_GC=1 \
+  D2B_POST_GATE_DEEP_GC_SUDO=1 \
   bash tests/static.sh                                  # + system gens
   ```
 
-  `NL_POST_GATE_DEEP_GC_SUDO=1` uses `sudo -n` and skips fail-open
+  `D2B_POST_GATE_DEEP_GC_SUDO=1` uses `sudo -n` and skips fail-open
   with a clear log if passwordless sudo isn't available. Threshold
-  defaults to 7 days; override with `NL_POST_GATE_DEEP_GC_DAYS=N`.
+  defaults to 7 days; override with `D2B_POST_GATE_DEEP_GC_DAYS=N`.
   Off by default — this is operator policy, not gate policy.
-- `NL_SKIP_WITH_ENTRA_ID=1` skips the per-example flake check for
+- `D2B_SKIP_WITH_ENTRA_ID=1` skips the per-example flake check for
   `examples/with-entra-id` when its pinned `vicondoa/entrablau.nix`
   input fails the per-example cargo fetch with a transient crates.io
   403 against `libhimmelblau-0.8.18` / `kanidm-hsm-crypto-0.3.6`.
@@ -857,7 +857,7 @@ fields that request panel, agent, or model metadata.
   Each derivation fetches the pinned RustSec advisory DB snapshot
   from the Nix store (no network at build time) and runs cargo-deny /
   cargo-audit against both `packages/Cargo.lock` and
-  `packages/nixling-priv-broker/Cargo.lock`. The advisory DB is a
+  `packages/d2b-priv-broker/Cargo.lock`. The advisory DB is a
   `fetchFromGitHub` pinned to a specific commit; update the rev + hash
   in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).
@@ -869,21 +869,21 @@ Touch these only with a clear plan and a corresponding test run.
 | System                              | Where                                                                                  | Risk if broken                                                            |
 | ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Net VM networking / firewall        | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/net-vm-network-eval.sh`. |
-| Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/nixling/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/nixling/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel — do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/nixling` and `/nix/store` on the **same filesystem** — hardlinks can't cross FS boundaries; if split, `nixling vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` — recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
-| TPM persistence (per-VM swtpm)      | `/var/lib/nixling/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/nixling-host/src/swtpm_argv.rs` and supervised by `nixlingd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/nixling-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `nixling-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink — emitting the path-free `PrepareSwtpmDir` audit op. | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/nixling/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/nixling-priv-broker/src/ops/swtpm_dir.rs` tests. |
-| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `nixlingd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker — there is no per-env `nixling-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
-| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `nixlingd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `nixlingd` no longer terminates CH — pidfd handoff means the child outlives a daemon reconnect — but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
-| Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/nixling-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `nixling-<vm>-video` principal, not `nixling-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |
-| UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/nixling-wlcontrol` | The compositor-agnostic `nixling.site.ui` / `nixling.envs.<env>.ui` / `nixling.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/nixling/ui-colors.json` and `/etc/nixling/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `nixling.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned nixling state directly. |
+| Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel — do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** — hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` — recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
+| TPM persistence (per-VM swtpm)      | `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-host/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink — emitting the path-free `PrepareSwtpmDir` audit op. | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` tests. |
+| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker — there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
+| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH — pidfd handoff means the child outlives a daemon reconnect — but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
+| Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |
+| UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
-| Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/nixling-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:nixlingd` 0640 and ground every broker/sandbox/runner behaviour. `nixling-core` DTOs are canonical; `nixling._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/nixling` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
-| Control plane — `nixlingd` + `nixling-priv-broker` | `packages/nixling-contracts/**` + `packages/nixling-core/**` + `packages/nixlingd/**` + `packages/nixling-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/nixling/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `nixling-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `nixlingd.service` carries `Wants=nixling-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `nixlingd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:nixlingd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `nixling.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/nixlingd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
-| Storage lifecycle / restart / synchronization | Planned generated contracts in `nixling-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](./docs/explanation/storage-lifecycle.md) | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/nixling`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority. |
+| Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
+| Control plane — `d2bd` + `d2b-priv-broker` | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/d2bd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
+| Storage lifecycle / restart / synchronization | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](./docs/explanation/storage-lifecycle.md) | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority. |
 | Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. |
-| Guest-control exec session table    | `packages/nixlingd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/nixlingd/src/lib.rs`, `packages/nixling/src/exec_client.rs`, `packages/nixling-contracts/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`) | `nixling vm exec` is **admin-only** and runs through `nixlingd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) — never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`nixling-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `nixling vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`nixling vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** — the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs BEFORE any session lookup/slot reservation/connect or detached create; old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices. |
-| Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `nixling` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/nixlingd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check. |
-| SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `nixling keys rotate` MUST NOT touch consumer-supplied keys. |
-| virtiofsd sandbox model             | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/nixling-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `nixling-<vm>-runner`; the guest-control token share (`nl-gctl`) maps to the narrower `nixling-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `nl-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md). Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
+| Guest-control exec session table    | `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`) | `d2b vm exec` is **admin-only** and runs through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) — never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** — the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs BEFORE any session lookup/slot reservation/connect or detached create; old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices. |
+| Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check. |
+| SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NOT touch consumer-supplied keys. |
+| virtiofsd sandbox model             | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md). Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
 
 ## Don'ts (security-relevant)
 
@@ -902,15 +902,15 @@ Touch these only with a clear plan and a corresponding test run.
   is right but the failure mode is misleading, fix the message.
 - **Don't reintroduce a per-VM systemd unit or a host-singleton
   framework service.** Every per-VM lifecycle step lives inside
-  `nixlingd`'s DAG executor with privileged side effects routed
-  through a typed `nixling-priv-broker` op (ADR 0015). The
+  `d2bd`'s DAG executor with privileged side effects routed
+  through a typed `d2b-priv-broker` op (ADR 0015). The
   `tests/legacy-unit-denylist-eval.sh` and
   `tests/agents-md-rewrite-eval.sh` gates fail closed on
   regressions.
 - **Don't reintroduce a bash CLI fallback or env-knob escape
   hatch.** The Rust CLI is the only operator surface;
-  `NIXLING_LEGACY_BASH_OPT_IN`, `NIXLING_LEGACY_CLI`, and
-  `NIXLING_NATIVE_ONLY` are no-ops.
+  `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`, and
+  `D2B_NATIVE_ONLY` are no-ops.
 - **Don't commit secrets, hostnames, real user identifiers, or
   real network ranges.** Use generic names (`alice`,
   `corp-vm`, `work`, `personal`) and RFC1918 / RFC5737 ranges
@@ -931,15 +931,15 @@ Touch these only with a clear plan and a corresponding test run.
   and feature-branch commits — never in shipped source comments,
   shipped docs prose, CLI help/error text, or released CHANGELOG
   sections. See [Versioning & changelog](#versioning--changelog).
-  The functional `nixling.defaultSwitchReadiness.<wave>` option
+  The functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
 - **Don't let a host process hold realm credentials, or treat relay
   identity as local auth (ADR 0032).** Realm relay/session/provider
   credentials, remote node registries, and realm audit belong inside
-  a per-realm gateway guest VM — never in `nixlingd`, the broker, the
+  a per-realm gateway guest VM — never in `d2bd`, the broker, the
   host bundle, host-readable storage, or any host-side activation
   artifact. A relay-authenticated peer is never mapped to local
-  `Admin`; `SO_PEERCRED` + `nixling` group membership stays the only
+  `Admin`; `SO_PEERCRED` + `d2b` group membership stays the only
   local lifecycle authz surface. Work and personal realms never share
   a gateway guest or an L2 bridge.
 - **Don't add ad-hoc storage, ACL, cleanup, or lock ownership paths.**
@@ -947,7 +947,7 @@ Touch these only with a clear plan and a corresponding test run.
   broker-resolved opaque ids, anchored path resolution, OFD locks with
   `O_CLOEXEC`, explicit fd transfer only, restart-aware adoption before
   cleanup, and typed degraded-state reporting instead of broad chmod,
-  chown, setfacl, or `/run/nixling` sweeps. Every new host-mutable
+  chown, setfacl, or `/run/d2b` sweeps. Every new host-mutable
   path or lock surface must add or reuse a generated `storage.json` /
   `sync.json` row, name a single repair owner, and route repair through
   that owner rather than adding a second activation/broker/daemon fixer.
@@ -960,23 +960,23 @@ broker op mutating host state.
 
 ### cgroup slice naming
 
-- Single canonical slice: **`/sys/fs/cgroup/nixling.slice`** (no
-  `system-` prefix, no `nixling-launcher.slice` parent). The broker
+- Single canonical slice: **`/sys/fs/cgroup/d2b.slice`** (no
+  `system-` prefix, no `d2b-launcher.slice` parent). The broker
   creates it on `host prepare --apply` if absent.
 - Per-VM directories live one level below the slice:
-  `nixling.slice/<vm>/<role>/`. The VM layer is **process-free**; only
+  `d2b.slice/<vm>/<role>/`. The VM layer is **process-free**; only
   the per-role leaves hold processes.
 - Delegation: the broker `fchown`s the delegated subtree (the
-  `nixling.slice` directory and every descendant) to the `nixlingd`
+  `d2b.slice` directory and every descendant) to the `d2bd`
   system user. The host cgroup root is never chowned.
 - Forbidden surfaces: writing `cpuset.cpus.partition` on
-  nixling-owned cgroups (the cgroup v2 root and other ancestors
-  are out of scope; nixling never reads/writes them), threaded
-  cgroups, `cgroup.kill` on `nixling.slice` or any ancestor of
+  d2b-owned cgroups (the cgroup v2 root and other ancestors
+  are out of scope; d2b never reads/writes them), threaded
+  cgroups, `cgroup.kill` on `d2b.slice` or any ancestor of
   a daemon-owned leaf, and **Phase B (post-delegation) runtime
   mutation while running as uid 0** (Phase A privileged setup
   — `+controllers` cascade, slice/leaf `mkdir`, `fchown` to
-  `nixlingd`'s uid/gid — legitimately runs as root per ADR 0011
+  `d2bd`'s uid/gid — legitimately runs as root per ADR 0011
   Decision item 2; the uid != 0 invariant applies to the
   steady-state cgroup code path after privilege drop). See
   [`docs/reference/cgroup-delegation.md`](./docs/reference/cgroup-delegation.md)
@@ -989,12 +989,12 @@ markers so foreign-rule preservation can be enforced fail-closed:
 
 | Surface | Marker shape |
 | --- | --- |
-| nftables (`inet nixling` table) | every rule + chain carries `comment "nixling managed: <ownership-id>"`; foreign tables are never flushed |
-| `/etc/hosts` | block delimited by `# nixling-managed begin` and `# nixling-managed end`; foreign lines outside the block are byte-preserved |
-| NetworkManager unmanaged config | `/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf`, contents delimited by `# nixling-managed begin` / `# nixling-managed end` |
-| systemd-networkd | detection-only; coexistence requires an operator-shipped configured-unmanaged file matching the `nl-`/`nlv-` prefix (no nixling write) |
+| nftables (`inet d2b` table) | every rule + chain carries `comment "d2b managed: <ownership-id>"`; foreign tables are never flushed |
+| `/etc/hosts` | block delimited by `# d2b-managed begin` and `# d2b-managed end`; foreign lines outside the block are byte-preserved |
+| NetworkManager unmanaged config | `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf`, contents delimited by `# d2b-managed begin` / `# d2b-managed end` |
+| systemd-networkd | detection-only; coexistence requires an operator-shipped configured-unmanaged file matching the `d2b-`/`d2bv-` prefix (no d2b write) |
 
-Discovering a foreign ownership marker where nixling expects its own
+Discovering a foreign ownership marker where d2b expects its own
 is fail-closed (`path-safety-violation`,
 `nm-managed-foreign-conflict`, `foreign-nft-rule-preserved`). See
 [`docs/explanation/host-prepare.md`](./docs/explanation/host-prepare.md)
@@ -1004,31 +1004,31 @@ the rationale.
 ## Daemon-only end-state (P6 onward)
 
 The framework declares **exactly three** root-visible units:
-`nixlingd.service`, `nixling-priv-broker.socket`, and
-`nixling-priv-broker.service`. The binding architectural decision
+`d2bd.service`, `d2b-priv-broker.socket`, and
+`d2b-priv-broker.service`. The binding architectural decision
 is recorded in
 [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 
 Agents working on the framework MUST treat the following as the
 contract:
 
-- The CLI is the Rust `nixling` binary, full stop. There is no bash
-  fallback bridge; `NIXLING_LEGACY_BASH_OPT_IN`, `NIXLING_LEGACY_CLI`,
-  and `NIXLING_NATIVE_ONLY` are no-ops.
+- The CLI is the Rust `d2b` binary, full stop. There is no bash
+  fallback bridge; `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`,
+  and `D2B_NATIVE_ONLY` are no-ops.
 - There are no framework-declared per-VM systemd units. The per-VM
-  lifecycle DAG runs inside `nixlingd`; spawned runners
+  lifecycle DAG runs inside `d2bd`; spawned runners
   (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound, USBIP
   attach) are launched by the broker's `SpawnRunner` op and handed
-  back to `nixlingd` as pidfds via `OpenPidfd` / `SCM_RIGHTS`.
+  back to `d2bd` as pidfds via `OpenPidfd` / `SCM_RIGHTS`.
 - There are no host-singleton framework services
-  (`nixling-ch-exporter`, `nixling-otel-host-bridge`,
-  `nixling-net-route-preflight`, `nixling-audit-check[.timer]`,
-  `microvms.target`). Their work either moved into `nixlingd` or
+  (`d2b-ch-exporter`, `d2b-otel-host-bridge`,
+  `d2b-net-route-preflight`, `d2b-audit-check[.timer]`,
+  `microvms.target`). Their work either moved into `d2bd` or
   was retired with the metric / signal it produced.
-- The `nixling.vms.<vm>.supervisor` option has been removed; setting
+- The `d2b.vms.<vm>.supervisor` option has been removed; setting
   it fails eval with a typed friendly message.
 - The polkit allowlist for legacy launcher groups is retired.
-  `nixling` group membership + `SO_PEERCRED` at
+  `d2b` group membership + `SO_PEERCRED` at
   `public.sock` accept time is the **only** lifecycle authorisation
   surface.
 - The Rust CLI does not invoke bash. `tests/no-bash-exec-eval.sh`
@@ -1045,20 +1045,20 @@ contract:
   not mention the bash CLI or per-VM systemd templates as live
   surfaces (only as historical / retired context).
 - Host exit criterion: on a deployed host,
-  `systemctl list-units --no-pager --all | grep -E '^(nixling|microvm)' | wc -l`
+  `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' | wc -l`
   returns `3`.
 
 ## References
 
 - [docs/adr/0015-daemon-only-clean-break.md](./docs/adr/0015-daemon-only-clean-break.md)
   — **the binding architectural decision** for the daemon-only
-  end-state: `nixlingd` + `nixling-priv-broker` are the only
+  end-state: `d2bd` + `d2b-priv-broker` are the only
   persistent root surfaces.
 - [docs/adr/0017-no-bash-fallbacks-invariant.md](./docs/adr/0017-no-bash-fallbacks-invariant.md)
   — the Rust CLI never invokes bash; CI gates enforce no new
   `Command::new("bash")` sites.
 - [docs/adr/0018-microvm-nix-removal.md](./docs/adr/0018-microvm-nix-removal.md)
-  — nixling owns its per-VM substrate via `vm-options.nix` +
+  — d2b owns its per-VM substrate via `vm-options.nix` +
   `vm-evaluator.nix`; the `microvm.nix` flake input is gone.
 - [docs/adr/0021-broker-user-namespace-for-virtiofsd.md](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md)
   — broker pre-establishes a single-entry user namespace via
@@ -1069,14 +1069,14 @@ contract:
 - [docs/adr/0031-bare-command-and-detached-exec.md](./docs/adr/0031-bare-command-and-detached-exec.md)
   — bare command-name exec resolution and enabled detached
   workload-user exec with VM-first management verbs.
-- [docs/adr/0032-nixling-v2-constellation-control-plane.md](./docs/adr/0032-nixling-v2-constellation-control-plane.md)
-  — evolves `nixlingd` into a transport-neutral constellation
+- [docs/adr/0032-d2b-v2-constellation-control-plane.md](./docs/adr/0032-d2b-v2-constellation-control-plane.md)
+  — evolves `d2bd` into a transport-neutral constellation
   daemon. **Load-bearing invariant:** the host daemon/broker hold
   **no** realm relay/provider credentials, remote node registries,
   or realm audit (those live inside a per-realm gateway guest); and
   **relay identity is not local auth** — relay credentials
   authenticate relay/transport access only, are never mapped to a local
-  lifecycle role, and `SO_PEERCRED` + `nixling` group membership remains
+  lifecycle role, and `SO_PEERCRED` + `d2b` group membership remains
   the sole local lifecycle authz surface.
 - [docs/adr/0034-storage-lifecycle-restart-and-synchronization.md](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md)
   — selected design for generated storage, restart/adoption, and
@@ -1105,21 +1105,21 @@ contract:
   output.
 - [docs/reference/realm-policy.md](./docs/reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny
-  cross-realm behavior, and `nixling realm list` / `inspect`
+  cross-realm behavior, and `d2b realm list` / `inspect`
   inspection surfaces.
 - [docs/reference/constellation-observability.md](./docs/reference/constellation-observability.md)
-  — bounded `nixling op inspect`, TraceContext handling, degraded partial
+  — bounded `d2b op inspect`, TraceContext handling, degraded partial
   results, and telemetry redaction/cardinality constraints.
 - [docs/how-to/configure-work-gateway.md](./docs/how-to/configure-work-gateway.md)
   — configure a dedicated work/provider realm gateway and verify the
   default-deny boundary.
-- [docs/how-to/migrate-nixling-v0-to-v1.md](./docs/how-to/migrate-nixling-v0-to-v1.md)
+- [docs/how-to/migrate-d2b-v0-to-v1.md](./docs/how-to/migrate-d2b-v0-to-v1.md)
   — consumer migration guide for v0.x → v1.0.
-- [docs/how-to/migrate-nixling-v1-0-to-v1-1.md](./docs/how-to/migrate-nixling-v1-0-to-v1-1.md)
+- [docs/how-to/migrate-d2b-v1-0-to-v1-1.md](./docs/how-to/migrate-d2b-v1-0-to-v1-1.md)
   — consumer migration guide for v1.0 → v1.1.
-- [docs/how-to/migrate-nixling-v1-1-to-v1-2.md](./docs/how-to/migrate-nixling-v1-1-to-v1-2.md)
+- [docs/how-to/migrate-d2b-v1-1-to-v1-2.md](./docs/how-to/migrate-d2b-v1-1-to-v1-2.md)
   — consumer migration guide for v1.1 → v1.2, including the
-  canonical `nixling` lifecycle group rename.
+  canonical `d2b` lifecycle group rename.
 - [docs/how-to/migrating-from-microvm.md](./docs/how-to/migrating-from-microvm.md)
   — option mapping for users coming from raw microvm.nix
   (scoped to new installs).

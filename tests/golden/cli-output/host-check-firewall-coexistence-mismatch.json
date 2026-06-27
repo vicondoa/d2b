@@ -4,6 +4,6 @@
   "exit_code": 1,
   "kind": "host-check-error",
   "observed_state": "host.firewallCoexistence.manager declared X; runtime probe observed Y.",
-  "remediation": "Update nixling.firewallCoexistence.manager to match the actual host firewall stack.",
+  "remediation": "Update d2b.firewallCoexistence.manager to match the actual host firewall stack.",
   "what_was_checked": "Whether the declared firewallCoexistence manager matches the running stack."
 }

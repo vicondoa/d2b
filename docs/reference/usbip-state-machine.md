@@ -1,17 +1,17 @@
 # USBIP per-busid state machine
 
-> Reference for the typed, fail-fast state machine that the nixling
+> Reference for the typed, fail-fast state machine that the d2b
 > daemon (via the privileged broker) drives every time a USBIP
 > passthrough device is attached to a target VM.
 >
-> Source: [`packages/nixlingd/src/usbip_state_machine.rs`](../../packages/nixlingd/src/usbip_state_machine.rs).
+> Source: [`packages/d2bd/src/usbip_state_machine.rs`](../../packages/d2bd/src/usbip_state_machine.rs).
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
 
 The host-side USBIP path is a chain of cooperating subsystems —
 the `usbip-host` kernel module, a per-busid file lock under
-`/run/nixling/locks/usbip/<busid>`, the per-env nftables carve-out
+`/run/d2b/locks/usbip/<busid>`, the per-env nftables carve-out
 (`UsbipBindFirewallRule`), the per-env usbipd backend + proxy
 runners, and the per-busid `UsbipBind { bus_id, vm }` operation
 itself. Any step out of order silently corrupts state:
@@ -32,22 +32,22 @@ The state machine pins the order so call sites can't shuffle it.
 
 ## Prerequisites
 
-The executor may run only after `nixlingd` has resolved the trusted bundle for
+The executor may run only after `d2bd` has resolved the trusted bundle for
 the target VM/env/busid. Required preconditions are:
 
 - a USBIP bind intent and firewall intent exist for the VM/busid;
 - VM apply paths that need guest import have a running VM and authenticated
   guest-control USBIP capability;
-- `nixling.site.yubikey.enable = true` and at least one enabled VM in the env
+- `d2b.site.yubikey.enable = true` and at least one enabled VM in the env
   opts into `usbip.yubikey = true` before host YubiKey machinery is expected;
 - the broker can prepare `usbip-host`, the host-session busid lock,
   backend/export carrier, and per-env proxy; and
 - physical topology/policy checks allow the observed device before exposure.
 
 Public remediation stays on the lifecycle surface: start the VM with
-`nixling vm start <vm> --apply`, reconcile with
-`nixling usb attach <vm> <busid> --apply`, or release with
-`nixling usb detach <vm> <busid> --apply`. Operators must not edit lock files
+`d2b vm start <vm> --apply`, reconcile with
+`d2b usb attach <vm> <busid> --apply`, or release with
+`d2b usb detach <vm> <busid> --apply`. Operators must not edit lock files
 or sysfs driver links directly.
 
 ## Canonical order
@@ -83,9 +83,9 @@ manual recovery guidance while the session busid claim remains in place.
 | Step | Step kind | Backing broker op / daemon action | Why this position |
 | --- | --- | --- | --- |
 | 1 | `modprobe` | `ModprobeIfAllowed { module: "usbip-host" }` against the trusted-bundle kernel-module matrix | Every later step silently no-ops without the kernel symbol surface. |
-| 2 | `lock` | broker-written owner record at `/run/nixling/locks/usbip/<busid>` for the target VM, read by the daemon for status/reconcile | Single owner per busid, regardless of env. |
+| 2 | `lock` | broker-written owner record at `/run/d2b/locks/usbip/<busid>` for the target VM, read by the daemon for status/reconcile | Single owner per busid, regardless of env. |
 | 3 | `withhold` | daemon-side admission gate that refuses non-owner-env `SpawnRunner` requests for the same busid | Closes the race window before the firewall opens. |
-| 4 | `firewall` | `UsbipBindFirewallRule { bundle_usbip_firewall_intent_ref }` | Per-env `inet nixling` carve-out so the per-env proxy can accept the bind. |
+| 4 | `firewall` | `UsbipBindFirewallRule { bundle_usbip_firewall_intent_ref }` | Per-env `inet d2b` carve-out so the per-env proxy can accept the bind. |
 | 5 | `backend` | `SpawnRunner { role: RunnerRole::Usbip, vm_id: sys-<env>-usbipd, … }` | Ensure the per-env usbipd backend runner is up. Idempotent; not stopped for one busid. |
 | 6 | `bind` | `UsbipBind { bus_id, vm }` | Kernel binds the physical device to the per-env usbipd backend. |
 | 7 | `proxy` | generic per-env TCP proxy listen socket open | Target VM can now attach to the bound device. Idempotent; not busid-aware and not stopped for one busid. |
@@ -96,7 +96,7 @@ The state machine is fully typed; rearranging or skipping steps
 is a compile-time error.
 
 ```rust
-use nixlingd::usbip_state_machine::{
+use d2bd::usbip_state_machine::{
     build_usbip_plan, execute_usbip_plan,
     UsbipBusidPlan, UsbipBusidStep, UsbipStepExecutor,
 };
@@ -175,7 +175,7 @@ a partial failure are safe.
 
 The daemon encodes the current generic L4 proxy strategy in
 `UsbipProxySynchronizationPlan`
-([`packages/nixlingd/src/usbip_reconcile_state.rs`](../../packages/nixlingd/src/usbip_reconcile_state.rs)).
+([`packages/d2bd/src/usbip_reconcile_state.rs`](../../packages/d2bd/src/usbip_reconcile_state.rs)).
 The encoded strategy deliberately avoids busid-aware claims that the current
 `socat` proxy cannot satisfy:
 
@@ -209,7 +209,7 @@ drain host-side active carrier state only when the selected stream can first be
 isolated. The host-session per-busid claim is preserved on VM stop/restart so
 the same VM can start again and reattach through the normal bind path during the
 current host boot/session. It is not preserved across host reboot because the
-lock is under `/run/nixling/locks/usbip`. Only an explicit USB detach may revoke
+lock is under `/run/d2b/locks/usbip`. Only an explicit USB detach may revoke
 backend ACLs and release the claim during a host session, and only after
 firewall withdrawal/targeted flow cleanup and host unbind succeed. A
 dead/unreachable VM guest-detach failure stays visible as degraded cleanup but
@@ -240,7 +240,7 @@ vendor/product allowlists, undeclared physical topology, or topology mismatch �
 fail before device exposure and roll back the VM start with remediation to fix
 the declaration or bind the approved physical device.
 
-`nixling usb probe` and `nixling status` project this split directly: session
+`d2b usb probe` and `d2b status` project this split directly: session
 claim, host bind/carrier/proxy, guest import, topology/policy, degraded
 reasons, and remediation commands are separate fields. A same-VM session claim
 that has not reconverged its active carriers is degraded, not `bound`.
@@ -256,9 +256,9 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 
 | Layer | Path | What it asserts |
 | --- | --- | --- |
-| Unit | `packages/nixlingd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
-| Unit | `packages/nixlingd/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
-| Contract | [`packages/nixling-contract-tests/tests/policy_supervisor.rs`](../../packages/nixling-contract-tests/tests/policy_supervisor.rs) (`usbip_state_machine_surface`) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
+| Unit | `packages/d2bd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
+| Unit | `packages/d2bd/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
+| Contract | [`packages/d2b-contract-tests/tests/policy_supervisor.rs`](../../packages/d2b-contract-tests/tests/policy_supervisor.rs) (`usbip_state_machine_surface`) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
 
 ## See also
 

@@ -31,12 +31,12 @@ on the kernel lock state, not on stale filenames or mtimes.
 
 The daemon uses two lock scopes:
 
-- daemon singleton: `/run/nixling/daemon.lock`
-  - owner/group: `root:nixlingd`
+- daemon singleton: `/run/d2b/daemon.lock`
+  - owner/group: `root:d2bd`
   - mode: `0640`
-- per-VM lock files: `/run/nixling/locks/<vm>.lock`
+- per-VM lock files: `/run/d2b/locks/<vm>.lock`
 
-The daemon singleton lock prevents two `nixlingd` instances from acting
+The daemon singleton lock prevents two `d2bd` instances from acting
 as the same control-plane owner. The per-VM lock files carry the same
 single-writer rule into lifecycle-affecting operations so a future
 supervisor cannot race another actor on one VM while still allowing
@@ -44,15 +44,15 @@ independent VMs to proceed concurrently.
 
 ## Parent path invariant: no symlinked lock roots
 
-The lock paths sit under `/run/nixling`, which means the parent path is
+The lock paths sit under `/run/d2b`, which means the parent path is
 part of the trust boundary.
 
 The daemon therefore validates that the parent directories are real directories,
 not symlinks, before opening the lock file:
 
-- `/run/nixling` must be owned by `root:root` and remain a real
+- `/run/d2b` must be owned by `root:root` and remain a real
   directory;
-- `/run/nixling/locks` must likewise be a real directory;
+- `/run/d2b/locks` must likewise be a real directory;
 - startup fails closed if a symlink swap is detected.
 
 The point of this invariant is simple: if an attacker can redirect the
@@ -62,8 +62,8 @@ lock path, they can redirect the daemon's notion of exclusivity.
 
 ### Daemon crash
 
-If `nixlingd` crashes, the kernel closes the daemon's last reference to
-`/run/nixling/daemon.lock` and releases the OFD lock immediately. The
+If `d2bd` crashes, the kernel closes the daemon's last reference to
+`/run/d2b/daemon.lock` and releases the OFD lock immediately. The
 replacement daemon may then reopen the same path, reacquire the lock,
 and continue. No manual “stale lock” deletion is required for correctness.
 

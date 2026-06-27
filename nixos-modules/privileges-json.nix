@@ -56,8 +56,8 @@ let
     "subject": "operation/realm state",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -69,8 +69,8 @@ let
     "subject": "VM command family",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -82,8 +82,8 @@ let
     "subject": "VM/display",
     "scope": "per-VM/per-realm",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -95,8 +95,8 @@ let
     "subject": "realm command family",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -108,8 +108,8 @@ let
     "subject": "VM/env",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -121,8 +121,8 @@ let
     "subject": "VM/env",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -134,8 +134,8 @@ let
     "subject": "VM/env",
     "scope": "global-or-scoped",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -147,8 +147,8 @@ let
     "subject": "host/VM",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -160,8 +160,8 @@ let
     "subject": "host/VM",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -173,8 +173,8 @@ let
     "subject": "host/VM",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -186,8 +186,8 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -199,8 +199,8 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -212,7 +212,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -224,7 +224,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -236,7 +236,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -248,7 +248,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -272,7 +272,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "possible-paths-only",
@@ -284,7 +284,7 @@ let
     "subject": "host/observability",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -296,7 +296,7 @@ let
     "subject": "host",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "possible-paths-only",
@@ -308,7 +308,7 @@ let
     "subject": "host/storage",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "possible-paths-only",
@@ -320,8 +320,8 @@ let
     "subject": "VM/env",
     "scope": "per-VM/per-env",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -333,8 +333,8 @@ let
     "subject": "VM/env",
     "scope": "per-VM/per-env",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -346,8 +346,8 @@ let
     "subject": "VM/env",
     "scope": "per-VM/per-env",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -359,8 +359,8 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -372,8 +372,8 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -385,8 +385,8 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -398,8 +398,8 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -411,7 +411,7 @@ let
     "subject": "VM/process",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -423,7 +423,7 @@ let
     "subject": "VM/persistent shell",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -435,7 +435,7 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -447,7 +447,7 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -459,7 +459,7 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -471,7 +471,7 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -483,7 +483,7 @@ let
     "subject": "VM/global",
     "scope": "per-VM/global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -495,7 +495,7 @@ let
     "subject": "store/VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -507,7 +507,7 @@ let
     "subject": "key",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "public-key-only",
@@ -519,7 +519,7 @@ let
     "subject": "key",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "public-key-only",
@@ -531,7 +531,7 @@ let
     "subject": "key",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "read-write",
@@ -543,7 +543,7 @@ let
     "subject": "key/known-host",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "host-key-metadata",
@@ -555,7 +555,7 @@ let
     "subject": "key/known-host",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "host-key-metadata",
@@ -567,8 +567,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -580,8 +580,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -593,8 +593,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -606,8 +606,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -619,8 +619,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -632,8 +632,8 @@ let
     "subject": "VM/audio",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -645,8 +645,8 @@ let
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -658,7 +658,7 @@ let
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -670,7 +670,7 @@ let
     "subject": "VM/USB busid",
     "scope": "per-VM/per-env/per-busid",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -682,8 +682,8 @@ let
     "subject": "VM/USB busid",
     "scope": "global",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -695,7 +695,7 @@ let
     "subject": "diagnostics",
     "scope": "scoped",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": false,
     "secretAccess": "redacted-only",
@@ -707,7 +707,7 @@ let
     "subject": "host/state",
     "scope": "global",
     "allowedGroups": [
-      "nixling-admin"
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -724,7 +724,7 @@ let
     "subject": "handshake",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -736,7 +736,7 @@ let
     "subject": "bundle",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -748,7 +748,7 @@ let
     "subject": "installer",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -760,7 +760,7 @@ let
     "subject": "installer",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -772,7 +772,7 @@ let
     "subject": "VM",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -784,7 +784,7 @@ let
     "subject": "VM/global",
     "scope": "per-VM/global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -796,7 +796,7 @@ let
     "subject": "key",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "read-write",
@@ -808,7 +808,7 @@ let
     "subject": "key/known-host",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "host-key-metadata",
@@ -820,7 +820,7 @@ let
     "subject": "key/known-host",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "host-key-metadata",
@@ -832,7 +832,7 @@ let
     "subject": "fs",
     "scope": "global/per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -844,7 +844,7 @@ let
     "subject": "fs",
     "scope": "global/per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -856,7 +856,7 @@ let
     "subject": "fs",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -868,7 +868,7 @@ let
     "subject": "account",
     "scope": "global/per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -880,7 +880,7 @@ let
     "subject": "cgroup",
     "scope": "global/per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -892,7 +892,7 @@ let
     "subject": "cgroup",
     "scope": "global/per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -904,7 +904,7 @@ let
     "subject": "device",
     "scope": "per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -916,7 +916,7 @@ let
     "subject": "pidfd",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -928,7 +928,7 @@ let
     "subject": "device",
     "scope": "per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -940,7 +940,7 @@ let
     "subject": "device",
     "scope": "per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -952,7 +952,7 @@ let
     "subject": "device",
     "scope": "per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "none",
@@ -964,7 +964,7 @@ let
     "subject": "network",
     "scope": "per-env/VM/TAP",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -976,7 +976,7 @@ let
     "subject": "network",
     "scope": "per-env/VM/TAP",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -988,7 +988,7 @@ let
     "subject": "network",
     "scope": "per-env/VM/TAP",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1000,7 +1000,7 @@ let
     "subject": "network-host",
     "scope": "global/per-env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1012,7 +1012,7 @@ let
     "subject": "network-host",
     "scope": "global/per-env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1024,7 +1024,7 @@ let
     "subject": "network-host",
     "scope": "global/per-env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1036,7 +1036,7 @@ let
     "subject": "network-host",
     "scope": "global/per-env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1048,7 +1048,7 @@ let
     "subject": "name-resolution",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1060,7 +1060,7 @@ let
     "subject": "socket",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1072,7 +1072,7 @@ let
     "subject": "socket",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1084,7 +1084,7 @@ let
     "subject": "mount/store",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1096,7 +1096,7 @@ let
     "subject": "mount/store",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1108,7 +1108,7 @@ let
     "subject": "process",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1120,7 +1120,7 @@ let
     "subject": "secret/key",
     "scope": "per-VM/key",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "read-write",
@@ -1132,7 +1132,7 @@ let
     "subject": "guest-control token",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "redacted-only",
@@ -1144,7 +1144,7 @@ let
     "subject": "secret/key",
     "scope": "per-VM/key",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "read-write",
@@ -1156,7 +1156,7 @@ let
     "subject": "secret/key",
     "scope": "per-VM/key",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "read-write",
@@ -1168,7 +1168,7 @@ let
     "subject": "USBIP",
     "scope": "per-busid/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1180,7 +1180,7 @@ let
     "subject": "USBIP explicit attach",
     "scope": "per-busid/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1192,7 +1192,7 @@ let
     "subject": "USBIP explicit attach firewall",
     "scope": "per-busid/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1204,7 +1204,7 @@ let
     "subject": "USBIP",
     "scope": "per-busid/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1216,7 +1216,7 @@ let
     "subject": "USBIP",
     "scope": "per-busid/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1228,7 +1228,7 @@ let
     "subject": "kernel-module",
     "scope": "global/feature",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1240,7 +1240,7 @@ let
     "subject": "broker-admin",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -1252,7 +1252,7 @@ let
     "subject": "broker-admin",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -1264,7 +1264,7 @@ let
     "subject": "broker-admin",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -1276,7 +1276,7 @@ let
     "subject": "USBIP firewall",
     "scope": "per-busid",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1288,7 +1288,7 @@ let
     "subject": "qemu-media registry",
     "scope": "per-VM/per-media-ref",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1300,7 +1300,7 @@ let
     "subject": "qemu-media hotplug",
     "scope": "per-VM/per-media-ref",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1312,7 +1312,7 @@ let
     "subject": "qemu-media redacted registry",
     "scope": "host",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "redacted-only",
@@ -1324,7 +1324,7 @@ let
     "subject": "fs/storage-contract",
     "scope": "global/per-VM/per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "metadata-only",
@@ -1336,7 +1336,7 @@ let
     "subject": "lock/sync-contract",
     "scope": "global/per-VM/per-role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -1348,7 +1348,7 @@ let
     "subject": "qemu-media boot media",
     "scope": "per-VM/per-media-ref",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1360,7 +1360,7 @@ let
     "subject": "qemu-media lifecycle",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1372,7 +1372,7 @@ let
     "subject": "qemu-media lifecycle status",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "redacted-only",
@@ -1384,7 +1384,7 @@ let
     "subject": "qemu-media lifecycle",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1396,7 +1396,7 @@ let
     "subject": "qemu-media hotplug",
     "scope": "per-VM/per-media-ref",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "redacted-only",
@@ -1408,7 +1408,7 @@ let
     "subject": "runner",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1420,8 +1420,8 @@ let
     "subject": "runner",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
-      "nixling-admin"
+      "d2b-launcher",
+      "d2b-admin"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1433,7 +1433,7 @@ let
     "subject": "runner",
     "scope": "global",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -1445,7 +1445,7 @@ let
     "subject": "store",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1457,7 +1457,7 @@ let
     "subject": "store",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1469,7 +1469,7 @@ let
     "subject": "network",
     "scope": "per-VM/env",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1481,7 +1481,7 @@ let
     "subject": "mount/store",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1493,7 +1493,7 @@ let
     "subject": "host",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -1505,7 +1505,7 @@ let
     "subject": "ssh-host-key",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": false,
     "secretAccess": "metadata-only",
@@ -1517,7 +1517,7 @@ let
     "subject": "disk",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1529,7 +1529,7 @@ let
     "subject": "vm-runner",
     "scope": "per-VM/role",
     "allowedGroups": [
-      "nixlingd"
+      "d2bd"
     ],
     "destructive": true,
     "secretAccess": "none",
@@ -1545,11 +1545,11 @@ let
   };
 
   jsonText = builtins.toJSON data;
-  jsonFile = pkgs.writeText "nixling-privileges.json" jsonText;
+  jsonFile = pkgs.writeText "d2b-privileges.json" jsonText;
 in
 {
   config = {
-    nixling._bundle.privilegesJson = {
+    d2b._bundle.privilegesJson = {
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "privileges.json";

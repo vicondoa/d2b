@@ -493,7 +493,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-core"
+name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "rustix 0.38.44",
@@ -505,7 +505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-constellation-core"
+name = "d2b-constellation-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
@@ -513,22 +513,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-exec-runner"
+name = "d2b-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
  "rustix 0.38.44",
 ]
 
 [[package]]
-name = "nixling-guestd"
+name = "d2b-guestd"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "futures",
  "hmac",
- "nixling-constellation-core",
- "nixling-exec-runner",
- "nixling-contracts",
+ "d2b-constellation-core",
+ "d2b-exec-runner",
+ "d2b-contracts",
  "protobuf",
  "rustix 0.38.44",
  "sha2",
@@ -538,10 +538,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-contracts"
+name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
- "nixling-core",
+ "d2b-core",
  "protobuf",
  "schemars",
  "serde",
@@ -549,10 +549,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "nixling-userd"
+name = "d2b-userd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "nixling-contracts",
+ "d2b-contracts",
 ]
 
 [[package]]

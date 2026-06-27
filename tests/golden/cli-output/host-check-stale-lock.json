@@ -5,5 +5,5 @@
   "kind": "host-check-error",
   "observed_state": "Lockfile exists but the recorded PID is not running.",
   "remediation": "Remove the stale lock via the documented recovery runbook; do not unlink by hand.",
-  "what_was_checked": "Whether /run/nixling/locks/<vm> is owned by a live process."
+  "what_was_checked": "Whether /run/d2b/locks/<vm> is owned by a live process."
 }

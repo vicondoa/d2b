@@ -1,6 +1,6 @@
 # nix-unit cases migrated from tests/daemon-autostart-eval.sh.
 #
-# Asserts the static surface of the nixlingd autostart contract:
+# Asserts the static surface of the d2bd autostart contract:
 #
 #   1. The Rust autostart module exposes the documented public surface
 #      (AutostartPlan / VmAutostartEntry / AutostartConfig /
@@ -13,7 +13,7 @@
 #      `autostart_parallelism` config field.
 #   3. The contract is documented in docs/reference/daemon-autostart.md
 #      and cross-referenced from docs/reference/daemon-api.md.
-#   4. The `nixling.daemon.autostart.parallelism` NixOS option defaults to
+#   4. The `d2b.daemon.autostart.parallelism` NixOS option defaults to
 #      3 and honours an override.
 #   5. The daemon lifecycle graceful-shutdown Nix options render into
 #      daemon-config.json / vms.json and keep host-shutdown systemd timing
@@ -30,8 +30,8 @@
 
 let
   linesOf = rel: lib.splitString "\n" (builtins.readFile (flakeRoot + rel));
-  autostartRs = linesOf "/packages/nixlingd/src/autostart.rs";
-  libRs = linesOf "/packages/nixlingd/src/lib.rs";
+  autostartRs = linesOf "/packages/d2bd/src/autostart.rs";
+  libRs = linesOf "/packages/d2bd/src/lib.rs";
   hostDaemonNix = linesOf "/nixos-modules/host-daemon.nix";
   optionsDaemonNix = linesOf "/nixos-modules/options-daemon.nix";
   autostartMd = linesOf "/docs/reference/daemon-autostart.md";
@@ -51,36 +51,36 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
   };
 
   parOf = overrides:
-    (mkEval ([ base ] ++ overrides)).config.nixling.daemon.autostart.parallelism;
+    (mkEval ([ base ] ++ overrides)).config.d2b.daemon.autostart.parallelism;
   cfgOf = overrides:
     (mkEval ([ base ] ++ overrides)).config;
   daemonJsonOf = overrides:
-    builtins.fromJSON (cfgOf overrides).environment.etc."nixling/daemon-config.json".text;
+    builtins.fromJSON (cfgOf overrides).environment.etc."d2b/daemon-config.json".text;
   lifecycleHost = { lib, ... }: {
-    nixling.vms.work-vm = {
+    d2b.vms.work-vm = {
       env = "work";
       index = 10;
       lifecycle.gracefulShutdown.timeoutSeconds = 45;
     };
-    nixling.vms.media = {
+    d2b.vms.media = {
       runtime.kind = "qemu-media";
       env = "work";
       index = 42;
       qemuMedia.source = {
         kind = "image-file";
-        path = "/var/lib/nixling/images/installer.img";
+        path = "/var/lib/d2b/images/installer.img";
         format = "raw";
       };
     };
@@ -89,8 +89,8 @@ let
   disabledLifecycleCfg = cfgOf [
     lifecycleHost
     ({ ... }: {
-      nixling.daemon.lifecycle.gracefulShutdown.enable = false;
-      nixling.vms.media.lifecycle.gracefulShutdown.enable = true;
+      d2b.daemon.lifecycle.gracefulShutdown.enable = false;
+      d2b.vms.media.lifecycle.gracefulShutdown.enable = true;
     })
   ];
   failureMessages = overrides:
@@ -126,7 +126,7 @@ in
   "daemon-autostart/doc-degraded" = has autostartMd "Degraded";
   "daemon-autostart/doc-idempotent" = has autostartMd "Idempotent";
   "daemon-autostart/doc-parallelism" = has autostartMd "parallelism";
-  "daemon-autostart/doc-option-name" = has autostartMd "nixling.daemon.autostart";
+  "daemon-autostart/doc-option-name" = has autostartMd "d2b.daemon.autostart";
   "daemon-autostart/api-cross-ref" = has apiMd "daemon-autostart";
 
   # (4) NixOS option default + override.
@@ -135,55 +135,55 @@ in
     expected = 3;
   };
   "daemon-autostart/option-override-7" = {
-    expr = parOf [ ({ ... }: { nixling.daemon.autostart.parallelism = 7; }) ];
+    expr = parOf [ ({ ... }: { d2b.daemon.autostart.parallelism = 7; }) ];
     expected = 7;
   };
 
   # (5) Graceful shutdown lifecycle Nix surface.
   "daemon-lifecycle/graceful-option-default-enabled" = {
-    expr = lifecycleCfg.nixling.daemon.lifecycle.gracefulShutdown.enable;
+    expr = lifecycleCfg.d2b.daemon.lifecycle.gracefulShutdown.enable;
     expected = true;
   };
   "daemon-lifecycle/graceful-option-default-timeout" = {
-    expr = lifecycleCfg.nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
+    expr = lifecycleCfg.d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     expected = 90;
   };
   "daemon-lifecycle/graceful-option-docs-upper-bound" =
     has optionsDaemonNix "between 1 and 600 seconds";
   "daemon-lifecycle/daemon-config-renders-autostart" = {
-    expr = (daemonJsonOf [ ({ ... }: { nixling.daemon.autostart.parallelism = 5; }) ]).autostartParallelism;
+    expr = (daemonJsonOf [ ({ ... }: { d2b.daemon.autostart.parallelism = 5; }) ]).autostartParallelism;
     expected = 5;
   };
   "daemon-lifecycle/daemon-config-renders-timeout" = {
-    expr = (daemonJsonOf [ ({ ... }: { nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 120; }) ]).gracefulShutdownTimeoutSeconds;
+    expr = (daemonJsonOf [ ({ ... }: { d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 120; }) ]).gracefulShutdownTimeoutSeconds;
     expected = 120;
   };
   "daemon-lifecycle/manifest-workload-graceful-enabled" = {
-    expr = lifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.enable;
+    expr = lifecycleCfg.d2b.manifest."work-vm".lifecycle.gracefulShutdown.enable;
     expected = true;
   };
   "daemon-lifecycle/manifest-workload-timeout-override" = {
-    expr = lifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.timeoutSeconds;
+    expr = lifecycleCfg.d2b.manifest."work-vm".lifecycle.gracefulShutdown.timeoutSeconds;
     expected = 45;
   };
   "daemon-lifecycle/manifest-qemu-graceful-enabled" = {
-    expr = lifecycleCfg.nixling.manifest.media.lifecycle.gracefulShutdown.enable;
+    expr = lifecycleCfg.d2b.manifest.media.lifecycle.gracefulShutdown.enable;
     expected = true;
   };
   "daemon-lifecycle/global-disable-per-vm-opt-in" = {
     expr = {
-      work = disabledLifecycleCfg.nixling.manifest."work-vm".lifecycle.gracefulShutdown.enable;
-      media = disabledLifecycleCfg.nixling.manifest.media.lifecycle.gracefulShutdown.enable;
+      work = disabledLifecycleCfg.d2b.manifest."work-vm".lifecycle.gracefulShutdown.enable;
+      media = disabledLifecycleCfg.d2b.manifest.media.lifecycle.gracefulShutdown.enable;
     };
     expected = { work = false; media = true; };
   };
   "daemon-lifecycle/timeout-stop-sec-uses-phase-maxima" = {
-    expr = lifecycleCfg.systemd.services.nixlingd.serviceConfig.TimeoutStopSec;
+    expr = lifecycleCfg.systemd.services.d2bd.serviceConfig.TimeoutStopSec;
     expected = "360s";
   };
   "daemon-lifecycle/execstop-uses-host-shutdown-hook" = {
-    expr = lib.hasPrefix "+" lifecycleCfg.systemd.services.nixlingd.serviceConfig.ExecStop
-      && lib.hasInfix "nixling-host-shutdown-hook" lifecycleCfg.systemd.services.nixlingd.serviceConfig.ExecStop;
+    expr = lib.hasPrefix "+" lifecycleCfg.systemd.services.d2bd.serviceConfig.ExecStop
+      && lib.hasInfix "d2b-host-shutdown-hook" lifecycleCfg.systemd.services.d2bd.serviceConfig.ExecStop;
     expected = true;
   };
   "daemon-lifecycle/execstop-gates-on-system-manager-stopping" = {
@@ -196,29 +196,29 @@ in
   };
   "daemon-lifecycle/broker-shutdown-ordering" = {
     expr =
-      builtins.elem "nixling-priv-broker.service" lifecycleCfg.systemd.services.nixlingd.after
-      && builtins.elem "nixling-priv-broker.socket" lifecycleCfg.systemd.services.nixlingd.after
-      && builtins.elem "dbus.service" lifecycleCfg.systemd.services.nixlingd.after;
+      builtins.elem "d2b-priv-broker.service" lifecycleCfg.systemd.services.d2bd.after
+      && builtins.elem "d2b-priv-broker.socket" lifecycleCfg.systemd.services.d2bd.after
+      && builtins.elem "dbus.service" lifecycleCfg.systemd.services.d2bd.after;
     expected = true;
   };
   "daemon-lifecycle/global-timeout-upper-bound-assertion" = {
     expr = hasFailure
-      [ ({ ... }: { nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 601; }) ]
-      "nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be";
+      [ ({ ... }: { d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds = 601; }) ]
+      "d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds must be";
     expected = true;
   };
   "daemon-lifecycle/per-vm-timeout-lower-bound-assertion" = {
     expr = hasFailure
       [
         ({ ... }: {
-          nixling.vms.work-vm = {
+          d2b.vms.work-vm = {
             env = "work";
             index = 10;
             lifecycle.gracefulShutdown.timeoutSeconds = 0;
           };
         })
       ]
-      "nixling.vms.work-vm.lifecycle.gracefulShutdown.timeoutSeconds must be";
+      "d2b.vms.work-vm.lifecycle.gracefulShutdown.timeoutSeconds must be";
     expected = true;
   };
 }

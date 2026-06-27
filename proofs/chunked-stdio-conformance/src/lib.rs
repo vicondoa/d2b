@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Executable conformance model for nixling's selected Kata-style
+//! Executable conformance model for d2b's selected Kata-style
 //! chunked stdio guest-control protocol.
 //!
 //! The crate intentionally uses only `std`: it is a protocol proof, not

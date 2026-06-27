@@ -1,13 +1,13 @@
-# How to: prepare a nixling host
+# How to: prepare a d2b host
 
-> Diataxis: how-to. Operator-facing walkthrough for `nixling host
+> Diataxis: how-to. Operator-facing walkthrough for `d2b host
 > prepare`. This document is assembled from the per-scope fragments
 > under `docs/how-to/host-prepare.d/*.md`; keep the assembled view
 > and fragments in sync when editing.
 
-> `nixling host check`, `nixling host prepare --dry-run`,
-> `nixling host destroy --dry-run`, and
-> `nixling host doctor --read-only` exercise the broker's read-only
+> `d2b host check`, `d2b host prepare --dry-run`,
+> `d2b host destroy --dry-run`, and
+> `d2b host doctor --read-only` exercise the broker's read-only
 > audit path and are wired live. The mutating `--apply` verbs
 > (`host prepare --apply`, `host destroy --apply`) are **not yet
 > wired**: the daemon-side typed-intent dispatch and bundle resolver
@@ -23,8 +23,8 @@
 > [`docs/reference/compatibility.md`](../reference/compatibility.md)
 > and [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
-`nixling host prepare` is the single operator command that takes a
-nixling host from "I just rendered the bundle" to "every declared VM
+`d2b host prepare` is the single operator command that takes a
+d2b host from "I just rendered the bundle" to "every declared VM
 can boot". It runs as an unprivileged user against the daemon socket,
 which forwards mutating steps to the privileged broker; only the
 broker holds capabilities, and every mutation goes through a typed,
@@ -34,25 +34,25 @@ The host CLI is split across seven verbs; the canonical contract is:
 
 | Verb | Mutates host | Required flag |
 | --- | --- | --- |
-| `nixling host check` | no | n/a — read-only inventory + diff |
-| `nixling host prepare --dry-run` | no | `--dry-run` mandatory; reports only |
-| `nixling host prepare --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
-| `nixling host destroy --dry-run` | no | `--dry-run` mandatory; reports only |
-| `nixling host destroy --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
-| `nixling host doctor --read-only` | no | `--read-only` mandatory |
-| `nixling host install --dry-run` | no | `--dry-run` mandatory; reports the synthesized 5-step install plan |
-| `nixling host install --apply` | yes (daemon → broker) | `--apply` mandatory; optional `--enable` + `--start`/`--no-start`; broker failures exit 78 |
+| `d2b host check` | no | n/a — read-only inventory + diff |
+| `d2b host prepare --dry-run` | no | `--dry-run` mandatory; reports only |
+| `d2b host prepare --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
+| `d2b host destroy --dry-run` | no | `--dry-run` mandatory; reports only |
+| `d2b host destroy --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
+| `d2b host doctor --read-only` | no | `--read-only` mandatory |
+| `d2b host install --dry-run` | no | `--dry-run` mandatory; reports the synthesized 5-step install plan |
+| `d2b host install --apply` | yes (daemon → broker) | `--apply` mandatory; optional `--enable` + `--start`/`--no-start`; broker failures exit 78 |
 
 The `--dry-run` and `--apply` forms are intentionally mutually
-exclusive: there is no flag-less `nixling host prepare`. Operators who
-want the read-only inventory run `nixling host check`; operators who
-want the apply-plan-without-mutation run `nixling host prepare
+exclusive: there is no flag-less `d2b host prepare`. Operators who
+want the read-only inventory run `d2b host check`; operators who
+want the apply-plan-without-mutation run `d2b host prepare
 --dry-run`. `host destroy --apply` is not yet wired and returns
 `daemon-down` (exit 1) today; once wired it withdraws only
-nixling-owned state and refuses foreign ownership markers.
+d2b-owned state and refuses foreign ownership markers.
 
 The four reconcile domains — cgroup delegation, network (bridge /
-TAP / NM / IPv6 / hosts), firewall (`inet nixling` nftables
+TAP / NM / IPv6 / hosts), firewall (`inet d2b` nftables
 coexistence + USBIP rule skeleton), and modules + device nodes —
 are each documented in the sections below, which are assembled from
 smaller fragment files.
@@ -83,10 +83,10 @@ catalogued in
 > under `docs/how-to/host-prepare.d/*.md`; this file is the cgroup
 > section.
 
-`nixling` runs every VM payload inside a per-VM/per-role cgroup leaf
-beneath `/sys/fs/cgroup/nixling.slice`. The slice is created by the
-small `nixling-priv-broker` and then delegated to the non-root
-`nixlingd` daemon so the daemon never needs `CAP_SYS_ADMIN` on the
+`d2b` runs every VM payload inside a per-VM/per-role cgroup leaf
+beneath `/sys/fs/cgroup/d2b.slice`. The slice is created by the
+small `d2b-priv-broker` and then delegated to the non-root
+`d2bd` daemon so the daemon never needs `CAP_SYS_ADMIN` on the
 host cgroup tree at runtime.
 
 This page covers operator-visible behavior. The full algorithm,
@@ -95,7 +95,7 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `nixling host prepare --apply` (not yet wired — it
+Before running `d2b host prepare --apply` (not yet wired — it
 returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
 the "What `host prepare --apply` will do for cgroup" section below),
 confirm the host meets
@@ -110,8 +110,8 @@ the prerequisites:
 # 2. Required controllers advertised on the root:
 grep -wE 'cpu|memory|io|pids|cpuset' /sys/fs/cgroup/cgroup.controllers
 
-# 3. nixlingd is non-root (delegation refuses uid 0):
-id nixlingd
+# 3. d2bd is non-root (delegation refuses uid 0):
+id d2bd
 ```
 
 A host that boots with `systemd.unified_cgroup_hierarchy=0` or with the
@@ -120,18 +120,18 @@ legacy `cgroup` v1 mount option WILL fail `host check` with
 
 ## What `host check` reports for cgroup
 
-`nixling host check` evaluates the following invariants in order; the
+`d2b host check` evaluates the following invariants in order; the
 first failure is what the operator sees:
 
 | Reported code | Meaning | Remediation |
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
-| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `nixling.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `d2bd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `d2bd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `d2b.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
-`/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640),
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root:d2bd 0640),
 keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
 ## What `host prepare --apply` will do for cgroup
@@ -148,19 +148,19 @@ perform the 8-step delegation sequence documented in
    every ancestor before `+cpuset` is enabled;
 4. enable `+cpu, +memory, +io, +pids, +cpuset` on `cgroup.subtree_control`
    in that strict order, verifying each enable by re-reading;
-5. create `/sys/fs/cgroup/nixling.slice`;
-6. keep `cpuset.cpus.partition` as `member` on `nixling.slice`
-   and every nixling-created descendant (per-VM intermediate /
-   per-role / host-scoped leaves); nixling does NOT read or
+5. create `/sys/fs/cgroup/d2b.slice`;
+6. keep `cpuset.cpus.partition` as `member` on `d2b.slice`
+   and every d2b-created descendant (per-VM intermediate /
+   per-role / host-scoped leaves); d2b does NOT read or
    write ancestor `cpuset.cpus.partition` (the cgroup v2 root
    is typically a partition root and that state is the host's
-   concern, not nixling's);
-7. fd-relative `fchown` the delegated subtree to `nixlingd:nixlingd`;
+   concern, not d2b's);
+7. fd-relative `fchown` the delegated subtree to `d2bd:d2bd`;
 8. refuse Phase B (post-delegation) runtime mutation if the broker
    is still running as uid 0; Phase A privileged setup
    legitimately runs as root per ADR 0011 Decision item 2.
 
-After the apply, `nixling.slice` will be owned by `nixlingd` and the
+After the apply, `d2b.slice` will be owned by `d2bd` and the
 delegated subtree will carry every required controller in
 `cgroup.subtree_control`. Threaded cgroups are forbidden.
 
@@ -196,7 +196,7 @@ disabled. Confirm `CONFIG_CPUSETS=y`, `CONFIG_MEMCG=y`,
 ### "cgroup-delegation-refused" (uid 0)
 
 The broker is supposed to enter the cgroup work path as the dropped
-`nixlingd` user. If it reaches that path while still running as root,
+`d2bd` user. If it reaches that path while still running as root,
 something is wrong with the broker bootstrap. Re-check
 `docs/explanation/host-prepare.md` § recovery.
 
@@ -240,11 +240,11 @@ This fragment covers the network reconcile deliverables:
 ```bash
 # Read-only inventory: lists derived ifnames, declared bridges,
 # detected NM version + state, host LAN CIDRs, route preflight result.
-nixling host check --json
+d2b host check --json
 
 # Plan-only: emits the reconcile diff without mutating host state.
 # Fully wired today.
-sudo nixling host prepare --dry-run
+sudo d2b host prepare --dry-run
 
 # `--apply` is NOT yet wired: the daemon-side typed-intent dispatch
 # and bundle resolver that back `host prepare --apply` are still
@@ -255,13 +255,13 @@ sudo nixling host prepare --dry-run
 # ApplyNmUnmanaged), take the per-VM lock, apply the diff, and run the
 # IPv6-off readback gate, failing closed on drift; broker failures
 # will surface as the typed `broker-error` envelope (exit 78).
-sudo nixling host prepare --apply
+sudo d2b host prepare --apply
 
 # Same disposition for destroy: --apply is NOT yet wired and returns
 # `daemon-down` (exit 1) today. When it ships it will reverse the
 # host-prepare mutations only (bridges, TAPs, NM drop-in, /etc/hosts
 # managed block, IPv6 sysctls). Foreign state is never touched.
-sudo nixling host destroy --apply
+sudo d2b host destroy --apply
 ```
 
 The mutating `--apply` invocations are not yet wired: the daemon-side
@@ -276,12 +276,12 @@ every non-Tier-0 host, with broker failures surfacing as the typed
 reads already exercise the broker's read-only audit path.
 
 `host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
-one where nixling resolves no daemon-owned bundle to reconcile and
+one where d2b resolves no daemon-owned bundle to reconcile and
 the upstream NixOS module already owns host-shared reconciliation. The
-per-VM `nixling.vms.<vm>.supervisor` option was removed in v1.1 (per
+per-VM `d2b.vms.<vm>.supervisor` option was removed in v1.1 (per
 ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
 host resolves to the daemon path. The refusal remains as a fail-closed
-guard for hosts with no loadable nixling bundle.
+guard for hosts with no loadable d2b bundle.
 
 ## Ownership markers (foreign-rule preservation guarantees)
 
@@ -290,10 +290,10 @@ grep for and refuse to modify:
 
 | File                                                | Begin marker                    | End marker                    |
 | --------------------------------------------------- | ------------------------------- | ----------------------------- |
-| `/etc/hosts`                                        | `# nixling-managed begin`       | `# nixling-managed end`       |
-| `/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf` | `# nixling-managed begin`    | `# nixling-managed end`       |
-| `/proc/sys/net/ipv6/conf/<nixling-ifname>/*`        | per-link only (no marker file)  | n/a                           |
-| `/proc/sys/net/ipv4/conf/<nixling-ifname>/*`        | per-link only                   | n/a                           |
+| `/etc/hosts`                                        | `# d2b-managed begin`       | `# d2b-managed end`       |
+| `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf` | `# d2b-managed begin`    | `# d2b-managed end`       |
+| `/proc/sys/net/ipv6/conf/<d2b-ifname>/*`        | per-link only (no marker file)  | n/a                           |
+| `/proc/sys/net/ipv4/conf/<d2b-ifname>/*`        | per-link only                   | n/a                           |
 | `/proc/sys/net/bridge/bridge-nf-call-*`             | global; only written when `br_netfilter` is loaded | n/a |
 
 Foreign lines outside the marker block are preserved byte-for-byte.
@@ -302,7 +302,7 @@ hardlink, rename-race, and world-writable-parent on every marked file.
 
 ## IPv6-off 5-step ordering (per link)
 
-Each nixling-owned bridge or TAP follows the same sequence. Any drift
+Each d2b-owned bridge or TAP follows the same sequence. Any drift
 between the step-3 write and the step-5 readback is the
 `ipv6-sysctl-drift` canary and fails closed.
 
@@ -334,7 +334,7 @@ between the step-3 write and the step-5 readback is the
 - NM 1.46. `nmcli general reload conf` is the correct command.
 - `/proc/modules` typically contains `br_netfilter`; the bridge-nf
   sysctls are written.
-- If `nmcli -t -f DEVICE,STATE device status` reports the nixling
+- If `nmcli -t -f DEVICE,STATE device status` reports the d2b
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
   ID; remove or rename it and, once `host prepare --apply` is wired,
@@ -345,7 +345,7 @@ between the step-3 write and the step-5 readback is the
 
 - NM 1.48. Same reload command as Ubuntu.
 - `firewalld` is active by default. Host prepare detects `firewalld`
-  and refuses to apply the `inet nixling` table unless an explicit
+  and refuses to apply the `inet d2b` table unless an explicit
   coexistence policy is declared in the bundle (`refuse` is the
   default).
 
@@ -358,7 +358,7 @@ between the step-3 write and the step-5 readback is the
 ### NixOS (Tier 0)
 
 - `host prepare --apply` is refused on the legacy path. Tier-0
-  consumers use the NixOS module: every nixling-owned bridge, TAP,
+  consumers use the NixOS module: every d2b-owned bridge, TAP,
   sysctl, NM unmanaged entry, and `/etc/hosts` block is materialised
   declaratively via `nixos-modules/`. The `host doctor --read-only`
   command still runs and reports drift between the module-emitted
@@ -384,18 +384,18 @@ mode in `host.json` under `host.ch.netHandoffMode`:
 
 ## Host LAN CIDR derivation
 
-`nixling host check` reports the detected host LAN CIDRs and any
+`d2b host check` reports the detected host LAN CIDRs and any
 `ambiguous-host-lan` finding (point-to-point / VPN-like links). The
 derivation rule:
 
-- skip nixling-owned links (by prefix);
+- skip d2b-owned links (by prefix);
 - skip loopback (`lo`);
 - skip Docker/libvirt-known prefixes (`docker*`, `virbr*`, `lxcbr*`);
 - skip DOWN-state links;
 - collect remaining IPv4 `RT_TABLE_MAIN scope LINK` destinations;
 - flag VPN-like routes (point-to-point, no broadcast) as ambiguous —
   do not include automatically. Operator overrides via
-  `nixling.site.hostLanCidrs`.
+  `d2b.site.hostLanCidrs`.
 
 ## Failure modes operators will see
 
@@ -405,7 +405,7 @@ derivation rule:
 | `ifname-collision`                  | Two `(env, vm, role)` keys derived the same ifname.      |
 | `ipv6-sysctl-drift`                 | Per-link IPv6 sysctl readback diverged from step-3 write.|
 | `bridge-port-flag-drift`            | Post-`SetBridgePortFlags` readback diverged.             |
-| `nm-managed-foreign-conflict`       | NM still claims a nixling-declared ifname.               |
+| `nm-managed-foreign-conflict`       | NM still claims a d2b-declared ifname.               |
 | `nm-reload-required`                | NM reload command failed; broker rolled back.            |
 | `route-preflight-no-default-route`  | Declared uplink has no matching default route.           |
 | `route-preflight-foreign-default-route` | Default route exists but `via` differs from `host.json`. |
@@ -425,20 +425,20 @@ for the rationale + rejected alternatives.
 
 This fragment is included in `docs/how-to/host-prepare.md`.
 
-This document is the operator how-to for the `inet nixling` named
+This document is the operator how-to for the `inet d2b` named
 table that the privileged broker's host-prepare path reconciles (and
-re-checks before every VM start). The mutating `nixling host prepare
+re-checks before every VM start). The mutating `d2b host prepare
 --apply` is **not yet wired** — it returns the typed `daemon-down`
 envelope (exit 1) today; `host check` and `host prepare --dry-run`
 exercise the read-only path. The authoritative chain layout reference
 lives at
-[`../reference/inet-nixling-chains.md`](../reference/inet-nixling-chains.md);
+[`../reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md);
 the architectural rationale is in
 [ADR 0013](../adr/0013-w3-firewall-coexistence-policy.md).
 
-## What nixling installs
+## What d2b installs
 
-Exactly one named table, `inet nixling`, with four chains:
+Exactly one named table, `inet d2b`, with four chains:
 
 | Chain        | Hook         | Priority | Policy   |
 | ------------ | ------------ | -------- | -------- |
@@ -447,17 +447,17 @@ Exactly one named table, `inet nixling`, with four chains:
 | `output`     | `output`     | `-5`     | `accept` |
 | `input`      | `input`     |  `-5`    | `accept` |
 
-Every rule and chain carries `comment "nixling managed: <id>"`. Nixling
-NEVER allocates `raw`, `mangle`, or `nat` hooks under `inet nixling`,
+Every rule and chain carries `comment "d2b managed: <id>"`. D2b
+NEVER allocates `raw`, `mangle`, or `nat` hooks under `inet d2b`,
 and NEVER runs `nft flush ruleset`.
 
-## What nixling does NOT touch
+## What d2b does NOT touch
 
 - Foreign tables, chains, sets, maps. The reconcile path emits a
-  declarative batch for `inet nixling` only; everything else stays
+  declarative batch for `inet d2b` only; everything else stays
   byte-for-byte intact.
 - Your `iptables-save` output. If the host runs the `iptables-nft`
-  compatibility shim, nixling detects it and chooses `coexist` only
+  compatibility shim, d2b detects it and chooses `coexist` only
   when its hook priority demonstrably wins.
 
 ## Per-distro guidance
@@ -466,70 +466,70 @@ and NEVER runs `nft flush ruleset`.
 
 Default policy: **refuse**. firewalld owns the nft `filter` family
 under its own zone-based abstractions; coexistence at the unprivileged
-`inet nixling` priority does not survive `firewall-cmd --reload`.
+`inet d2b` priority does not survive `firewall-cmd --reload`.
 
-To use nixling on a firewalld host, either:
+To use d2b on a firewalld host, either:
 
 1. Stop firewalld (`systemctl disable --now firewalld`) and, once
-   `nixling host prepare --apply` is wired, re-run it to reconcile (it
+   `d2b host prepare --apply` is wired, re-run it to reconcile (it
    returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); or
-2. Replace firewalld with a firewall setup where nixling owns
-   `inet nixling`; otherwise nixling fails closed.
+2. Replace firewalld with a firewall setup where d2b owns
+   `inet d2b`; otherwise d2b fails closed.
 
 ### Ubuntu (ufw)
 
 Default policy: **refuse**. ufw is implemented on top of the
 `iptables-nft` shim and writes its own chains at a priority that
-shadows `inet nixling`'s `forward` chain.
+shadows `inet d2b`'s `forward` chain.
 
-To use nixling on a ufw host:
+To use d2b on a ufw host:
 
-1. `ufw disable` and, once `nixling host prepare --apply` is wired,
+1. `ufw disable` and, once `d2b host prepare --apply` is wired,
    re-run it to reconcile (it returns `daemon-down` (exit 1) today —
    use `--dry-run` to re-check); or
-2. Replace ufw with a firewall setup where nixling owns `inet
-   nixling`; otherwise the host check refuses.
+2. Replace ufw with a firewall setup where d2b owns `inet
+   d2b`; otherwise the host check refuses.
 
 ### Mixed Docker / libvirt setups
 
 Default policy: **require-unmanaged**. Both Docker and libvirt write
-their own `filter`/`nat` chains. Nixling will install `inet nixling`
+their own `filter`/`nat` chains. D2b will install `inet d2b`
 alongside them but requires an explicit
-`/etc/nixling/firewall.coexist-with-{docker,libvirt}.toml` marker so
+`/etc/d2b/firewall.coexist-with-{docker,libvirt}.toml` marker so
 the operator has acknowledged the forward-path arbitration that
 follows. The host check enforces that marker, and the forward path is
 verified
-on every VM start via the post-apply `nft list table inet nixling -j`
-re-hash; drift fails closed with `inet-nixling-drift`.
+on every VM start via the post-apply `nft list table inet d2b -j`
+re-hash; drift fails closed with `inet-d2b-drift`.
 
 ### iptables-nft compatibility shim
 
 Default policy: **coexist**. Only safe when `iptables --version`
 reports `(nf_tables)` AND no other manager is active. The pre-VM-start
-hook re-reads `inet nixling`'s post-apply hash and refuses to start
+hook re-reads `inet d2b`'s post-apply hash and refuses to start
 VMs if a foreign rule has been inserted at a priority that would
-shadow the nixling decision.
+shadow the d2b decision.
 
 ### NixOS (no manager)
 
-Default policy: **coexist**. Nixling owns `inet nixling`; the rest of
+Default policy: **coexist**. D2b owns `inet d2b`; the rest of
 the ruleset is whatever your `networking.firewall` / `networking.nftables`
 declared.
 
 ## Drift detection
 
-Every VM start re-hashes `nft list table inet nixling -j` (with
+Every VM start re-hashes `nft list table inet d2b -j` (with
 volatile `handle`/`index` fields stripped) and compares against the
 digest stored in the bundle's `host.json`. Mismatches fail closed with
-`inet-nixling-drift`; remediation is to re-run
-`nixling host prepare --apply` once it is wired (it returns
+`inet-d2b-drift`; remediation is to re-run
+`d2b host prepare --apply` once it is wired (it returns
 `daemon-down` (exit 1) today — use `--dry-run` to re-check the diff).
 
 ## USBIP firewall carve-out
 
 When a VM is configured for USBIP passthrough,
 `UsbipBindFirewallRule` adds a per-busid source-based carve-out to
-`inet nixling`'s `forward` chain BEFORE the generic allow/drop.
+`inet d2b`'s `forward` chain BEFORE the generic allow/drop.
 This is **firewall-only**; the USBIP attach/detach flow is handled
 separately from this firewall carve-out.
 
@@ -538,13 +538,13 @@ separately from this firewall carve-out.
 - **`firewall-coexistence-mismatch`**: the detected manager does not
   match the bundle's declared policy. Either change the bundle (allowed
   override per the matrix above) or stop/disable the offending manager
-  and, once `nixling host prepare --apply` is wired, re-run it (it
+  and, once `d2b host prepare --apply` is wired, re-run it (it
   returns `daemon-down` (exit 1) today — use `--dry-run` to re-check).
-- **`nft-foreign-rule-shadows-nixling`**: a foreign hook at a priority
+- **`nft-foreign-rule-shadows-d2b`**: a foreign hook at a priority
   ≤ `-5` is active. Inspect with `nft list ruleset` and identify the
   source.
-- **`inet-nixling-drift`**: the live table no longer matches the
-  bundle digest. Re-apply with `nixling host prepare --apply` once it
+- **`inet-d2b-drift`**: the live table no longer matches the
+  bundle digest. Re-apply with `d2b host prepare --apply` once it
   is wired (it returns `daemon-down` (exit 1) today — use `--dry-run`
   to re-check); if it
   recurs immediately, a periodic process is rewriting the ruleset
@@ -592,7 +592,7 @@ pinning:
 - `net.bridge.bridge-nf-call-iptables=0`
 - `net.bridge.bridge-nf-call-ip6tables=0`
 
-so iptables / ip6tables cannot route around the `inet nixling`
+so iptables / ip6tables cannot route around the `inet d2b`
 policy. An ADR opt-in is required to suppress this recommendation.
 
 ### Distro troubleshooting
@@ -605,7 +605,7 @@ policy. An ADR opt-in is required to suppress this recommendation.
 - **Arch (Tier 2).** Kernel built with `MODULES_DISABLED=y` requires a
   rebuild before VM startup is accepted.
 - **NixOS (Tier 0 legacy).** The framework's NixOS module is the
-  primary path; `nixling host prepare --apply` is refused with
+  primary path; `d2b host prepare --apply` is refused with
   `tier-0-legacy-uses-nixos-module`.
 
 ## Device nodes
@@ -639,7 +639,7 @@ under `host doctor --read-only` and **refuses** to mutate store state.
 
 ## Runner-shape preflight
 
-`nixling host check` consumes `host.json`, `processes.json`, and
+`d2b host check` consumes `host.json`, `processes.json`, and
 `closures/<vm>.json` runner-parity snapshots, then validates them
 without launching Cloud Hypervisor:
 
@@ -673,10 +673,10 @@ backends.
 
 - ADR 0011 — [cgroup v2 delegation and pidfd handoff](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
 - ADR 0012 — [IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-- ADR 0013 — [firewall coexistence policy matrix + `inet nixling` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
+- ADR 0013 — [firewall coexistence policy matrix + `inet d2b` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
 - ADR 0014 — [`kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
 - Reference: [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
-- Reference: [`docs/reference/inet-nixling-chains.md`](../reference/inet-nixling-chains.md)
+- Reference: [`docs/reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md)
 - Reference: [`docs/reference/support-matrix.md`](../reference/support-matrix.md)
 - Reference: [`docs/reference/privileges.md`](../reference/privileges.md)
 - Explanation: [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)

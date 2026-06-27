@@ -3,13 +3,13 @@
 - Status: Accepted (Unreleased)
 - Date: 2026-06-07
 - Related: ADR 0015 (daemon-only clean break), ADR 0017 (no bash
-  fallbacks), ADR 0018 (microvm.nix removal — nixling owns the per-VM
+  fallbacks), ADR 0018 (microvm.nix removal — d2b owns the per-VM
   evaluator)
 
 ## Context
 
 A VM's NixOS config is host-owned: the operator declares it in
-`nixling.vms.<vm>.config`, the host builds it
+`d2b.vms.<vm>.config`, the host builds it
 (`system.build.toplevel`), and the guest boots a read-only closure.
 The guest is **untrusted** in the threat model
 ([`docs/explanation/design.md`](../explanation/design.md) §2); the host
@@ -25,9 +25,9 @@ inversion.
 ## Decision
 
 1. **Two authorship surfaces, one closure.** The host-owned
-   `nixling.vms.<vm>.config` keeps full power (mounts, `microvm.*`,
-   `nixling.*`, env, components) and current eval behaviour. A new
-   `nixling.vms.<vm>.guestConfigFile` holds the **guest-editable** OS
+   `d2b.vms.<vm>.config` keeps full power (mounts, `microvm.*`,
+   `d2b.*`, env, components) and current eval behaviour. A new
+   `d2b.vms.<vm>.guestConfigFile` holds the **guest-editable** OS
    layer (packages, services, in-guest users, files). Both merge into
    the one per-VM closure the guest boots.
 
@@ -38,13 +38,13 @@ inversion.
    `lib.evalModules` over the **real nixpkgs NixOS module set** — so a
    guest module that READS a standard option (e.g.
    `config.networking.hostName` in a `mkIf` guard) resolves instead of
-   crashing the host eval — with `microvm` and `nixling` redeclared as
+   crashing the host eval — with `microvm` and `d2b` redeclared as
    detector options that nothing else defines. A namespace is reported
    iff `options.<ns>.isDefined`, i.e. by **definition-existence**, not
    by trusting the module system's reported source file. So a guest's
    `imports`, a `builtins.toFile`-generated module, and `_file`
    spoofing are all caught. If the guest file defines ANY option under
-   `microvm.*` or `nixling.*`, the host rebuild fails, naming the
+   `microvm.*` or `d2b.*`, the host rebuild fails, naming the
    offending option(s). A guest can change its own OS, never the host's
    substrate/framework control of it. Only VMs that set a
    `guestConfigFile` pay this cost.
@@ -80,7 +80,7 @@ inversion.
    existing version control of their host config.
 
 4. **Transport is a host-initiated SSH copy — no new attack surface.**
-   `nixling config sync <vm>` pulls the guest's edited file over the
+   `d2b config sync <vm>` pulls the guest's edited file over the
    **existing** framework-managed per-VM SSH key + manifest
    `static_ip`/`ssh_user` into a **user-local** staging file. There is
    no virtiofs config share, no new daemon/broker socket, and no
@@ -97,7 +97,7 @@ inversion.
    staged copy onto the operator-named target only — the CLI never
    auto-locates or writes the operator's config tree. The authoritative
    containment + eval gate is the `guestConfigFile` assertion that runs
-   on the subsequent `nixling switch`; `approve` itself performs only
+   on the subsequent `d2b switch`; `approve` itself performs only
    light byte validation (non-empty, valid UTF-8).
 
 6. **Guest-built store paths are never trusted.** Durable persistence
@@ -109,7 +109,7 @@ inversion.
 ## Consequences
 
 - The trust direction is preserved: untrusted guest input is contained
-  by (a) the host-eval namespace policy lint (no `microvm.*`/`nixling.*`
+  by (a) the host-eval namespace policy lint (no `microvm.*`/`d2b.*`
   escape), (b) operator review before the host ever evaluates it, and
   (c) the host-operator-only approve step.
 - No net-new privileged surface is added for the workflow; it reuses

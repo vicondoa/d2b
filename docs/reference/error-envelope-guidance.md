@@ -2,7 +2,7 @@
 
 **Diataxis category:** reference.
 
-nixling now has four closely related error/reporting surfaces:
+d2b now has four closely related error/reporting surfaces:
 
 1. the public daemon/operator envelope;
 2. the private broker envelope;
@@ -27,7 +27,7 @@ Every new error or refusal should follow these rules first:
 
 ## Public daemon/operator envelope
 
-`nixling_core::error::Error` serializes as the public operator envelope:
+`d2b_core::error::Error` serializes as the public operator envelope:
 
 | Field | Meaning |
 | --- | --- |
@@ -103,7 +103,7 @@ Guidance:
   `brokerKind` / `errorKind` hint) so the CLI can re-render the same
   redacted, user-actionable remediation table without exposing the raw
   private broker payload;
-- native-only mode (`NIXLING_NATIVE_ONLY=1`) should surface the real native
+- native-only mode (`D2B_NATIVE_ONLY=1`) should surface the real native
   refusal, not silently fall back to bash.
 
 ## Mapping to `error-codes.md`

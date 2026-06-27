@@ -4,15 +4,15 @@ let
   closureRefs = lib.sortOn (ref: ref.vm) (lib.mapAttrsToList (_: closure: {
     vm = closure.vm;
     path = closure.relativePath;
-  }) (config.nixling._bundle.closures or { }));
+  }) (config.d2b._bundle.closures or { }));
 
   profileRefs = lib.sortOn (ref: ref.profileId) (lib.mapAttrsToList (_: profile: {
     profileId = profile.data.profileId;
     path = profile.relativePath;
-  }) (config.nixling._bundle.minijailProfiles or { }));
+  }) (config.d2b._bundle.minijailProfiles or { }));
 
-  nl = import ./lib.nix { inherit lib; };
-  normalNixosVms = nl.normalNixosVms config.nixling.vms;
+  d2bLib = import ./lib.nix { inherit lib; };
+  normalNixosVms = d2bLib.normalNixosVms config.d2b.vms;
   managedKeyOverrides = lib.sortOn (entry: entry.vm) (lib.filter (entry: entry != null)
     (lib.mapAttrsToList (name: vm:
       if vm.ssh.keyPath == null
@@ -32,33 +32,33 @@ let
   artifactHashInputs =
     [
       {
-        key = "/etc/nixling/host.json";
-        path = config.nixling._bundle.hostJson.path;
+        key = "/etc/d2b/host.json";
+        path = config.d2b._bundle.hostJson.path;
       }
       {
-        key = "/etc/nixling/processes.json";
-        path = config.nixling._bundle.processesJson.path;
+        key = "/etc/d2b/processes.json";
+        path = config.d2b._bundle.processesJson.path;
       }
       {
-        key = "/etc/nixling/privileges.json";
-        path = config.nixling._bundle.privilegesJson.path;
+        key = "/etc/d2b/privileges.json";
+        path = config.d2b._bundle.privilegesJson.path;
       }
       {
-        key = "/etc/nixling/storage.json";
-        path = config.nixling._bundle.storageJson.path;
+        key = "/etc/d2b/storage.json";
+        path = config.d2b._bundle.storageJson.path;
       }
       {
-        key = "/etc/nixling/sync.json";
-        path = config.nixling._bundle.syncJson.path;
+        key = "/etc/d2b/sync.json";
+        path = config.d2b._bundle.syncJson.path;
       }
     ]
     ++ map (ref: {
       key = ref.path;
-      path = config.nixling._bundle.closures.${ref.vm}.path;
+      path = config.d2b._bundle.closures.${ref.vm}.path;
     }) closureRefs
     ++ map (ref: {
       key = ref.path;
-      path = config.nixling._bundle.minijailProfiles.${ref.profileId}.path;
+      path = config.d2b._bundle.minijailProfiles.${ref.profileId}.path;
     }) profileRefs;
 
   # dataWithoutHash is the canonical bundle content used as the hash
@@ -71,17 +71,17 @@ let
     artifactHashes = null;
     bundleVersion = 6;
     schemaVersion = "v2";
-    publicManifestPath = "/run/current-system/sw/share/nixling/vms.json";
-    hostPath = "/etc/nixling/host.json";
-    processesPath = "/etc/nixling/processes.json";
-    privilegesPath = "/etc/nixling/privileges.json";
-    storagePath = "/etc/nixling/storage.json";
-    syncPath = "/etc/nixling/sync.json";
+    publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
+    hostPath = "/etc/d2b/host.json";
+    processesPath = "/etc/d2b/processes.json";
+    privilegesPath = "/etc/d2b/privileges.json";
+    storagePath = "/etc/d2b/storage.json";
+    syncPath = "/etc/d2b/sync.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {
-      keysDir = toString config.nixling.site.keysDir;
-      knownHostsPath = "${config.nixling.site.stateDir}/known_hosts.nixling";
+      keysDir = toString config.d2b.site.keysDir;
+      knownHostsPath = "${config.d2b.site.stateDir}/known_hosts.d2b";
       overrides = managedKeyOverrides;
     };
     generation = {
@@ -103,10 +103,10 @@ let
   # installation and tests that need the final bytes must use `path`.
   data = dataWithoutHash // { inherit bundleHash; artifactHashes = null; };
   jsonText = builtins.toJSON data;
-  baseJsonFile = pkgs.writeText "nixling-bundle-base.json" jsonText;
-  artifactHashInputsFile = pkgs.writeText "nixling-bundle-artifact-inputs.json"
+  baseJsonFile = pkgs.writeText "d2b-bundle-base.json" jsonText;
+  artifactHashInputsFile = pkgs.writeText "d2b-bundle-artifact-inputs.json"
     (builtins.toJSON artifactHashInputs);
-  jsonFile = pkgs.runCommand "nixling-bundle.json"
+  jsonFile = pkgs.runCommand "d2b-bundle.json"
     {
       nativeBuildInputs = [ pkgs.python3 ];
     } ''
@@ -134,7 +134,7 @@ let
 in
 {
   config = {
-    nixling._bundle.bundle = {
+    d2b._bundle.bundle = {
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "bundle.json";
@@ -144,12 +144,12 @@ in
 
     # The CLI reads these integrity-pinned bundle artifacts directly before
     # some daemon requests. They must remain non-secret: every regular file
-    # under /etc/nixling is made read-only for the lifecycle group below.
-    system.activationScripts.nixlingBundleAcl = lib.stringAfter [ "etc" "users" ] ''
-      if ${pkgs.getent}/bin/getent group nixling >/dev/null && [ -d /etc/nixling ]; then
-        ${pkgs.acl}/bin/setfacl -m "g:nixling:rx,m::rx" /etc/nixling 2>/dev/null || true
-        ${pkgs.findutils}/bin/find /etc/nixling -type d -exec ${pkgs.acl}/bin/setfacl -m "g:nixling:rx,m::rx" {} + 2>/dev/null || true
-        ${pkgs.findutils}/bin/find /etc/nixling -type f -exec ${pkgs.acl}/bin/setfacl -m "g:nixling:r,m::r" {} + 2>/dev/null || true
+    # under /etc/d2b is made read-only for the lifecycle group below.
+    system.activationScripts.d2bBundleAcl = lib.stringAfter [ "etc" "users" ] ''
+      if ${pkgs.getent}/bin/getent group d2b >/dev/null && [ -d /etc/d2b ]; then
+        ${pkgs.acl}/bin/setfacl -m "g:d2b:rx,m::rx" /etc/d2b 2>/dev/null || true
+        ${pkgs.findutils}/bin/find /etc/d2b -type d -exec ${pkgs.acl}/bin/setfacl -m "g:d2b:rx,m::rx" {} + 2>/dev/null || true
+        ${pkgs.findutils}/bin/find /etc/d2b -type f -exec ${pkgs.acl}/bin/setfacl -m "g:d2b:r,m::r" {} + 2>/dev/null || true
       fi
     '';
   };

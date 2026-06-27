@@ -12,9 +12,9 @@
     "status": "ok",
     "detail": "nftables available in PATH"
   },
-  "nftables_table_nixling": {
+  "nftables_table_d2b": {
     "status": "ok",
-    "detail": "inet nixling table absent"
+    "detail": "inet d2b table absent"
   },
   "firewalld_coexistence": {
     "status": "unsupported",
@@ -22,11 +22,11 @@
   },
   "network_manager_unmanaged": {
     "status": "ok",
-    "detail": "found nixling unmanaged-devices config: /etc/NetworkManager/conf.d/nixling.conf"
+    "detail": "found d2b unmanaged-devices config: /etc/NetworkManager/conf.d/d2b.conf"
   },
   "route_preflight": {
     "status": "todo-wave-w3",
-    "detail": "deferred to W3 host prepare; nixling envs not yet declared"
+    "detail": "deferred to W3 host prepare; d2b envs not yet declared"
   },
   "bridge_tap_port_flag_readback": {
     "status": "ok",
@@ -42,7 +42,7 @@
   },
   "etc_hosts_marked_block": {
     "status": "ok",
-    "detail": "no nixling marked block found in /etc/hosts"
+    "detail": "no d2b marked block found in /etc/hosts"
   },
   "usbip_busid_lock_module_firewall_prereqs": {
     "status": "ok",

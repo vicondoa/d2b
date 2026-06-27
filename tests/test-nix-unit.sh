@@ -11,8 +11,8 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
-export ROOT NL_LOG
+D2B_LOG=${D2B_LOG:-/dev/null}
+export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"

@@ -26,13 +26,13 @@ rc=0
 # These are the paths that MUST be cached for warm CI builds.
 declared_dirs=(
   "packages -> target"
-  "packages/nixling-priv-broker -> target"
+  "packages/d2b-priv-broker -> target"
 )
 # Broker parallel feature-pass target dirs: the script uses
 # ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
-# packages/nixling-priv-broker/target.
+# packages/d2b-priv-broker/target.
 while IFS= read -r suffix; do
-  declared_dirs+=("packages/nixling-priv-broker/target-${suffix}")
+  declared_dirs+=("packages/d2b-priv-broker/target-${suffix}")
 done < <(
   grep -oP '(?<=broker_target_dir%/\}-)[a-z0-9]+' "$test_script" | sort -u
 )

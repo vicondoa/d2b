@@ -1,6 +1,6 @@
 # nixos-modules/vm-submodule.nix
 #
-# Wraps the nixling-owned per-VM evaluator (`vm-evaluator.nix`) for
+# Wraps the d2b-owned per-VM evaluator (`vm-evaluator.nix`) for
 # `host.nix`'s consumption. This file
 # stays as the single entry-point for `composeVm` so host.nix
 # imports it once. The actual NixOS evaluation logic lives in

@@ -37,8 +37,8 @@ let
         type = types.str;
         default =
           if config.installFileName == null
-          then "nixling-${name}.json"
-          else "nixling-${baseNameOf config.installFileName}";
+          then "d2b-${name}.json"
+          else "d2b-${baseNameOf config.installFileName}";
         internal = true;
         visible = false;
         description = "Internal derivation name used when path is generated from jsonText.";
@@ -49,7 +49,7 @@ let
         default = null;
         internal = true;
         visible = false;
-        description = "Internal path below /etc/nixling for central bundle artifact installation.";
+        description = "Internal path below /etc/d2b for central bundle artifact installation.";
       };
 
       mode = lib.mkOption {
@@ -97,7 +97,7 @@ let
         default = config.installFileName != null;
         internal = true;
         visible = false;
-        description = "Internal switch for central /etc/nixling artifact installation.";
+        description = "Internal switch for central /etc/d2b artifact installation.";
       };
     };
   });
@@ -125,8 +125,8 @@ let
   };
 
   privateGroup =
-    if topConfig.nixling.daemonExperimental.enable
-    then "nixlingd"
+    if topConfig.d2b.daemonExperimental.enable
+    then "d2bd"
     else "root";
 
   singletonArtifactNames = [
@@ -142,9 +142,9 @@ let
     artifact.enableEtc && artifact.installFileName != null;
 
   singletonArtifacts = lib.genAttrs singletonArtifactNames
-    (name: topConfig.nixling._bundle.${name});
+    (name: topConfig.d2b._bundle.${name});
 
-  extraArtifacts = topConfig.nixling._bundle.extraArtifacts;
+  extraArtifacts = topConfig.d2b._bundle.extraArtifacts;
 
   collidingExtraArtifactNames =
     lib.attrNames (builtins.intersectAttrs singletonArtifacts extraArtifacts);
@@ -156,7 +156,7 @@ let
 
 in
 {
-  options.nixling._bundle = {
+  options.d2b._bundle = {
     bundle = lib.mkOption {
       type = artifactModule;
       default = { };
@@ -235,14 +235,14 @@ in
       {
         assertion = collidingExtraArtifactNames == [ ];
         message =
-          "nixling internal bundle extraArtifacts collide with reserved artifact names: "
+          "d2b internal bundle extraArtifacts collide with reserved artifact names: "
           + lib.concatStringsSep ", " collidingExtraArtifactNames;
       }
     ];
 
     environment.etc = lib.mkMerge (lib.mapAttrsToList
       (_: artifact: {
-        "nixling/${artifact.installFileName}" = {
+        "d2b/${artifact.installFileName}" = {
           source = artifact.path;
           inherit (artifact) mode user group;
         };

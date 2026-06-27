@@ -20,18 +20,18 @@ null
 --serial
 tty
 --vsock
-cid=110,socket=/var/lib/nixling/vms/personal-dev/vsock.sock
+cid=110,socket=/var/lib/d2b/vms/personal-dev/vsock.sock
 --fs
-socket=/run/nixling/vms/personal-dev/ro-store.sock,tag=ro-store
-socket=/run/nixling/vms/personal-dev/nl-meta.sock,tag=nl-meta
-socket=/run/nixling/vms/personal-dev/nl-hkeys.sock,tag=nl-hkeys
-socket=/run/nixling/vms/personal-dev/nl-ssh-host.sock,tag=nl-ssh-host
+socket=/run/d2b/vms/personal-dev/ro-store.sock,tag=ro-store
+socket=/run/d2b/vms/personal-dev/d2b-meta.sock,tag=d2b-meta
+socket=/run/d2b/vms/personal-dev/d2b-hkeys.sock,tag=d2b-hkeys
+socket=/run/d2b/vms/personal-dev/d2b-ssh-host.sock,tag=d2b-ssh-host
 --api-socket
-/var/lib/nixling/vms/personal-dev/personal-dev.sock
+/var/lib/d2b/vms/personal-dev/personal-dev.sock
 --net
 mac=02:00:07:5E:AA:0A,tap=personal-l10
 --tpm
-socket=/run/nixling/vms/personal-dev/tpm.sock
+socket=/run/d2b/vms/personal-dev/tpm.sock
 # deviceBinds
 /dev/kvm
 /dev/vhost-net

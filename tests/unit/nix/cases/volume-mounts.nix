@@ -9,7 +9,7 @@
 # The "module callsites use the shared helpers" grep checks the bash gate
 # also carried are NOT value assertions; they migrate to the hermetic
 # flake.checks.<sys>.module-helper-wiring derivation (see flake.nix).
-{ nl, ... }:
+{ d2bLib, ... }:
 
 let
   varVolume = {
@@ -39,7 +39,7 @@ let
     imageType = "qcow2";
   };
 
-  issues = nl.volumeSerialIssues [
+  issues = d2bLib.volumeSerialIssues [
     { image = "var.img"; }
     { image = "var.img"; }
     { image = "rootfs.img"; }
@@ -49,23 +49,23 @@ let
     { image = "empty.img"; serial = ""; }
   ];
 
-  fs = nl.volumeFileSystem varVolume;
+  fs = d2bLib.volumeFileSystem varVolume;
 in
 {
   "volume-mounts/serial-null-defaults" = {
-    expr = nl.volumeSerial varVolume;
+    expr = d2bLib.volumeSerial varVolume;
     expected = "var";
   };
   "volume-mounts/serial-sanitizes-delimiters" = {
-    expr = nl.volumeSerial { image = "bad,name=still.img"; };
+    expr = d2bLib.volumeSerial { image = "bad,name=still.img"; };
     expected = "bad-name-still";
   };
   "volume-mounts/host-path-relative" = {
-    expr = nl.volumeHostPath "/var/lib/nixling/vms" "work" varVolume;
-    expected = "/var/lib/nixling/vms/work/var.img";
+    expr = d2bLib.volumeHostPath "/var/lib/d2b/vms" "work" varVolume;
+    expected = "/var/lib/d2b/vms/work/var.img";
   };
   "volume-mounts/host-path-absolute" = {
-    expr = nl.volumeHostPath "/var/lib/nixling/vms" "work" externalVolume;
+    expr = d2bLib.volumeHostPath "/var/lib/d2b/vms" "work" externalVolume;
     expected = "/tmp/external.img";
   };
   "volume-mounts/fs-device" = {
@@ -85,23 +85,23 @@ in
     expected = true;
   };
   "volume-mounts/size-bytes" = {
-    expr = nl.volumeSizeBytes varVolume;
+    expr = d2bLib.volumeSizeBytes varVolume;
     expected = 1073741824;
   };
   "volume-mounts/disk-init-relative-ext4-raw" = {
-    expr = nl.volumeDiskInitEligible varVolume;
+    expr = d2bLib.volumeDiskInitEligible varVolume;
     expected = true;
   };
   "volume-mounts/disk-init-absolute" = {
-    expr = nl.volumeDiskInitEligible externalVolume;
+    expr = d2bLib.volumeDiskInitEligible externalVolume;
     expected = false;
   };
   "volume-mounts/disk-init-non-ext4" = {
-    expr = nl.volumeDiskInitEligible nonExt4Volume;
+    expr = d2bLib.volumeDiskInitEligible nonExt4Volume;
     expected = false;
   };
   "volume-mounts/disk-init-non-raw" = {
-    expr = nl.volumeDiskInitEligible qcowVolume;
+    expr = d2bLib.volumeDiskInitEligible qcowVolume;
     expected = false;
   };
   "volume-mounts/issues-duplicates" = {

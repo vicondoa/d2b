@@ -1,6 +1,6 @@
-# cli-usb — CLI-contract integration tests for `nixling usb`
-# (packages/nixling/tests/usb_contract.rs). Successor for the retired
-# cli-rust-native-usb.sh bash gate: spawns the real `nixling` binary and
+# cli-usb — CLI-contract integration tests for `d2b usb`
+# (packages/d2b/tests/usb_contract.rs). Successor for the retired
+# cli-rust-native-usb.sh bash gate: spawns the real `d2b` binary and
 # asserts `usb --help` and `usb {attach,detach} <vm> <busid> --dry-run` stay
 # byte-stable against the committed tests/golden/cli-output/usb-*.txt goldens.
 # One libtest path per line; checked by tests/tools/assert-pinned-tests.sh.

@@ -7,7 +7,7 @@
 # rendered NixOS config: disable_ipv6 = 1, accept_ra = 0, autoconf = 0.
 #
 # This pins the invariant that NixOS activation applies bridge IPv6
-# suppression declaratively BEFORE any nixlingd/broker invocation, closing
+# suppression declaratively BEFORE any d2bd/broker invocation, closing
 # the boot-time window where bridges had IPv6 active until the first VM in
 # the env started.
 #
@@ -25,17 +25,17 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = { launcherUsers = [ "alice" ]; yubikey.enable = false; };
-    nixling.hostLanCidrs = [ "192.168.1.0/24" ];
-    nixling.envs.work = {
+    d2b.site = { launcherUsers = [ "alice" ]; yubikey.enable = false; };
+    d2b.hostLanCidrs = [ "192.168.1.0/24" ];
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    nixling.envs.personal = {
+    d2b.envs.personal = {
       lanSubnet = "10.30.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
     };
-    nixling.vms.work-app = {
+    d2b.vms.work-app = {
       enable = true;
       env = "work";
       index = 10;
@@ -45,7 +45,7 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
-    nixling.vms.personal-app = {
+    d2b.vms.personal-app = {
       enable = true;
       env = "personal";
       index = 10;

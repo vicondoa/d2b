@@ -7,21 +7,21 @@ set. Historical microvm.nix runner evidence lives in
 
 ## Framework-managed shares
 
-For a headless `corp-vm`, nixling emits these baseline shares. The
+For a headless `corp-vm`, d2b emits these baseline shares. The
 guest-control token share is present only when
-`nixling.vms.corp-vm.guest.control.enable = true`.
+`d2b.vms.corp-vm.guest.control.enable = true`.
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | `/var/lib/nixling/vms/corp-vm/store-view/live`       | RO   |
-| `nl-meta`     | `/run/nixling/vms/corp-vm/nl-meta.sock`  | `/var/lib/nixling/vms/corp-vm/store-view/meta`       | RO   |
-| `nl-hkeys`    | `/run/nixling/vms/corp-vm/nl-hkeys.sock` | `/var/lib/nixling/vms/corp-vm/host-keys`             | RW   |
-| `nl-ssh-host` | `/run/nixling/vms/corp-vm/nl-ssh-host.sock` | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`      | RW   |
-| `nl-gctl`     | `/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock` | `/var/lib/nixling/guest-control-corp-vm` | RO |
+| `ro-store`    | `/run/d2b/vms/corp-vm/ro-store.sock` | `/var/lib/d2b/vms/corp-vm/store-view/live`       | RO   |
+| `d2b-meta`     | `/run/d2b/vms/corp-vm/d2b-meta.sock`  | `/var/lib/d2b/vms/corp-vm/store-view/meta`       | RO   |
+| `d2b-hkeys`    | `/run/d2b/vms/corp-vm/d2b-hkeys.sock` | `/var/lib/d2b/vms/corp-vm/host-keys`             | RW   |
+| `d2b-ssh-host` | `/run/d2b/vms/corp-vm/d2b-ssh-host.sock` | `/var/lib/d2b/vms/corp-vm/sshd-host-keys`      | RW   |
+| `d2b-gctl`     | `/run/d2b/vms/corp-vm/guest-control/d2b-gctl.sock` | `/var/lib/d2b/guest-control-corp-vm` | RO |
 
 CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
 flag (see `ChArgvInput.fs_shares` in
-[`ch_argv`](../../packages/nixling-host/src/ch_argv.rs)).
+[`ch_argv`](../../packages/d2b-host/src/ch_argv.rs)).
 
 ## virtiofsd argv shape
 
@@ -29,7 +29,7 @@ Each share renders to one virtiofsd process:
 
 ```text
 virtiofsd \
-  --socket-path=/run/nixling/vms/<vm>/<tag>.sock \
+  --socket-path=/run/d2b/vms/<vm>/<tag>.sock \
   [--socket-group=<group>] \
   --shared-dir=<host-path> \
   --thread-pool-size=<N> \
@@ -43,8 +43,8 @@ Flag semantics:
 
 - `--socket-path` — UDS the CH runner connects to. Daemon-owned;
   the broker places normal share sockets under
-  `/run/nixling/vms/<vm>/<tag>.sock`; `nl-gctl` uses the isolated
-  `/run/nixling/vms/<vm>/guest-control/nl-gctl.sock` path.
+  `/run/d2b/vms/<vm>/<tag>.sock`; `d2b-gctl` uses the isolated
+  `/run/d2b/vms/<vm>/guest-control/d2b-gctl.sock` path.
 - `--socket-group=<group>` — optional UDS group ownership. It is emitted
   only when `microvm.virtiofsd.group` is non-null.
 - `--shared-dir` — host path the guest sees through the tag.
@@ -61,8 +61,8 @@ Flag semantics:
 - `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` — `ro-store`, `nl-meta`, and the guest-control token
-  share (`nl-gctl`) are read-only. `nl-meta` is rooted at
+- `--readonly` — `ro-store`, `d2b-meta`, and the guest-control token
+  share (`d2b-gctl`) are read-only. `d2b-meta` is rooted at
   `store-view/meta` and carries only guest-safe generation metadata
   (`current`, `store-paths`, `db.dump`, allow-listed `meta.json`); it
   never exposes `live/`, `state/`, `gcroots/`, or `sync.lock`. The
@@ -73,8 +73,8 @@ Flag semantics:
 Per ADR 0021 each virtiofsd instance runs fake-root inside a
 broker-pre-established single-entry user namespace and has zero host
 capabilities. Normal VM shares map namespace UID/GID 0 to the
-`nixling-<vm>-runner` stable principal. The guest-control token share
-(`nl-gctl`) maps to the narrower `nixling-<vm>-gctlfs` stable
+`d2b-<vm>-runner` stable principal. The guest-control token share
+(`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` stable
 principal and receives only the token directory/file ACLs plus its
 dedicated runtime socket directory.
 

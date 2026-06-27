@@ -1,0 +1,4 @@
+# d2bd-startup-smoke successor native tests.
+# Existing public-socket/Hello coverage remains pinned in daemon-socket-acl.txt.
+daemon_version_file::startup_writes_version_file_next_to_public_socket
+daemon_vm_start_returns_bundle_tampered_envelope

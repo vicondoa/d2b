@@ -1,40 +1,40 @@
 # Naming conventions
 
-Canonical reference for host-visible nixling naming. AGENTS.md and the design doc keep shorter summaries; this page is the detailed glossary.
+Canonical reference for host-visible d2b naming. AGENTS.md and the design doc keep shorter summaries; this page is the detailed glossary.
 
 ## Service and user naming
 
 | Resource | Pattern | Notes |
 | --- | --- | --- |
-| Daemon | `nixlingd.service` | v1.0 non-root daemon; the only persistent user-facing system unit nixling declares besides the broker (per ADR 0015). |
-| Privileged broker | `nixling-priv-broker.{socket,service}` | v1.0 socket-activated privileged dispatcher for every audited host mutation. |
-| Per-VM runner leaves | `nixling.slice/<vm>/<role>` | v1.0 broker-spawned runner cgroup leaves (replaces legacy `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}.service`). |
-| Per-env runner leaves | `nixling.slice/sys-<env>/usbipd-{backend,proxy}` | v1.0 broker-spawned per-env USBIP runners (replaces legacy `nixling-sys-<env>-usbipd-{backend,proxy}.service`). |
-| Legacy per-VM lifecycle wrapper | `nixling@<vm>.service` | Retired in v1.0 (per ADR 0015); v1.0 lifecycle dispatches through `nixlingd` → broker `SpawnRunner` instead. |
+| Daemon | `d2bd.service` | v1.0 non-root daemon; the only persistent user-facing system unit d2b declares besides the broker (per ADR 0015). |
+| Privileged broker | `d2b-priv-broker.{socket,service}` | v1.0 socket-activated privileged dispatcher for every audited host mutation. |
+| Per-VM runner leaves | `d2b.slice/<vm>/<role>` | v1.0 broker-spawned runner cgroup leaves (replaces legacy `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}.service`). |
+| Per-env runner leaves | `d2b.slice/sys-<env>/usbipd-{backend,proxy}` | v1.0 broker-spawned per-env USBIP runners (replaces legacy `d2b-sys-<env>-usbipd-{backend,proxy}.service`). |
+| Legacy per-VM lifecycle wrapper | `d2b@<vm>.service` | Retired in v1.0 (per ADR 0015); v1.0 lifecycle dispatches through `d2bd` → broker `SpawnRunner` instead. |
 | Upstream backend | `microvm@<vm>.service` | microvm.nix's own template; still emitted in v1.0 for direct-debug bypass but not the lifecycle-of-record. |
-| Legacy per-VM sidecars | `nixling-<vm>-<purpose>.service` | Legacy sidecar systemd templates (`gpu`, `video`, `snd`, `swtpm`, `store-sync`). Retired in v1.0; the broker now spawns the corresponding runners on the per-VM DAG. |
-| Virtiofsd exception | `microvm-virtiofsd@<vm>.service` | Upstream microvm.nix unit; rename to `nixling-<vm>-virtiofsd` is tracked for a future release. |
-| Legacy per-env system services | `nixling-sys-<env>-<purpose>.service` | Example: `nixling-sys-corp-usbipd-proxy.service`. Retired in v1.0 (per ADR 0015); in v1.0 the broker spawns the equivalent runners under `nixling.slice/sys-<env>/<role>`. |
-| Legacy host singleton services | `nixling-<role>.service` | Examples: `nixling-ch-exporter.service`, `nixling-otel-host-bridge.service`. All retired by v1.0; ADR 0015 § "What gets removed" lists the full retired inventory. |
-| Auto-declared net VM | `nixling@sys-<env>-net.service` | Framework-reserved net VM per env (legacy wrapper-unit name; in v1.0 dispatched through `nixlingd` → broker like every other VM). |
-| Legacy per-VM system users | `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `nixling.slice/<vm>/<role>`. Notable exceptions: `nixling-<vm>-store-sync` runs as root (no dedicated user) and `nixling-<vm>-gpu` is shared by the GPU and video runners. |
-| Launcher group | `nixling` | v1.2 Unix group allowed to talk to `nixlingd` over `/run/nixling/public.sock` (mode 0660, group `nixling`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `nixling-launcher` / `nixling-launchers` groups are empty migration tombstones only. |
+| Legacy per-VM sidecars | `d2b-<vm>-<purpose>.service` | Legacy sidecar systemd templates (`gpu`, `video`, `snd`, `swtpm`, `store-sync`). Retired in v1.0; the broker now spawns the corresponding runners on the per-VM DAG. |
+| Virtiofsd exception | `microvm-virtiofsd@<vm>.service` | Upstream microvm.nix unit; rename to `d2b-<vm>-virtiofsd` is tracked for a future release. |
+| Legacy per-env system services | `d2b-sys-<env>-<purpose>.service` | Example: `d2b-sys-corp-usbipd-proxy.service`. Retired in v1.0 (per ADR 0015); in v1.0 the broker spawns the equivalent runners under `d2b.slice/sys-<env>/<role>`. |
+| Legacy host singleton services | `d2b-<role>.service` | Examples: `d2b-ch-exporter.service`, `d2b-otel-host-bridge.service`. All retired by v1.0; ADR 0015 § "What gets removed" lists the full retired inventory. |
+| Auto-declared net VM | `d2b@sys-<env>-net.service` | Framework-reserved net VM per env (legacy wrapper-unit name; in v1.0 dispatched through `d2bd` → broker like every other VM). |
+| Legacy per-VM system users | `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `d2b.slice/<vm>/<role>`. Notable exceptions: `d2b-<vm>-store-sync` runs as root (no dedicated user) and `d2b-<vm>-gpu` is shared by the GPU and video runners. |
+| Launcher group | `d2b` | v1.2 Unix group allowed to talk to `d2bd` over `/run/d2b/public.sock` (mode 0660, group `d2b`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `d2b-launcher` / `d2b-launchers` groups are empty migration tombstones only. |
 
 ## Broker caller-role audit labels
 
 The broker emits `peer_role` / caller-role values into
-`/etc/nixling/privileges.json` and every line of
-`/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
+`/etc/d2b/privileges.json` and every line of
+`/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
 
 | Label | Class | Stability |
 | --- | --- | --- |
-| `nixling-launcher` | lifecycle/launcher principal (members authorized by the daemon to call `public.sock`) | **Stable** — permanent audit-class identifier |
-| `nixling-admin` | administrative principal | **Stable** — permanent audit-class identifier |
+| `d2b-launcher` | lifecycle/launcher principal (members authorized by the daemon to call `public.sock`) | **Stable** — permanent audit-class identifier |
+| `d2b-admin` | administrative principal | **Stable** — permanent audit-class identifier |
 
 These are stable broker audit/authz class labels. They are distinct
-from the live Unix group name (`nixling` from v1.2 onward; previously
-`nixling-launcher` and `nixling-launchers`). Audit consumers must not
-cross-reference `peer_role == "nixling-launcher"` with Unix group
+from the live Unix group name (`d2b` from v1.2 onward; previously
+`d2b-launcher` and `d2b-launchers`). Audit consumers must not
+cross-reference `peer_role == "d2b-launcher"` with Unix group
 membership: the audit label is a class identifier, not a group lookup.
 
 See [ADR 0015](../adr/0015-daemon-only-clean-break.md) for the
@@ -70,12 +70,12 @@ Constellation targets extend the VM/env naming rules without making a
 target address a network address. The canonical persisted form is:
 
 ```text
-nl://<workload>.<node>.<realm-path>.nixling
+d2b://<workload>.<node>.<realm-path>.d2b
 ```
 
 The bare `<workload>` form remains the v1-compatible local workload
-alias. Multi-label human forms must end in `.nixling`; `all`, `*`, and
-non-suffix `nixling` labels are list selectors or reserved words, never
+alias. Multi-label human forms must end in `.d2b`; `all`, `*`, and
+non-suffix `d2b` labels are list selectors or reserved words, never
 target labels.
 
 Label-shaped constellation ids (`RealmId`, `NodeId`, `WorkloadId`,
@@ -89,7 +89,7 @@ core model contract.
 
 Gateway-backed realms use a local gateway VM entrypoint. The default
 gateway VM name is `sys-<realm-path-with-dashes>-gateway`, but
-operators may override `nixling.gateways.<name>.vmName`; consumers
+operators may override `d2b.gateways.<name>.vmName`; consumers
 should read the generated `realm-entrypoints.json` table rather than
 reconstructing the name from the realm path.
 
@@ -104,18 +104,18 @@ reconstructing the name from the realm path.
 
 ## Examples
 
-- `nixling@work.service`
+- `d2b@work.service`
 - `microvm@work.service`
-- `nixling-work-gpu.service`
-- `nixling-work-video.service`
-- `nixling-work-snd.service`
-- `nixling-work-swtpm.service`
-- `nixling-work-store-sync.service`
+- `d2b-work-gpu.service`
+- `d2b-work-video.service`
+- `d2b-work-snd.service`
+- `d2b-work-swtpm.service`
+- `d2b-work-store-sync.service`
 - `microvm-virtiofsd@work.service`
-- `nixling-sys-corp-usbipd-proxy.service`
-- `nixling-ch-exporter.service`
-- `nixling-otel-host-bridge.service`
-- `nixling@sys-corp-net.service`
+- `d2b-sys-corp-usbipd-proxy.service`
+- `d2b-ch-exporter.service`
+- `d2b-otel-host-bridge.service`
+- `d2b@sys-corp-net.service`
 - `br-corp-up`, `br-corp-lan`, `corp-u2`, `corp-l2`
 
 ## Host-prepare network IfName conventions
@@ -126,22 +126,22 @@ VM (per ADR 0012 — IPv6-off sysctl set, hash-derived IfName,
 bridge-port defaults):
 
 - Every broker-created host interface is named
-  `nl-<10-char hash>` for bridges and `nlv-<10-char hash>` for TAPs.
+  `d2b-<10-char hash>` for bridges and `d2bv-<10-char hash>` for TAPs.
   The hash is FNV-1a + Crockford base32 over the canonical
   `<env>/<vm>/<role>` tuple from the trusted bundle. The 10-char
   body keeps the full name at ≤ `IFNAMSIZ-1` (15 bytes).
 - The mapping is exposed to operators via
-  `nixling host check` JSON output and via the
+  `d2b host check` JSON output and via the
   `IfNameMapping` DTO in `bundle/host.json` (env/vm name → derived
-  `nl-*`/`nlv-*` name). Operators must never hand-pick an ifname
-  whose prefix collides with `nl-` or `nlv-`.
+  `d2b-*`/`d2bv-*` name). Operators must never hand-pick an ifname
+  whose prefix collides with `d2b-` or `d2bv-`.
 - Collisions are detected at emitter time: two bundle tuples that
   hash to the same body fail bundle render with
   `ifname-collision` rather than racing at apply time.
 - The legacy per-env bridges (`br-<env>-up`, `br-<env>-lan`,
   `<env>-u2`, `<env>-l2`) belong to the **legacy-systemd** mode
   and are unchanged. They live in a disjoint name space and
-  coexist with daemon-mode `nl-*`/`nlv-*` names on the same host.
+  coexist with daemon-mode `d2b-*`/`d2bv-*` names on the same host.
 
 `IFNAMSIZ` enforcement is a hard predicate on every broker-derived
 name; an ifname that would exceed 15 bytes is rejected at bundle
@@ -154,36 +154,36 @@ ifname via a single helper, equivalent to:
 
 ```nix
 # nixos-modules/host-json.nix (sketch)
-mkNixlingIfName = { kind, env, vm, role }:
+mkD2bIfName = { kind, env, vm, role }:
   let
     # Canonical "<env>/<vm>/<role>" tuple feeds FNV-1a → Crockford base32.
     key = "${env}/${vm}/${role}";
     hash = lib.substring 0 10
       (lib.fnv1aCrockford32 key);          # 10-char body
-    prefix = if kind == "bridge" then "nl-" else "nlv-";
+    prefix = if kind == "bridge" then "d2b-" else "d2bv-";
     name = prefix + hash;
   in
     assert lib.stringLength name <= 15;     # IFNAMSIZ-1
     name;
 ```
 
-The same function runs in `packages/nixling-host/src/ifname.rs` so the
+The same function runs in `packages/d2b-host/src/ifname.rs` so the
 broker and the emitter always agree byte-for-byte. The committed
 `tests/golden/host-json/ifname-collision.json` fixture pins one
 emitter-rejected collision case.
 
 ### Looking up the user-visible name from a derived IfName
 
-Operators rarely need to read the `nl-<hash>` or `nlv-<hash>` names
+Operators rarely need to read the `d2b-<hash>` or `d2bv-<hash>` names
 directly. Both directions of the mapping ship in the
 `IfNameMapping` DTO of `bundle/host.json` and are surfaced to
 operators in two CLI outputs:
 
-- `nixling host check --json` — emits the full per-env, per-VM,
+- `d2b host check --json` — emits the full per-env, per-VM,
   per-role mapping under `.host.ifnameMapping[]`. Use this to look
-  up a `nl-*`/`nlv-*` name observed in `ip link`, `nft list ruleset`,
+  up a `d2b-*`/`d2bv-*` name observed in `ip link`, `nft list ruleset`,
   or a broker audit record back to `(env, vm, role)`.
-- `nixling status <vm> --json` — emits the same mapping scoped to one
+- `d2b status <vm> --json` — emits the same mapping scoped to one
   VM under `.vm.ifnames[]`.
 
 The mapping is keyed on `(kind, env, vm, role)` so the human-visible

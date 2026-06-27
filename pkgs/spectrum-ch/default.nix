@@ -24,7 +24,7 @@
 #       (a) CVE-2026-45782 (CVSS 8.9, virtio-block UAF guest→host
 #           escape) affects v21.0 – v51.1; fixed in v51.2 / v52.0.
 #       (b) v52.0 is the first release to ship `--generic-vhost-user`,
-#           which the audio component (modules/nixling/audio.nix)
+#           which the audio component (modules/d2b/audio.nix)
 #           depends on to wire vhost-device-sound into CH.
 #
 # Pinning:
@@ -116,7 +116,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   #
   # However, microvm.nix unconditionally emits `--memory
   # mergeable=on,shared=on,size=…` whenever a VM has virtiofs shares
-  # OR graphics enabled (both true for every nixling workload VM,
+  # OR graphics enabled (both true for every d2b workload VM,
   # because per-VM /nix/store is virtiofs-backed). CH v52 added a
   # validator that rejects that combination:
   #
@@ -129,7 +129,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # can DMA into it). For our VMs `shared=on` is non-negotiable, so
   # we rewrite `mergeable=on` to `mergeable=off` in any `--memory`
   # arg before CH sees it. Cost: lose KSM page deduplication for
-  # these VMs. Worth it: every nixling VM needs virtiofs.
+  # these VMs. Worth it: every d2b VM needs virtiofs.
   postFixup = (oldAttrs.postFixup or "") + ''
     mv $out/bin/cloud-hypervisor $out/bin/.cloud-hypervisor-real
     # Heredoc is UNQUOTED so ${pkgs.gnused} expands at write time.
@@ -187,5 +187,5 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # for downstream `nix flake check --all-systems`. The platform
   # gate at the graphics/audio component layer
   # (`nixos-modules/host.nix` checkVmPlatform) is the authoritative
-  # eval-time check for nixling consumers.
+  # eval-time check for d2b consumers.
 })

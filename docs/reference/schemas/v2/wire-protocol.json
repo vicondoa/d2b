@@ -1181,7 +1181,7 @@
           }
         },
         {
-          "description": "Typed broker op that hardlink-farms a VM's resolved closure into `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the `current` symlink. Replaces the retired per-VM `nixling-<vm>-store-sync.service` bash oneshot. The daemon names only the opaque `bundle_closure_ref` + `vm_id` + expected `generation_token`; the broker re-derives every closure path from its trusted bundle copy and derives the collision-free on-disk `generation_id` itself.",
+          "description": "Typed broker op that hardlink-farms a VM's resolved closure into `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current` symlink. Replaces the retired per-VM `d2b-<vm>-store-sync.service` bash oneshot. The daemon names only the opaque `bundle_closure_ref` + `vm_id` + expected `generation_token`; the broker re-derives every closure path from its trusted bundle copy and derives the collision-free on-disk `generation_id` itself.",
           "type": "object",
           "required": [
             "kind",
@@ -1615,7 +1615,7 @@
           }
         },
         {
-          "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge (not the full per-env USBIP table entry).\n\nCarries the daemon-validated env bridge identity so the broker can build the scoped `inet nixling` rule without a bundle firewall intent ref.\n\nCurrently a typed stub (`Unimplemented`).",
+          "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge (not the full per-env USBIP table entry).\n\nCarries the daemon-validated env bridge identity so the broker can build the scoped `inet d2b` rule without a bundle firewall intent ref.\n\nCurrently a typed stub (`Unimplemented`).",
           "type": "object",
           "required": [
             "kind",
@@ -1667,7 +1667,7 @@
           }
         },
         {
-          "description": "Bind-mount `/var/lib/nixling/vms/<vm>/store-view` from the per-VM hardlink farm at `<vm>/store/`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nTODO: wire to a `live_bind_mount_from_hardlink_farm` handler resolved via `BundleResolver::find_store_view_intent`.",
+          "description": "Bind-mount `/var/lib/d2b/vms/<vm>/store-view` from the per-VM hardlink farm at `<vm>/store/`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nTODO: wire to a `live_bind_mount_from_hardlink_farm` handler resolved via `BundleResolver::find_store_view_intent`.",
           "type": "object",
           "required": [
             "kind",
@@ -1686,7 +1686,7 @@
           }
         },
         {
-          "description": "Enforce the per-leaf ownership/mode matrix on `/var/lib/nixling/vms/<vm>/`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to `nixling_host::ownership_matrix::check`.",
+          "description": "Enforce the per-leaf ownership/mode matrix on `/var/lib/d2b/vms/<vm>/`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to `d2b_host::ownership_matrix::check`.",
           "type": "object",
           "required": [
             "kind",
@@ -1705,7 +1705,7 @@
           }
         },
         {
-          "description": "Refuse VM start if `/var/lib/nixling/vms/<vm>/sshd-host-keys/` drifts from `root:root 0400`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to the `O_NOFOLLOW` symlink-rejecting check.",
+          "description": "Refuse VM start if `/var/lib/d2b/vms/<vm>/sshd-host-keys/` drifts from `root:root 0400`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to the `O_NOFOLLOW` symlink-rejecting check.",
           "type": "object",
           "required": [
             "kind",
@@ -2520,7 +2520,7 @@
       "additionalProperties": false
     },
     "DelegateCgroupV2Request": {
-      "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/nixling.slice`). It is **not** taken from caller input — the broker reads it from its own bundle copy via `scope_id`.",
+      "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller input — the broker reads it from its own bundle copy via `scope_id`.",
       "type": "object",
       "required": [
         "scopeId"
@@ -5337,7 +5337,7 @@
       ]
     },
     "MutatingVerbResponse": {
-      "description": "Mutating-verb daemon response shape.\n\n`outcome = \"dry-run-planned\"` returns a human-readable plan description in `summary` (the native CLI's dry-run planner output is preserved verbatim by the daemon).\n\n`outcome = \"applied\"` is returned only when the daemon has a native handler that genuinely executed the verb against the broker.\n\n`outcome = \"not-yet-implemented\"` is the v1.0 daemon-only contract (ADR 0015): the daemon has the wire variant + handler dispatch row but the per-verb native backend has not yet landed. The CLI surfaces the typed envelope (exit 78) unconditionally; the historical `NIXLING_LEGACY_BASH_OPT_IN` escape hatch and the bash-fallback shim were both retired in v1.0.\n\n`outcome = \"broker-error\"` means the daemon reached the live broker executor, but the broker refused or failed the request. The CLI surfaces the redacted broker remediation to the operator with exit 78; the raw broker `message` / `action` details MUST stay on the broker audit + admin-only log surfaces. There is no bash fallback in v1.0 daemon-only.",
+      "description": "Mutating-verb daemon response shape.\n\n`outcome = \"dry-run-planned\"` returns a human-readable plan description in `summary` (the native CLI's dry-run planner output is preserved verbatim by the daemon).\n\n`outcome = \"applied\"` is returned only when the daemon has a native handler that genuinely executed the verb against the broker.\n\n`outcome = \"not-yet-implemented\"` is the v1.0 daemon-only contract (ADR 0015): the daemon has the wire variant + handler dispatch row but the per-verb native backend has not yet landed. The CLI surfaces the typed envelope (exit 78) unconditionally; the historical `D2B_LEGACY_BASH_OPT_IN` escape hatch and the bash-fallback shim were both retired in v1.0.\n\n`outcome = \"broker-error\"` means the daemon reached the live broker executor, but the broker refused or failed the request. The CLI surfaces the redacted broker remediation to the operator with exit 78; the raw broker `message` / `action` details MUST stay on the broker audit + admin-only log surfaces. There is no bash fallback in v1.0 daemon-only.",
       "type": "object",
       "required": [
         "outcome",
@@ -5462,7 +5462,7 @@
       "additionalProperties": false
     },
     "OpenPidfdRequest": {
-      "description": "OpenPidfd daemon-side reconcile-and-adopt support. The daemon's `nixlingd::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the critical pid-reuse issue: the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
+      "description": "OpenPidfd daemon-side reconcile-and-adopt support. The daemon's `d2bd::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the critical pid-reuse issue: the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
       "type": "object",
       "required": [
         "expectedStartTimeTicks",
@@ -5556,7 +5556,7 @@
       "additionalProperties": false
     },
     "OwnershipMatrixCheckRequest": {
-      "description": "OwnershipMatrixCheck request. The broker walks the `/var/lib/nixling/vms/<vm>/` subtree and verifies each leaf against the ownership matrix.",
+      "description": "OwnershipMatrixCheck request. The broker walks the `/var/lib/d2b/vms/<vm>/` subtree and verifies each leaf against the ownership matrix.",
       "type": "object",
       "required": [
         "vmId"
@@ -5579,14 +5579,14 @@
       "description": "Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`]. The broker derives the concrete path from the bundle anchored by `vm_id` + `path_class`; the daemon never passes a raw path.\n\n[`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir [`PrepareRuntimeDir`]: crate::broker_wire::BrokerRequest::PrepareRuntimeDir",
       "oneOf": [
         {
-          "description": "Per-VM state directory under `/var/lib/nixling/vms/<vm>/`.",
+          "description": "Per-VM state directory under `/var/lib/d2b/vms/<vm>/`.",
           "type": "string",
           "enum": [
             "vm"
           ]
         },
         {
-          "description": "Per-VM runtime directory under `/run/nixling/<vm>/`.",
+          "description": "Per-VM runtime directory under `/run/d2b/<vm>/`.",
           "type": "string",
           "enum": [
             "runtime"
@@ -5611,7 +5611,7 @@
       "additionalProperties": false
     },
     "PrepareDirRequest": {
-      "description": "The concrete `/var/lib/nixling/vms/<vm>` or `/run/nixling/<vm>` path is derived from `vm_id` + `path_class` against the broker-side bundle. The daemon never passes a raw path.",
+      "description": "The concrete `/var/lib/d2b/vms/<vm>` or `/run/d2b/<vm>` path is derived from `vm_id` + `path_class` against the broker-side bundle. The daemon never passes a raw path.",
       "type": "object",
       "required": [
         "pathClass",
@@ -6168,7 +6168,7 @@
           }
         },
         {
-          "description": "Dedicated reconcile verb that re-runs the broker-side per-env nftables / route / sysctl reconcile without starting any VM. The CLI exposes this as `nixling host reconcile --network --apply`.",
+          "description": "Dedicated reconcile verb that re-runs the broker-side per-env nftables / route / sysctl reconcile without starting any VM. The CLI exposes this as `d2b host reconcile --network --apply`.",
           "type": "object",
           "required": [
             "kind",
@@ -6206,7 +6206,7 @@
           }
         },
         {
-          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` drives this verb; it never crosses SSH.",
+          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `d2b vm exec` drives this verb; it never crosses SSH.",
           "type": "object",
           "required": [
             "kind",
@@ -6225,7 +6225,7 @@
           }
         },
         {
-          "description": "Persistent named guest-shell operation. The staged contract DTOs fail closed until guestd and nixlingd runtime implementations are available.",
+          "description": "Persistent named guest-shell operation. The staged contract DTOs fail closed until guestd and d2bd runtime implementations are available.",
           "type": "object",
           "required": [
             "kind",
@@ -6244,7 +6244,7 @@
           }
         },
         {
-          "description": "Gateway-mode display-session operation. Host-mode daemons reject this with a typed gateway-unavailable error; gateway-mode nixlingd handles it through the ADR 0032 orchestrator.",
+          "description": "Gateway-mode display-session operation. Host-mode daemons reject this with a typed gateway-unavailable error; gateway-mode d2bd handles it through the ADR 0032 orchestrator.",
           "type": "object",
           "required": [
             "kind",
@@ -6559,11 +6559,14 @@
     "PublicVmServices": {
       "type": "object",
       "required": [
+        "d2b",
         "microvm",
-        "nixling",
         "virtiofsd"
       ],
       "properties": {
+        "d2b": {
+          "type": "string"
+        },
         "gpu": {
           "type": [
             "string",
@@ -6571,9 +6574,6 @@
           ]
         },
         "microvm": {
-          "type": "string"
-        },
-        "nixling": {
           "type": "string"
         },
         "qemuMedia": {
@@ -7252,7 +7252,7 @@
       "additionalProperties": false
     },
     "RunHostInstallRequest": {
-      "description": "Broker-side installer driver. The broker resolves the bundle's `installer:host` intent row (synthesised by `nixling_core::bundle_resolver` from the `host.json` + Nix-emitted installer plan), then runs the systemd unit install + `--enable` / `--start` shellouts per the resolved plan. The daemon never names the systemd unit path or `--enable` flag on the wire.",
+      "description": "Broker-side installer driver. The broker resolves the bundle's `installer:host` intent row (synthesised by `d2b_core::bundle_resolver` from the `host.json` + Nix-emitted installer plan), then runs the systemd unit install + `--enable` / `--start` shellouts per the resolved plan. The daemon never names the systemd unit path or `--enable` flag on the wire.",
       "type": "object",
       "required": [
         "bundleInstallerIntentRef"
@@ -7523,7 +7523,7 @@
           ]
         },
         {
-          "description": "CH `--api-socket` path the daemon owns; the broker validates the path is under `/run/nixling/<vm>/`.",
+          "description": "CH `--api-socket` path the daemon owns; the broker validates the path is under `/run/d2b/<vm>/`.",
           "type": "string",
           "enum": [
             "api-socket-path"
@@ -7535,14 +7535,14 @@
       "description": "The daemon never names argv, env, uid/gid, caps, kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any other launch authority across the wire. The broker resolves the full role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored by the opaque `bundle_runner_intent_ref`. The wire shape follows the opaque-only contract for every other mutating variant.\n\n`RunnerRole` selects which argv generator the broker invokes against the bundle data (CH, virtiofsd, or swtpm). Adding new roles requires a bundle schema bump so downstream bundles can declare the new launch context.",
       "oneOf": [
         {
-          "description": "Cloud Hypervisor headless / hybrid VM. Broker invokes `nixling_host::ch_argv::generate_ch_argv`.",
+          "description": "Cloud Hypervisor headless / hybrid VM. Broker invokes `d2b_host::ch_argv::generate_ch_argv`.",
           "type": "string",
           "enum": [
             "cloud-hypervisor"
           ]
         },
         {
-          "description": "QEMU media runtime scaffold. Broker invokes `nixling_host::qemu_media_argv::generate_qemu_media_argv`.",
+          "description": "QEMU media runtime scaffold. Broker invokes `d2b_host::qemu_media_argv::generate_qemu_media_argv`.",
           "type": "string",
           "enum": [
             "qemu-media"
@@ -7570,49 +7570,49 @@
           ]
         },
         {
-          "description": "crosvm GPU sidecar. Broker invokes `nixling_host::gpu_argv::generate_gpu_argv`.",
+          "description": "crosvm GPU sidecar. Broker invokes `d2b_host::gpu_argv::generate_gpu_argv`.",
           "type": "string",
           "enum": [
             "gpu"
           ]
         },
         {
-          "description": "vhost-device-sound audio sidecar. Broker invokes `nixling_host::audio_argv::generate_audio_argv`.",
+          "description": "vhost-device-sound audio sidecar. Broker invokes `d2b_host::audio_argv::generate_audio_argv`.",
           "type": "string",
           "enum": [
             "audio"
           ]
         },
         {
-          "description": "crosvm video-decoder sidecar. Broker invokes `nixling_host::video_argv::generate_video_argv`.",
+          "description": "crosvm video-decoder sidecar. Broker invokes `d2b_host::video_argv::generate_video_argv`.",
           "type": "string",
           "enum": [
             "video"
           ]
         },
         {
-          "description": "socat-based vsock relay sidecar. Broker invokes `nixling_host::vsock_relay_argv::generate_vsock_relay_argv`.",
+          "description": "socat-based vsock relay sidecar. Broker invokes `d2b_host::vsock_relay_argv::generate_vsock_relay_argv`.",
           "type": "string",
           "enum": [
             "vsock-relay"
           ]
         },
         {
-          "description": "usbip helper sidecar. Broker invokes `nixling_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.",
+          "description": "usbip helper sidecar. Broker invokes `d2b_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.",
           "type": "string",
           "enum": [
             "usbip"
           ]
         },
         {
-          "description": "OTel host-bridge sidecar (vsock relay folded out of `nixling-otel-host-bridge.service` into broker SpawnRunner). Receives pre-opened fds for the obs VM vsock socket and the nixling OTel host-egress socket; no AF_VSOCK socket creation capability in the role profile. Broker invokes `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.",
+          "description": "OTel host-bridge sidecar (vsock relay folded out of `d2b-otel-host-bridge.service` into broker SpawnRunner). Receives pre-opened fds for the obs VM vsock socket and the d2b OTel host-egress socket; no AF_VSOCK socket creation capability in the role profile. Broker invokes `d2b_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.",
           "type": "string",
           "enum": [
             "otel-host-bridge"
           ]
         },
         {
-          "description": "Host-jailed Wayland filter proxy. Broker invokes `nixling_host::wayland_proxy_argv::generate_wayland_proxy_argv`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access. Runs as `nixling-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path.",
+          "description": "Host-jailed Wayland filter proxy. Broker invokes `d2b_host::wayland_proxy_argv::generate_wayland_proxy_argv`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access. Runs as `d2b-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path.",
           "type": "string",
           "enum": [
             "wayland-proxy"
@@ -7621,7 +7621,7 @@
       ]
     },
     "RunnerSignal": {
-      "description": "Runner-signal broker envelope. The live daemon stop/restart path first delivers signals through `nixlingd::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; on pidfd `EPERM`, nixlingd falls back to this broker-owned live caller via `stop_vm_pidfd_role`.",
+      "description": "Runner-signal broker envelope. The live daemon stop/restart path first delivers signals through `d2bd::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; on pidfd `EPERM`, d2bd falls back to this broker-owned live caller via `stop_vm_pidfd_role`.",
       "type": "string",
       "enum": [
         "term",
@@ -7876,7 +7876,7 @@
       "additionalProperties": false
     },
     "SeedDnsmasqLeaseRequest": {
-      "description": "SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/nixling/dnsmasq/<vm>.leases` with the correct owner / mode.",
+      "description": "SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/d2b/dnsmasq/<vm>.leases` with the correct owner / mode.",
       "type": "object",
       "required": [
         "scopeId",
@@ -8774,7 +8774,7 @@
       "additionalProperties": false
     },
     "SshHostKeyPreflightRequest": {
-      "description": "SshHostKeyPreflight request. The broker opens every `/var/lib/nixling/vms/<vm>/sshd-host-keys/ssh_host_*_key` with `O_NOFOLLOW` and refuses if drift from `root:root 0400`.",
+      "description": "SshHostKeyPreflight request. The broker opens every `/var/lib/d2b/vms/<vm>/sshd-host-keys/ssh_host_*_key` with `O_NOFOLLOW` and refuses if drift from `root:root 0400`.",
       "type": "object",
       "required": [
         "vmId"
@@ -8876,7 +8876,7 @@
       "additionalProperties": false
     },
     "StoreSyncResponse": {
-      "description": "Store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store-view/`); the active generation directory is reachable via the `current` symlink.\n\nADR 0027: `generation_id` is the collision-free on-disk layout key (a SHA-256 over the full ordered closure identity). `generation_token` is the truncated u32 display/wire value carried for backwards compatibility and operator-facing output; it is never used as the on-disk key.",
+      "description": "Store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/d2b/vms/<vm>/store-view/`); the active generation directory is reachable via the `current` symlink.\n\nADR 0027: `generation_id` is the collision-free on-disk layout key (a SHA-256 over the full ordered closure identity). `generation_token` is the truncated u32 display/wire value carried for backwards compatibility and operator-facing output; it is never used as the on-disk key.",
       "type": "object",
       "required": [
         "cleanupDeferred",
@@ -9535,7 +9535,7 @@
       "additionalProperties": false
     },
     "UsbipDurableClaimState": {
-      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/nixling/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
+      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/d2b/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
       "type": "string",
       "enum": [
         "missing",
@@ -9598,7 +9598,7 @@
       "additionalProperties": false
     },
     "UsbipExplicitFirewallRuleRequest": {
-      "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge. The broker builds the scoped `inet nixling` input rule from `host_uplink_ip` (the env bridge side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is strictly limited to traffic from the owner env's net VM.",
+      "description": "Explicit-attach: install a per-busid nftables carve-out scoped to the target VM's env bridge. The broker builds the scoped `inet d2b` input rule from `host_uplink_ip` (the env bridge side) and `net_uplink_ip` (the net-VM uplink) so the carve-out is strictly limited to traffic from the owner env's net VM.",
       "type": "object",
       "required": [
         "busId",

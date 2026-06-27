@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::release_v1_1_tag_is_annotated_and_names_the_release (refs/tags/v1.1 is annotated, resolves to a commit, and its tag message first line names the release version); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_release.rs::release_v1_1_tag_is_annotated_and_names_the_release (refs/tags/v1.1 is annotated, resolves to a commit, and its tag message first line names the release version); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]

@@ -24,7 +24,7 @@ host-reconcile
 ```
 
 Roles, from
-[`nixling_core::processes::ProcessRole`](../../packages/nixling-core/src/processes.rs):
+[`d2b_core::processes::ProcessRole`](../../packages/d2b-core/src/processes.rs):
 
 - `host-reconcile` — bundle-derived host state catch-up (cgroup
   delegation, nft chain, route entries, sysctl ordering).
@@ -32,14 +32,14 @@ Roles, from
   set against the trusted bundle's
   [`runner_shape`](../reference/runner-shape-audit.md) preflight.
 - `virtiofsd` — one instance per `microvm.shares` row. The current
-  headless shape uses four shares: `ro-store`, `nl-meta`,
-  `nl-hkeys`, and `nl-ssh-host`.
+  headless shape uses four shares: `ro-store`, `d2b-meta`,
+  `d2b-hkeys`, and `d2b-ssh-host`.
 - `cloud-hypervisor-runner` — the CH binary launched against the
-  argv emitted by [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs).
+  argv emitted by [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs).
 - `guest-control-health` — daemon-side authenticated guest-control
   Health probe (full Hello + token challenge-response + Health over the
   guest-control vsock). It is the framework readiness gate on
-  guest-control-capable VMs (`nixling.vms.<vm>.guest.control.enable =
+  guest-control-capable VMs (`d2b.vms.<vm>.guest.control.enable =
   true`) and fails **closed**: never ready for an old-generation,
   unreachable, auth-failed, or timed-out guest. Per-VM sshd/host-keys
   are retained as a compat surface but never gate readiness: the
@@ -49,10 +49,10 @@ Roles, from
 Optional roles wired by per-VM features:
 
 - `swtpm` + `swtpm-pre-start-flush` when
-  `nixling.vms.<vm>.tpm.enable = true` — TPM 2.0 socket sidecar
+  `d2b.vms.<vm>.tpm.enable = true` — TPM 2.0 socket sidecar
   with the documented `swtpm_ioctl -i --unix <ctrl>` pre-start
   flush.
-- `vsock-relay` when `nixling.observability.enable = true` — the
+- `vsock-relay` when `d2b.observability.enable = true` — the
   guest→host OTLP relay sidecar.
 - `gpu` / `video` / `audio` — feature-gated roles not present in the
   headless shape described here.
@@ -62,7 +62,7 @@ Optional roles wired by per-VM features:
 The supervisor uses Kahn's algorithm to topo-sort the DAG, then
 walks the order issuing one `SpawnRunner` broker call per node.
 The relevant pure-Rust surface lives in
-[`nixlingd::supervisor::dag`](../../packages/nixlingd/src/supervisor/dag.rs):
+[`d2bd::supervisor::dag`](../../packages/d2bd/src/supervisor/dag.rs):
 
 - `topo_sort(VmProcessDag)` — deterministic source-pop ordering;
   cycles surface as `DagError::Cycle { residual_nodes }`. Self-loops
@@ -81,13 +81,13 @@ The relevant pure-Rust surface lives in
 
 ## Readiness predicates
 
-Each [`ProcessNode`](../../packages/nixling-core/src/processes.rs)
+Each [`ProcessNode`](../../packages/d2b-core/src/processes.rs)
 declares zero or more `ReadinessPredicate` entries. The supervisor
 treats the node as ready when every predicate fires before its
 budget expires.
 
 Supported predicate kinds (per
-[`ReadinessPredicate`](../../packages/nixling-core/src/processes.rs)):
+[`ReadinessPredicate`](../../packages/d2b-core/src/processes.rs)):
 
 - `api-socket-info: <path>` — daemon connects to the CH API socket
   and reads `GET /api/v1/vm.info`. Pinned to `mode=0660` +
@@ -111,7 +111,7 @@ Supported predicate kinds (per
 
 ## Per-node budget
 
-Each node has a [`NodeBudget`](../../packages/nixlingd/src/supervisor/dag.rs):
+Each node has a [`NodeBudget`](../../packages/d2bd/src/supervisor/dag.rs):
 
 ```rust
 NodeBudget {
@@ -135,11 +135,11 @@ Hypervisor/NixOS VMs use the CH API socket and request
 polling, and `quit` only after the guest is stopped and QEMU is an empty VMM.
 
 The wait is controlled by
-`nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds` (default 90,
+`d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds` (default 90,
 bounded 1–600) or
-`nixling.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-VM
+`d2b.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds`. Per-VM
 `lifecycle.gracefulShutdown.enable = false` skips the provider phase without
-creating a degraded marker. Explicit `nixling vm stop <vm> --force --apply`
+creating a degraded marker. Explicit `d2b vm stop <vm> --force --apply`
 also skips the provider wait, but still uses the normal SIGTERM/SIGKILL and
 cgroup cleanup policy; it is recorded as operator intent rather than as an
 unexpected degraded condition.
@@ -153,17 +153,17 @@ primary VMM stop/cleanup decision.
 ## Host shutdown and reboot integration
 
 NixOS still declares only the three ADR-0015 root-visible units:
-`nixlingd.service`, `nixling-priv-broker.socket`, and
-`nixling-priv-broker.service`. There is no per-VM or extra guest-shutdown
-systemd unit. Instead, `nixlingd.service` has an `ExecStop` hook that first
+`d2bd.service`, `d2b-priv-broker.socket`, and
+`d2b-priv-broker.service`. There is no per-VM or extra guest-shutdown
+systemd unit. Instead, `d2bd.service` has an `ExecStop` hook that first
 checks the systemd manager state with absolute systemd helper paths. It runs
 the all-VM shutdown hook only when the system manager is stopping for host
-shutdown or reboot; a manual `systemctl restart nixlingd.service` remains a
+shutdown or reboot; a manual `systemctl restart d2bd.service` remains a
 continuation event and does not stop all VMs.
 
-Daemon updates are also continuation events. `nixlingd.service` is a
+Daemon updates are also continuation events. `d2bd.service` is a
 `Type=notify` unit: systemd reports the restart complete only after the daemon
-has rebound `/run/nixling/public.sock`, restored/adopted runner state, and sent
+has rebound `/run/d2b/public.sock`, restored/adopted runner state, and sent
 `READY=1`. The unit uses `KillMode=process` so the restart terminates only the
 daemon main process; broker-spawned VM runners remain alive and are re-adopted
 by PID/start-time identity. If startup does not reach readiness within the
@@ -174,15 +174,15 @@ All-VM host shutdown runs in dependency phases: workload VMs in parallel first,
 then env net VMs in parallel. `TimeoutStopSec` is computed from the maximum
 enabled graceful timeout in each phase, plus bounded forced-fallback and
 sidecar-cleanup budgets, and is emitted with `lib.mkDefault` so host operators
-can intentionally override it. `nixlingd.service` orders after the broker
+can intentionally override it. `d2bd.service` orders after the broker
 socket/service and D-Bus so broker-mediated qemu-media shutdown remains
 available while live VMMs are being stopped.
 
 ## State persistence + restart reconciliation
 
 On every supervisor transition the daemon writes a
-[`RunnerSnapshotRecord`](../../packages/nixlingd/src/supervisor/state.rs)
-to `/var/lib/nixling/daemon-state/<vm>/runtime.<role_id>.json`:
+[`RunnerSnapshotRecord`](../../packages/d2bd/src/supervisor/state.rs)
+to `/var/lib/d2b/daemon-state/<vm>/runtime.<role_id>.json`:
 
 ```jsonc
 {
@@ -202,7 +202,7 @@ role does not touch unrelated VMs.
 On daemon startup the supervisor:
 
 1. Enumerates every persisted snapshot under
-   `/var/lib/nixling/daemon-state/`.
+   `/var/lib/d2b/daemon-state/`.
 2. For each snapshot, reads `/proc/<pid>/stat` and parses field 22
    (`starttime` ticks) using `parse_proc_stat_starttime` (handles
    comm with spaces and parens via the LAST-`)` split).
@@ -243,28 +243,28 @@ VM's `current` symlink diverges from its `booted` symlink). This
 same idea also applies to the daemon binary itself.
 
 On startup the daemon writes
-[`DaemonVersionFile`](../../packages/nixlingd/src/daemon_version.rs)
-to `/run/nixling/version`:
+[`DaemonVersionFile`](../../packages/d2bd/src/daemon_version.rs)
+to `/run/d2b/version`:
 
 ```jsonc
 {
   "serverVersion":   "0.4.0",
-  "binaryPath":      "/nix/store/abc-nixlingd-0.4.0/bin/nixlingd",
+  "binaryPath":      "/nix/store/abc-d2bd-0.4.0/bin/d2bd",
   "startedAt":       "2026-05-29T03:00:00Z",
   "protocolVersion": 3
 }
 ```
 
 The CLI reads the file and runs `std::fs::canonicalize` against the
-on-disk install path (`/run/current-system/sw/bin/nixlingd` on NixOS,
+on-disk install path (`/run/current-system/sw/bin/d2bd` on NixOS,
 the non-NixOS install path otherwise). `compute_restart_status`
 returns:
 
 - `DaemonRestartStatus::UpToDate` — paths match.
 - `DaemonRestartStatus::PendingRestart { running_path, on_disk_path }`
-  — paths differ. A `systemctl restart nixlingd` will pick up the
+  — paths differ. A `systemctl restart d2bd` will pick up the
   new binary.
-- `DaemonRestartStatus::DaemonNotRunning` — `/run/nixling/version`
+- `DaemonRestartStatus::DaemonNotRunning` — `/run/d2b/version`
   is absent (CLI surfaces this as `daemon-down`).
 - `DaemonRestartStatus::VersionFileUnreadable { detail }` — present
   but unparseable; the CLI refuses to compute the pending-restart
@@ -275,9 +275,9 @@ alongside the per-VM `[pending restart]` annotations.
 
 ## Virtiofsd watchdog
 
-The old per-share `nixling-<vm>-virtiofsd@<share>.service`
+The old per-share `d2b-<vm>-virtiofsd@<share>.service`
 ExecStopPost-style bash health check, driven by the
-`nixling-vfsd-watchdog@<vm>.{timer,service}` pair, has been replaced
+`d2b-vfsd-watchdog@<vm>.{timer,service}` pair, has been replaced
 by daemon/broker pidfd supervision. The broker is the parent and sole
 reaper of every `SpawnRunner` child (including Virtiofsd); the daemon
 observes via the broker's `ChildExited` / `OneShotComplete` RPC
@@ -293,7 +293,7 @@ Each virtiofsd runner the broker spawns is registered in two places:
   observability.
 
 On `ChildExited` RPC, the daemon invokes
-[`supervisor::pidfd::handle_runner_exit`](../../packages/nixlingd/src/supervisor/pidfd.rs)
+[`supervisor::pidfd::handle_runner_exit`](../../packages/d2bd/src/supervisor/pidfd.rs)
 with the `(exit_code, signal)` from the broker's reap, NOT from a
 local `waitid` (the daemon is not the parent and cannot reap;
 `waitid(P_PIDFD)` would return `ECHILD`).
@@ -307,7 +307,7 @@ The handler:
    supervisor's event channel:
    - `VfsdDied { vm, role_id, exit }` — the audit-facing typed event.
    - `VfsdShareDegraded { vm, role_id }` — the per-share mount is now
-     unrecoverable; `nixling status <vm>` surfaces this in the
+     unrecoverable; `d2b status <vm>` surfaces this in the
      per-VM degraded counter.
    - `StopRunnerRequested { runner_role: CloudHypervisor, reason }` —
      drives CH down through the existing SIGTERM→SIGKILL pidfd
@@ -318,12 +318,12 @@ The handler:
 3. Returns a `VfsdDiedAuditRecord` with `event = "vfsd-died"`,
    `policy_stopped_ch`, and the classified exit — the integrator
    wraps it into the existing `OpAuditRecord` envelope before
-   appending to `/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
+   appending to `/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
 
 The in-daemon detection-and-degradation path has replaced the old
 per-share systemd template/watchdog combination
 (`microvm-virtiofsd@<vm>.service` /
-`nixling-vfsd-watchdog@<vm>`).
+`d2b-vfsd-watchdog@<vm>`).
 
 ## References
 
@@ -339,14 +339,14 @@ per-share systemd template/watchdog combination
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) — wire
   envelope shapes and typed-error catalog.
-- [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs)
-  / [`swtpm_argv`](../../packages/nixling-host/src/swtpm_argv.rs) —
+- [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs)
+  / [`swtpm_argv`](../../packages/d2b-host/src/swtpm_argv.rs) —
   pure argv generators feeding the broker `SpawnRunner` op.
   virtiofsd argv is emitted from `nixos-modules/processes-json.nix`
   because each share is already resolved during the VM eval.
-- [`nixlingd::supervisor::dag`](../../packages/nixlingd/src/supervisor/dag.rs)
-  / [`state`](../../packages/nixlingd/src/supervisor/state.rs)
-  / [`pidfd`](../../packages/nixlingd/src/supervisor/pidfd.rs) — the
+- [`d2bd::supervisor::dag`](../../packages/d2bd/src/supervisor/dag.rs)
+  / [`state`](../../packages/d2bd/src/supervisor/state.rs)
+  / [`pidfd`](../../packages/d2bd/src/supervisor/pidfd.rs) — the
   supervisor surface itself.
-- [`nixlingd::daemon_version`](../../packages/nixlingd/src/daemon_version.rs)
+- [`d2bd::daemon_version`](../../packages/d2bd/src/daemon_version.rs)
   — `[pending restart]` machinery.

@@ -1,4 +1,4 @@
-# Guest-side baseline applied to every nixling VM.
+# Guest-side baseline applied to every d2b VM.
 #
 # Layered in by `host.nix`'s `microvm.vms` translation. Each entry
 # here uses `lib.mkDefault` so a per-VM module can override.
@@ -9,41 +9,41 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
 in
 {
-  options.nixling.sshUser = lib.mkOption {
+  options.d2b.sshUser = lib.mkOption {
     type = lib.types.nullOr lib.types.str;
     default = null;
     description = ''
       SSH user to populate with the framework-managed pubkey + the
       operator-supplied userAuthorizedKeys at guest boot. Populated
-      by host.nix from the host-side `nixling.vms.<name>.ssh.user`
+      by host.nix from the host-side `d2b.vms.<name>.ssh.user`
       option; for net VMs it stays null (host.nix instead points the
       service at `root`).
     '';
   };
 
-  options.nixling.sudo = lib.mkEnableOption ''
+  options.d2b.sudo = lib.mkEnableOption ''
     passwordless sudo for the VM's SSH user. When enabled, a
     NOPASSWD sudoers rule is added for the SSH user.
   '';
 
   config = {
-  # Passwordless sudo for the SSH user when nixling.sudo is enabled.
+  # Passwordless sudo for the SSH user when d2b.sudo is enabled.
   security.sudo.extraRules = lib.mkIf (cfg.sudo && cfg.sshUser != null) [{
     users = [ cfg.sshUser ];
     commands = [{ command = "ALL"; options = [ "NOPASSWD" ]; }];
   }];
 
-  # Every nixling VM uses systemd-networkd. The host runs a DHCP
+  # Every d2b VM uses systemd-networkd. The host runs a DHCP
   # server on each env's LAN bridge; per-VM static-IP overrides come
   # from the dnsmasq host-reservation set up by network.nix.
   networking.useNetworkd = lib.mkDefault true;
   systemd.network.enable = lib.mkDefault true;
   services.resolved.enable = lib.mkDefault true;
 
-  # IPv6 is off by default for nixling VMs (networking
+  # IPv6 is off by default for d2b VMs (networking
   # hardening). The bridge plumbing,
   # nftables rules in net.nix, and dnsmasq are all IPv4-only by
   # construction; auto-configured IPv6 link-local addresses (which
@@ -87,7 +87,7 @@ in
 
   # ---------------------------------------------------------------------------
   # Per-VM nix store: load the db.dump from the host-injected
-  # /run/nixling-store-meta share into the guest's local Nix DB
+  # /run/d2b-store-meta share into the guest's local Nix DB
   # (/nix/var/nix/db/). Without this, `nix-store --query --valid` and
   # `nix-shell` both reject any closure path they didn't register
   # themselves — so writableStoreOverlay-based Home Manager + ad-hoc
@@ -97,43 +97,43 @@ in
   #
   # Fires on every boot AND whenever the host publishes steady-state
   # store metadata by bumping `current` (via the path-trigger below).
-  # Live `nixling switch <vm>` additionally runs through authenticated
+  # Live `d2b switch <vm>` additionally runs through authenticated
   # guest-control activation before the broker commits the host-side
   # current pointers.
   # ---------------------------------------------------------------------------
-  systemd.services.nixling-load-store-db = {
-    description = "Load nixling per-VM closure into the guest's local nix DB";
+  systemd.services.d2b-load-store-db = {
+    description = "Load d2b per-VM closure into the guest's local nix DB";
     wantedBy = [ "multi-user.target" ];
     after = [ "nix-daemon.socket" ];
     unitConfig = {
-      ConditionPathExists = "/run/nixling-store-meta/current/db.dump";
+      ConditionPathExists = "/run/d2b-store-meta/current/db.dump";
     };
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = false;
-      ExecStart = "${pkgs.writeShellScript "nl-load-store-db" ''
+      ExecStart = "${pkgs.writeShellScript "d2b-load-store-db" ''
         set -euo pipefail
-        DUMP=/run/nixling-store-meta/current/db.dump
+        DUMP=/run/d2b-store-meta/current/db.dump
         if [ ! -f "$DUMP" ]; then
-          echo "nixling-load-store-db: $DUMP missing — skipping." >&2
+          echo "d2b-load-store-db: $DUMP missing — skipping." >&2
           exit 0
         fi
         # The dump is trusted (came from the host's hardlinked closure
         # of this VM's own toplevel), so --no-check-sigs is appropriate.
         ${pkgs.nix}/bin/nix-store --load-db < "$DUMP"
-        echo "nixling-load-store-db: loaded $(wc -l < /run/nixling-store-meta/current/store-paths) paths from $DUMP"
+        echo "d2b-load-store-db: loaded $(wc -l < /run/d2b-store-meta/current/store-paths) paths from $DUMP"
       ''}";
     };
   };
 
-  # Path trigger: re-run nixling-load-store-db whenever `current`
-  # changes (host fired `nixling-<vm>-store-sync` → bumped current).
+  # Path trigger: re-run d2b-load-store-db whenever `current`
+  # changes (host fired `d2b-<vm>-store-sync` → bumped current).
   # PathChanged fires on rename/replace of the symlink target.
-  systemd.paths.nixling-load-store-db = {
-    description = "Watch nixling store-meta/current for closure updates";
+  systemd.paths.d2b-load-store-db = {
+    description = "Watch d2b store-meta/current for closure updates";
     wantedBy = [ "multi-user.target" ];
     pathConfig = {
-      PathChanged = "/run/nixling-store-meta/current";
+      PathChanged = "/run/d2b-store-meta/current";
     };
   };
 
@@ -142,25 +142,25 @@ in
   # into ~ssh-user/.ssh/authorized_keys (or root's, for net VMs that
   # don't declare an ssh.user).
   #
-  # The host-keys/ share (/run/nixling-host-keys/) is staged by the
-  # host's nixlingGenerateKeys activation script and refreshed on
+  # The host-keys/ share (/run/d2b-host-keys/) is staged by the
+  # host's d2bGenerateKeys activation script and refreshed on
   # every host switch. We dedupe at write time so adding the same
-  # operator pubkey under both nixling.site.userAuthorizedKeys and
-  # nixling.vms.<vm>.userAuthorizedKeys doesn't bloat the file.
+  # operator pubkey under both d2b.site.userAuthorizedKeys and
+  # d2b.vms.<vm>.userAuthorizedKeys doesn't bloat the file.
   # ---------------------------------------------------------------------------
-  systemd.services.nixling-load-host-keys = {
-    description = "Inject nixling-managed pubkey + user-authorized-keys for ssh-user";
+  systemd.services.d2b-load-host-keys = {
+    description = "Inject d2b-managed pubkey + user-authorized-keys for ssh-user";
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" ];
     unitConfig = {
-      ConditionPathIsMountPoint = "/run/nixling-host-keys";
+      ConditionPathIsMountPoint = "/run/d2b-host-keys";
     };
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${pkgs.writeShellScript "nixling-load-host-keys" ''
+      ExecStart = "${pkgs.writeShellScript "d2b-load-host-keys" ''
         set -euo pipefail
-        SHARE=/run/nixling-host-keys
+        SHARE=/run/d2b-host-keys
         # Resolve target user. Empty = root (net VM case).
         SSH_USER="${if cfg.sshUser == null then "root" else cfg.sshUser}"
 
@@ -168,11 +168,11 @@ in
         # users.users.<u>.home would also work but requires propagating
         # the value through extra options.
         if ! USER_HOME=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f6); then
-          echo "nixling-load-host-keys: user '$SSH_USER' not found in /etc/passwd — skipping" >&2
+          echo "d2b-load-host-keys: user '$SSH_USER' not found in /etc/passwd — skipping" >&2
           exit 0
         fi
         if [ -z "$USER_HOME" ]; then
-          echo "nixling-load-host-keys: user '$SSH_USER' has empty home — skipping" >&2
+          echo "d2b-load-host-keys: user '$SSH_USER' has empty home — skipping" >&2
           exit 0
         fi
 
@@ -186,7 +186,7 @@ in
         SSH_GID=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f4)
         SSH_GROUP=$(${pkgs.glibc.getent}/bin/getent group "$SSH_GID" | ${pkgs.coreutils}/bin/cut -d: -f1)
         if [ -z "$SSH_GROUP" ]; then
-          echo "nixling-load-host-keys: could not resolve primary group for '$SSH_USER' (gid=$SSH_GID) — skipping" >&2
+          echo "d2b-load-host-keys: could not resolve primary group for '$SSH_USER' (gid=$SSH_GID) — skipping" >&2
           exit 0
         fi
 
@@ -209,7 +209,7 @@ in
         ${pkgs.coreutils}/bin/install -m 0600 -o "$SSH_USER" \
           -g "$SSH_GROUP" "$TMP" "$AUTH_KEYS"
 
-        echo "nixling-load-host-keys: $(${pkgs.coreutils}/bin/wc -l < "$AUTH_KEYS") key(s) installed in $AUTH_KEYS for $SSH_USER"
+        echo "d2b-load-host-keys: $(${pkgs.coreutils}/bin/wc -l < "$AUTH_KEYS") key(s) installed in $AUTH_KEYS for $SSH_USER"
       ''}";
     };
   };

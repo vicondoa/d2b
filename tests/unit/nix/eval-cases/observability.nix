@@ -84,13 +84,13 @@ let
       aux = auxAttempt.value;
     };
 
-  manifest = nixos: builtins.fromJSON nixos.config.nixling._manifestPkg.text;
+  manifest = nixos: builtins.fromJSON nixos.config.d2b._manifestPkg.text;
 
   cliPkg =
     nixos:
     builtins.head (
       builtins.filter (
-        pkg: (pkg.name or "") == "nixling" || (pkg.pname or "") == "nixling"
+        pkg: (pkg.name or "") == "d2b" || (pkg.pname or "") == "d2b"
       ) nixos.config.environment.systemPackages
     );
 
@@ -113,10 +113,10 @@ in
   };
 
   obs-default-off-no-units = mkCase {
-    override = { ... }: { nixling.observability.enable = false; };
+    override = { ... }: { d2b.observability.enable = false; };
     extract = nixos: {
       otelServiceNames = sortStrings (
-        builtins.filter (name: builtins.match "^nixling-otel-.*" name != null) (builtins.attrNames nixos.config.systemd.services)
+        builtins.filter (name: builtins.match "^d2b-otel-.*" name != null) (builtins.attrNames nixos.config.systemd.services)
       );
     };
     expectedExtract = { otelServiceNames = [ ]; };
@@ -124,22 +124,22 @@ in
   };
 
   obs-enabled-defaults = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
+    override = { ... }: { d2b.observability.enable = true; };
     extract = nixos:
       let
         manifestData = manifest nixos;
-        obsVm = nixos.config.nixling.observability.vmName;
-        obsEnv = lib.attrByPath [ "obs" ] { } nixos.config.nixling.envs;
+        obsVm = nixos.config.d2b.observability.vmName;
+        obsEnv = lib.attrByPath [ "obs" ] { } nixos.config.d2b.envs;
       in
       {
-        hasSysObs = builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
-        hasObsEnv = builtins.hasAttr "obs" nixos.config.nixling.envs;
+        hasSysObs = builtins.hasAttr "sys-obs" nixos.config.d2b.vms;
+        hasObsEnv = builtins.hasAttr "obs" nixos.config.d2b.envs;
         obsEnvLanSubnet = obsEnv.lanSubnet or null;
         obsEnvUplinkSubnet = obsEnv.uplinkSubnet or null;
         obsVmName = lib.attrByPath [ "_observability" "vmName" ] null manifestData;
         obsVsockCid = lib.attrByPath [ "_observability" "obsVsockCid" ] null manifestData;
-        signozListenAddress = nixos.config.nixling.observability.signoz.listenAddress;
-        obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.nixling.manifest;
+        signozListenAddress = nixos.config.d2b.observability.signoz.listenAddress;
+        obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.d2b.manifest;
         signozUrl = lib.attrByPath [ "_observability" "signozUrl" ] null manifestData;
       };
     expectedExtract = {
@@ -157,18 +157,18 @@ in
 
   obs-signoz-bind-tracks-obs-ip = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.observability.lanSubnet = "10.44.0.0/24";
-      nixling.observability.index = 23;
+      d2b.observability.enable = true;
+      d2b.observability.lanSubnet = "10.44.0.0/24";
+      d2b.observability.index = 23;
     };
     extract = nixos:
       let
         manifestData = manifest nixos;
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
       in
       {
-        signozListenAddress = nixos.config.nixling.observability.signoz.listenAddress;
-        obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.nixling.manifest;
+        signozListenAddress = nixos.config.d2b.observability.signoz.listenAddress;
+        obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.d2b.manifest;
         signozUrl = lib.attrByPath [ "_observability" "signozUrl" ] null manifestData;
       };
     expectedExtract = {
@@ -180,31 +180,31 @@ in
 
   obs-name-extension-allowed = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.sys-obs = {
+      d2b.observability.enable = true;
+      d2b.vms.sys-obs = {
         ssh.user = "alice";
         config.users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
-    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
+    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.d2b.vms;
     expectedExtract = true;
   };
 
   obs-cid-cross-env-noncollision = mkCase {
     override = { lib, ... }: {
-      nixling.observability.enable = true;
-      nixling.envs.aaa = {
+      d2b.observability.enable = true;
+      d2b.envs.aaa = {
         lanSubnet = "10.30.0.0/24";
         uplinkSubnet = "198.51.100.0/30";
       };
-      nixling.envs.bbb = {
+      d2b.envs.bbb = {
         lanSubnet = "10.31.0.0/24";
         uplinkSubnet = "198.18.0.0/30";
       };
-      nixling.vms.corp-vm.env = lib.mkForce "aaa";
-      nixling.vms.corp-vm.index = lib.mkForce 110;
-      nixling.vms.corp-vm.observability.enable = true;
-      nixling.vms.other-vm = {
+      d2b.vms.corp-vm.env = lib.mkForce "aaa";
+      d2b.vms.corp-vm.index = lib.mkForce 110;
+      d2b.vms.corp-vm.observability.enable = true;
+      d2b.vms.other-vm = {
         enable = true;
         env = "bbb";
         index = 10;
@@ -230,7 +230,7 @@ in
   };
 
   obs-manifest-fields = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
+    override = { ... }: { d2b.observability.enable = true; };
     extract = nixos:
       let vmObs = lib.attrByPath [ "corp-vm" "observability" ] { } (manifest nixos);
       in {
@@ -242,24 +242,24 @@ in
     expectedExtract = {
       enabled = false;
       vsockCid = 1110;
-      vsockHostSocket = "/var/lib/nixling/vms/corp-vm/vsock.sock";
-      agentSocket = "/run/nixling/otlp.sock";
+      vsockHostSocket = "/var/lib/d2b/vms/corp-vm/vsock.sock";
+      agentSocket = "/run/d2b/otlp.sock";
     };
   };
 
   obs-relay-acl-surface = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        processes = builtins.fromJSON nixos.config.d2b._bundle.processesJson.jsonText;
         corpDag = builtins.head (builtins.filter (dag: dag.vm == "corp-vm") processes.vms);
         relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") corpDag.nodes);
         obsDag = builtins.head (builtins.filter (dag: dag.vm == "sys-obs") processes.vms);
         bridgeNode = builtins.head (builtins.filter (node: node.id == "otel-host-bridge") obsDag.nodes);
-        activationText = nixos.config.system.activationScripts.nixlingRoleUidAcls.text;
+        activationText = nixos.config.system.activationScripts.d2bRoleUidAcls.text;
       in
       {
         relayNodeRole = relayNode.role;
@@ -267,8 +267,8 @@ in
         relayProfileSeccomp = relayNode.profile.seccompPolicyRef;
         bridgeNodeRole = bridgeNode.role;
         bridgeProfileHasRuntimeBind =
-          builtins.any (path: path == "/run/nixling/otel") bridgeNode.profile.mountPolicy.writablePaths;
-        activationGrantsOtelRuntime = hasInfix "/run/nixling/otel" activationText;
+          builtins.any (path: path == "/run/d2b/otel") bridgeNode.profile.mountPolicy.writablePaths;
+        activationGrantsOtelRuntime = hasInfix "/run/d2b/otel" activationText;
         activationExcludesBridgeFromBroadVmAcl = hasInfix "otel_host_bridge_uids" activationText;
       };
     expectedExtract = {
@@ -284,22 +284,22 @@ in
 
   obs-stack-vm-guest-surface = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
-      nixling.observability.retention.metrics = "5d";
-      nixling.observability.retention.logs = "3d";
-      nixling.observability.retention.traces = "1d";
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
+      d2b.observability.retention.metrics = "5d";
+      d2b.observability.retention.logs = "3d";
+      d2b.observability.retention.traces = "1d";
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         services = obsGuest.systemd.services;
-        ingressSources = obsGuest.nixling.observability.ingress.sources;
+        ingressSources = obsGuest.d2b.observability.ingress.sources;
       in
       {
         obsVmName = obsVm;
-        manifestHasObsVm = builtins.hasAttr obsVm nixos.config.nixling.manifest;
+        manifestHasObsVm = builtins.hasAttr obsVm nixos.config.d2b.manifest;
         clickhouseEnable = obsGuest.services.clickhouse.enable;
         keeperDeclared = builtins.hasAttr "clickhouse-keeper" services;
         signozDeclared = builtins.hasAttr "signoz" services;
@@ -315,15 +315,15 @@ in
         ingressSourceNames = sortStrings (builtins.attrNames ingressSources);
         hostIngress = ingressSources.host;
         corpIngress = ingressSources.corp-vm;
-        hostVsockInDeclared = builtins.hasAttr "nixling-otel-vsock-in-host" services;
-        corpVsockInDeclared = builtins.hasAttr "nixling-otel-vsock-in-corp-vm" services;
+        hostVsockInDeclared = builtins.hasAttr "d2b-otel-vsock-in-host" services;
+        corpVsockInDeclared = builtins.hasAttr "d2b-otel-vsock-in-corp-vm" services;
         hostVsockInExecStartHasShape = hasInfix
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
-          services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
+          services.d2b-otel-vsock-in-host.serviceConfig.ExecStart;
         corpVsockInExecStartHasShape = hasInfix
           "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
-          services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
-        signozBindAddress = obsGuest.nixling.observability.signoz.listenAddress;
+          services.d2b-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
+        signozBindAddress = obsGuest.d2b.observability.signoz.listenAddress;
       };
     expectedExtract = {
       obsVmName = "sys-obs";
@@ -361,23 +361,23 @@ in
 
   obs-alerting-surface = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         workGuest = nixos.config.microvm.vms.corp-vm.config.config;
       in
       {
-        obsIngressSources = sortStrings (builtins.attrNames obsGuest.nixling.observability.ingress.sources);
-        guestOtelCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
-        guestVsockOutDeclared = builtins.hasAttr "nixling-otel-vsock-out" workGuest.systemd.services;
+        obsIngressSources = sortStrings (builtins.attrNames obsGuest.d2b.observability.ingress.sources);
+        guestOtelCollectorDeclared = builtins.hasAttr "d2b-otel-collector" workGuest.systemd.services;
+        guestVsockOutDeclared = builtins.hasAttr "d2b-otel-vsock-out" workGuest.systemd.services;
         guestAlloyAbsent = ! builtins.hasAttr "alloy" workGuest.systemd.services;
-        guestIdentity = workGuest.nixling.observability.identity;
+        guestIdentity = workGuest.d2b.observability.identity;
         guestVsockOutHasHostPort = hasInfix "VSOCK-CONNECT:2:14317"
-          workGuest.systemd.services.nixling-otel-vsock-out.serviceConfig.ExecStart;
+          workGuest.systemd.services.d2b-otel-vsock-out.serviceConfig.ExecStart;
       };
     expectedExtract = {
       obsIngressSources = [ "corp-vm" "host" ];
@@ -393,22 +393,22 @@ in
   };
 
   obs-vm-toggle-default-off = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
+    override = { ... }: { d2b.observability.enable = true; };
     extract = nixos: lib.attrByPath [ "corp-vm" "observability" "enabled" ] null (manifest nixos);
     expectedExtract = false;
   };
 
   obs-journal-default-on = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
         workGuest = nixos.config.microvm.vms.corp-vm.config.config;
       in
       {
-        scrapeJournalResolved = workGuest.nixling.observability.scrapeJournal;
+        scrapeJournalResolved = workGuest.d2b.observability.scrapeJournal;
         otelUserInJournalGroup =
           builtins.elem "systemd-journal" (workGuest.users.users.otel.extraGroups or [ ]);
       };
@@ -420,12 +420,12 @@ in
 
   obs-audit-surface = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability = {
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability = {
         enable = true;
         scrapeJournal = false;
       };
-      nixling.vms.corp-vm.audit.enable = true;
+      d2b.vms.corp-vm.audit.enable = true;
     };
     extract = nixos:
       let
@@ -435,9 +435,9 @@ in
         auditEnabled = workGuest.security.audit.enable;
         auditdEnabled = workGuest.security.auditd.enable;
         auditdSyslogPlugin = workGuest.security.auditd.plugins.syslog.active;
-        guestOtelCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
+        guestOtelCollectorDeclared = builtins.hasAttr "d2b-otel-collector" workGuest.systemd.services;
         guestAlloyAbsent = ! builtins.hasAttr "alloy" workGuest.systemd.services;
-        scrapeJournalResolved = workGuest.nixling.observability.scrapeJournal;
+        scrapeJournalResolved = workGuest.d2b.observability.scrapeJournal;
         auditRules = sortStrings workGuest.security.audit.rules;
       };
     expectedExtract = {
@@ -456,39 +456,39 @@ in
   };
 
   obs-cli-traces-default-on = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
-    extract = nixos: nixos.config.nixling.observability.cli.traces.enable;
+    override = { ... }: { d2b.observability.enable = true; };
+    extract = nixos: nixos.config.d2b.observability.cli.traces.enable;
     expectedExtract = true;
     aux = nixos: { cliDrvPath = (cliPkg nixos).drvPath; };
   };
 
   obs-cli-traces-disabled = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.observability.cli.traces.enable = false;
+      d2b.observability.enable = true;
+      d2b.observability.cli.traces.enable = false;
     };
-    extract = nixos: nixos.config.nixling.observability.cli.traces.enable;
+    extract = nixos: nixos.config.d2b.observability.cli.traces.enable;
     expectedExtract = false;
     aux = nixos: { cliDrvPath = (cliPkg nixos).drvPath; };
   };
 
   obs-cli-trace-attr-allowlist = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
+    override = { ... }: { d2b.observability.enable = true; };
     extract = _nixos: true;
     expectedExtract = true;
     aux = nixos: { cliDrvPath = (cliPkg nixos).drvPath; };
   };
 
   obs-reserved-prefix-exempt = mkCase {
-    override = { ... }: { nixling.observability.enable = true; };
-    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
+    override = { ... }: { d2b.observability.enable = true; };
+    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.d2b.vms;
     expectedExtract = true;
   };
 
   obs-vm-without-framework = mkCase {
     kind = "expect-failure";
-    override = { ... }: { nixling.vms.corp-vm.observability.enable = true; };
-    expectedSubstring = "observability.enable = true but nixling.observability.enable is false";
+    override = { ... }: { d2b.vms.corp-vm.observability.enable = true; };
+    expectedSubstring = "observability.enable = true but d2b.observability.enable is false";
   };
 
   obs-dashboards-schema = mkCase {
@@ -504,12 +504,12 @@ in
 
   obs-rules-promtool = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         services = obsGuest.systemd.services;
       in
@@ -529,15 +529,15 @@ in
 
   obs-metric-references = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-        ingressSources = obsGuest.nixling.observability.ingress.sources;
-        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        ingressSources = obsGuest.d2b.observability.ingress.sources;
+        processes = builtins.fromJSON nixos.config.d2b._bundle.processesJson.jsonText;
         corpDag = builtins.head (builtins.filter (dag: dag.vm == "corp-vm") processes.vms);
         relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") corpDag.nodes);
         relayArgv = builtins.concatStringsSep " " relayNode.argv;
@@ -549,7 +549,7 @@ in
         hostVsockPort = ingressSources.host.vsockPort;
         corpVsockPort = ingressSources.corp-vm.vsockPort;
         relayTargetsCorpIngressPort = hasInfix
-          "nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14318"
+          "d2b-ch-vsock-connect /var/lib/d2b/vms/sys-obs/vsock.sock 14318"
           relayArgv;
       };
     expectedExtract = {
@@ -564,24 +564,24 @@ in
 
   obs-scrape-job-stability = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         services = obsGuest.systemd.services;
       in
       {
         hostIngressExecHasShape = hasInfix
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
-          services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
+          services.d2b-otel-vsock-in-host.serviceConfig.ExecStart;
         corpIngressExecHasShape = hasInfix
           "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
-          services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
-        hostIngressRestartIfChanged = services.nixling-otel-vsock-in-host.restartIfChanged;
-        corpIngressRestartIfChanged = services.nixling-otel-vsock-in-corp-vm.restartIfChanged;
+          services.d2b-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
+        hostIngressRestartIfChanged = services.d2b-otel-vsock-in-host.restartIfChanged;
+        corpIngressRestartIfChanged = services.d2b-otel-vsock-in-corp-vm.restartIfChanged;
       };
     expectedExtract = {
       hostIngressExecHasShape = true;
@@ -593,12 +593,12 @@ in
 
   obs-stability = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.corp-vm.observability.enable = true;
+      d2b.observability.enable = true;
+      d2b.vms.corp-vm.observability.enable = true;
     };
     extract = nixos:
       let
-        obsVm = nixos.config.nixling.observability.vmName;
+        obsVm = nixos.config.d2b.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         workGuest = nixos.config.microvm.vms.corp-vm.config.config;
       in
@@ -610,9 +610,9 @@ in
           || obsGuest.systemd.services ? tempo
           || obsGuest.systemd.services ? alloy
         );
-        hostCollectorDeclared = builtins.hasAttr "nixling-host-otel-collector" nixos.config.systemd.services;
-        guestCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
-        guestVsockOutDeclared = builtins.hasAttr "nixling-otel-vsock-out" workGuest.systemd.services;
+        hostCollectorDeclared = builtins.hasAttr "d2b-host-otel-collector" nixos.config.systemd.services;
+        guestCollectorDeclared = builtins.hasAttr "d2b-otel-collector" workGuest.systemd.services;
+        guestVsockOutDeclared = builtins.hasAttr "d2b-otel-vsock-out" workGuest.systemd.services;
       };
     expectedExtract = {
       retiredBackendServicesAbsent = true;
@@ -624,8 +624,8 @@ in
 
   obs-graphics-runner-wiring = mkCase {
     override = { ... }: {
-      nixling.observability.enable = true;
-      nixling.vms.gpu-vm = {
+      d2b.observability.enable = true;
+      d2b.vms.gpu-vm = {
         enable = true;
         env = "personal";
         index = 11;
@@ -641,8 +641,8 @@ in
     };
     extract = nixos:
       let
-        gpuUnit = nixos.config.systemd.services."nixling-gpu-vm-gpu" or null;
-        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        gpuUnit = nixos.config.systemd.services."d2b-gpu-vm-gpu" or null;
+        processes = builtins.fromJSON nixos.config.d2b._bundle.processesJson.jsonText;
         gpuDag = builtins.head (builtins.filter (dag: dag.vm == "gpu-vm") processes.vms);
         nodeIds = sortStrings (map (node: node.id) gpuDag.nodes);
         relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") gpuDag.nodes);
@@ -652,7 +652,7 @@ in
         relayNodeDeclared = builtins.elem "vsock-relay" nodeIds;
         relayNodeRole = relayNode.role;
         relayNodeTargetsObs = hasInfix
-          "nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock"
+          "d2b-ch-vsock-connect /var/lib/d2b/vms/sys-obs/vsock.sock"
           (builtins.concatStringsSep " " relayNode.argv);
       };
     expectedExtract = {

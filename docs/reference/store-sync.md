@@ -2,7 +2,7 @@
 
 This page documents the typed broker op that hardlink-farms a VM's
 resolved closure into the per-VM ADR 0027 **split** store view under
-`/var/lib/nixling/vms/<vm>/store-view/` and atomically publishes the new
+`/var/lib/d2b/vms/<vm>/store-view/` and atomically publishes the new
 generation.
 
 It is the **sole canonical writer** for `store-view`; host activation may
@@ -19,7 +19,7 @@ system store path, `g-<hex>`; **not** the truncated u32 token):
 | Path                                              | Trust          | Contents                                                                 |
 | ------------------------------------------------- | -------------- | ------------------------------------------------------------------------ |
 | `store-view/live/`                                | guest (ro)     | flat hardlink pool of top-level closure basenames; served as `/nix/.ro-store` |
-| `store-view/live/.nixling-marker-<vm>`            | guest (ro)     | zero-length cold-start readiness marker, planted **last**                |
+| `store-view/live/.d2b-marker-<vm>`            | guest (ro)     | zero-length cold-start readiness marker, planted **last**                |
 | `store-view/meta/current`                         | guest (ro)     | `-> generations/<generation_id>`                                          |
 | `store-view/meta/generations/<id>/`               | guest (ro)     | `store-paths`, guest-safe `meta.json`, `db.dump`                          |
 | `store-view/state/current`                        | host-only      | `-> generations/<generation_id>`                                         |
@@ -27,7 +27,7 @@ system store path, `g-<hex>`; **not** the truncated u32 token):
 | `store-view/gcroots/generation-<id>`              | host-only      | symlink to the generation's system store path (GC pin)                   |
 | `store-view/sync.lock`                            | host-only      | `flock(2)` exclusion for the op                                          |
 
-The guest `nl-meta` share points at `store-view/meta/` only; `state/`,
+The guest `d2b-meta` share points at `store-view/meta/` only; `state/`,
 `gcroots/`, and `sync.lock` are never exposed to the guest.
 
 Publish ordering is fixed: materialise `live/` + `meta/`/`state/`
@@ -59,7 +59,7 @@ The per-VM hardlink farm shares **inodes** with `/nix/store`. The
    reconciled on the next run.
 
 The daemon does not have the privileges to satisfy any of these
-guarantees — the farm root lives under `/var/lib/nixling/vms/<vm>/`
+guarantees — the farm root lives under `/var/lib/d2b/vms/<vm>/`
 which is broker-owned and chmod'd `0o700` to root — so the work
 must happen in the broker.
 
@@ -68,7 +68,7 @@ must happen in the broker.
 The per-VM store-view path **shares inodes** with `/nix/store`.
 
 **NEVER `chown -R`, `chmod -R`, or `setfacl -R`** anywhere under
-`/var/lib/nixling/vms/<vm>/store-view/live/`. Any recursive mode/owner
+`/var/lib/d2b/vms/<vm>/store-view/live/`. Any recursive mode/owner
 mutation propagates **into `/nix/store` via the shared hardlink
 inodes** and immediately breaks ssh's `safe_path()` check on every
 host on the network (every `~/.ssh/authorized_keys` lookup walks
@@ -112,7 +112,7 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 | `vm`                   | `String` | Echoed VM name from the resolved intent.             |
 | `generation_id`        | `String` | Activated generation **id** — the collision-free on-disk layout key (SHA-256 over the full ordered closure identity, [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). |
 | `generation_token`     | `u32`    | Activated generation **token** — truncated u32 display/wire value carried for backcompat; never the on-disk key. |
-| `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/nixling/vms/<vm>/store-view`). |
+| `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/d2b/vms/<vm>/store-view`). |
 | `closure_count`        | `u32`    | Number of top-level closure paths linked in.         |
 | `retained_generations` | `Vec<u32>` | Generations retained for cleanup safety.           |
 | `swept_count`          | `u32`    | Top-level live entries removed by cleanup.           |
@@ -207,7 +207,7 @@ The `decision` field follows the broker default
 ## Observability export
 
 The terminal audit record above is **host-confidential** (`0640
-root:nixlingd` under `<stateDir>/audit/broker-*.jsonl`) and carries
+root:d2bd` under `<stateDir>/audit/broker-*.jsonl`) and carries
 context the observability plane must never see. Grafana Alloy is **not**
 granted read access to that record or to the unified broker audit log.
 
@@ -221,7 +221,7 @@ positive-allow-list projection to a dedicated export file:
 written `0640`, `O_APPEND`, one JSON object per line, daily-rotated by
 UTC date. The projection is a dedicated
 `StoreSyncObservabilityRecord` struct
-(`packages/nixling-priv-broker/src/ops/store_sync_export.rs`) built by
+(`packages/d2b-priv-broker/src/ops/store_sync_export.rs`) built by
 `from_audit_fields()`, which reads **only** the allow-listed fields — so
 no serializer ever receives the full audit struct and host-only fields
 cannot leak by construction (`#[serde(deny_unknown_fields)]` + an
@@ -259,7 +259,7 @@ The host Nix/Alloy wiring
 `store-sync-*.jsonl` glob (via `local.file_match` + `loki.source.file`,
 following rotation and new files) and grants the `alloy` identity
 focused read/traverse ACLs to the export directory **only** — never to
-the broker audit log, the privileged daemon socket, or nixlingd state.
+the broker audit log, the privileged daemon socket, or d2bd state.
 The Loki stream labels stay host singletons (`vm="host"`, `env="host"`,
 `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
 remain in JSON content. See
@@ -270,14 +270,14 @@ remain in JSON content. See
 > current obs stack has no `loki.process`/`stage.metrics` log→metric
 > path, and the signed scope forbids adding a Loki ruler, Alertmanager,
 > host Alloy self-scrape, a broker `/metrics` endpoint, or a new exposed
-> port — so the existing systemd-unit-failed `NixlingStoreSyncFailure`
+> port — so the existing systemd-unit-failed `D2bStoreSyncFailure`
 > alert (Prometheus, `stack.nix`) is left unchanged.
 
 ## Explicit verify surface
 
-`nixling store verify <vm> [--repair] [--json]` is the operator-facing
+`d2b store verify <vm> [--repair] [--json]` is the operator-facing
 live-pool integrity surface. The CLI is thin: it sends `storeVerify` to
-`nixlingd`, and the daemon sends `BrokerRequest::StoreVerify` to the
+`d2bd`, and the daemon sends `BrokerRequest::StoreVerify` to the
 privileged broker. The CLI never reads `store-view/live` or
 `store-view/state` directly.
 
@@ -370,7 +370,7 @@ the guest.
 
 ## Live readiness marker
 
-`store-view/live/.nixling-marker-<vm>` is the cold-start readiness
+`store-view/live/.d2b-marker-<vm>` is the cold-start readiness
 signal, planted last via tmp+rename+fsync after `live/` contains every
 required basename. Per ADR 0027 it is a **zero-length** file: its
 existence alone is the signal (the readiness probe is a `test -e`), and
@@ -380,44 +380,44 @@ asserts `len() == 0`.
 
 ## Implementation file map
 
-- `packages/nixling-priv-broker/src/ops/store_sync.rs` — pure
+- `packages/d2b-priv-broker/src/ops/store_sync.rs` — pure
   handler (`run_store_sync`) + typed `StoreSyncError`. Derives the
   `generation_id`, materialises via `build_store_view_cross_mount_safe`,
   and publishes (`state/current`, `meta/current`, live marker).
-- `packages/nixling-priv-broker/src/ops/store_view_farm.rs` —
+- `packages/d2b-priv-broker/src/ops/store_view_farm.rs` —
   cross-mount-safe wrappers (`build_store_view_cross_mount_safe`) that
   retry the build/replace in a private mount namespace when `/nix/store` is a
   separate vfsmount. The broker execs the activation helper directly; no shell
   wrapper is used.
-- `packages/nixling-host/src/hardlink_farm.rs` — underlying
+- `packages/d2b-host/src/hardlink_farm.rs` — underlying
   same-filesystem-checked split-layout primitive (`build_store_view`,
   the `generation_id` derivation, the publish/read helpers); authors the
   zero-length live marker and the guest-safe + host-only `meta.json`.
-- `packages/nixling-host/src/bin/nixling-activation-helper.rs` —
+- `packages/d2b-host/src/bin/d2b-activation-helper.rs` —
   the `private-store <verb>` entrypoint that unshares the mount namespace,
   makes propagation private, lazily detaches `/nix/store`, and runs
   `build-store-view` / `replace-store-view-live` from stdin JSON.
-- `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
+- `packages/d2b-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
-- `packages/nixling-contracts/src/broker_wire.rs` — typed request/
+- `packages/d2b-contracts/src/broker_wire.rs` — typed request/
   response structs + enum variants. The wire carries both the
   collision-free `generation_id` (response) and the u32
   `generation_token` (request + response); the token is display/wire
   only and is never the on-disk key.
-- `packages/nixling-contracts/src/types.rs` — `BundleClosureRef`
+- `packages/d2b-contracts/src/types.rs` — `BundleClosureRef`
   opaque newtype.
-- `packages/nixling-priv-broker/src/ops/audit_op.rs` —
+- `packages/d2b-priv-broker/src/ops/audit_op.rs` —
   `OperationFields::StoreSync` newtype over `StoreSyncAuditFields`.
-- `packages/nixling-priv-broker/src/ops/store_sync_audit.rs` —
+- `packages/d2b-priv-broker/src/ops/store_sync_audit.rs` —
   the signed `StoreSyncAuditFields` terminal audit schema, its enums,
   invariant-enforcing constructors, and `validate()`.
-- `packages/nixling-priv-broker/src/ops/store_verify.rs` — explicit
+- `packages/d2b-priv-broker/src/ops/store_verify.rs` — explicit
   StoreVerify broker op, top-level live-pool verifier, and host-only
   integrity record writer.
 
 ## Migration: deleting the per-VM systemd oneshot
 
-The generated `nixling-<vm>-store-sync.service` unit is the
+The generated `d2b-<vm>-store-sync.service` unit is the
 caller of the bash hardlink-farm script today. Deletion of the
 generator is owned by the daemon-only cleanup — `StoreSync` is the
 typed replacement op that the per-VM start path will call instead.

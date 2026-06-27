@@ -129,20 +129,20 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
-          stateDir = lib.mkForce "/var/lib/nixling";
+        d2b.site = {
+          stateDir = lib.mkForce "/var/lib/d2b";
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        nixling.vms.corp-vm = mkCorpVm;
-        nixling.vms.side-vm = {
+        d2b.vms.corp-vm = mkCorpVm;
+        d2b.vms.side-vm = {
           enable = true;
           env = "work";
           index = 11;
@@ -159,36 +159,36 @@ let
     ];
   };
 
-  corpGuest = nixos.config.nixling._computed.corp-vm.config;
+  corpGuest = nixos.config.d2b._computed.corp-vm.config;
 
-  # No per-user `nixling-userd-*` services exist anywhere anymore.
+  # No per-user `d2b-userd-*` services exist anywhere anymore.
   userdNames = guestConfig:
-    lib.filter (name: lib.hasPrefix "nixling-userd-" name)
+    lib.filter (name: lib.hasPrefix "d2b-userd-" name)
       (lib.attrNames guestConfig.systemd.services);
 
-  guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart;
-  # The guest-internal detached slice + /run/nixling-exec dir are emitted as
+  guestdExecStart = corpGuest.systemd.services.d2b-guestd.serviceConfig.ExecStart;
+  # The guest-internal detached slice + /run/d2b-exec dir are emitted as
   # part of the exec runtime substrate when guest-control exec is enabled.
-  guestHasExecSlice = builtins.hasAttr "nixling-exec" (corpGuest.systemd.slices or { });
+  guestHasExecSlice = builtins.hasAttr "d2b-exec" (corpGuest.systemd.slices or { });
   guestTmpfilesRules = corpGuest.systemd.tmpfiles.rules or [ ];
-  guestHasRunDir = lib.any (r: lib.hasInfix "/run/nixling-exec" r) guestTmpfilesRules;
+  guestHasRunDir = lib.any (r: lib.hasInfix "/run/d2b-exec" r) guestTmpfilesRules;
 
   positiveEnabled =
-    assert corpGuest.nixling.guestControl.enable == true;
-    assert corpGuest.nixling.guestControl.exec.enable == true;
+    assert corpGuest.d2b.guestControl.enable == true;
+    assert corpGuest.d2b.guestControl.exec.enable == true;
     # The host-fixed workload user is derived from ssh.user.
-    assert corpGuest.nixling.guestControl.exec.execUser == "alice";
+    assert corpGuest.d2b.guestControl.exec.execUser == "alice";
     # No userd services anywhere (the stub + scaffolding were removed).
     assert userdNames corpGuest == [ ];
     assert userdNames nixos.config == [ ];
-    assert !(builtins.hasAttr "nixling-userd-alice" corpGuest.systemd.services);
+    assert !(builtins.hasAttr "d2b-userd-alice" corpGuest.systemd.services);
     # guestd ExecStart carries the workload user + the exec-runtime helper paths
     # (systemd-run + exec-runner), wired whenever exec is enabled.
     assert lib.hasInfix "--exec-user alice" guestdExecStart;
     assert lib.hasInfix "--systemd-run-path /nix/store/" guestdExecStart;
     assert lib.hasInfix "--exec-runner-path /nix/store/" guestdExecStart;
     assert lib.hasInfix "/bin/systemd-run" guestdExecStart;
-    assert lib.hasInfix "/bin/nixling-exec-runner" guestdExecStart;
+    assert lib.hasInfix "/bin/d2b-exec-runner" guestdExecStart;
     # Both ceilings default to 0 (unlimited) and are emitted explicitly.
     assert lib.hasInfix "--interactive-max-runtime-sec 0" guestdExecStart;
     assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
@@ -201,25 +201,25 @@ let
     assert guestHasRunDir;
     builtins.toJSON {
       scenario = "enabled";
-      execUser = corpGuest.nixling.guestControl.exec.execUser;
+      execUser = corpGuest.d2b.guestControl.exec.execUser;
     };
 
   positiveDefault =
-    assert corpGuest.nixling.guestControl.exec.enable == false;
+    assert corpGuest.d2b.guestControl.exec.enable == false;
     assert userdNames corpGuest == [ ];
     # With guest-control disabled the guestd service is not emitted at all.
-    assert !(builtins.hasAttr "nixling-guestd" corpGuest.systemd.services);
+    assert !(builtins.hasAttr "d2b-guestd" corpGuest.systemd.services);
     builtins.toJSON {
       scenario = "default";
-      execUser = corpGuest.nixling.guestControl.exec.execUser;
+      execUser = corpGuest.d2b.guestControl.exec.execUser;
     };
 
   positiveControlNoExec =
     # Control enabled but the `guest.exec` block omitted: exec defaults OFF.
-    assert corpGuest.nixling.guestControl.enable == true;
-    assert corpGuest.nixling.guestControl.exec.enable == false;
+    assert corpGuest.d2b.guestControl.enable == true;
+    assert corpGuest.d2b.guestControl.exec.enable == false;
     # guestd IS emitted (the control plane is up), but with NO exec wiring.
-    assert builtins.hasAttr "nixling-guestd" corpGuest.systemd.services;
+    assert builtins.hasAttr "d2b-guestd" corpGuest.systemd.services;
     assert !(lib.hasInfix "--exec-enable" guestdExecStart);
     assert !(lib.hasInfix "--exec-user" guestdExecStart);
     assert !(lib.hasInfix "--systemd-run-path" guestdExecStart);
@@ -231,27 +231,27 @@ let
     assert !guestHasRunDir;
     builtins.toJSON {
       scenario = "control-no-exec";
-      controlEnable = corpGuest.nixling.guestControl.enable;
-      execEnable = corpGuest.nixling.guestControl.exec.enable;
+      controlEnable = corpGuest.d2b.guestControl.enable;
+      execEnable = corpGuest.d2b.guestControl.exec.enable;
     };
 
   positiveDetachedCeiling =
-    assert corpGuest.nixling.guestControl.exec.enable == true;
-    assert corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec == 3600;
+    assert corpGuest.d2b.guestControl.exec.enable == true;
+    assert corpGuest.d2b.guestControl.exec.detachedMaxRuntimeSec == 3600;
     assert lib.hasInfix "--detached-max-runtime-sec 3600" guestdExecStart;
     builtins.toJSON {
       scenario = "detached-ceiling";
-      maxRuntimeSec = corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec;
+      maxRuntimeSec = corpGuest.d2b.guestControl.exec.detachedMaxRuntimeSec;
     };
 
   positiveInteractiveCeiling =
-    assert corpGuest.nixling.guestControl.exec.enable == true;
-    assert corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec == 7200;
+    assert corpGuest.d2b.guestControl.exec.enable == true;
+    assert corpGuest.d2b.guestControl.exec.interactiveMaxRuntimeSec == 7200;
     assert lib.hasInfix "--interactive-max-runtime-sec 7200" guestdExecStart;
     assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
     builtins.toJSON {
       scenario = "interactive-ceiling";
-      interactiveMaxRuntimeSec = corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec;
+      interactiveMaxRuntimeSec = corpGuest.d2b.guestControl.exec.interactiveMaxRuntimeSec;
     };
 in
 if scenario == "enabled" then

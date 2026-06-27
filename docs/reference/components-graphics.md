@@ -1,4 +1,4 @@
-# `nixling.vms.<vm>.graphics.*`
+# `d2b.vms.<vm>.graphics.*`
 
 > Reference for the `graphics` component module.
 > Source: [`nixos-modules/components/graphics.nix`](../../nixos-modules/components/graphics.nix)
@@ -20,29 +20,29 @@ Display capability boundaries are documented in
 When `graphics.crossDomainTrusted = true` and
 `graphics.waylandFilter.enable = true`, the guest-side
 `wl-cross-domain-proxy` bridges the virtio-gpu cross-domain transport to
-the guest socket, while the host-side `nixling-wayland-filter` runs as a
+the guest socket, while the host-side `d2b-wayland-filter` runs as a
 broker-spawned `wayland-proxy` role and mediates access to the real host
-compositor. `nixlingd` supervises the daemon-owned process DAG and asks
-`nixling-priv-broker` to spawn the wayland proxy, GPU sidecar
+compositor. `d2bd` supervises the daemon-owned process DAG and asks
+`d2b-priv-broker` to spawn the wayland proxy, GPU sidecar
 (`crosvm device gpu`), and cloud-hypervisor runner as pidfd-tracked
 runners. The GPU sidecar runs as the dedicated per-VM
-`nixling-<vm>-gpu` system user, not as the operator's Wayland user.
+`d2b-<vm>-gpu` system user, not as the operator's Wayland user.
 
 ## Options (host-side)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
-| `nixling.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
-| `nixling.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `nixling-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
-| `nixling.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
-| `nixling.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side filter runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
-| `nixling.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
-| `nixling.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
-| `nixling.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
-| `nixling.vms.<vm>.graphics.waylandFilter.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
-| `nixling.vms.<vm>.graphics.waylandFilter.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
-| `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
+| `d2b.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
+| `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
+| `d2b.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
+| `d2b.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
+| `d2b.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side filter runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
+| `d2b.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
+| `d2b.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
+| `d2b.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
+| `d2b.vms.<vm>.graphics.waylandFilter.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
+| `d2b.vms.<vm>.graphics.waylandFilter.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
+| `d2b.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
 The filter's built-in policy exposes the compositor's
 `zwp_linux_dmabuf_v1` version by default so Mesa can use dmabuf feedback
@@ -54,14 +54,14 @@ For example, NVIDIA hosts affected by linear DMA-BUF pitch import issues can
 keep dmabuf feedback v4/v5 visible while hiding linear modifiers:
 
 ```nix
-nixling.vms.work.graphics.waylandFilter.dmabufDeny = [ "all:linear" ];
+d2b.vms.work.graphics.waylandFilter.dmabufDeny = [ "all:linear" ];
 ```
 
 Site-level dependency:
 
 | Option | Type | Required when | Description |
 |---|---|---|---|
-| `nixling.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar or the host-side Wayland filter needs this user's `/run/user/<uid>/<waylandDisplay>` socket. Eval fails with a clear message if unset. |
+| `d2b.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar or the host-side Wayland filter needs this user's `/run/user/<uid>/<waylandDisplay>` socket. Eval fails with a clear message if unset. |
 
 ## Options (guest-side propagation)
 
@@ -70,8 +70,8 @@ under `mkIf vm'.graphics.enable`:
 
 ```nix
 (lib.mkIf vm'.graphics.enable {
-  nixling.graphics.crossDomainTrusted = vm'.graphics.crossDomainTrusted;
-  nixling.graphics.virglVideo = vm'.graphics.virglVideo;
+  d2b.graphics.crossDomainTrusted = vm'.graphics.crossDomainTrusted;
+  d2b.graphics.virglVideo = vm'.graphics.virglVideo;
 })
 ```
 
@@ -80,22 +80,22 @@ The matching guest-visible option lives in the imported
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `nixling.graphics.crossDomainTrusted` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When false, a shell shim wraps `crosvm` and strips `cross-domain` from the `--params` JSON before invoking the real binary. |
-| `nixling.graphics.virglVideo` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When true, the patched crosvm/rutabaga build passes `VIRGL_RENDERER_USE_VIDEO` to virglrenderer. |
+| `d2b.graphics.crossDomainTrusted` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When false, a shell shim wraps `crosvm` and strips `cross-domain` from the `--params` JSON before invoking the real binary. |
+| `d2b.graphics.virglVideo` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When true, the patched crosvm/rutabaga build passes `VIRGL_RENDERER_USE_VIDEO` to virglrenderer. |
 
 ## Host-side resources created
 
-- **`nixling-<vm>-gpu` system user + group** (declared in
+- **`d2b-<vm>-gpu` system user + group** (declared in
   [`host-users.nix`](../../nixos-modules/host-users.nix)). It is a
   per-VM runner principal and is separate from the host Wayland user.
 - **Daemon process nodes** in `processes.json`: `wayland-proxy` when the
   filter is enabled for a cross-domain VM, `gpu` (or `gpu-render-node`),
-  and `cloud-hypervisor-runner`. `nixlingd` supervises them through the
+  and `cloud-hypervisor-runner`. `d2bd` supervises them through the
   broker `SpawnRunner` / pidfd path; no per-VM graphics systemd service
   is emitted.
-- **`/run/nixling-wlproxy/<vm>/wayland-0`** for the filtered compositor
+- **`/run/d2b-wlproxy/<vm>/wayland-0`** for the filtered compositor
   socket that crosvm connects to when the host filter is active.
-  `/run/nixling-gpu/<vm>/` remains the GPU role-local runtime directory.
+  `/run/d2b-gpu/<vm>/` remains the GPU role-local runtime directory.
 - **Device allowlist** from the minijail profile. Normal GPU runners
   use the closed device set needed by cloud-hypervisor/crosvm; the
   render-node-only profile uses broker-prepared fd passing instead of
@@ -140,10 +140,10 @@ The matching guest-visible option lives in the imported
 
 ## Runtime invariants
 
-- The CH + crosvm-gpu processes show up as `nixling-<vm>-gpu` in
+- The CH + crosvm-gpu processes show up as `d2b-<vm>-gpu` in
   `ps -ef`; never as the operator's Wayland user.
 - With the host filter active, the GPU runner connects to
-  `/run/nixling-wlproxy/<vm>/wayland-0` and does not hold the real host
+  `/run/d2b-wlproxy/<vm>/wayland-0` and does not hold the real host
   compositor socket. The `wayland-proxy` role is the VM-specific process
   with access to the real compositor socket.
 - The guest cannot reach the host compositor outside of virtio-gpu
@@ -162,8 +162,8 @@ The matching guest-visible option lives in the imported
 
 ## Lifecycle
 
-Graphics lifecycle is daemon-supervised. `nixling vm start <vm>` sends
-the request to `nixlingd`; the daemon evaluates the per-VM DAG and uses
+Graphics lifecycle is daemon-supervised. `d2b vm start <vm>` sends
+the request to `d2bd`; the daemon evaluates the per-VM DAG and uses
 the broker to spawn `gpu` / `gpu-render-node`, optional sidecars, and
 `cloud-hypervisor-runner` in dependency order. Runners are tracked by
 pidfd and are stopped/restarted through the same daemon/broker path.
@@ -171,17 +171,17 @@ pidfd and are stopped/restarted through the same daemon/broker path.
 Implications:
 
 - **`nixos-rebuild switch` does NOT restart the running VM.**
-  `nixlingd.service` may restart, but the restart kills only the daemon
+  `d2bd.service` may restart, but the restart kills only the daemon
   main PID and re-adopts existing VM runners.
-  After a rebuild, `nixling list`
+  After a rebuild, `d2b list`
   flags the VM with `[pending restart]` if its `current` closure
-  has drifted from `booted`. Apply with `nixling vm restart <vm> --apply`.
+  has drifted from `booted`. Apply with `d2b vm restart <vm> --apply`.
 
 - **`booted` symlink is owned by the daemon start path.** The daemon
   updates per-VM `booted`/`current` state so pending-restart detection
   works for graphics and headless VMs without per-VM systemd units.
 
-- **`nixling status <vm>` reports `pending-restart: yes/no`** with
+- **`d2b status <vm>` reports `pending-restart: yes/no`** with
   both store paths and the exact remediation command.
 
 See [`docs/explanation/design.md`](../explanation/design.md#per-vm-sidecars)
@@ -195,8 +195,8 @@ the broker `SpawnRunner` plan, not a per-VM service template:
 - zero host capabilities unless a role-specific profile explicitly
   grants them;
 - broker-controlled argv and environment;
-- role-local writable paths under `/var/lib/nixling/vms/<vm>` and
-  `/run/nixling-gpu/<vm>`;
+- role-local writable paths under `/var/lib/d2b/vms/<vm>` and
+  `/run/d2b-gpu/<vm>`;
 - closed or fd-passed device access depending on the GPU profile;
 - pidfd registration and broker audit for every spawned runner.
 
@@ -209,8 +209,8 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 ## Common gotchas / failure modes
 
 - **Black screen / no guest window.** The host `wayland-0` socket
-  must be reachable as the user named by `nixling.site.waylandUser`.
-  `nixling vm start <vm>` must be invoked from a Plasma session terminal —
+  must be reachable as the user named by `d2b.site.waylandUser`.
+  `d2b vm start <vm>` must be invoked from a Plasma session terminal —
   never as root, never over SSH (`autostart = true` is also wrong
   for graphics VMs and triggers an assertion in the audio module if
   audio is enabled).
@@ -227,7 +227,7 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
   spectrum-ch re-test. Read the vhost-user-gpu wire-protocol notes
   in the module header, re-test, then bump `testedWithCrosvmRev`.
 - **Sidecar permission denied on the Wayland socket.** The host
-  Wayland socket must exist for `nixling.site.waylandUser` before the VM
+  Wayland socket must exist for `d2b.site.waylandUser` before the VM
   starts. If the socket is absent, the host-side filter or the direct GPU
   fallback cannot connect to the compositor.
 - **Cross-domain forwarding silently disabled.** With
@@ -241,8 +241,8 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 - [Manifest schema](./manifest-schema.md) — graphics state is surfaced
   through the evaluated bundle and daemon status, not a per-VM
   systemd unit.
-- [CLI contract](./cli-contract.md) — `nixling vm start <vm>` /
-  `nixling vm stop <vm>` lifecycle.
+- [CLI contract](./cli-contract.md) — `d2b vm start <vm>` /
+  `d2b vm stop <vm>` lifecycle.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
   end-to-end example with graphics + audio + USBIP YubiKey.
 - [`examples/with-entra-id`](../../examples/with-entra-id/) — graphics

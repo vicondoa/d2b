@@ -30,7 +30,7 @@ requires the daemon to be able to:
    execute" — which is the symptom we hit pre-fu14)
 
 Through v1.1.1fu13, our broker spawned virtiofsd as a non-root
-ephemeral UID (`stablePrincipalId "nixling-<vm>-runner"`) with
+ephemeral UID (`stablePrincipalId "d2b-<vm>-runner"`) with
 the cap union above in the *bounding* set but NOT effective.
 virtiofsd's `setresuid(0)` failed with EPERM, file-handle
 support self-disabled, and the guest initrd `chroot` failed
@@ -46,8 +46,8 @@ We needed a model where:
   `CAP_SYS_ADMIN`, no `CAP_SETUID` on the broker-spawned process
   visible to the host)
 - The model is uniformly applied to framework virtiofsd shares, with
-  only the declared per-share principal changing (for example `nl-gctl`
-  uses `nixling-<vm>-gctlfs` instead of the general runner principal)
+  only the declared per-share principal changing (for example `d2b-gctl`
+  uses `d2b-<vm>-gctlfs` instead of the general runner principal)
 - The implementation does not require `/etc/subuid` /
   `/etc/subgid` allocations (which are operator-visible state
   and a per-host migration burden)
@@ -60,10 +60,10 @@ exec'ing virtiofsd. Concretely:
 1. The role profile (`minijail-profiles.nix`) declares
    `userNamespace = { hostUidForZero = <uid>; hostGidForZero = <gid>; }`
    for the virtiofsd shares. Normal VM shares map to the
-   `stablePrincipalId` for `nixling-<vm>-runner` (the same
+   `stablePrincipalId` for `d2b-<vm>-runner` (the same
    ephemeral UID virtiofsd already runs as). The guest-control token
-   share (`nl-gctl`) deliberately maps to the narrower
-   `nixling-<vm>-gctlfs` principal so it can read only the materialized
+   share (`d2b-gctl`) deliberately maps to the narrower
+   `d2b-<vm>-gctlfs` principal so it can read only the materialized
    token and create only its dedicated runtime socket.
 2. `processes-json.nix` propagates this into the role's
    `RoleProfile.userNamespace` field (camelCase JSON shape).
@@ -100,7 +100,7 @@ exec'ing virtiofsd. Concretely:
    `CAP_DAC_READ_SEARCH` granted on the host.
 6. virtiofsd is invoked with `--sandbox=chroot
    --inode-file-handles=never` (and `--readonly` for every
-   read-only share, including `/nix/store` and `nl-gctl`). Inside the user NS, `--sandbox=chroot`
+   read-only share, including `/nix/store` and `d2b-gctl`). Inside the user NS, `--sandbox=chroot`
    works because the namespace gives virtiofsd
    `CAP_SYS_ADMIN` for `pivot_root(2)`.
 
@@ -119,18 +119,18 @@ This is **acceptable for ALL current virtiofsd shares**:
 
 - `/nix/store` is content-addressed and world-readable; the
   guest doesn't need true root-UID ownership semantics on it.
-- `nl-ssh-host` per-keyfile (`ssh_host_ed25519_key` 0400
+- `d2b-ssh-host` per-keyfile (`ssh_host_ed25519_key` 0400
   root:root): a per-keyfile ACL grant (`u:<runtime_uid>:r`)
   installed by `host-activation.nix` makes the file readable
   to virtiofsd inside the NS; the file appears to the guest
   with the overflow UID, but the guest's sshd doesn't care
   about UID ownership on its host key — only its read mode.
-- `nl-hkeys` / `nl-meta`: same story — content semantics, not
+- `d2b-hkeys` / `d2b-meta`: same story — content semantics, not
   ownership semantics, are what matters.
-- `nl-gctl` guest-control token share: the share runs under the
-  dedicated `nixling-<vm>-gctlfs` principal, not the general runner
+- `d2b-gctl` guest-control token share: the share runs under the
+  dedicated `d2b-<vm>-gctlfs` principal, not the general runner
   principal, and is read-only. Host activation grants that UID only
-  read/traverse access to `/var/lib/nixling/guest-control-<vm>/token`
+  read/traverse access to `/var/lib/d2b/guest-control-<vm>/token`
   plus its dedicated virtiofs socket directory.
 
 If a future share needs true UID-preserving semantics (e.g.,
@@ -145,7 +145,7 @@ share would need either:
   + `--gid-map` arguments — also requires subuid provisioning).
 
 This trade-off is explicit and documented; the v1.1.2 model
-covers every virtiofsd use case nixling currently ships.
+covers every virtiofsd use case d2b currently ships.
 
 ## Consequences
 
@@ -184,7 +184,7 @@ Negative:
   pipe whose write end has been closed. The `EOF` causes a
   short read (`n != 1`), so the child exits with
   `CHILD_EXIT_USER_NS_SYNC`. This is observable in
-  `journalctl -u nixling-priv-broker` as the spawned process
+  `journalctl -u d2b-priv-broker` as the spawned process
   exiting with status 74.
 - The `CLONE_NEWUSER` flag was previously guarded against in
   the broker (an explicit `Unsupported` error). The guard now
@@ -208,7 +208,7 @@ Negative:
    research report). For the `/nix/store` share specifically,
    this works because the store is content-addressed and
    already world-readable. **Rejected for v1.1.1** because the
-   mutable per-VM shares (`nl-meta`, `nl-hkeys`, `nl-ssh-host`)
+   mutable per-VM shares (`d2b-meta`, `d2b-hkeys`, `d2b-ssh-host`)
    carry actual confidentiality (the SSH host keys especially)
    and dropping the sandbox would let any guest with a
    symlink-traversal vulnerability in virtiofsd escape to
@@ -297,7 +297,7 @@ call would return `EINVAL`.
 
 ## Test coverage
 
-- `packages/nixling-priv-broker/src/ops/spawn_runner.rs`:
+- `packages/d2b-priv-broker/src/ops/spawn_runner.rs`:
   - `user_namespace_round_trips_none` — bundle without
     user_namespace flows through preflight unchanged
   - `user_namespace_round_trips_some` — bundle with spec
@@ -306,7 +306,7 @@ call would return `EINVAL`.
     pins that the preflight does NOT reject UID 0 maps; the
     refusal is enforced in `runtime.rs` against
     `adr_carve_out`.
-- `packages/nixling-priv-broker/src/sys.rs`:
+- `packages/d2b-priv-broker/src/sys.rs`:
   - `user_namespace_true_requires_spec` — broker rejects
     `namespaces.user=true` without `user_namespace=Some(_)`
   - `user_namespace_spec_requires_namespace_flag` — broker
@@ -317,7 +317,7 @@ call would return `EINVAL`.
     model (initrd reaches multi-user.target; SSH connect
     succeeds from host)
   - `work-aad` boots end-to-end concurrently
-  - `journalctl -u nixling-priv-broker | grep -i virtiofsd`
+  - `journalctl -u d2b-priv-broker | grep -i virtiofsd`
     shows NO `Couldn't set the process uid as root: -1`
     warnings under the new model
 
@@ -339,7 +339,7 @@ call would return `EINVAL`.
   v1.2. swtpm has zero device binds + zero host caps + Unix socket
   only — a direct translation of the virtiofsd model. The long-lived
   swtpm sidecar profile now declares `userNamespace = { hostUidForZero
-  = stablePrincipalId "nixling-<vm>-swtpm"; hostGidForZero = ... }`
+  = stablePrincipalId "d2b-<vm>-swtpm"; hostGidForZero = ... }`
   and runs with zero host capabilities inside a single-entry user NS.
 
   **v1.2 D5/P2.3 gpu render-node closure (v1.2fu25)**: gpu is

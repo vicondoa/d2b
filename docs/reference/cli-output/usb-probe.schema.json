@@ -27,7 +27,7 @@
       ]
     },
     "UsbipDurableClaimState": {
-      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/nixling/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
+      "description": "Wire-compatible state name for the USBIP host-session claim. The backing lock lives under `/run/d2b/locks/usbip`, so the claim survives VM stop/restart and daemon restart during one host boot, but not host reboot.",
       "type": "string",
       "enum": [
         "missing",

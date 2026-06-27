@@ -1,12 +1,12 @@
-# Per-environment network materialisation for nixling.
+# Per-environment network materialisation for d2b.
 #
-# For each `nixling.envs.<env>`, this module produces
+# For each `d2b.envs.<env>`, this module produces
 #
 #   • Two host-side bridges
 #       - br-<env>-up   (/30, host has the .1, net VM the .2)
 #       - br-<env>-lan  (/24, host has NO interface, net VM is .1)
 #   • An auto-declared headless net VM named `sys-<env>-net`,
-#     registered as `nixling.vms."sys-${env}-net"`. The net VM
+#     registered as `d2b.vms."sys-${env}-net"`. The net VM
 #     imports ./net.nix and gets its per-env knobs via specialArgs.
 #   • Two `microvm-tap` style networkd rules per env so tap names
 #     `up-<env>-*` and `lan-<env>-*` land on the right bridges.
@@ -42,9 +42,9 @@
 { config, pkgs, lib, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
   index = cfg._index;
-  nl = import ./lib.nix { inherit lib; };
+  d2bLib = import ./lib.nix { inherit lib; };
 
   # -------- Per-env materialisation ------------------------------------------
   envs = index.enabledEnvs;
@@ -90,8 +90,8 @@ in
     (lib.mapAttrsToList
       (vmName: vm: {
         assertion = vm.env == null || (lib.hasAttr vm.env cfg.envs && cfg.envs.${vm.env}.enable);
-        message = "nixling.vms.${vmName}.env = \"${toString vm.env}\" "
-          + "but nixling.envs has no such ENABLED env (have enabled: "
+        message = "d2b.vms.${vmName}.env = \"${toString vm.env}\" "
+          + "but d2b.envs has no such ENABLED env (have enabled: "
           + lib.concatStringsSep ", " (lib.attrNames envs) + ").";
       })
       enabledVms)
@@ -99,7 +99,7 @@ in
     ++ (lib.mapAttrsToList
       (vmName: vm: {
         assertion = !(vm.staticIp != null && vm.env != null);
-        message = "nixling.vms.${vmName}: set EITHER `env`/`index` "
+        message = "d2b.vms.${vmName}: set EITHER `env`/`index` "
           + "OR the deprecated `staticIp`, not both.";
       })
       enabledVms)
@@ -113,7 +113,7 @@ in
         in
         {
           assertion = dups == [ ];
-          message = "nixling.envs.${envName}: VMs share index "
+          message = "d2b.envs.${envName}: VMs share index "
             + "values ${builtins.toJSON dups}. Each workload VM in an "
             + "env needs a unique `index`.";
         })
@@ -125,7 +125,7 @@ in
     ++ (lib.mapAttrsToList
       (envName: _: {
         assertion = lib.stringLength envName <= 8;
-        message = "nixling.envs.${envName}: env name must be at "
+        message = "d2b.envs.${envName}: env name must be at "
           + "most 8 characters (Linux IFNAMSIZ-1=15 limit: bridge "
           + "`br-<env>-lan` is 7 + len(env) chars).";
       })
@@ -133,7 +133,7 @@ in
     ++ (lib.mapAttrsToList
       (envName: net: {
         assertion = !(net.lan.allowEastWest && !cfg.site.allowUnsafeEastWest);
-        message = "nixling.envs.${envName}.lan.allowEastWest requires nixling.site.allowUnsafeEastWest = true because peer-guest traffic is outside nixling's default isolation threat model.";
+        message = "d2b.envs.${envName}.lan.allowEastWest requires d2b.site.allowUnsafeEastWest = true because peer-guest traffic is outside d2b's default isolation threat model.";
       })
       envs)
     # per-env CIDR validation.
@@ -142,7 +142,7 @@ in
     # .0-.254 host range).
     # - uplinkSubnet MUST be exactly /30 (point-to-point host↔net-VM).
     # - No two envs may share a lanSubnet or uplinkSubnet, and none
-    #   may overlap with `nixling.hostLanCidrs`.
+    #   may overlap with `d2b.hostLanCidrs`.
     ++ (lib.concatLists (lib.mapAttrsToList
       (envName: net:
         let
@@ -156,19 +156,19 @@ in
         [
           {
             assertion = lanMask == "24";
-            message = "nixling.envs.${envName}.lanSubnet "
+            message = "d2b.envs.${envName}.lanSubnet "
               + "= \"${net.lanSubnet}\" must be a /24 (got /${lanMask}).";
           }
           {
             assertion = lib.length lanOctets == 4
               && lib.last lanOctets == "0";
-            message = "nixling.envs.${envName}.lanSubnet "
+            message = "d2b.envs.${envName}.lanSubnet "
               + "= \"${net.lanSubnet}\" must have a network address "
               + "ending in '.0' (got '${lanBase}').";
           }
           {
             assertion = upMask == "30";
-            message = "nixling.envs.${envName}.uplinkSubnet "
+            message = "d2b.envs.${envName}.uplinkSubnet "
               + "= \"${net.uplinkSubnet}\" must be a /30 (got /${upMask}).";
           }
         ])
@@ -178,10 +178,10 @@ in
     # IPv4 prefix arithmetic (see lib.nix). We reject any pair where
     # two distinct envs' subnets overlap, an env's lan/uplink subnets
     # overlap each other, or any env subnet overlaps with one of the
-    # consumer-declared `nixling.hostLanCidrs` entries.
+    # consumer-declared `d2b.hostLanCidrs` entries.
     ++ (
       let
-        inherit (nl) cidrOverlaps;
+        inherit (d2bLib) cidrOverlaps;
         # Flatten every env subnet (lan + uplink) into a list of
         # { env; kind; cidr; } records so we can do pairwise overlap
         # checking with clear error messages.
@@ -219,7 +219,7 @@ in
       in
       (map (p: {
         assertion = false;
-        message = "nixling.envs: CIDR overlap between "
+        message = "d2b.envs: CIDR overlap between "
           + "${p.a.env}.${p.a.kind} (${p.a.cidr}) and "
           + "${p.b.env}.${p.b.kind} (${p.b.cidr}). "
           + "Even containment counts as overlap — VMs would alias "
@@ -228,8 +228,8 @@ in
       }) overlapping)
       ++ (map (o: {
         assertion = false;
-        message = "nixling.envs.${o.env}.${o.kind} (${o.cidr}) "
-          + "overlaps with `nixling.hostLanCidrs` entry "
+        message = "d2b.envs.${o.env}.${o.kind} (${o.cidr}) "
+          + "overlaps with `d2b.hostLanCidrs` entry "
           + "\"${o.host}\". Pick a non-overlapping range — the "
           + "framework's static-route + NAT scheme requires every "
           + "env subnet to be disjoint from the host's primary LAN.";
@@ -298,7 +298,7 @@ in
         # Without it, networkd refuses to apply Address + Route
         # before the bridge has carrier, but the bridge only gets
         # carrier when the net VM attaches its uplink tap. The
-        # `nixling-net-route-preflight.service` checks the static
+        # `d2b-net-route-preflight.service` checks the static
         # route exists; it runs BEFORE the net VM start; deadlock.
         # Caught during the first real consumer migration.
         "20-${m.uplinkBridge}" = {
@@ -412,7 +412,7 @@ in
     allMeta
     ++ lib.mapAttrsToList
       (_: m: {
-        # The broker-owned `inet nixling` table carries the per-busid
+        # The broker-owned `inet d2b` table carries the per-busid
         # USBIP carve-out/audit, but NixOS also installs a later
         # `ip filter INPUT` chain. Accept TCP/3240 on opted-in uplink
         # bridges here so that later chain does not drop traffic that
@@ -440,7 +440,7 @@ in
   # undoes `disable_ipv6=1` by re-processing the netdev.
   #
   # Fix: emit declarative `boot.kernel.sysctl` entries for every declared
-  # bridge here, applied at NixOS activation BEFORE any nixlingd/broker
+  # bridge here, applied at NixOS activation BEFORE any d2bd/broker
   # invocation.  The per-VM ApplySysctl path is retained as defense-in-depth
   # (no change to broker emission or host-json output).
   #
@@ -459,15 +459,15 @@ in
 
   # ---------------------------------------------------------------------------
   # The per-env usbipd systemd units
-  # (`nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`) and the
-  # `nixling-net-route-preflight.service` singleton were deleted here.
+  # (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}`) and the
+  # `d2b-net-route-preflight.service` singleton were deleted here.
   #
   # Replacements:
   #   - usbipd-backend / usbipd-proxy: broker `SpawnRunner{role: Usbip,
   #     vm_id: sys-<env>-usbipd}` per the per-busid state machine in
   #     `docs/reference/privileges.md`.
-  #   - net route preflight: `nixlingd` startup self-check +
-  #     `nixling host reconcile --network --apply` via broker ops
+  #   - net route preflight: `d2bd` startup self-check +
+  #     `d2b host reconcile --network --apply` via broker ops
   #   - Firewall carve-outs for per-env usbip ports: broker
   #     `UsbipBindFirewallRule` op.
   # ---------------------------------------------------------------------------
@@ -475,11 +475,11 @@ in
 
   # ---------------------------------------------------------------------------
   # Auto-declare the net VM for each env.
-  # The net VM runs as a regular nixling VM (so its lifecycle is
-  # nixling@<name>.service like every other VM) but its config is
+  # The net VM runs as a regular d2b VM (so its lifecycle is
+  # d2b@<name>.service like every other VM) but its config is
   # entirely generated here from the env's metadata.
   # ---------------------------------------------------------------------------
-  nixling.vms = lib.mapAttrs'
+  d2b.vms = lib.mapAttrs'
     (envName: m: {
       name = m.netName;
       value = {

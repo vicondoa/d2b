@@ -9,7 +9,7 @@
 ## Context
 
 The portability plan keeps Nix as the producer of guest systems and
-microvm configuration, but moves host orchestration into `nixlingd`.
+microvm configuration, but moves host orchestration into `d2bd`.
 `microvm.declaredRunner` is useful as a compatibility oracle, yet its
 Cloud Hypervisor runner is a generated shell wrapper that can also fork
 sidecars inline.
@@ -23,8 +23,8 @@ execs.
 
 ## Decision
 
-Nixling will generate its own Cloud Hypervisor argv from evaluated
-microvm/nixling config and launch each role separately under daemon-owned
+D2b will generate its own Cloud Hypervisor argv from evaluated
+microvm/d2b config and launch each role separately under daemon-owned
 supervision.
 
 The considered options are:
@@ -33,10 +33,10 @@ The considered options are:
    minijail profile — rejected because CH, GPU, virtiofsd, audio/video,
    swtpm, TAP, and relay roles need distinct uid/gid, capability,
    cgroup, mount, and seccomp/minijail profiles.
-2. Generate nixling-owned CH argv from evaluated config — accepted. The
+2. Generate d2b-owned CH argv from evaluated config — accepted. The
    daemon consumes `microvm.interfaces`, `microvm.shares`,
    `microvm.vsock`, `microvm.cloud-hypervisor.extraArgs`,
-   `nixling.vms.<vm>.*`, and the W1 manifest bundle. For headless VMs,
+   `d2b.vms.<vm>.*`, and the W1 manifest bundle. For headless VMs,
    generated argv must match declaredRunner's snapshotted argv except for
    documented daemon divergences such as API socket ownership and vsock
    CID allocation.
@@ -45,18 +45,18 @@ The considered options are:
    complex in W4.
 4. The W0b runner-shape contract is a documentation and audit pin only:
    it does not add future Rust crate stubs. The W2 crate names reserved
-   by this ADR are `nixling-priv-broker`, `nixling-sandbox`,
-   `nixling-supervisor`, `nixling-ch-api`, and `nixling-host`.
+   by this ADR are `d2b-priv-broker`, `d2b-sandbox`,
+   `d2b-supervisor`, `d2b-ch-api`, and `d2b-host`.
 
 ## Consequences
 
-1. Positive: `nixlingd` can apply per-role minijail profiles instead of
+1. Positive: `d2bd` can apply per-role minijail profiles instead of
    inheriting the broad privilege union required by a shell runner.
 2. Positive: `declaredRunner` remains valuable as a parity oracle while
    the daemon runner is implemented.
 3. Positive: W4 has a concrete CH argv fixture to compare against before
    replacing the current supervisor path.
-4. Negative: Nixling must encode the CH argv model rather than delegating
+4. Negative: D2b must encode the CH argv model rather than delegating
    all backend details to microvm.nix's shell scripts.
 5. Neutral: A tiny microvm.nix patch remains available if graphics inline
    GPU spawning blocks W4, but it is not the primary design.
@@ -76,7 +76,7 @@ The considered options are:
 
 | Capability / backend | W0b posture | Notes |
 | --- | --- | --- |
-| Headless Cloud Hypervisor VM | Supported runner-shape target | Nixling-owned argv must track declaredRunner parity for the audited headless shape. |
+| Headless Cloud Hypervisor VM | Supported runner-shape target | D2b-owned argv must track declaredRunner parity for the audited headless shape. |
 | Graphics Cloud Hypervisor VM | Supported shape, sidecar split required | Inline `crosvm device gpu` spawning remains a W4 implementation blocker to solve with per-role supervision or the deferred upstream patch. |
 | Audio Cloud Hypervisor VM | Supported shape, sidecar split required | Audio/video sidecars must run as separate roles rather than inheriting one broad CH runner profile. |
 | TPM Cloud Hypervisor VM | Supported shape, sidecar split required | `swtpm` remains a separate role with its own uid/gid, socket ownership, and sandbox. |
@@ -86,7 +86,7 @@ The considered options are:
 
 ## Field-by-field input contract
 
-The nixling-owned Cloud Hypervisor argv generator consumes evaluated
+The d2b-owned Cloud Hypervisor argv generator consumes evaluated
 configuration, not shell fragments. For declaredRunner parity it must
 map the following inputs field by field:
 
@@ -115,9 +115,9 @@ map the following inputs field by field:
 
 ## Future Rust crate reservations
 
-W0b does NOT add the future `nixling-priv-broker`,
-`nixling-sandbox`, `nixling-supervisor`, `nixling-ch-api`,
-`nixling-host` crate stubs; those are reserved for W2 and named here to
+W0b does NOT add the future `d2b-priv-broker`,
+`d2b-sandbox`, `d2b-supervisor`, `d2b-ch-api`,
+`d2b-host` crate stubs; those are reserved for W2 and named here to
 prevent drift.
 
 ## References

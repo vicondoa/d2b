@@ -7,8 +7,8 @@ let
   inherit (pkgs) lib;
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   expected = [
-    flake.packages.${system}.nixling-guestd-static
-    flake.packages.${system}.nixling-exec-runner-static
+    flake.packages.${system}.d2b-guestd-static
+    flake.packages.${system}.d2b-exec-runner-static
   ];
   nixos = nixosSystem {
     inherit system;
@@ -30,19 +30,19 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
           extraSpecialArgs.inputs = { };
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        nixling.vms.corp-vm = {
+        d2b.vms.corp-vm = {
           enable = true;
           env = "work";
           index = 10;
@@ -59,7 +59,7 @@ let
     ];
   };
   guestSystemPackages =
-    nixos.config.nixling._computed.corp-vm.config.environment.systemPackages;
+    nixos.config.d2b._computed.corp-vm.config.environment.systemPackages;
 in
 assert lib.all (pkg: builtins.elem pkg guestSystemPackages) expected;
 builtins.toJSON (map toString expected)

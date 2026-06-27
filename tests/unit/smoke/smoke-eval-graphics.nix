@@ -2,14 +2,14 @@
 #
 # Mirrors tests/unit/smoke/smoke-eval.nix but declares ONE graphics-enabled VM.
 # Graphics VMs trip the cli.nix `vmLaunchScript` codepath that reads
-# `config.nixling.manifest.<name>` directly. That access path is what
-# revealed Spec correction #29: when the `nixling.manifest` option
+# `config.d2b.manifest.<name>` directly. That access path is what
+# revealed Spec correction #29: when the `d2b.manifest` option
 # carried both `readOnly = true` AND `default = { }`, the matching
-# `config.nixling.manifest = …` assignment in manifest.nix collided
+# `config.d2b.manifest = …` assignment in manifest.nix collided
 # with the default and produced "set multiple times" — but ONLY when
 # a graphics VM was synthesized. The headless smoke-eval missed it.
 #
-# Strictly evaluating `config.nixling.manifest` here forces the
+# Strictly evaluating `config.d2b.manifest` here forces the
 # readOnly path and would re-surface a regression of #29 immediately.
 #
 # Also asserts the Wave 2 wiring:
@@ -50,22 +50,22 @@ let
           uid = 1000;
         };
 
-        nixling.site = {
+        d2b.site = {
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
         };
 
-        nixling.envs.work = {
+        d2b.envs.work = {
           lanSubnet    = "10.20.0.0/24";
           uplinkSubnet = "192.0.2.0/30";
         };
 
         # The graphics-enabled VM is the crux of this test — it
         # forces cli.nix's `vmLaunchScript` to dereference
-        # `config.nixling.manifest.<name>`, which is the access
+        # `config.d2b.manifest.<name>`, which is the access
         # path that surfaced Spec correction #29.
-        nixling.vms.demo-gfx = {
+        d2b.vms.demo-gfx = {
           enable = true;
           env = "work";
           index = 11;
@@ -82,7 +82,7 @@ let
 
         # A VM with crossDomainTrusted = true to assert that the
         # host-side wayland-proxy DAG node is emitted.
-        nixling.vms.demo-cd = {
+        d2b.vms.demo-cd = {
           enable = true;
           env = "work";
           index = 13;
@@ -112,18 +112,18 @@ let
 
   # Guest service assertions for default VM (crossDomainTrusted=false)
   guestServices =
-    nixos.config.nixling._computed.demo-gfx.config.systemd.user.services;
+    nixos.config.d2b._computed.demo-gfx.config.systemd.user.services;
   defaultSessionVars =
-    nixos.config.nixling._computed.demo-gfx.config.environment.sessionVariables;
+    nixos.config.d2b._computed.demo-gfx.config.environment.sessionVariables;
 
   # Guest service assertions for trusted VM (crossDomainTrusted=true)
   trustedGuestServices =
-    nixos.config.nixling._computed.demo-cd.config.systemd.user.services;
+    nixos.config.d2b._computed.demo-cd.config.systemd.user.services;
   trustedProxyExec =
-    nixos.config.nixling._computed.demo-cd.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
+    nixos.config.d2b._computed.demo-cd.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
 
   # Host DAG node assertions: look for wayland-proxy node in processes bundle
-  processes = nixos.config.nixling._bundle.processesJson.data;
+  processes = nixos.config.d2b._bundle.processesJson.data;
   trustedDag = builtins.filter (dag: dag.vm == "demo-cd") processes.vms;
   trustedDagRecord = if trustedDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head trustedDag;
   trustedNodes = trustedDagRecord.nodes;
@@ -178,11 +178,11 @@ in
     "crossDomainTrusted=false should not emit wayland-proxy DAG edges";
   assert lib.assertMsg (builtins.any (a: lib.hasPrefix "/run/user/1000/" a) defaultGpuArgv)
     "default GPU runner should use the real host compositor socket when the filter proxy is absent";
-  assert lib.assertMsg (!(builtins.any (a: lib.hasPrefix "/run/nixling-wlproxy/" a) defaultGpuArgv))
+  assert lib.assertMsg (!(builtins.any (a: lib.hasPrefix "/run/d2b-wlproxy/" a) defaultGpuArgv))
     "default GPU runner should not target the filter socket when no filter proxy node exists";
   # GPU argv: --wayland-sock targets the filter socket, not the real compositor
-  assert lib.assertMsg (builtins.any (a: lib.hasPrefix "/run/nixling-wlproxy/" a) trustedGpuArgv)
-    "GPU runner --wayland-sock should target /run/nixling-wlproxy/<vm>/wayland-0";
+  assert lib.assertMsg (builtins.any (a: lib.hasPrefix "/run/d2b-wlproxy/" a) trustedGpuArgv)
+    "GPU runner --wayland-sock should target /run/d2b-wlproxy/<vm>/wayland-0";
   assert lib.assertMsg (!(builtins.any (a: lib.hasPrefix "/run/user/" a) trustedGpuArgv))
     "GPU runner argv should not contain /run/user/<uid> (real compositor path)";
   assert lib.assertMsg (builtins.any (e: e.from == "wayland-proxy" && e.to == trustedGraphicsNodeId) trustedEdges)
@@ -197,11 +197,11 @@ in
     "waylandFilter.dmabufAllow should serialize to wayland-proxy argv";
   assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--dmabuf-deny" "all:linear")
     "waylandFilter.dmabufDeny should serialize to wayland-proxy argv";
-  assert lib.assertMsg (builtins.elem "WL_PROXY_DEBUG=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_PREFIX=nixling-demo-cd-wlproxy" trustedWlproxyEnv)
+  assert lib.assertMsg (builtins.elem "WL_PROXY_DEBUG=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_PREFIX=d2b-demo-cd-wlproxy" trustedWlproxyEnv)
     "waylandFilter.debugLogging should serialize WL_PROXY_DEBUG/WL_PROXY_PREFIX to wayland-proxy env";
   assert lib.assertMsg (builtins.elem "WL_PROXY_HEXDUMP=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_HEXDUMP_LIMIT=256" trustedWlproxyEnv)
     "waylandFilter.byteLogging should serialize WL_PROXY_HEXDUMP/WL_PROXY_HEXDUMP_LIMIT to wayland-proxy env";
-  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--listen" "/run/nixling-wlproxy/demo-cd/wayland-0")
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--listen" "/run/d2b-wlproxy/demo-cd/wayland-0")
     "wayland-proxy argv should listen on the filter socket used by readiness";
   assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--connect" "/run/user/1000/wayland-0")
     "wayland-proxy argv should connect to the real host compositor path";
@@ -217,5 +217,5 @@ in
   # Force the readOnly path by strictly evaluating the manifest in
   # addition to the toplevel build. `deepSeq` ensures we don't
   # accept a thunk that lazily skips the manifest assignment.
-  builtins.deepSeq nixos.config.nixling.manifest
+  builtins.deepSeq nixos.config.d2b.manifest
     nixos.config.system.build.toplevel

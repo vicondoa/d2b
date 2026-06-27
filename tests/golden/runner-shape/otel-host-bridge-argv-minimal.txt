@@ -1,5 +1,5 @@
-# P1 OtelHostBridge argv snapshot from nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv (happy path)
-# Replaces the singleton nixling-otel-host-bridge.service ExecStart shape
+# P1 OtelHostBridge argv snapshot from d2b_host::otel_host_bridge_argv::generate_otel_host_bridge_argv (happy path)
+# Replaces the singleton d2b-otel-host-bridge.service ExecStart shape
 # (nixos-modules/components/observability/host.nix lines 302-360); fd
 # inheritance is broker-side (RunnerRole::OtelHostBridge), not encoded in argv.
-/run/current-system/sw/bin/socat -d -d UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660 EXEC:"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317"
+/run/current-system/sw/bin/socat -d -d UNIX-LISTEN:/run/d2b/otel/host-egress.sock,fork,reuseaddr,mode=0660 EXEC:"/run/current-system/sw/bin/d2b-ch-vsock-connect /var/lib/d2b/vms/sys-obs/vsock.sock 14317"

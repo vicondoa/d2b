@@ -4,6 +4,6 @@
   "exit_code": 1,
   "kind": "host-check-error",
   "observed_state": "Observed mode/owner/group diverges from the declared SocketSpec.",
-  "remediation": "Inspect `systemctl status nixlingd.socket`; the unit re-asserts perms on restart.",
-  "what_was_checked": "Whether /run/nixling/public.sock has the expected mode/owner/group."
+  "remediation": "Inspect `systemctl status d2bd.socket`; the unit re-asserts perms on restart.",
+  "what_was_checked": "Whether /run/d2b/public.sock has the expected mode/owner/group."
 }

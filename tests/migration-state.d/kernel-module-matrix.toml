@@ -1,2 +1,2 @@
 status = "retired"
-successor_ids = ["cargo nextest run --workspace (nixling-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (nixling-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]

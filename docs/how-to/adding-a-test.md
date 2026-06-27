@@ -1,6 +1,6 @@
 # How to add a test
 
-nixling tests are invoked through **`make` targets** (one per test type). The
+d2b tests are invoked through **`make` targets** (one per test type). The
 single rule:
 
 > **`make check` is the Layer-1 done-gate.** A change is not finished until
@@ -19,7 +19,7 @@ target and where the test lives.
 | --- | --- | --- | --- |
 | Rust logic / argv / DTO behaviour, or a **fake-backed** kernel/broker canary, or KVM-free runtime integration (sockets, `unshare` netns) | **A** | `test-rust` | `#[test]` in the owning crate (`cargo nextest`) |
 | Generated artifact == its **shipped, committed** copy (schema / docs / CLI / manpage) | **B** | `test-drift` | `xtask gen-* && git diff` (canonical) + `insta` |
-| A property of a **rendered bundle artifact** (privileges/host/processes/minijail JSON) | **C** | `test-contract` | `packages/nixling-contract-tests` — parse the fixture into a `nixling-core` DTO + assert |
+| A property of a **rendered bundle artifact** (privileges/host/processes/minijail JSON) | **C** | `test-contract` | `packages/d2b-contract-tests` — parse the fixture into a `d2b-core` DTO + assert |
 | A **pure-Nix value / option / internal-config** fact | **D** | `test-nix-unit` | `nix-unit` over an introspection fixture |
 | That a **misconfig is rejected** at eval | **E** | `test-nix-unit` | `nix-unit` (Bucket-A value over `config.assertions`; Bucket-B `expectedError`) |
 | That a config **builds** / a schema is strict | **F** | `test-flake` | `flake.checks` (realized via `nix build`) |
@@ -42,7 +42,7 @@ fixture used by local `make test-unit` / contract-test validation, but the
 nested NixOS graph can make hosted-runner Nix evaluators segfault before they
 produce a typed Nix error. Keep it in `flake.checks` and the pin, validate it
 locally with `make test-unit` (or directly with
-`NL_FLAKE_CHECK=fixture-smoke-full make test-flake` on a sufficiently large
+`D2B_FLAKE_CHECK=fixture-smoke-full make test-flake` on a sufficiently large
 host), and only add it back to the hosted dynamic matrix after the evaluator
 failure mode is gone.
 
@@ -54,8 +54,8 @@ artifact, it is **C** (Rust contract test). Ad-hoc bash that shells out to
 
 ```bash
 # Contract (C) — reuse the smoke fixture, run one test:
-make test-fixtures                       # builds the fixture, prints NL_FIXTURES
-NL_FIXTURES=<that path> cargo nextest run -p nixling-contract-tests -E 'test(my_new_case)'
+make test-fixtures                       # builds the fixture, prints D2B_FIXTURES
+D2B_FIXTURES=<that path> cargo nextest run -p d2b-contract-tests -E 'test(my_new_case)'
 
 # Rust logic (A): cargo nextest run -p <crate> -E 'test(my_new_case)'
 # Nix value (D/E): add a case to the nix-unit suite and run `make test-nix-unit`

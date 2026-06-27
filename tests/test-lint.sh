@@ -3,7 +3,7 @@
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
 #   * nix-instantiate --parse on every .nix file
-#   * shellcheck --severity=warning on the nixling shell scripts
+#   * shellcheck --severity=warning on the d2b shell scripts
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 # Driver script name matches the make target (tests/test-<target>.sh).
@@ -12,8 +12,8 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
-export ROOT NL_LOG
+D2B_LOG=${D2B_LOG:-/dev/null}
+export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
@@ -41,7 +41,7 @@ done < <(find nixos-modules tests -name '*.nix' -type f; printf '%s\n' flake.nix
 ok "nix-instantiate --parse ($parsed files)"
 
 # --- shellcheck -----------------------------------------------------------
-log "--> shellcheck --severity=warning on all nixling shell scripts"
+log "--> shellcheck --severity=warning on all d2b shell scripts"
 if ! command -v shellcheck >/dev/null 2>&1; then
   if command -v nix >/dev/null 2>&1; then
     sc_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#shellcheck \

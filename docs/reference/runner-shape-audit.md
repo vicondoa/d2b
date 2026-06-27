@@ -75,9 +75,9 @@ contains one event listener and four virtiofsd programs:
 
 - `virtiofsd-ro-store`: `--socket-path=corp-vm-virtiofs-ro-store.sock`,
   `--socket-group=kvm`, `--shared-dir=/nix/store`.
-- `virtiofsd-nl-meta`: `--shared-dir=/var/lib/nixling/vms/corp-vm/store-meta`.
-- `virtiofsd-nl-hkeys`: `--shared-dir=/var/lib/nixling/vms/corp-vm/host-keys`.
-- `virtiofsd-nl-ssh-host`: `--shared-dir=/var/lib/nixling/vms/corp-vm/sshd-host-keys`.
+- `virtiofsd-d2b-meta`: `--shared-dir=/var/lib/d2b/vms/corp-vm/store-meta`.
+- `virtiofsd-d2b-hkeys`: `--shared-dir=/var/lib/d2b/vms/corp-vm/host-keys`.
+- `virtiofsd-d2b-ssh-host`: `--shared-dir=/var/lib/d2b/vms/corp-vm/sshd-host-keys`.
 
 Each virtiofsd wrapper conditionally adds `--rlimit-nofile 1048576` when
 running as uid 0, then passes `--thread-pool-size \`nproc\``,
@@ -89,7 +89,7 @@ snapshotted in `tests/golden/runner-shape/cloud-hypervisor-argv-minimal.txt`.
 At this revision it is:
 
 ```bash
-exec -a "microvm@corp-vm" /nix/store/5dp5ya1q03ab3indxnd7x3pwixifw5rn-cloud-hypervisor-52.0/bin/cloud-hypervisor --cpus 'boot=1' --watchdog --kernel /nix/store/6p1aazl39927kp22ajw4h8bqa6j5g4vz-linux-6.18.31-dev/vmlinux --initramfs /nix/store/qdrg2rycwnqw7b5m69v12pizvf3p19yr-initrd-linux-6.18.31/initrd --cmdline 'earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 8250.nr_uarts=1 root=fstab loglevel=4 lsm=landlock,yama,bpf init=/nix/store/5ycspc2h3zhl9qiq2axsc1hvirr5pm02-nixos-system-corp-vm-26.05pre-git/init regInfo=/nix/store/ldfmwp9xh6av69d5bvz7j898m6kqlgzm-closure-info/registration' --seccomp true --memory 'shared=on,size=512M' --platform 'oem_strings=[io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888]' --console null --serial tty --vsock 'cid=10914385,socket=notify.vsock' --fs 'socket=corp-vm-virtiofs-ro-store.sock,tag=ro-store' 'socket=corp-vm-virtiofs-nl-meta.sock,tag=nl-meta' 'socket=corp-vm-virtiofs-nl-hkeys.sock,tag=nl-hkeys' 'socket=corp-vm-virtiofs-nl-ssh-host.sock,tag=nl-ssh-host' --api-socket corp-vm.sock --net 'mac=02:76:53:AE:57:0A,tap=work-l10'   ${runtime_args:-}
+exec -a "microvm@corp-vm" /nix/store/5dp5ya1q03ab3indxnd7x3pwixifw5rn-cloud-hypervisor-52.0/bin/cloud-hypervisor --cpus 'boot=1' --watchdog --kernel /nix/store/6p1aazl39927kp22ajw4h8bqa6j5g4vz-linux-6.18.31-dev/vmlinux --initramfs /nix/store/qdrg2rycwnqw7b5m69v12pizvf3p19yr-initrd-linux-6.18.31/initrd --cmdline 'earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 8250.nr_uarts=1 root=fstab loglevel=4 lsm=landlock,yama,bpf init=/nix/store/5ycspc2h3zhl9qiq2axsc1hvirr5pm02-nixos-system-corp-vm-26.05pre-git/init regInfo=/nix/store/ldfmwp9xh6av69d5bvz7j898m6kqlgzm-closure-info/registration' --seccomp true --memory 'shared=on,size=512M' --platform 'oem_strings=[io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888]' --console null --serial tty --vsock 'cid=10914385,socket=notify.vsock' --fs 'socket=corp-vm-virtiofs-ro-store.sock,tag=ro-store' 'socket=corp-vm-virtiofs-d2b-meta.sock,tag=d2b-meta' 'socket=corp-vm-virtiofs-d2b-hkeys.sock,tag=d2b-hkeys' 'socket=corp-vm-virtiofs-d2b-ssh-host.sock,tag=d2b-ssh-host' --api-socket corp-vm.sock --net 'mac=02:76:53:AE:57:0A,tap=work-l10'   ${runtime_args:-}
 ```
 
 ## Cloud Hypervisor argv inventory
@@ -111,9 +111,9 @@ The headless runner emits these flags today:
 | `--console` | `null` | headless VM console policy. |
 | `--serial` | `tty` | headless serial console policy. |
 | `--vsock` | `cid=10914385,socket=notify.vsock` | `microvm.vsock.cid`; host.nix gives non-observability VMs a fallback CID for CH notify. Observability VMs append their own `microvm.cloud-hypervisor.extraArgs` `--vsock socket=...`. |
-| `--fs` | four sockets/tags: `ro-store`, `nl-meta`, `nl-hkeys`, `nl-ssh-host` | `microvm.shares`; nixling's store and host-key modules materialize these virtiofs shares. |
+| `--fs` | four sockets/tags: `ro-store`, `d2b-meta`, `d2b-hkeys`, `d2b-ssh-host` | `microvm.shares`; d2b's store and host-key modules materialize these virtiofs shares. |
 | `--api-socket` | `corp-vm.sock` | CH runner default. The daemon keeps API sockets always enabled but daemon-only. |
-| `--net` | `mac=02:76:53:AE:57:0A,tap=work-l10` | `microvm.interfaces`, derived from `nixling.vms.corp-vm.env = "work"` and `index = 10`. |
+| `--net` | `mac=02:76:53:AE:57:0A,tap=work-l10` | `microvm.interfaces`, derived from `d2b.vms.corp-vm.env = "work"` and `index = 10`. |
 | `${runtime_args:-}` | empty for headless minimal | Extension point used by audio/graphics shapes; empty in this audit. |
 
 Not present for the audited headless VM, but present when features enable
@@ -129,15 +129,15 @@ additional explicit `microvm.cloud-hypervisor.extraArgs`.
   which supervises four virtiofsd workers. `tap-up`/`tap-down` are
   lifecycle helpers rather than long-lived sidecars. A `socat` notify
   relay is forked only when `NOTIFY_SOCKET` is set.
-- TPM-enabled VMs: nixling's TPM component adds a per-VM swtpm service
+- TPM-enabled VMs: d2b's TPM component adds a per-VM swtpm service
   and passes the CH TPM socket via `microvm.cloud-hypervisor.extraArgs`.
 - Graphics workstation: the graphics CH runner starts `crosvm device gpu`
-  inline, then CH connects to it with `--gpu socket=...`. Nixling also
+  inline, then CH connects to it with `--gpu socket=...`. D2b also
   has host-side video and audio sidecars for the graphics/audio example;
   video contributes `--vhost-user-media`, and audio contributes runtime
   CH args through the generated audio args script.
 - Observability-enabled VMs: host-side observability relay/listener roles
-  are separate nixling services; the guest CH argv gets a vsock socket
+  are separate d2b services; the guest CH argv gets a vsock socket
   from `microvm.cloud-hypervisor.extraArgs`.
 
 ## Inline-crosvm-gpu spawn note
@@ -169,23 +169,23 @@ TAP handling, notify relay, and future observability roles. That violates
 the requirements for per-role minijail profiles, per-role uid/capability
 sets, cgroup leaves, readiness predicates, and runtime oracles.
 
-### B. Generate nixling-owned CH argv from evaluated microvm/nixling config
+### B. Generate d2b-owned CH argv from evaluated microvm/d2b config
 
-Preferred. Nixling should evaluate the existing Nix module graph, then
-serialize enough runner data for `nixlingd` to launch each role itself.
+Preferred. D2b should evaluate the existing Nix module graph, then
+serialize enough runner data for `d2bd` to launch each role itself.
 Inputs are:
 
 - `microvm.interfaces` for MAC/TAP/network argv;
 - `microvm.shares` for virtiofs sockets/tags and virtiofsd roles;
 - `microvm.vsock` and `microvm.cloud-hypervisor.extraArgs` for notify,
   observability, TPM, video/audio, and other backend-specific flags;
-- `nixling.vms.<vm>.*` options for env/index-derived names, graphics,
+- `d2b.vms.<vm>.*` options for env/index-derived names, graphics,
   audio, video, TPM, USBIP, audit, observability, state roots, and
   lifecycle policy;
 - the manifest bundle (`bundle.json`, `host.json`, `processes.json`,
   `privileges.json`) as the stable daemon input.
 
-The parity oracle is: for headless VMs, nixling-generated CH argv must
+The parity oracle is: for headless VMs, d2b-generated CH argv must
 match the declaredRunner argv snapshotted here except for explicitly
 documented divergences. Known expected divergences are daemon-owned API
 socket placement/permissions, daemon-owned vsock CID allocation, and any
@@ -194,13 +194,13 @@ TAP fd-passing shape selected by the TAP ADR.
 ### C. Patch microvm.nix's CH runner to skip inline crosvm-gpu spawn
 
 Deferred. This remains a fallback if option B hits unforeseen complexity.
-It would reduce the graphics blocker but still leaves nixling with
+It would reduce the graphics blocker but still leaves d2b with
 a shell-runner ABI and less direct control over role supervision.
 
 ## Decision
 
-Choose option B: generate nixling-owned Cloud Hypervisor argv from the
-evaluated microvm/nixling config and keep `declaredRunner` only as a
+Choose option B: generate d2b-owned Cloud Hypervisor argv from the
+evaluated microvm/d2b config and keep `declaredRunner` only as a
 parity oracle during the transition.
 
 ## Parity oracle contract
@@ -219,7 +219,7 @@ runner store path or CH argv is a failure, not a skip. The test skips
 only when the example flake cannot be evaluated or built at all in the
 current environment, and logs that as a TODO-style skip.
 
-A future microvm.nix, nixpkgs, component, or nixling option change that
+A future microvm.nix, nixpkgs, component, or d2b option change that
 alters runner shape must update this audit, explain the intended drift,
 and refresh the fixtures in the same commit. The CH argv fixture will be
 lifted into a hard build-time parity gate by comparing daemon-generated

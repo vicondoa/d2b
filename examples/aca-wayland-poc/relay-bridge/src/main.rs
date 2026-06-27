@@ -1,4 +1,4 @@
-//! nixling-relay-bridge — tunnel a raw byte stream over an Azure Relay
+//! d2b-relay-bridge — tunnel a raw byte stream over an Azure Relay
 //! Hybrid Connection (ADR 0032).
 //!
 //! Two modes:
@@ -69,24 +69,24 @@ async fn ws_connect(
 
 #[derive(Parser)]
 #[command(
-    name = "nixling-relay-bridge",
+    name = "d2b-relay-bridge",
     about = "Tunnel a byte stream over an Azure Relay Hybrid Connection"
 )]
 struct Cli {
     /// Relay namespace FQDN, e.g. relns-xxxx.servicebus.windows.net.
-    #[arg(long, env = "NIXLING_RELAY_NAMESPACE")]
+    #[arg(long, env = "D2B_RELAY_NAMESPACE")]
     namespace: String,
 
-    /// Hybrid connection name (the entity path), e.g. hc-nixling-display.
-    #[arg(long, env = "NIXLING_RELAY_ENTITY")]
+    /// Hybrid connection name (the entity path), e.g. hc-d2b-display.
+    #[arg(long, env = "D2B_RELAY_ENTITY")]
     entity: String,
 
     /// SAS key name (authorization rule), e.g. gateway-send / gateway-listen.
-    #[arg(long, env = "NIXLING_RELAY_KEY_NAME")]
+    #[arg(long, env = "D2B_RELAY_KEY_NAME")]
     key_name: String,
 
     /// SAS key (primary key of the rule).
-    #[arg(long, env = "NIXLING_RELAY_KEY")]
+    #[arg(long, env = "D2B_RELAY_KEY")]
     key: String,
 
     /// SAS token lifetime in seconds.
@@ -98,7 +98,7 @@ struct Cli {
     /// transparent egress proxy terminates TLS and presents a cert signed
     /// by the injected `adc-egress-proxy-ca` (typically
     /// /etc/ssl/certs/adc-egress-proxy-ca.crt).
-    #[arg(long, env = "NIXLING_RELAY_CA_FILE")]
+    #[arg(long, env = "D2B_RELAY_CA_FILE")]
     ca_file: Option<String>,
 
     #[command(subcommand)]

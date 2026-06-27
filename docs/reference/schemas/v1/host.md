@@ -2,7 +2,7 @@
 
 `host.json` is the private host-intent artifact. It records the exact host resources and reconciliation policy that the daemon and privileged broker must enforce before any VM process starts.
 
-Producer: `nixos-modules/manifest-host.nix` emits this artifact; `packages/nixling-core` parses it.
+Producer: `nixos-modules/manifest-host.nix` emits this artifact; `packages/d2b-core` parses it.
 
 Schema: [`host.json`](./host.json) (forward reference; generated with `cargo xtask gen-schemas`).
 
@@ -14,7 +14,7 @@ Schema: [`host.json`](./host.json) (forward reference; generated with `cargo xta
 | `supportTier` | object | yes | Host support tier, platform, kernel floor, and detected feature requirements from [ADR 0008](../../../adr/0008-supported-platforms-and-rejected-targets.md). |
 | `ifNamePolicy` | object | yes | `IfName` validation and derivation rules. |
 | `environments` | array | yes | Per-env network intent: bridges, TAPs, MTU/MSS/east-west policy, route and hosts entries. |
-| `nftables` | object | yes | Exact `inet nixling` table hooks, priorities, chains, and rule ownership policy. |
+| `nftables` | object | yes | Exact `inet d2b` table hooks, priorities, chains, and rule ownership policy. |
 | `networkManager` | object | yes | Unmanaged configuration materialization rules. |
 | `hostsFile` | object | yes | `/etc/hosts` marked-block ownership policy. |
 | `ipv6Off` | object | yes | Per-link IPv6 disablement sysctls. |
@@ -30,7 +30,7 @@ Every host-visible interface name is a typed `IfName`:
 | --- | --- |
 | Maximum length | 15 bytes (`IFNAMSIZ - 1`) |
 | Character set | ASCII `[A-Za-z0-9_-]+` |
-| Derivation | nixling-owned prefix plus short hash-derived component |
+| Derivation | d2b-owned prefix plus short hash-derived component |
 | Truncation | Forbidden; generation must fail instead |
 | Lookup metadata | User-facing env/VM names remain available in `host.json` for operators |
 
@@ -63,41 +63,41 @@ A workload LAN TAP may be unisolated only when both
 
 ## `nftables`
 
-The table name is fixed: `inet nixling`. The hook layout is also fixed
+The table name is fixed: `inet d2b`. The hook layout is also fixed
 and is duplicated in the ADR 0005 addendum.
 
 | Chain | Type | Hook | Priority | Policy | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `nl_ingress_accept` | filter | `input` | `-300` | `accept` | Early ACCEPT carve-outs for daemon-owned host endpoints. |
-| `nl_forward_accept` | filter | `forward` | `-300` | `accept` | Early ACCEPT carve-outs for net-VM forwarding, DHCP/DNS, and USBIP flows. |
-| `nl_egress_accept` | filter | `output` | `-300` | `accept` | Early ACCEPT carve-outs for host-originated nixling control-plane flows. |
-| `nl_ingress_drop` | filter | `input` | `300` | `accept` | Late default-drop and drift guards for marked nixling inputs. |
-| `nl_forward_drop` | filter | `forward` | `300` | `accept` | Late default-drop for cross-env, blocked CIDR, and non-carved forwarding. |
-| `nl_egress_drop` | filter | `output` | `300` | `accept` | Late default-drop for marked nixling egress that must not escape policy. |
+| `d2b_ingress_accept` | filter | `input` | `-300` | `accept` | Early ACCEPT carve-outs for daemon-owned host endpoints. |
+| `d2b_forward_accept` | filter | `forward` | `-300` | `accept` | Early ACCEPT carve-outs for net-VM forwarding, DHCP/DNS, and USBIP flows. |
+| `d2b_egress_accept` | filter | `output` | `-300` | `accept` | Early ACCEPT carve-outs for host-originated d2b control-plane flows. |
+| `d2b_ingress_drop` | filter | `input` | `300` | `accept` | Late default-drop and drift guards for marked d2b inputs. |
+| `d2b_forward_drop` | filter | `forward` | `300` | `accept` | Late default-drop for cross-env, blocked CIDR, and non-carved forwarding. |
+| `d2b_egress_drop` | filter | `output` | `300` | `accept` | Late default-drop for marked d2b egress that must not escape policy. |
 
 Priority `-300` runs before standard nft filter chains at priority `0`;
-priority `300` runs after them. Nixling never flushes foreign tables.
+priority `300` runs after them. D2b never flushes foreign tables.
 
 ## NetworkManager materialization
 
 | Field | Value |
 | --- | --- |
-| `path` | `/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf` |
-| `match` | All nixling bridge and TAP `IfName` values from this artifact |
+| `path` | `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf` |
+| `match` | All d2b bridge and TAP `IfName` values from this artifact |
 | `contents` | A generated `keyfile.unmanaged-devices` list matching interface names |
 | `owner` / `mode` | root-owned, non-world-writable |
 | `reload` | Reload NetworkManager after content changes when NetworkManager is active |
-| `drift` | Replace only the nixling-managed file; do not edit foreign files |
+| `drift` | Replace only the d2b-managed file; do not edit foreign files |
 
 ## `/etc/hosts` marked block
 
-Nixling owns only lines between deterministic begin/end sentinels. Host
+D2b owns only lines between deterministic begin/end sentinels. Host
 prepare replaces that block atomically, preserves all foreign lines, and
 fails closed if the sentinels are malformed or nested.
 
 ## `ipv6Off`
 
-For every nixling bridge and TAP, the broker writes and verifies these
+For every d2b bridge and TAP, the broker writes and verifies these
 per-link sysctls before link-up:
 
 | Sysctl suffix | Required value |
@@ -132,7 +132,7 @@ per-link sysctls before link-up:
 | `/dev/kvm` | broker | `SCM_RIGHTS` fd | No bind-mounted device node unless a later ADR requires it. |
 | TAP fd | broker | `SCM_RIGHTS` preferred | No retained `CAP_NET_ADMIN`; persistent `TUNSETOWNER` fallback only. |
 | `/dev/vhost-net` | broker | `SCM_RIGHTS` with TAP fd | No jail-visible device node by default. |
-| cgroup dirfd | broker | `SCM_RIGHTS` or delegated path | Delegated nixling subtree only. |
+| cgroup dirfd | broker | `SCM_RIGHTS` or delegated path | Delegated d2b subtree only. |
 | `/dev/vhost-vsock` | deferred | none in this schema | No jail-visible node and no broker handoff in this schema. |
 
 ## `cloudHypervisorCapabilities`

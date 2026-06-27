@@ -41,7 +41,7 @@
         "type": "github"
       }
     },
-    "nixling": {
+    "d2b": {
       "inputs": {
         "home-manager": [
           "home-manager"
@@ -83,7 +83,7 @@
       "inputs": {
         "home-manager": "home-manager",
         "microvm": "microvm",
-        "nixling": "nixling",
+        "d2b": "d2b",
         "nixpkgs": "nixpkgs"
       }
     },

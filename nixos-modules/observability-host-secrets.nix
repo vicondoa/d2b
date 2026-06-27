@@ -13,8 +13,8 @@
 #
 #   Host:    `<stateDir>/observability/*` (root:root 0444 under a
 #            root:root 0700 parent)
-#   Share:   virtiofs tag `nl-obs-sec` → stack-VM mount
-#            `/run/nixling-obs-secrets/` (read-only)
+#   Share:   virtiofs tag `d2b-obs-sec` → stack-VM mount
+#            `/run/d2b-obs-secrets/` (read-only)
 #   Guest:   stack services' `LoadCredential`
 #            points at the in-VM mount path (see
 #            `components/observability/stack.nix`).
@@ -26,11 +26,11 @@
 # `/etc/nixos`) is the consumer's responsibility; the framework
 # does not assume one operator name.
 #
-# Active only when `nixling.observability.enable = true`.
+# Active only when `d2b.observability.enable = true`.
 { config, pkgs, lib, ... }:
 
 let
-  cfg = config.nixling;
+  cfg = config.d2b;
   obsCfg = cfg.observability;
 
   hostSecretsDir = "${cfg.site.stateDir}/observability";
@@ -40,7 +40,7 @@ let
   hostSignozRootPasswordPath = "${hostSecretsDir}/signoz-root-password";
   hostClickHousePasswordPath = "${hostSecretsDir}/clickhouse-password";
 
-  guestSecretsMountPoint = "/run/nixling-obs-secrets";
+  guestSecretsMountPoint = "/run/d2b-obs-secrets";
 
   manageSecretKey = obsCfg.grafana.secretKeyFile == null;
   manageAdminPassword = obsCfg.grafana.adminPasswordFile == null;
@@ -76,14 +76,14 @@ in
     {
       system.activationScripts = lib.mkMerge [
         (lib.mkIf (manageSecretKey || manageAdminPassword || signozSecretSpecs != [ ]) {
-          nixlingObservabilityHostSecretsDir = lib.stringAfter [ "users" ] ''
+          d2bObservabilityHostSecretsDir = lib.stringAfter [ "users" ] ''
             ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root \
               ${lib.escapeShellArg hostSecretsDir}
           '';
         })
         (lib.mkIf manageSecretKey {
-          nixlingObservabilityHostSecretKey = lib.stringAfter
-            [ "nixlingObservabilityHostSecretsDir" ] ''
+          d2bObservabilityHostSecretKey = lib.stringAfter
+            [ "d2bObservabilityHostSecretsDir" ] ''
             file=${lib.escapeShellArg hostSecretKeyPath}
             if [ -s "$file" ] && [ "$(${pkgs.coreutils}/bin/stat -c %s "$file")" -ge 32 ]; then
               :
@@ -102,8 +102,8 @@ in
           '';
         })
         (lib.mkIf manageAdminPassword {
-          nixlingObservabilityHostAdminPassword = lib.stringAfter
-            [ "nixlingObservabilityHostSecretsDir" ] ''
+          d2bObservabilityHostAdminPassword = lib.stringAfter
+            [ "d2bObservabilityHostSecretsDir" ] ''
             file=${lib.escapeShellArg hostAdminPasswordPath}
             if [ -s "$file" ]; then
               :
@@ -123,8 +123,8 @@ in
         })
         (builtins.listToAttrs (map
           (spec: {
-            name = "nixlingObservabilityHost${spec.name}";
-            value = lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] (
+            name = "d2bObservabilityHost${spec.name}";
+            value = lib.stringAfter [ "d2bObservabilityHostSecretsDir" ] (
               if spec.source != null then ''
                 ${pkgs.coreutils}/bin/install -m 0444 -o root -g root \
                   ${lib.escapeShellArg (toString spec.source)} \
@@ -153,12 +153,12 @@ in
     }
 
     {
-      system.activationScripts.nixlingObservabilityHostSecretShareAcls =
-        lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] ''
+      system.activationScripts.d2bObservabilityHostSecretShareAcls =
+        lib.stringAfter [ "d2bObservabilityHostSecretsDir" ] ''
           set -u
-          processes=/etc/nixling/processes.json
+          processes=/etc/d2b/processes.json
           if [ -r "$processes" ]; then
-            obs_uid="$(${pkgs.jq}/bin/jq -r --arg vm ${lib.escapeShellArg obsCfg.vmName} '.vms[] | select(.vm == $vm) | .nodes[] | select(.id == "virtiofsd-nl-obs-sec") | .profile.uid' "$processes" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
+            obs_uid="$(${pkgs.jq}/bin/jq -r --arg vm ${lib.escapeShellArg obsCfg.vmName} '.vms[] | select(.vm == $vm) | .nodes[] | select(.id == "virtiofsd-d2b-obs-sec") | .profile.uid' "$processes" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
             case "$obs_uid" in
               ""|null) ;;
               *[!0-9]*) ;;
@@ -180,10 +180,10 @@ in
     # (v1.1 moved it out of store.nix to avoid module-system infinite
     # recursion). The share lives inside the per-VM
     # `microvm.shares` list at
-    # `config.nixling._computed.sys-obs.config.microvm.shares`.
+    # `config.d2b._computed.sys-obs.config.microvm.shares`.
     # Adding the share from here would lose to the mkForce in
     # host.nix. Coordinating via host.nix also lines up the obs
     # secrets share with the other framework-managed shares
-    # (`ro-store`, `nl-meta`, `nl-hkeys`).
+    # (`ro-store`, `d2b-meta`, `d2b-hkeys`).
   ]);
 }

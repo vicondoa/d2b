@@ -3,13 +3,13 @@
 - Status: Implemented in v1.1
 - Date: 2026-05-31
 - Wave: v1.1-P8 → v1.1-P11 (landed)
-- Plan slice: v1.1 §§"v1.1-P8 — Re-home processes-json.nix reads", "v1.1-P9 — Replace microvm.vms with nixling-owned submodule evaluator", "v1.1-P10 — Retire microvm@/microvm-virtiofsd@/store-sync templates", "v1.1-P11 — Drop microvm.nix flake input"
+- Plan slice: v1.1 §§"v1.1-P8 — Re-home processes-json.nix reads", "v1.1-P9 — Replace microvm.vms with d2b-owned submodule evaluator", "v1.1-P10 — Retire microvm@/microvm-virtiofsd@/store-sync templates", "v1.1-P11 — Drop microvm.nix flake input"
 - Companion ADRs: [ADR 0001](0001-systemd-free-vm-orchestration.md), [ADR 0004](0004-cloud-hypervisor-runner-shape.md), [ADR 0015](0015-daemon-only-clean-break.md)
 - Verification: `tests/microvm-nix-absent-eval.sh` + 4 sibling substrate gates; commit `edde456`.
 
 ## Context
 
-nixling v0.x and v1.0 ship with `microvm.nix` as a flake input. The
+d2b v0.x and v1.0 ship with `microvm.nix` as a flake input. The
 dependency is used in three structurally distinct ways:
 
 1. **NixOS host module import.** `nixos-modules/host.nix:184`
@@ -19,7 +19,7 @@ dependency is used in three structurally distinct ways:
    for virtiofsd/cloud-hypervisor/swtpm.
 2. **Per-VM config translation.** `nixos-modules/host.nix:253-298`
    defines `microvm.vms = lib.mapAttrs ...` that re-keys
-   `nixling.vms.<vm>` declarations into the upstream submodule
+   `d2b.vms.<vm>` declarations into the upstream submodule
    namespace, sets per-VM `microvm.vsock.cid`,
    `microvm.hypervisor`, and `microvm.cloud-hypervisor.extraArgs`.
 3. **Source-of-truth read.** `nixos-modules/processes-json.nix`
@@ -42,19 +42,19 @@ Pressure for removal came from three directions:
 
 - **Tagline accuracy.** The flake description still reads "Opinionated
   NixOS desktop microVM workspaces on microvm.nix". The v1.0
-  end-state already owns every spawn path through `nixling-priv-broker`;
+  end-state already owns every spawn path through `d2b-priv-broker`;
   the "on microvm.nix" framing misleads consumers about who owns
   per-VM lifecycle.
 - **Substrate divergence.** Upstream `microvm.nix` evolves on its
-  own schedule. nixling's per-VM contracts (broker-spawned runners,
+  own schedule. d2b's per-VM contracts (broker-spawned runners,
   `OpAuditRecord` tracing, cgroup v2 delegation per
   [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)) diverge
   from what upstream `microvm.nix` assumes (per-VM systemd templates,
   upstream `microvms.target`, upstream sidecar units). Every minor
-  upstream change requires nixling-side compatibility work; pinning
+  upstream change requires d2b-side compatibility work; pinning
   the input does not eliminate the substrate friction.
 - **Audit surface.** Importing upstream NixOS modules adds whatever
-  the upstream module declares to nixling's evaluated module set;
+  the upstream module declares to d2b's evaluated module set;
   audit reviews of "what does `host.nix` actually emit?" enumerate
   upstream modules they don't control.
 
@@ -68,34 +68,34 @@ Pressure for removal came from three directions:
 > not contain a `microvm` node. The flake tagline reads
 > "Opinionated NixOS desktop microVM workspaces" (no "on microvm.nix").
 
-### Migration map (microvm.* → nixling.vms.*)
+### Migration map (microvm.* → d2b.vms.*)
 
-Every microvm.* field consumed by nixling production paths gets a
-nixling-owned counterpart in `nixos-modules/options-vms.nix`. The
+Every microvm.* field consumed by d2b production paths gets a
+d2b-owned counterpart in `nixos-modules/options-vms.nix`. The
 mapping is established in v1.1-P8 (processes-json re-home) and
 extended through P9–P11.
 
-| Upstream `microvm.*` field (per-VM)              | nixling-owned counterpart                              | Consumer                              |
+| Upstream `microvm.*` field (per-VM)              | d2b-owned counterpart                              | Consumer                              |
 |--------------------------------------------------|--------------------------------------------------------|---------------------------------------|
-| `microvm.vsock.cid`                              | `nixling.vms.<vm>.runner.vsock.cid`                    | processes-json, broker SpawnRunner    |
-| `microvm.vcpu`                                   | `nixling.vms.<vm>.runner.cpu.count`                    | processes-json, manifest              |
-| `microvm.mem`                                    | `nixling.vms.<vm>.runner.memory.sizeMiB`               | processes-json                        |
-| `microvm.hugepageMem`                            | `nixling.vms.<vm>.runner.memory.hugepages`             | processes-json                        |
-| `microvm.balloon`                                | `nixling.vms.<vm>.runner.memory.balloon.enable`        | processes-json                        |
-| `microvm.hotplugMem` / `hotpluggedMem` / `initialBalloonMem` | `nixling.vms.<vm>.runner.memory.{hotplug,initialBalloon}*` | processes-json |
-| `microvm.deflateOnOOM`                           | `nixling.vms.<vm>.runner.memory.balloon.deflateOnOOM`  | processes-json                        |
-| `microvm.shares`                                 | `nixling.vms.<vm>.runner.shares`                       | processes-json, store.nix, broker     |
-| `microvm.volumes`                                | `nixling.vms.<vm>.runner.volumes`                      | processes-json                        |
-| `microvm.devices`                                | `nixling.vms.<vm>.runner.devices`                      | processes-json                        |
-| `microvm.kernel.{dev,out}` / `initrdPath` / `kernelParams` | `nixling.vms.<vm>.runner.kernel.*`           | processes-json                        |
-| `microvm.storeOnDisk` / `storeDisk` / `writableStoreOverlay` | `nixling.vms.<vm>.runner.store.*`          | processes-json, store.nix             |
-| `microvm.virtiofsd.*` (package, group, inodeFileHandles, extraArgs, threadPoolSize) | `nixling.vms.<vm>.runner.virtiofsd.*` | processes-json, store.nix |
-| `microvm.hypervisor`                             | (constant `"cloud-hypervisor"` in nixling — drop option) | processes-json                       |
-| `microvm.cloud-hypervisor.package`               | `nixling.vms.<vm>.runner.hypervisor.package`           | processes-json                        |
-| `microvm.cloud-hypervisor.extraArgs`             | `nixling.vms.<vm>.runner.hypervisor.extraArgs`         | processes-json                        |
-| `microvm.cloud-hypervisor.platformOEMStrings`    | `nixling.vms.<vm>.runner.hypervisor.platformOEMStrings`| processes-json                        |
-| `microvm.graphics.{enable,socket,crosvmPackage}` | `nixling.vms.<vm>.runner.graphics.*`                   | processes-json, broker Gpu role       |
-| `microvm.interfaces`                             | `nixling.vms.<vm>.runner.interfaces` (W3 ownership; see note below) | processes-json, host.nix, net.nix     |
+| `microvm.vsock.cid`                              | `d2b.vms.<vm>.runner.vsock.cid`                    | processes-json, broker SpawnRunner    |
+| `microvm.vcpu`                                   | `d2b.vms.<vm>.runner.cpu.count`                    | processes-json, manifest              |
+| `microvm.mem`                                    | `d2b.vms.<vm>.runner.memory.sizeMiB`               | processes-json                        |
+| `microvm.hugepageMem`                            | `d2b.vms.<vm>.runner.memory.hugepages`             | processes-json                        |
+| `microvm.balloon`                                | `d2b.vms.<vm>.runner.memory.balloon.enable`        | processes-json                        |
+| `microvm.hotplugMem` / `hotpluggedMem` / `initialBalloonMem` | `d2b.vms.<vm>.runner.memory.{hotplug,initialBalloon}*` | processes-json |
+| `microvm.deflateOnOOM`                           | `d2b.vms.<vm>.runner.memory.balloon.deflateOnOOM`  | processes-json                        |
+| `microvm.shares`                                 | `d2b.vms.<vm>.runner.shares`                       | processes-json, store.nix, broker     |
+| `microvm.volumes`                                | `d2b.vms.<vm>.runner.volumes`                      | processes-json                        |
+| `microvm.devices`                                | `d2b.vms.<vm>.runner.devices`                      | processes-json                        |
+| `microvm.kernel.{dev,out}` / `initrdPath` / `kernelParams` | `d2b.vms.<vm>.runner.kernel.*`           | processes-json                        |
+| `microvm.storeOnDisk` / `storeDisk` / `writableStoreOverlay` | `d2b.vms.<vm>.runner.store.*`          | processes-json, store.nix             |
+| `microvm.virtiofsd.*` (package, group, inodeFileHandles, extraArgs, threadPoolSize) | `d2b.vms.<vm>.runner.virtiofsd.*` | processes-json, store.nix |
+| `microvm.hypervisor`                             | (constant `"cloud-hypervisor"` in d2b — drop option) | processes-json                       |
+| `microvm.cloud-hypervisor.package`               | `d2b.vms.<vm>.runner.hypervisor.package`           | processes-json                        |
+| `microvm.cloud-hypervisor.extraArgs`             | `d2b.vms.<vm>.runner.hypervisor.extraArgs`         | processes-json                        |
+| `microvm.cloud-hypervisor.platformOEMStrings`    | `d2b.vms.<vm>.runner.hypervisor.platformOEMStrings`| processes-json                        |
+| `microvm.graphics.{enable,socket,crosvmPackage}` | `d2b.vms.<vm>.runner.graphics.*`                   | processes-json, broker Gpu role       |
+| `microvm.interfaces`                             | `d2b.vms.<vm>.runner.interfaces` (W3 ownership; see note below) | processes-json, host.nix, net.nix     |
 
 Every option in the new tree carries the same Nix type as the
 upstream original. The translation table is materialized in
@@ -103,7 +103,7 @@ upstream original. The translation table is materialized in
 cross-link this ADR.
 
 **On `microvm.interfaces`.** At v1.0 HEAD `00b24c5` the
-`microvm.interfaces` field is NOT yet fully nixling-owned despite
+`microvm.interfaces` field is NOT yet fully d2b-owned despite
 W3's IfName / TAP / macvtap ownership of the underlying
 *interface naming and reconcile* surface. Three production sites
 still write or consume `microvm.interfaces` directly:
@@ -115,8 +115,8 @@ still write or consume `microvm.interfaces` directly:
 - `nixos-modules/processes-json.nix:76` reads `microvm.interfaces`
   to assemble cloud-hypervisor `--net` argv.
 
-v1.1-P8 must re-home all three sites to `nixling.vms.<vm>.runner.interfaces`
-(plus a `nixling.netVm.interfaces` analogue for the net VM
+v1.1-P8 must re-home all three sites to `d2b.vms.<vm>.runner.interfaces`
+(plus a `d2b.netVm.interfaces` analogue for the net VM
 itself). The W3 IfName derivation
 (per [ADR 0012](0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md))
 and bridge-port + reconcile policy
@@ -132,14 +132,14 @@ above tracks that move.
 `config.system.build.toplevel` per VM. v1.1 implements the same
 shape via `nixos-modules/vm-submodule.nix`:
 
-- Each `nixling.vms.<vm>` declaration is evaluated as a NixOS
-  submodule with a private `pkgs`, the nixling base modules, and
+- Each `d2b.vms.<vm>` declaration is evaluated as a NixOS
+  submodule with a private `pkgs`, the d2b base modules, and
   the per-VM `runner.*` option family above.
-- `nixling.vms.<vm>.config.system.build.toplevel` is the per-VM
+- `d2b.vms.<vm>.config.system.build.toplevel` is the per-VM
   toplevel build, replacing
   `config.microvm.vms.<vm>.config.config.system.build.toplevel`.
-- `nixling.vms.<vm>.config.system.build.declaredRunner` is computed
-  by nixling-owned argv synthesis in `processes-json.nix`. Because
+- `d2b.vms.<vm>.config.system.build.declaredRunner` is computed
+  by d2b-owned argv synthesis in `processes-json.nix`. Because
   this collapses production and oracle into the same code path, the
   ADR 0004 "declaredRunner as independent compatibility oracle"
   framing is retired: v1.1 keeps the same NAME for source-stability
@@ -196,13 +196,13 @@ dispositions:
   does NOT enumerate the broker SpawnRunner role variants, so
   v1.1+ implementations and reviewers MUST treat this ADR 0018
   matrix as authoritative for the `RunnerRole` enum. The
-  `packages/nixling-contracts/src/runner_role.rs` enum that lands in
+  `packages/d2b-contracts/src/runner_role.rs` enum that lands in
   v1.1-P10 derives its variants from this matrix, and the
   `tests/broker-spawn-audit-parity-eval.sh` gate enforces parity
   between the Rust enum and the matrix rows (resolves R10
   virt-r10-2 + R11 docs-r11-1).
 - **Host-prep DAG** — replaced by a daemon-owned host-preparation
-  op (no per-runner spawn; ordering is enforced inside `nixlingd`).
+  op (no per-runner spawn; ordering is enforced inside `d2bd`).
 - **Retired in P6** — the unit is already gone in v1.0 source as
   part of the daemon-only clean break (per ADR 0015); the v1.1
   matrix records the disposition for completeness so future
@@ -212,8 +212,8 @@ dispositions:
 
 Every SpawnRunner role MUST preserve the
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-delegated-subtree path `nixling.slice/<vm>/<role>`, keep the VM
-interior cgroup nodes process-free, hand a pidfd to nixlingd over
+delegated-subtree path `d2b.slice/<vm>/<role>`, keep the VM
+interior cgroup nodes process-free, hand a pidfd to d2bd over
 `SCM_RIGHTS` before lifecycle ownership transfers, and use
 leaf-only **broker-mediated `CgroupKill`** (v1.1-P10 op per
 [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
@@ -373,23 +373,23 @@ panel-approved rationale.
 |--------------------------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------|------------------------------------------------|
 | `microvm@<vm>.service`                                 | SpawnRunner       | `Hypervisor` — cloud-hypervisor argv, signal/restart/audit, pidfd handoff                                     | full baseline (Spawn + Child + Restarted + PreLaunchHook for store-sync) |
 | `microvm-virtiofsd@<vm>.service` (per-share drop-in)  | SpawnRunner       | `Virtiofsd` (one per share) — virtiofsd argv per share, FD plumbing, ACL setup                               | full baseline + LivenessProbe (active wedge detection per below) |
-| `nixling-<vm>-store-sync.service`                      | Pre-launch hook   | `Hypervisor` pre-launch hook — rsync + hardlink-farm population; subprocess MUST run as its own SpawnRunner leaf per ADR 0011 binding above | PreLaunchHookStarted/Succeeded/Failed + (if forks child) full Spawn/Child baseline |
-| `nixling-<vm>-swtpm.service`                           | SpawnRunner       | `SwtpmFlush` (one-shot) + `Swtpm` (long-lived) — swtpm-flush state migration; swtpm pidfd                    | full baseline (Restarted N/A for SwtpmFlush) |
-| `nixling-<vm>-gpu.service`                             | SpawnRunner       | `Gpu` — crosvm gpu sidecar argv, GPU device ACL, socket FD via SCM_RIGHTS                                    | full baseline + Restarted + signal-on-VM-shutdown |
-| `nixling-<vm>-video.service`                           | SpawnRunner       | `Video` — vhost-user-video argv, video device ACL                                                            | full baseline + Restarted |
-| `nixling-<vm>-snd.service`                             | SpawnRunner       | `Audio` — vhost-user-sound argv, audio ACL, pipewire socket FD via SCM_RIGHTS                                | full baseline + Restarted |
-| `nixling-otel-relay@<vm>.service`                      | SpawnRunner       | `OtelGuestRelay` — per-VM OTLP relay, vsock FD plumbing                                                      | full baseline + Restarted |
-| `nixling-otel-host-bridge.service`                     | SpawnRunner       | `OtelHostBridge` — host-side OTLP bridge, ACL refresh (replaces `host-otel-relay-acl.nix`), unix-socket plumbing | full baseline + Restarted (v1.1-P6 lands this) |
-| `nixling-vfsd-watchdog@.{service,timer}`               | Embedded in role  | Active liveness probe inside `Virtiofsd` SpawnRunner role (see "Virtiofsd wedge detection" below)             | LivenessProbe set (Started/Ok/Wedged/WedgeRestarted) |
-| `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}` | SpawnRunner   | `UsbipBackend` (per-env, long-lived `usbipd -4 --tcp-port <backendPort>`) + `UsbipProxy` (per-env, `systemd-socket-proxyd` front binding `<env.hostUplinkIp>:3240`). At v1.0 HEAD these are ALREADY broker-spawned under `nixling.slice/sys-<env>/usbipd-*` per [`docs/reference/components-usbip.md`](../reference/components-usbip.md); v1.1 only consolidates the role-matrix entry and registers the denylist pattern. **v1.1 RunnerRole catalog reconciliation note** (resolves R10 virt-r10-2 + R11 docs-r11-2 + networking-r11-2): the v1.0 [`privileges.md`](../reference/privileges.md) catalog lists a SINGULAR `Usbip` SpawnRunner role and the broker ops `UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`. The v1.1 design SUPERSEDES the singular role into the multi-variant inventory below (per ADR 0018 § "Disposition matrix" — this matrix is the canonical RunnerRole source per the section preamble above); the v1.0 broker ops (`UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`) remain unchanged and are what the v1.1 SpawnRunner leaves dispatch through. v1.1-P10 lands the corresponding privileges.md update (singular `Usbip` row → 6-variant rows) alongside the runner_role.rs enum. **Per-attach lifecycle reconciled with [`docs/reference/components-usbip.md`](../reference/components-usbip.md).** The hot-plug ceremony has **two distinct execution contexts**: (a) host-side `usbip bind`/`unbind` against the local usbipd (dispatched via the existing `UsbipBind`/`UsbipUnbind` broker ops); AND (b) guest-side `usbip attach`/`detach` which MUST run INSIDE the workload VM (per components-usbip.md "Guest-side resources created" and `vhci_hcd` requirement). Both contexts dispatch through the broker `SpawnRunner` DAG as **ephemeral one-shot SpawnRunner leaves** — but the leaf's exec payload differs: **host-side** leaves exec the host `/run/current-system/sw/bin/usbip` binary directly; **guest-side** leaves exec an `ssh` client invocation whose **remote-command** argv is the `usbip attach`/`detach` against the in-guest vhci_hcd (the same model components-usbip.md describes as "Rust CLI SSHs in and issues `usbip attach`"). The v1.1 SpawnRunner role naming reflects this split: **host-side** roles `UsbipBindOneShot{busid}` (dispatches the existing `UsbipBind` broker op via a one-shot SpawnRunner leaf — these are NOT new broker ops, they are SpawnRunner variants that exec the host `usbip bind` payload) and `UsbipUnbindOneShot{busid}` (dispatches existing `UsbipUnbind` broker op); **guest-side** roles `GuestUsbipAttachOneShot{vm, busid}` (no corresponding host-side broker op; exec: `ssh -i <vm.ssh.keyPath> <vm.ssh.user>@<vm.staticIp> -- usbip attach -r <env.usbipdHostIp> -b <busid>`) and `GuestUsbipDetachOneShot{vm, busid}` (exec: `ssh ... -- usbip detach -p <port>`). Both contexts spawn under `nixling.slice/sys-<env>/usbip-<verb>-<id>/` cgroup leaf with pidfd handoff per the ADR 0011 invariant binding above. **The `UsbipBindFirewallRule` broker op stays a broker op (NOT a SpawnRunner role).** Earlier drafts of this row described it as a SpawnRunner; per privileges.md § "Broker dispatcher fields" it is the existing v1.0 broker op that emits nftables carve-outs. It is invoked from the host-prep DAG ordering (before `UsbipBackend` SpawnRunner starts) and from the per-attach state machine (before `UsbipBindOneShot` SpawnRunner runs); there is NO `UsbipUnbindFirewallRule` op — carve-out removal is performed by re-invoking `UsbipBindFirewallRule` with a `destroy: true` payload field (the standard W3 broker-op destroy convention per [`ApplyNftables`](../adr/0013-w3-firewall-coexistence-policy.md) precedent). The guest-side `ssh` client invocation, like every host-launched SpawnRunner payload, is constrained by the minijail parentage invariants (exec-in-place, no double-fork) per the "Minijail / sandbox-wrapper parentage preservation" subsection below. **ssh(1) hardening for `Guest*OneShot` payloads** (resolves R11 kernel ssh-parentage finding): the broker's `ssh` argv MUST NOT pass `-f` (would daemonize and re-parent), MUST NOT pass `-N`/`-M` (background master-mode would do the same), MUST set `-o ControlMaster=no` and `-o ControlPath=none` (disables multiplexing master sockets which can outlive the pidfd-tracked client), MUST set `-o ControlPersist=no`, MUST set `-o BatchMode=yes` (no interactive prompts; deterministic exit on auth fail), MUST NOT read user-level `~/.ssh/config` (use `-F /dev/null`), and MUST exec the configured key + user + host explicitly. The broker enforces this via a static argv builder; the `tests/broker-spawn-minijail-parentage-eval.sh` gate (future, v1.1-P10) exercises the ssh-OneShot leaves with a synthetic guest that asserts `getppid()` and pidfd identity match expectations — proving the ssh client is exec-in-place and not double-forked. Cross-env busid exclusivity is enforced by `host.json.environments[].usbipBusidLocks[].busIds` (the per-env flock contract); the broker MUST hold the lock for the duration of the bind→attach→detach→unbind sequence and audit `UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended` events around it (these are daemon-side audit-event kinds, NOT broker ops or SpawnRunner roles — they land in v1.1-P10 daemon-side audit catalog). **Pre-spawn `modprobe usbip-host`** is NOT in-process — it execs the host's `/run/current-system/sw/bin/modprobe` binary. Per the R4 virt finding, this requires its own disposition: register as a daemon **host-prep DAG op** `ModprobeIfAllowed{module: "usbip-host", matrix_entry_id}` per [`docs/reference/privileges.md`](../reference/privileges.md) row `ModprobeIfAllowed` (already catalogued, scope `kernel module`, gated by `nixling.site.yubikey.enable` + at least one VM with `usbip.yubikey = true`). The host-prep DAG runs the modprobe op BEFORE the first `UsbipBackend` SpawnRunner starts for each env. **ModprobeIfAllowed failure propagation** (resolves R6 virt + R7 virt findings): if the modprobe op fails the host-prep DAG aborts the per-env USBIP bring-up sequence and returns a typed `#broker-validation-failed` envelope (exit 31 per [`error-codes.md`](../reference/error-codes.md)). The envelope `kind` is always `broker-validation-failed`; the **fine-grained denial reason** is carried in the **audit `error_kind` field** (NOT the envelope kind) using existing catalog codes from `error-codes.md`: `#modules-disabled-sysctl-locked` (kernel.modules_disabled=1 prevented load), `#host-modules-locked` (host blocks all loads), or `#modprobe-denied-not-in-matrix` (module not in the trusted-matrix allowlist). The dependent `UsbipBackend` SpawnRunner is NOT started; the daemon emits `HostPrepAborted{env, op: "ModprobeIfAllowed", error_kind, broker_op_id}` and the operator sees the typed envelope on `nixling vm start --apply` (or whichever verb triggered the per-env bring-up). The modprobe op itself is short-lived but runs under broker oversight in its own ephemeral cgroup leaf | full baseline + Restarted on the two long-lived runners (`UsbipBackend`/`UsbipProxy`); ephemeral one-shot SpawnRunner leaves (`UsbipBindOneShot`/`UsbipUnbindOneShot` host-side; `GuestUsbipAttachOneShot`/`GuestUsbipDetachOneShot` guest-via-SSH) emit the **full SpawnRunner baseline** (SpawnRequested/Succeeded/Failed + ChildExited; Restarted N/A on one-shots — listed in `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml` (future, v1.1-P10 — fixture file does NOT exist at HEAD; it will be created in v1.1-P10 alongside the role implementations) via the `applies_to: {lifecycle: one_shot}` predicate with `owner_discipline: virt`); the per-attach lock kinds (`UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended`) are emitted at the daemon→broker dispatch boundary, NOT at the SpawnRunner level, and are tracked under a separate daemon-side audit catalog (NOT the SpawnRunner role-baseline parity gate) |
+| `d2b-<vm>-store-sync.service`                      | Pre-launch hook   | `Hypervisor` pre-launch hook — rsync + hardlink-farm population; subprocess MUST run as its own SpawnRunner leaf per ADR 0011 binding above | PreLaunchHookStarted/Succeeded/Failed + (if forks child) full Spawn/Child baseline |
+| `d2b-<vm>-swtpm.service`                           | SpawnRunner       | `SwtpmFlush` (one-shot) + `Swtpm` (long-lived) — swtpm-flush state migration; swtpm pidfd                    | full baseline (Restarted N/A for SwtpmFlush) |
+| `d2b-<vm>-gpu.service`                             | SpawnRunner       | `Gpu` — crosvm gpu sidecar argv, GPU device ACL, socket FD via SCM_RIGHTS                                    | full baseline + Restarted + signal-on-VM-shutdown |
+| `d2b-<vm>-video.service`                           | SpawnRunner       | `Video` — vhost-user-video argv, video device ACL                                                            | full baseline + Restarted |
+| `d2b-<vm>-snd.service`                             | SpawnRunner       | `Audio` — vhost-user-sound argv, audio ACL, pipewire socket FD via SCM_RIGHTS                                | full baseline + Restarted |
+| `d2b-otel-relay@<vm>.service`                      | SpawnRunner       | `OtelGuestRelay` — per-VM OTLP relay, vsock FD plumbing                                                      | full baseline + Restarted |
+| `d2b-otel-host-bridge.service`                     | SpawnRunner       | `OtelHostBridge` — host-side OTLP bridge, ACL refresh (replaces `host-otel-relay-acl.nix`), unix-socket plumbing | full baseline + Restarted (v1.1-P6 lands this) |
+| `d2b-vfsd-watchdog@.{service,timer}`               | Embedded in role  | Active liveness probe inside `Virtiofsd` SpawnRunner role (see "Virtiofsd wedge detection" below)             | LivenessProbe set (Started/Ok/Wedged/WedgeRestarted) |
+| `d2b-sys-<env>-usbipd-{proxy,backend}.{service,socket}` | SpawnRunner   | `UsbipBackend` (per-env, long-lived `usbipd -4 --tcp-port <backendPort>`) + `UsbipProxy` (per-env, `systemd-socket-proxyd` front binding `<env.hostUplinkIp>:3240`). At v1.0 HEAD these are ALREADY broker-spawned under `d2b.slice/sys-<env>/usbipd-*` per [`docs/reference/components-usbip.md`](../reference/components-usbip.md); v1.1 only consolidates the role-matrix entry and registers the denylist pattern. **v1.1 RunnerRole catalog reconciliation note** (resolves R10 virt-r10-2 + R11 docs-r11-2 + networking-r11-2): the v1.0 [`privileges.md`](../reference/privileges.md) catalog lists a SINGULAR `Usbip` SpawnRunner role and the broker ops `UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`. The v1.1 design SUPERSEDES the singular role into the multi-variant inventory below (per ADR 0018 § "Disposition matrix" — this matrix is the canonical RunnerRole source per the section preamble above); the v1.0 broker ops (`UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` / `UsbipBindFirewallRule`) remain unchanged and are what the v1.1 SpawnRunner leaves dispatch through. v1.1-P10 lands the corresponding privileges.md update (singular `Usbip` row → 6-variant rows) alongside the runner_role.rs enum. **Per-attach lifecycle reconciled with [`docs/reference/components-usbip.md`](../reference/components-usbip.md).** The hot-plug ceremony has **two distinct execution contexts**: (a) host-side `usbip bind`/`unbind` against the local usbipd (dispatched via the existing `UsbipBind`/`UsbipUnbind` broker ops); AND (b) guest-side `usbip attach`/`detach` which MUST run INSIDE the workload VM (per components-usbip.md "Guest-side resources created" and `vhci_hcd` requirement). Both contexts dispatch through the broker `SpawnRunner` DAG as **ephemeral one-shot SpawnRunner leaves** — but the leaf's exec payload differs: **host-side** leaves exec the host `/run/current-system/sw/bin/usbip` binary directly; **guest-side** leaves exec an `ssh` client invocation whose **remote-command** argv is the `usbip attach`/`detach` against the in-guest vhci_hcd (the same model components-usbip.md describes as "Rust CLI SSHs in and issues `usbip attach`"). The v1.1 SpawnRunner role naming reflects this split: **host-side** roles `UsbipBindOneShot{busid}` (dispatches the existing `UsbipBind` broker op via a one-shot SpawnRunner leaf — these are NOT new broker ops, they are SpawnRunner variants that exec the host `usbip bind` payload) and `UsbipUnbindOneShot{busid}` (dispatches existing `UsbipUnbind` broker op); **guest-side** roles `GuestUsbipAttachOneShot{vm, busid}` (no corresponding host-side broker op; exec: `ssh -i <vm.ssh.keyPath> <vm.ssh.user>@<vm.staticIp> -- usbip attach -r <env.usbipdHostIp> -b <busid>`) and `GuestUsbipDetachOneShot{vm, busid}` (exec: `ssh ... -- usbip detach -p <port>`). Both contexts spawn under `d2b.slice/sys-<env>/usbip-<verb>-<id>/` cgroup leaf with pidfd handoff per the ADR 0011 invariant binding above. **The `UsbipBindFirewallRule` broker op stays a broker op (NOT a SpawnRunner role).** Earlier drafts of this row described it as a SpawnRunner; per privileges.md § "Broker dispatcher fields" it is the existing v1.0 broker op that emits nftables carve-outs. It is invoked from the host-prep DAG ordering (before `UsbipBackend` SpawnRunner starts) and from the per-attach state machine (before `UsbipBindOneShot` SpawnRunner runs); there is NO `UsbipUnbindFirewallRule` op — carve-out removal is performed by re-invoking `UsbipBindFirewallRule` with a `destroy: true` payload field (the standard W3 broker-op destroy convention per [`ApplyNftables`](../adr/0013-w3-firewall-coexistence-policy.md) precedent). The guest-side `ssh` client invocation, like every host-launched SpawnRunner payload, is constrained by the minijail parentage invariants (exec-in-place, no double-fork) per the "Minijail / sandbox-wrapper parentage preservation" subsection below. **ssh(1) hardening for `Guest*OneShot` payloads** (resolves R11 kernel ssh-parentage finding): the broker's `ssh` argv MUST NOT pass `-f` (would daemonize and re-parent), MUST NOT pass `-N`/`-M` (background master-mode would do the same), MUST set `-o ControlMaster=no` and `-o ControlPath=none` (disables multiplexing master sockets which can outlive the pidfd-tracked client), MUST set `-o ControlPersist=no`, MUST set `-o BatchMode=yes` (no interactive prompts; deterministic exit on auth fail), MUST NOT read user-level `~/.ssh/config` (use `-F /dev/null`), and MUST exec the configured key + user + host explicitly. The broker enforces this via a static argv builder; the `tests/broker-spawn-minijail-parentage-eval.sh` gate (future, v1.1-P10) exercises the ssh-OneShot leaves with a synthetic guest that asserts `getppid()` and pidfd identity match expectations — proving the ssh client is exec-in-place and not double-forked. Cross-env busid exclusivity is enforced by `host.json.environments[].usbipBusidLocks[].busIds` (the per-env flock contract); the broker MUST hold the lock for the duration of the bind→attach→detach→unbind sequence and audit `UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended` events around it (these are daemon-side audit-event kinds, NOT broker ops or SpawnRunner roles — they land in v1.1-P10 daemon-side audit catalog). **Pre-spawn `modprobe usbip-host`** is NOT in-process — it execs the host's `/run/current-system/sw/bin/modprobe` binary. Per the R4 virt finding, this requires its own disposition: register as a daemon **host-prep DAG op** `ModprobeIfAllowed{module: "usbip-host", matrix_entry_id}` per [`docs/reference/privileges.md`](../reference/privileges.md) row `ModprobeIfAllowed` (already catalogued, scope `kernel module`, gated by `d2b.site.yubikey.enable` + at least one VM with `usbip.yubikey = true`). The host-prep DAG runs the modprobe op BEFORE the first `UsbipBackend` SpawnRunner starts for each env. **ModprobeIfAllowed failure propagation** (resolves R6 virt + R7 virt findings): if the modprobe op fails the host-prep DAG aborts the per-env USBIP bring-up sequence and returns a typed `#broker-validation-failed` envelope (exit 31 per [`error-codes.md`](../reference/error-codes.md)). The envelope `kind` is always `broker-validation-failed`; the **fine-grained denial reason** is carried in the **audit `error_kind` field** (NOT the envelope kind) using existing catalog codes from `error-codes.md`: `#modules-disabled-sysctl-locked` (kernel.modules_disabled=1 prevented load), `#host-modules-locked` (host blocks all loads), or `#modprobe-denied-not-in-matrix` (module not in the trusted-matrix allowlist). The dependent `UsbipBackend` SpawnRunner is NOT started; the daemon emits `HostPrepAborted{env, op: "ModprobeIfAllowed", error_kind, broker_op_id}` and the operator sees the typed envelope on `d2b vm start --apply` (or whichever verb triggered the per-env bring-up). The modprobe op itself is short-lived but runs under broker oversight in its own ephemeral cgroup leaf | full baseline + Restarted on the two long-lived runners (`UsbipBackend`/`UsbipProxy`); ephemeral one-shot SpawnRunner leaves (`UsbipBindOneShot`/`UsbipUnbindOneShot` host-side; `GuestUsbipAttachOneShot`/`GuestUsbipDetachOneShot` guest-via-SSH) emit the **full SpawnRunner baseline** (SpawnRequested/Succeeded/Failed + ChildExited; Restarted N/A on one-shots — listed in `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml` (future, v1.1-P10 — fixture file does NOT exist at HEAD; it will be created in v1.1-P10 alongside the role implementations) via the `applies_to: {lifecycle: one_shot}` predicate with `owner_discipline: virt`); the per-attach lock kinds (`UsbipLockAcquired`/`UsbipLockReleased`/`UsbipLockContended`) are emitted at the daemon→broker dispatch boundary, NOT at the SpawnRunner level, and are tracked under a separate daemon-side audit catalog (NOT the SpawnRunner role-baseline parity gate) |
 | `microvm-tap-interfaces@.service` (and per-VM TAP)     | Host-prep DAG     | `ApplyW3TapInterfaces` (already W3-owned in v1.0 per ADRs 0012/0014)                                          | (covered by existing W3 audit kinds, not SpawnRunner) |
 | `microvm-setup@.service`                               | Retired in P6     | Subsumed into daemon host-prep DAG (per ADR 0015 § Decision); no replacement needed                          | n/a |
 | `microvm-pci-devices@.service`                         | Host-prep DAG     | `ApplyDeviceCgroup` (per-VM PCI passthrough device ACL via daemon-owned cgroup device controller)            | (covered by existing host-prep audit kinds) |
-| `microvm-set-booted@.service`                          | Daemon-RPC + broker write-once | In-broker write-once on Hypervisor `SpawnSucceeded`; broker hands `(vm, generation, pidfd)` triple to nixlingd; nixlingd is the **single writer** of boot-counter state; accepts the update iff `(vm, generation)` matches the currently-owned Hypervisor pidfd; atomic compare-and-set after readiness validation (see "set-booted race-free serialization" below) | `DaemonStateUpdated` (nixlingd-side) + `SpawnSucceeded` (broker-side) |
-| `nixling-known-hosts-refresh@.service`                 | Retired in P6     | Daemon emits known-hosts on bundle apply (per ADR 0015 § Decision); no replacement needed                    | n/a |
-| `nixling-net-route-preflight.service`                  | Retired in P6     | Folded into daemon host-prep DAG `RoutePreflight` op (per ADR 0014); no separate unit                        | n/a |
-| `nixling-audit-check.{service,timer}`                  | Retired in P6     | Daemon-owned audit pipeline (per ADR 0010 § audited broker read path); no separate unit                      | n/a |
-| `nixling-ch-exporter.service`                          | Retired in P6     | Retired entirely (per ADR 0015 § Decision). The transitional ACL-refresh remnant in `host-otel-relay-acl.nix:256` (the `g:nixling-ch-exporter refresh_acl_set` call) is retired by v1.1-P6 as part of the ACL-script retirement | n/a |
+| `microvm-set-booted@.service`                          | Daemon-RPC + broker write-once | In-broker write-once on Hypervisor `SpawnSucceeded`; broker hands `(vm, generation, pidfd)` triple to d2bd; d2bd is the **single writer** of boot-counter state; accepts the update iff `(vm, generation)` matches the currently-owned Hypervisor pidfd; atomic compare-and-set after readiness validation (see "set-booted race-free serialization" below) | `DaemonStateUpdated` (d2bd-side) + `SpawnSucceeded` (broker-side) |
+| `d2b-known-hosts-refresh@.service`                 | Retired in P6     | Daemon emits known-hosts on bundle apply (per ADR 0015 § Decision); no replacement needed                    | n/a |
+| `d2b-net-route-preflight.service`                  | Retired in P6     | Folded into daemon host-prep DAG `RoutePreflight` op (per ADR 0014); no separate unit                        | n/a |
+| `d2b-audit-check.{service,timer}`                  | Retired in P6     | Daemon-owned audit pipeline (per ADR 0010 § audited broker read path); no separate unit                      | n/a |
+| `d2b-ch-exporter.service`                          | Retired in P6     | Retired entirely (per ADR 0015 § Decision). The transitional ACL-refresh remnant in `host-otel-relay-acl.nix:256` (the `g:d2b-ch-exporter refresh_acl_set` call) is retired by v1.1-P6 as part of the ACL-script retirement | n/a |
 
 **One-shot SpawnRunner lifecycle cleanup (Usbip*OneShot,
 SwtpmFlush, store-sync hook child if forked).** Every ephemeral
@@ -443,7 +443,7 @@ reaping, with the daemon as an observer:
      reap releases it so the cgroup leaf becomes truly empty.
      (Per `pidfd(2)` semantics, `close(pidfd)` does NOT reap;
      only `waitid`/`waitpid` does.)
-   - Read `nixling.slice/<vm>/<usbip-verb-id>/cgroup.events`
+   - Read `d2b.slice/<vm>/<usbip-verb-id>/cgroup.events`
      to verify `populated 0`. **Order matters (resolves R7
      kernel MEDIUM)**: the populated check happens AFTER the
      final reap because the WNOWAIT-pinned zombie itself counts
@@ -478,14 +478,14 @@ reaping, with the daemon as an observer:
      watchdog (configurable, default 30s) flags
      never-acked notifications via a `OneShotCompleteAckTimeout`
      audit event but does NOT block the broker. The Rust DTO
-     (lands in `packages/nixling-contracts/src/broker_wire.rs` in
+     (lands in `packages/d2b-contracts/src/broker_wire.rs` in
      v1.1-P10):
 
      ```rust
-     // packages/nixling-contracts/src/broker_wire.rs (v1.1-P10 addition)
+     // packages/d2b-contracts/src/broker_wire.rs (v1.1-P10 addition)
      //
      // Derive set matches the existing broker-wire enum convention
-     // (per `packages/nixling-contracts/src/broker_wire.rs` v1.0 HEAD):
+     // (per `packages/d2b-contracts/src/broker_wire.rs` v1.0 HEAD):
      // every wire DTO must derive Debug + Clone + PartialEq + Eq +
      // serde::Serialize + serde::Deserialize + schemars::JsonSchema.
      // The R9 rust reviewer flagged the earlier minimal Serialize/
@@ -512,7 +512,7 @@ reaping, with the daemon as an observer:
 
      The struct uses camelCase JSON keys (`runnerRole`,
      `runnerId`, `exitStatus`, `orphanKilled`,
-     `cleanupOutcome`) to match the existing nixling-contracts wire
+     `cleanupOutcome`) to match the existing d2b-contracts wire
      style (resolves R8 rust major); the enum variants
      serialize as kebab-case via `serde(rename_all)`. The
      ADR 0010 update for the new variant lands as part of
@@ -532,7 +532,7 @@ reaping, with the daemon as an observer:
 **Subreaper / SIGCHLD disposition (resolves R7 virt + kernel
 LOW + R8 virt cross-ADR conflict + R8 kernel LOW).** Neither
 broker NOR daemon sets `PR_SET_CHILD_SUBREAPER` for **SpawnRunner
-children**. This SUPERSEDES the v1.0 `nixlingd` PR_SET_CHILD_SUBREAPER
+children**. This SUPERSEDES the v1.0 `d2bd` PR_SET_CHILD_SUBREAPER
 clause in [ADR 0011 line 84](0011-cgroup-v2-delegation-and-pidfd-handoff.md):
 under v1.0, the daemon was the spawning process for many VM
 subprocesses and benefited from subreaper semantics for cleanup;
@@ -540,7 +540,7 @@ under v1.1's broker-is-parent model the daemon is NOT the
 spawning process for SpawnRunner children, so subreaper
 semantics would create cross-process reparenting that
 complicates the pidfd-table accounting. The v1.1 supersession
-is normative: v1.1+ `nixlingd` does NOT set
+is normative: v1.1+ `d2bd` does NOT set
 `PR_SET_CHILD_SUBREAPER` for SpawnRunner handling. (ADR 0011's
 v1.0 subreaper note remains accurate for the v1.0 source
 state; v1.1-P12 docs-polish adds an explicit "Superseded by
@@ -576,9 +576,9 @@ For this direct child the daemon contract is:
   fork → pidfd_open → SIGKILL → waitid sequence using
   `sigprocmask(SIG_BLOCK, &chld_set, ...)` and unblock after
   the explicit waitid completes.
-- The pidfs-probe code in `packages/nixlingd/src/startup.rs`
+- The pidfs-probe code in `packages/d2bd/src/startup.rs`
   (future, v1.1-P10) implements the SIGCHLD-block-around-probe
-  pattern; the test `packages/nixlingd/tests/pidfs_probe.rs`
+  pattern; the test `packages/d2bd/tests/pidfs_probe.rs`
   asserts the helper child is NOT auto-reaped by a stray
   SIGCHLD handler.
 
@@ -600,7 +600,7 @@ when the test injects a process into the leaf, AND the
 **Virtiofsd wedge detection.** A pidfd becomes readable only when
 the process exits; it does not detect wedges, uninterruptible-I/O
 hangs, or no-longer-servicing-FUSE-requests states. Replacing
-`nixling-vfsd-watchdog@.{service,timer}` therefore requires a
+`d2b-vfsd-watchdog@.{service,timer}` therefore requires a
 broker-owned **active liveness probe** inside the `Virtiofsd`
 SpawnRunner role: a periodic FUSE ping (or timeout-bounded `stat`
 on a sentinel path within the share) with a configurable threshold.
@@ -610,14 +610,14 @@ leaf-kills the virtiofsd cgroup, and restarts per the
 *secondary* signal (process-exit notification) but is not
 authoritative for wedge detection. If the active probe cannot be
 landed in v1.1-P7, the alternative is to keep the existing
-`nixling-vfsd-watchdog@.timer` until v1.2; the v1.1 plan landing
+`d2b-vfsd-watchdog@.timer` until v1.2; the v1.1 plan landing
 order MUST commit to one of these two paths before P7 begins.
 
 **Kernel modules + `modules_disabled` parity.** Upstream
 `microvm.nix` derives a `kernelModules` requirement matrix for each
 VM (built-in vs loadable; whether the host kernel currently has the
 module loaded). [ADR 0014](0014-w3-modules-devices-runner-shape.md)
-requires that nixling's host-check + runner-shape preflight consume
+requires that d2b's host-check + runner-shape preflight consume
 this matrix AND fail closed under `kernel.modules_disabled=1`. v1.1
 must reproduce the matrix end-to-end. The parity gate compares the
 full ADR 0014 contract, not just the module-name list:
@@ -630,7 +630,7 @@ full ADR 0014 contract, not just the module-name list:
   behaviour under `modules_disabled=1`), and any associated
   sysctls (e.g. `net.bridge.bridge-nf-call-iptables=0` for the
   br_netfilter coexistence per ADR 0013).
-- `packages/nixling-core/src/host_check.rs` continues to consume
+- `packages/d2b-core/src/host_check.rs` continues to consume
   the lists without modification.
 - New parity gate `tests/kernel-modules-parity-eval.sh`
   (future, v1.1-P9a) compares the v1.0 (microvm.nix-derived) and
@@ -638,13 +638,13 @@ full ADR 0014 contract, not just the module-name list:
   example VM:
   - **Set-equality** on `requiredKernelModules` AND
     `optionalKernelModules` (ordering ignored because nothing in
-    nixling source consumes list order for module loading — verified
-    by `rg -nE 'kernel_modules|kernelModules' packages/nixling-core/src/`
+    d2b source consumes list order for module loading — verified
+    by `rg -nE 'kernel_modules|kernelModules' packages/d2b-core/src/`
     showing only iteration patterns at HEAD `4b5274b` — in particular
     `for module in &host.kernel_modules` at
-    `packages/nixling-core/src/host_check.rs:541`, indexed iteration
+    `packages/d2b-core/src/host_check.rs:541`, indexed iteration
     at `host_check.rs:659,662,993,994`, struct definition at
-    `packages/nixling-core/src/host.rs:115` (no order-sensitive
+    `packages/d2b-core/src/host.rs:115` (no order-sensitive
     consumers found).
   - **Per-module attribute equality** on requirement class,
     load-fail-if-locked policy, and sysctl-association — these
@@ -661,12 +661,12 @@ full ADR 0014 contract, not just the module-name list:
 ### set-booted race-free serialization
 
 The retired
-`microvm-set-booted@<vm>.service` wrote `/var/lib/nixling/vms/<vm>/booted`
+`microvm-set-booted@<vm>.service` wrote `/var/lib/d2b/vms/<vm>/booted`
 on systemd "boot reached" notification. The v1.1 replacement
 splits the write into a **broker side** (in-process write-once on
 `Hypervisor` `SpawnSucceeded` reaching the documented readiness
 condition) and a **daemon side** (single writer of the boot-counter
-state under `/var/lib/nixling/vms/<vm>/state.json`). The two
+state under `/var/lib/d2b/vms/<vm>/state.json`). The two
 sides interlock as follows:
 
 - Broker holds a per-`(vm, hypervisor-generation)` pidfd from the
@@ -711,14 +711,14 @@ sides interlock as follows:
      `boot.kernelPackages` derivation).
 
      **Defence-in-depth runtime probe.** At daemon startup
-     `nixlingd` runs a self-probe to confirm pidfs is supported
+     `d2bd` runs a self-probe to confirm pidfs is supported
      on the host kernel. The probe:
      1. Forks a short-lived **helper child** (`fork() + immediate
         `pause()`); the child is reaped by the daemon as part of
         the probe's cleanup. The helper child's PID is
         DIFFERENT from `getpid()` by construction (a fresh PID
         from the kernel) — this avoids the failure mode where
-        `nixlingd` is itself PID 1 in its visible namespace
+        `d2bd` is itself PID 1 in its visible namespace
         (e.g., when running inside an init-less container)
         and "PID 1" would be `getpid()` rather than an
         unrelated process. (The R6 kernel reviewer flagged
@@ -911,7 +911,7 @@ The race window the v1.0 systemd path implicitly closed (boot
 notification arriving after the VM was already restarted) is
 explicitly closed by the generation + pidfd-equality + CAS
 trio. The contract is tested by
-`packages/nixlingd/tests/booted_notify_race.rs` (future,
+`packages/d2bd/tests/booted_notify_race.rs` (future,
 v1.1-P10) which exercises:
 - Stale generation (broker delivers `BootedNotify` from
   generation N after daemon already owns generation N+1) →
@@ -948,23 +948,23 @@ in `nixos-modules/host.nix` is removed in v1.1-P11 because
 `microvms.target` itself ceases to exist when the upstream module
 is no longer imported. **Note on systemd ordering.** Removing
 `microvms.target` does NOT remove any security-relevant ordering
-because nixling's reconcile / runner ordering was already
+because d2b's reconcile / runner ordering was already
 DAG/broker-op ordered in v1.0 (not systemd-target ordered) per
 [ADR 0013](0013-w3-firewall-coexistence-policy.md) and
 [ADR 0014](0014-w3-modules-devices-runner-shape.md). Specifically:
 every `SpawnRunner` call requires the host-prep DAG to have
 completed `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`,
 `ApplyBridgePortFlags`, and `ApplyW3TapInterfaces` before the
-runner starts; the DAG ordering is enforced inside `nixlingd` and
+runner starts; the DAG ordering is enforced inside `d2bd` and
 audited via the host-prep `OpAuditRecord` kinds.
 
 The broker service already exists at v1.0 HEAD as
 [`nixos-modules/host-broker.nix`](../../nixos-modules/host-broker.nix);
-the unit declares `requires = [ "nixling-priv-broker.socket" ]`
-and `after = [ "nixling-priv-broker.socket" "local-fs.target" ]`
+the unit declares `requires = [ "d2b-priv-broker.socket" ]`
+and `after = [ "d2b-priv-broker.socket" "local-fs.target" ]`
 plus socket activation. v1.1-P4's work is to make this module
 the default-on path (currently gated behind
-`nixling.daemonExperimental.enable`) and diagnose the
+`d2b.daemonExperimental.enable`) and diagnose the
 manual-spawn workaround the v1.0 closeout side-task used (the
 runtime bring-up gap, not the unit definition). Ordering against
 nftables / NM / sysctl is enforced inside the broker IPC
@@ -973,43 +973,43 @@ contract, not the systemd unit dependency graph.
 ### Host-OTel ACL migration table (derived from `nixos-modules/host-otel-relay-acl.nix:251-256`)
 
 `nixos-modules/host-otel-relay-acl.nix` (retired in v1.1-P6
-together with the `nixling-otel-relay@<vm>.service` +
-`nixling-otel-host-bridge.service` units) refreshes ACLs via four
+together with the `d2b-otel-relay@<vm>.service` +
+`d2b-otel-host-bridge.service` units) refreshes ACLs via four
 live `refresh_acl_set` calls plus a vestigial fifth call for
-`nixling-ch-exporter` (transitional remnant). The table below is
+`d2b-ch-exporter` (transitional remnant). The table below is
 derived directly from the source at HEAD `00b24c5`; every grant
 listed in the source MUST have a v1.1 replacement before the
 script can be removed.
 
-State root path used by the ACL refresher: `/var/lib/nixling/vms/`
+State root path used by the ACL refresher: `/var/lib/d2b/vms/`
 (per `host-otel-relay-acl.nix` `state_root` resolution). Per-VM
-state dirs are `/var/lib/nixling/vms/<vm>/` at mode `0750`
-nixling:nixling (set by the v1.1-P5 perms tightening that reverts
+state dirs are `/var/lib/d2b/vms/<vm>/` at mode `0750`
+d2b:d2b (set by the v1.1-P5 perms tightening that reverts
 the 0755 workaround). Each sidecar group ACL grant requires
 `--x` traversal on this parent dir for the group to reach the
 nested target — these traversal grants are also listed below.
 
 | Source ref                                                  | Path / socket pattern                                                  | Grantee group(s)                       | Mode  | v1.1 replacement                                                                                                            |
 |-------------------------------------------------------------|------------------------------------------------------------------------|----------------------------------------|-------|-----------------------------------------------------------------------------------------------------------------------------|
-| `:251` `refresh_acl_set "g:nixling-otel-relay" relay_listener_keep_dirs ... rwx` | Per-VM workload listener dir `/var/lib/nixling/vms/<workload-vm>/`     | `g:nixling-otel-relay`                 | `rwx` + default ACL | `OtelGuestRelay` SpawnRunner broker pre-spawn ops: `MkdirSetown{path: state_dir, owner: nixling-otel-relay, mode: 0700}` + create listener socket directly under daemon-owned cgroup |
-| `:251` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/nixling/vms/<workload-vm>/vsock.sock_<port>` | `g:nixling-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints socket FD via `socketpair()` / vsock bind + hands to relay child via `SCM_RIGHTS`; no on-disk ACL needed |
-| `:252` `refresh_acl_set "g:nixling-otel-relay" relay_stack_keep_dirs ... --x` | Obs-stack VM state dir `/var/lib/nixling/vms/<obs-vm>/`                | `g:nixling-otel-relay`                 | `--x` (traverse only) | `OtelGuestRelay` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: nixling-otel-relay}` op (no default ACL — explicit single-grant) |
-| `:252` `refresh_acl_set ... "vsock.sock"` (stack base, rw)  | Obs-stack base socket `/var/lib/nixling/vms/<obs-vm>/vsock.sock`        | `g:nixling-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints connector FD (CH textual protocol) + hands to relay child via `SCM_RIGHTS`; OR (alternative) broker pre-spawn `SetfaclSocket{path, group, mode: rw}` op |
-| `:253` `refresh_acl_set "g:kvm" relay_listener_keep_dirs ... --x` | Per-VM workload listener dir `/var/lib/nixling/vms/<workload-vm>/`     | `g:kvm`                                | `--x` (traverse only) | `Hypervisor` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: kvm}` op (kvm group is the CH proxy user, needs `--x` to reach the listener socket the relay binds) |
-| `:253` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/nixling/vms/<workload-vm>/vsock.sock_<port>` | `g:kvm`                                | `--x` (connect-only) | `Hypervisor` SpawnRunner accepts the FD from `OtelGuestRelay` over `SCM_RIGHTS`; no on-disk ACL needed |
-| `:254` `refresh_acl_set "g:nixling-otel-bridge" bridge_keep_dirs ... rwx` | Bridge state dir `/var/lib/nixling/vms/<obs-vm>/` (bridge mode)        | `g:nixling-otel-bridge`                | `rwx` + default ACL | `OtelHostBridge` SpawnRunner broker pre-spawn `MkdirSetown{path: bridge_state_dir, owner: nixling-otel-bridge, mode: 0700}` op |
-| `:254` `refresh_acl_set ... "vsock.sock"`                   | Bridge base socket `/var/lib/nixling/vms/<obs-vm>/vsock.sock`           | `g:nixling-otel-bridge`                | `rw`  | `OtelHostBridge` SpawnRunner mints connector FD + hands to bridge child via `SCM_RIGHTS` |
-| **Parent-dir traversal — new in v1.1**                      | `/var/lib/nixling/vms/<vm>/` parent (0750 after v1.1-P5)               | `g:nixling-otel-relay`, `g:nixling-otel-bridge`, `g:kvm` | `--x` (traverse only) | Daemon-owned activation script (v1.1-P5) grants `--x` ACL to each enumerated sidecar group on every per-VM parent dir; v1.1-P5 owns the activation-script change, v1.1-P6 wires the ACL grants for the OTel groups specifically |
-| `:256` `refresh_acl_set "g:nixling-ch-exporter" ch_keep_dirs ... "%VM%.sock"` (RETIRED) | `nixling-ch-exporter` group ACL refresh (transitional remnant of P6-deleted `nixling-ch-exporter.service`) | `g:nixling-ch-exporter`                | (variable) | Retired entirely by v1.1-P6 (no replacement; the underlying `nixling-ch-exporter` service was already retired in P6 per ADR 0015; this ACL refresh is dead code waiting for the script's retirement) |
-| (defensive) `:138-148` pre-pass revoke of `g:nixling-otel-relay` / `g:nixling-otel-bridge` on per-VM `vsock.sock` (non-obs-stack) | Per-VM workload `vsock.sock` (NOT obs-stack) | (revoke `g:nixling-otel-relay`, `g:nixling-otel-bridge`) | (n/a — revoke) | `OtelHostBridge` / `OtelGuestRelay` SpawnRunner broker startup invokes the `RevokeSocketAclIfPresent{path, groups: [nixling-otel-relay, nixling-otel-bridge]}` broker op (catalogued as a **distinct broker op** in [`docs/reference/privileges.md`](../reference/privileges.md), NOT a state-mode of `SetSocketAcl`; the earlier "extending SetSocketAcl with state: \"absent\"" framing has been retired per the R5 networking review). Audit fields include the `socket_path_hash`, `groups_revoked`, and `acl_diff` shape per the privileges.md row |
+| `:251` `refresh_acl_set "g:d2b-otel-relay" relay_listener_keep_dirs ... rwx` | Per-VM workload listener dir `/var/lib/d2b/vms/<workload-vm>/`     | `g:d2b-otel-relay`                 | `rwx` + default ACL | `OtelGuestRelay` SpawnRunner broker pre-spawn ops: `MkdirSetown{path: state_dir, owner: d2b-otel-relay, mode: 0700}` + create listener socket directly under daemon-owned cgroup |
+| `:251` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/d2b/vms/<workload-vm>/vsock.sock_<port>` | `g:d2b-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints socket FD via `socketpair()` / vsock bind + hands to relay child via `SCM_RIGHTS`; no on-disk ACL needed |
+| `:252` `refresh_acl_set "g:d2b-otel-relay" relay_stack_keep_dirs ... --x` | Obs-stack VM state dir `/var/lib/d2b/vms/<obs-vm>/`                | `g:d2b-otel-relay`                 | `--x` (traverse only) | `OtelGuestRelay` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: d2b-otel-relay}` op (no default ACL — explicit single-grant) |
+| `:252` `refresh_acl_set ... "vsock.sock"` (stack base, rw)  | Obs-stack base socket `/var/lib/d2b/vms/<obs-vm>/vsock.sock`        | `g:d2b-otel-relay`                 | `rw`  | `OtelGuestRelay` SpawnRunner mints connector FD (CH textual protocol) + hands to relay child via `SCM_RIGHTS`; OR (alternative) broker pre-spawn `SetfaclSocket{path, group, mode: rw}` op |
+| `:253` `refresh_acl_set "g:kvm" relay_listener_keep_dirs ... --x` | Per-VM workload listener dir `/var/lib/d2b/vms/<workload-vm>/`     | `g:kvm`                                | `--x` (traverse only) | `Hypervisor` SpawnRunner broker pre-spawn `SetfaclTraverseOnly{path, group: kvm}` op (kvm group is the CH proxy user, needs `--x` to reach the listener socket the relay binds) |
+| `:253` `refresh_acl_set ... "vsock.sock_${obsOtlpPort}"`    | Per-VM listener socket `/var/lib/d2b/vms/<workload-vm>/vsock.sock_<port>` | `g:kvm`                                | `--x` (connect-only) | `Hypervisor` SpawnRunner accepts the FD from `OtelGuestRelay` over `SCM_RIGHTS`; no on-disk ACL needed |
+| `:254` `refresh_acl_set "g:d2b-otel-bridge" bridge_keep_dirs ... rwx` | Bridge state dir `/var/lib/d2b/vms/<obs-vm>/` (bridge mode)        | `g:d2b-otel-bridge`                | `rwx` + default ACL | `OtelHostBridge` SpawnRunner broker pre-spawn `MkdirSetown{path: bridge_state_dir, owner: d2b-otel-bridge, mode: 0700}` op |
+| `:254` `refresh_acl_set ... "vsock.sock"`                   | Bridge base socket `/var/lib/d2b/vms/<obs-vm>/vsock.sock`           | `g:d2b-otel-bridge`                | `rw`  | `OtelHostBridge` SpawnRunner mints connector FD + hands to bridge child via `SCM_RIGHTS` |
+| **Parent-dir traversal — new in v1.1**                      | `/var/lib/d2b/vms/<vm>/` parent (0750 after v1.1-P5)               | `g:d2b-otel-relay`, `g:d2b-otel-bridge`, `g:kvm` | `--x` (traverse only) | Daemon-owned activation script (v1.1-P5) grants `--x` ACL to each enumerated sidecar group on every per-VM parent dir; v1.1-P5 owns the activation-script change, v1.1-P6 wires the ACL grants for the OTel groups specifically |
+| `:256` `refresh_acl_set "g:d2b-ch-exporter" ch_keep_dirs ... "%VM%.sock"` (RETIRED) | `d2b-ch-exporter` group ACL refresh (transitional remnant of P6-deleted `d2b-ch-exporter.service`) | `g:d2b-ch-exporter`                | (variable) | Retired entirely by v1.1-P6 (no replacement; the underlying `d2b-ch-exporter` service was already retired in P6 per ADR 0015; this ACL refresh is dead code waiting for the script's retirement) |
+| (defensive) `:138-148` pre-pass revoke of `g:d2b-otel-relay` / `g:d2b-otel-bridge` on per-VM `vsock.sock` (non-obs-stack) | Per-VM workload `vsock.sock` (NOT obs-stack) | (revoke `g:d2b-otel-relay`, `g:d2b-otel-bridge`) | (n/a — revoke) | `OtelHostBridge` / `OtelGuestRelay` SpawnRunner broker startup invokes the `RevokeSocketAclIfPresent{path, groups: [d2b-otel-relay, d2b-otel-bridge]}` broker op (catalogued as a **distinct broker op** in [`docs/reference/privileges.md`](../reference/privileges.md), NOT a state-mode of `SetSocketAcl`; the earlier "extending SetSocketAcl with state: \"absent\"" framing has been retired per the R5 networking review). Audit fields include the `socket_path_hash`, `groups_revoked`, and `acl_diff` shape per the privileges.md row |
 
 **On `/run/alloy` path.** An earlier draft of this table referenced
 `/run/alloy/<vm>/` as the Alloy collector socket path. That was
 incorrect — at HEAD `74c36dc` the Alloy host RuntimeDirectory is
-`/run/nixling/alloy/` (per
+`/run/d2b/alloy/` (per
 `nixos-modules/components/observability/host.nix:15`
-`alloyRuntimeDir = "/run/nixling/alloy"`; the `RuntimeDirectory =
-lib.mkAfter [ "nixling/alloy" ]` is set at line 286 with
+`alloyRuntimeDir = "/run/d2b/alloy"`; the `RuntimeDirectory =
+lib.mkAfter [ "d2b/alloy" ]` is set at line 286 with
 `RuntimeDirectoryMode = "0710"` at line 287) with no per-VM nested
 directory. Any host-side Alloy socket access needed by the relay is
 currently granted via the `alloy` user/group declared in that file.
@@ -1024,11 +1024,11 @@ listener dir (sourced from `:253`, present in v1.0) and one on the
 per-VM parent dir (new in v1.1 from the parent-traversal row).
 These are **not redundant** under the v1.1-P5 0750 promotion:
 - The `:253`-sourced grant is on the *listener* dir
-  `/var/lib/nixling/vms/<workload-vm>/`, which is the same path
+  `/var/lib/d2b/vms/<workload-vm>/`, which is the same path
   as the parent dir for *that* VM. The two rows are duplicates
   for the workload-VM case.
 - For the *obs-stack* VM, only the `:252` `--x` traverse grant
-  to `g:nixling-otel-relay` exists in v1.0 source; `g:kvm` has
+  to `g:d2b-otel-relay` exists in v1.0 source; `g:kvm` has
   no v1.0 grant on the obs-stack dir. The parent-traversal row
   in v1.1 adds `g:kvm --x` to **every** per-VM parent dir
   uniformly so that the v1.1-P5 0750-tightened dir does not
@@ -1046,27 +1046,27 @@ in v1.1-P6.
 **Trigger for ACL refresh after script retirement.** Once
 `host-otel-relay-acl.nix` is removed in v1.1-P6, the historic
 on-`nixos-rebuild switch` ACL refresh cadence (the script was
-invoked from `system.activationScripts.nixlingOtelAcls`) is
+invoked from `system.activationScripts.d2bOtelAcls`) is
 replaced by two coordinated trigger points:
 
 1. **NixOS activation-script (every `nixos-rebuild switch`)** —
-   v1.1-P6 lands a new `system.activationScripts.nixlingReconcileOtelAcls`
+   v1.1-P6 lands a new `system.activationScripts.d2bReconcileOtelAcls`
    step that runs on every switch (the same trigger cadence the
    retired script used; this preserves operator expectations).
-   The activation script invokes `nixling host reconcile-otel-acls
-   --apply` (a new CLI verb gated on `nixling.daemonExperimental.enable`
+   The activation script invokes `d2b host reconcile-otel-acls
+   --apply` (a new CLI verb gated on `d2b.daemonExperimental.enable`
    being false-or-absent per v1.1-P4, AND on the daemon being
    reachable; if the daemon is unreachable during early activation,
    the script defers the reconcile to the daemon's startup path
    below). This trigger is REQUIRED (not `ExecStartPost` on
-   `nixlingd.service`) because **`nixlingd.service` is
+   `d2bd.service`) because **`d2bd.service` is
    `restartIfChanged = false`** at `nixos-modules/host-daemon.nix:154`
    per the v1.0 daemon-lifecycle invariant — restarting the
    daemon on every switch would interrupt every running VM. An
    `ExecStartPost` on a service that does not restart would not
    reliably fire on `nixos-rebuild switch`, defeating the trigger.
 
-2. **Daemon-startup reconcile** —  `nixlingd.service`
+2. **Daemon-startup reconcile** —  `d2bd.service`
    `ExecStartPost=` invokes a daemon RPC
    `daemon-api/host-prep ReconcileOtelAcls` on the daemon's OWN
    startup (which happens on system boot, NOT on every switch
@@ -1078,7 +1078,7 @@ replaced by two coordinated trigger points:
    `OtelHostBridge` SpawnRunner emits the ACL grants as
    pre-launch broker ops (the table-row replacements above). This
    handles the case where an operator runs
-   `nixling vm start --apply` after a state-dir reset without a
+   `d2b vm start --apply` after a state-dir reset without a
    full daemon restart, AND it is the SINGLE source-of-truth
    for per-spawn ACL state.
 
@@ -1087,12 +1087,12 @@ review's underspecification finding): the activation-time and
 daemon-startup reconciles (triggers 1 + 2) establish the
 **baseline** ACL set covering ALL declared **AND enabled** VMs
 in the bundle — i.e., every VM where
-`nixling.vms.<vm>.enable = true`, **whether currently running
+`d2b.vms.<vm>.enable = true`, **whether currently running
 or not**. For an enabled-but-stopped VM the state-dir
-`/var/lib/nixling/vms/<vm>/` still exists (created by the
+`/var/lib/d2b/vms/<vm>/` still exists (created by the
 v1.1-P5 perms-tightening activation step), and the reconcile
 applies the parent-dir traversal ACLs + any per-VM static ACL
-grants. **VMs with `nixling.vms.<vm>.enable = false` are
+grants. **VMs with `d2b.vms.<vm>.enable = false` are
 explicitly EXCLUDED from the reconcile**: their state-dirs may
 or may not exist depending on whether the operator declared
 the VM in a previous generation, but the ACL reconcile does
@@ -1141,16 +1141,16 @@ firewall interaction.
 **Activation-script wiring contract (v1.1-P6 implementation
 spec).** The R6 networking reviewer correctly flagged that the
 current v1.0 source still wires
-`system.activationScripts.nixlingOtelSocketAcls` to the legacy
-`nixling-otel-acl-refresh` bash helper. v1.1-P6 lands a
+`system.activationScripts.d2bOtelSocketAcls` to the legacy
+`d2b-otel-acl-refresh` bash helper. v1.1-P6 lands a
 **replacement** activation step
-`system.activationScripts.nixlingReconcileOtelAcls` with the
+`system.activationScripts.d2bReconcileOtelAcls` with the
 following concrete behaviour. The probe path uses a **minimal
 daemon-socket connect check** (NOT the full `host doctor`,
 which has many sub-checks for broker / metrics / runner /
 module / autostart — a metrics-endpoint failure should NOT
 soft-defer the ACL reconcile per the R7 networking review).
-The probe invokes `nixling host reconcile-otel-acls --apply
+The probe invokes `d2b host reconcile-otel-acls --apply
 --json` directly and inspects the typed envelope. **Envelope
 shape** (per the v1.0 source-of-truth at
 [`tests/golden/cli-output/host-check-daemon-down.json`](../../tests/golden/cli-output/host-check-daemon-down.json)
@@ -1166,20 +1166,20 @@ v1.0 envelope shape):
 
 ```nix
 # nixos-modules/host-otel-reconcile-acls.nix (future, v1.1-P6)
-system.activationScripts.nixlingReconcileOtelAcls = {
+system.activationScripts.d2bReconcileOtelAcls = {
   text = ''
     set +e  # don't abort activation on daemon-down
 
-    SCRATCH=$(mktemp /run/nixling/activation-reconcile-XXXXXX.json)
+    SCRATCH=$(mktemp /run/d2b/activation-reconcile-XXXXXX.json)
     trap 'rm -f "$SCRATCH"' EXIT
 
-    ${nixlingCli}/bin/nixling host reconcile-otel-acls --apply --json \
+    ${d2bCli}/bin/d2b host reconcile-otel-acls --apply --json \
       > "$SCRATCH" 2>&1
     rc=$?
 
     # Parse the JSON envelope's top-level `code` field via the
     # daemon's own jq subset.
-    err_code=$(${nixlingCli}/bin/nixling-activation-jq \
+    err_code=$(${d2bCli}/bin/d2b-activation-jq \
       -r '.code // empty' < "$SCRATCH" 2>/dev/null)
 
     case "$rc:$err_code" in
@@ -1188,15 +1188,15 @@ system.activationScripts.nixlingReconcileOtelAcls = {
         ;;
       1:daemon-down)
         # SOFT defer — daemon-startup ExecStartPost will pick it up
-        printf 'nixling: daemon not reachable during activation; ' >&2
-        printf 'OTel ACL reconcile deferred to nixlingd startup\n' >&2
+        printf 'd2b: daemon not reachable during activation; ' >&2
+        printf 'OTel ACL reconcile deferred to d2bd startup\n' >&2
         exit 0
         ;;
       *)
         # HARD failure — any other non-zero exit OR unrecognized
         # envelope code. Operator sees the typed envelope in stderr
         # and can re-run after fixing the underlying issue.
-        printf 'nixling: OTel ACL reconcile FAILED at activation: ' >&2
+        printf 'd2b: OTel ACL reconcile FAILED at activation: ' >&2
         cat "$SCRATCH" >&2
         exit 1
         ;;
@@ -1206,29 +1206,29 @@ system.activationScripts.nixlingReconcileOtelAcls = {
 };
 ```
 
-**`nixling-activation-jq` provisioning** (resolves R8 networking
-major). `nixling-activation-jq` is NOT a separate binary; it
-is a thin wrapper shipped INSIDE the `nixlingCli` Nix derivation
+**`d2b-activation-jq` provisioning** (resolves R8 networking
+major). `d2b-activation-jq` is NOT a separate binary; it
+is a thin wrapper shipped INSIDE the `d2bCli` Nix derivation
 (same package, sibling bin) that invokes a vendored Go-based
 `gojq` (or a similar pure-Go jq replacement). v1.1-P6 lands the
 wrapper as a flake-output package addition:
 
 ```nix
-# packages/nixling/Cargo.toml or sibling nixlingCli derivation
+# packages/d2b/Cargo.toml or sibling d2bCli derivation
 # v1.1-P6 adds:
-nixling-activation-jq = pkgs.writeShellScriptBin "nixling-activation-jq" ''
+d2b-activation-jq = pkgs.writeShellScriptBin "d2b-activation-jq" ''
   exec ${pkgs.gojq}/bin/gojq "$@"
 '';
-# And the nixlingCli package exports both bins:
+# And the d2bCli package exports both bins:
 postInstall = ''
-  ln -s ${nixling-activation-jq}/bin/nixling-activation-jq $out/bin/
+  ln -s ${d2b-activation-jq}/bin/d2b-activation-jq $out/bin/
 '';
 ```
 
-The wrapper is named `nixling-activation-jq` (not `jq` or `gojq`)
+The wrapper is named `d2b-activation-jq` (not `jq` or `gojq`)
 so it does not shadow operator-installed jq on the host PATH.
 The eval gate `tests/host-otel-acl-activation-eval.sh` asserts
-the binary exists at `${nixlingCli}/bin/nixling-activation-jq`
+the binary exists at `${d2bCli}/bin/d2b-activation-jq`
 AND that its output for a fixture envelope matches `.code`
 extraction. The vendored gojq is provisioned from the
 flake-pinned nixpkgs input (per the no-bash gate's flake-pinned
@@ -1241,7 +1241,7 @@ The activation script distinguishes two failure modes:
   soft-defer predicate is the **exit 1 + top-level `.code` field
   match**, NEVER `.kind`). Activation exits 0 with a
   stderr message; the daemon-startup `ExecStartPost=` trigger
-  picks up the reconcile when `nixlingd` starts.
+  picks up the reconcile when `d2bd` starts.
   `nixos-rebuild switch` succeeds.
 - **Daemon-reachable but reconcile errored (hard failure)**:
   any other non-zero exit (including `#broker-validation-failed`
@@ -1253,18 +1253,18 @@ The activation script distinguishes two failure modes:
 **Scratch-file cleanup**: the `trap 'rm -f "$SCRATCH"' EXIT`
 removes the temp file on all exit paths (success, soft-defer,
 hard-failure). The previous draft used static
-`/run/nixling/.activation-{doctor-probe,reconcile}.json` paths
+`/run/d2b/.activation-{doctor-probe,reconcile}.json` paths
 that leaked on success; the v1.1-P6 spec uses `mktemp` +
-trap-on-EXIT cleanup so no stale state remains in `/run/nixling`.
+trap-on-EXIT cleanup so no stale state remains in `/run/d2b`.
 
 **The `deps = [ "users" "specialfs" "etc" ]` ordering** uses
 canonical NixOS activation-script names (NOT systemd unit
 names — the R6 networking reviewer correctly flagged the prior
-`"nixling-priv-broker-socket"` value as the wrong shape).
+`"d2b-priv-broker-socket"` value as the wrong shape).
 `users` + `specialfs` + `etc` are the standard pre-requisites
 that ensure user/group creation, `/proc`/`/sys` mounting, and
 `/etc/nixos` materialization are complete before the
-`nixling-priv-broker.socket` activation step (which lives
+`d2b-priv-broker.socket` activation step (which lives
 under systemd, not under activation-scripts). The activation
 script does NOT directly depend on the broker socket; it
 treats `daemon-down` as a soft-defer, so socket-not-yet-ready
@@ -1280,7 +1280,7 @@ names not systemd unit names, soft-defer triggered by
 `.kind`, since `.kind` carries the broader envelope class
 `host-check-error` here, hard-failure on other errors,
 scratch-file cleanup via trap),
-AND that the v1.0 `system.activationScripts.nixlingOtelSocketAcls`
+AND that the v1.0 `system.activationScripts.d2bOtelSocketAcls`
 is no longer declared anywhere in the post-v1.1-P6 NixOS
 module set.
 
@@ -1328,7 +1328,7 @@ enumerated values, mirroring the `error-codes.md` catalog:
 Any future error kinds added by v1.1-Pn or later panel-approved
 changes MUST extend this enum AND the corresponding
 `error-codes.md` catalog entry; the audit-record schema in
-`packages/nixlingd/src/audit.rs` (future) declares the enum
+`packages/d2bd/src/audit.rs` (future) declares the enum
 with `#[serde(deny_unknown_fields)]` and `serde::Deserialize`
 that rejects unknown variants.
 
@@ -1338,7 +1338,7 @@ produced by `host-otel-relay-acl.nix` has a corresponding broker
 pre-spawn op (or SCM_RIGHTS handoff) in the v1.1 source. The test
 runs both code paths against a fixture VM (workload + obs-stack)
 and diffs the resulting effective ACL via `getfacl --absolute-names
--R /var/lib/nixling/vms/`. The diff must show only the
+-R /var/lib/d2b/vms/`. The diff must show only the
 intentional differences (revoked grants that v1.1 replaces with
 fd-passing); any unexplained drift fails the gate.
 
@@ -1351,23 +1351,23 @@ flake tagline is updated.
 
 ### Rust-source follow-through
 
-`packages/nixling/src/lib.rs` currently renders systemd-unit
+`packages/d2b/src/lib.rs` currently renders systemd-unit
 status output keyed on **six** per-VM systemd units, not just
 `microvm@*` and `microvm-virtiofsd@*`. The full inventory at HEAD
 `4b5274b`, derived from
-`grep -nE 'StatusServicesOutputV2|systemctl_state' packages/nixling/src/lib.rs`:
+`grep -nE 'StatusServicesOutputV2|systemctl_state' packages/d2b/src/lib.rs`:
 
 - `StatusServicesOutputV2` struct definition with six fields:
-  `nixling`, `microvm`, `virtiofsd`, `gpu` (Option), `snd`
+  `d2b`, `microvm`, `virtiofsd`, `gpu` (Option), `snd`
   (Option), `swtpm` (Option) at `lib.rs:99,112`.
 - `vm_service_states` (`lib.rs:3232-3243`) probes systemctl
   state for each of the six units per VM:
-  - `nixling@<vm>.service` (line 3235)
+  - `d2b@<vm>.service` (line 3235)
   - `microvm@<vm>.service` (line 3236)
   - `microvm-virtiofsd@<vm>.service` (line 3237)
-  - `nixling-<vm>-gpu.service` (line 3238, gated on `vm.graphics`)
+  - `d2b-<vm>-gpu.service` (line 3238, gated on `vm.graphics`)
   - `vm.audio_service` (line 3240-3241, gated on `vm.audio`)
-  - `nixling-<vm>-swtpm.service` (line 3242, gated on `vm.tpm`)
+  - `d2b-<vm>-swtpm.service` (line 3242, gated on `vm.tpm`)
 - `vm_counts_as_running` (`lib.rs:3275`) consumes the struct
   (must update to read broker-spawn role state).
 - `lib.rs:3389` formats `microvm@<vm> (backend): {state}` in the
@@ -1385,7 +1385,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
   above. Concrete rename map AND explicit Rust DTO type/cardinality
   spec (resolves the R4 rust review's "ambiguous field cardinality"
   finding):
-  - `nixling` → (DELETE — the per-VM `nixling@<vm>.service`
+  - `d2b` → (DELETE — the per-VM `d2b@<vm>.service`
     template was retired in P6 per ADR 0015; v1.0 source still
     probes it as a vestigial check, which v1.1-P10 removes).
   - `microvm` → `hypervisor: HypervisorState` (single per-VM
@@ -1394,7 +1394,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
   - `virtiofsd` → `virtiofsd: BTreeMap<ShareTag, VirtiofsdState>`
     (one entry per share, where `ShareTag` is a `String`).
     **Stable key contract**: the key is the share's `tag` field
-    from `nixling.vms.<vm>.runner.shares[].tag`, which v1.1-P8
+    from `d2b.vms.<vm>.runner.shares[].tag`, which v1.1-P8
     makes a REQUIRED + non-empty + unique field in the per-VM
     options schema (the v1.0 source allows array ordering as an
     implicit identifier; v1.1 makes `tag` the explicit stable
@@ -1407,7 +1407,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     duplicates in one round). The DTO uses `BTreeMap` (not
     `Vec`) so that JSON-output ordering is deterministic on
     the tag string. **Rust deserialization contract**: the
-    `nixling-core` crate provides a custom
+    `d2b-core` crate provides a custom
     `BTreeMap<ShareTag, VirtiofsdState>` deserializer that
     rejects duplicate JSON object keys with an explicit error
     (the stock `serde_json` deserializer silently allows
@@ -1416,7 +1416,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     a JSON array shape (`[{"tag":"a","..."},...]`) is REJECTED
     as the wrong shape, with a typed error pointing at the
     expected object shape. Tests in
-    `packages/nixling-core/tests/virtiofsd_state_dedup.rs`
+    `packages/d2b-core/tests/virtiofsd_state_dedup.rs`
     (future, v1.1-P10) cover both the duplicate-key JSON case
     and the wrong-shape-array case.
   - `gpu` → `gpu: Option<GpuState>` (per-VM, present iff
@@ -1431,7 +1431,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     field).
   - **New** `otel_relay: Option<OtelGuestRelayState>` — per-VM,
     present iff observability is enabled for the VM (per
-    `nixling.vms.<vm>.observability.enable` at HEAD).
+    `d2b.vms.<vm>.observability.enable` at HEAD).
   - **New** `otel_host_bridge: Option<OtelHostBridgeState>` —
     **host singleton** (NOT per-VM). The `StatusServicesOutputV2`
     type is currently per-VM-rendered; v1.1-P10 splits the
@@ -1481,7 +1481,7 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     canonical JSON schema regenerates to
     `docs/reference/cli-output/status.schema.json` (same path,
     new content) AND the schema's `$id` URI bumps to
-    `urn:nixling:status:v3` so consumer parsers can detect the
+    `urn:d2b:status:v3` so consumer parsers can detect the
     schema version by URI. The **schema drift gate** is the
     existing `cargo xtask gen-schemas` no-diff CI check (a
     dedicated `tests/schema-drift-eval.sh` does NOT exist at
@@ -1489,31 +1489,31 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     prior draft's reference to a non-existent file); the drift
     check is invoked as part of the standard `cargo xtask test`
     flow. The full `StatusOutputV3` Rust source path:
-    `packages/nixling/src/status_v3.rs` (new file in v1.1-P10,
-    following the `packages/nixling/src/` flat module convention
-    — see `ls packages/nixling/src/`). At v1.0 HEAD the
+    `packages/d2b/src/status_v3.rs` (new file in v1.1-P10,
+    following the `packages/d2b/src/` flat module convention
+    — see `ls packages/d2b/src/`). At v1.0 HEAD the
     `StatusServicesOutputV2` struct lives inline in `lib.rs`
     around lines 99-114; v1.1-P10 extracts it to a new
-    `packages/nixling/src/status_v2_compat.rs` file. To
+    `packages/d2b/src/status_v2_compat.rs` file. To
     preserve the existing `lib.rs::StatusServicesOutputV2`
     import path (which is referenced from
-    `packages/nixling/src/lib.rs` test modules + other call
+    `packages/d2b/src/lib.rs` test modules + other call
     sites), `lib.rs` adds `pub use status_v2_compat::StatusServicesOutputV2;`
     so the type is still reachable under both
-    `nixling::StatusServicesOutputV2` (compat alias) AND
-    `nixling::status_v2_compat::StatusServicesOutputV2`
+    `d2b::StatusServicesOutputV2` (compat alias) AND
+    `d2b::status_v2_compat::StatusServicesOutputV2`
     (canonical new path). No call-site rewrites needed (R8
     rust medium).
 
     **Dual-output CLI surface** (resolves R6 + R7 + R8 rust
     reviews). v1.1-P10 introduces a `--status-schema-version=2|3`
-    CLI flag on `nixling status`. **Clap placement spec**:
+    CLI flag on `d2b status`. **Clap placement spec**:
     the flag is declared on the existing `StatusArgs` struct
-    in `packages/nixling/src/lib.rs` (the `Args` body for the
+    in `packages/d2b/src/lib.rs` (the `Args` body for the
     `status` subcommand), NOT as a top-level CLI flag:
 
     ```rust
-    // packages/nixling/src/lib.rs (v1.1-P10 addition to StatusArgs)
+    // packages/d2b/src/lib.rs (v1.1-P10 addition to StatusArgs)
     #[derive(clap::Args, Debug, Clone)]
     pub struct StatusArgs {
         // ... existing v1.0 fields ...
@@ -1529,12 +1529,12 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
 
     The flag is StatusArgs-scoped (not top-level) so it does
     not pollute other subcommand surfaces. The selected version
-    is carried into `nixlingd` via the existing daemon-api
+    is carried into `d2bd` via the existing daemon-api
     `StatusRequest` envelope as a new `schema_version: u8`
     field (v1.1-P10 daemon-api update):
 
     ```rust
-    // packages/nixling-contracts/src/public_wire.rs (v1.1-P10 addition)
+    // packages/d2b-contracts/src/public_wire.rs (v1.1-P10 addition)
     //
     // Derive set matches existing public-wire DTO convention:
     // Debug + Clone + PartialEq + Eq + serde::Serialize +
@@ -1586,10 +1586,10 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
     of v1.1-P10. **One-time deprecation warning** (resolves R8
     product minor): when `--status-schema-version` is omitted
     (default 3), v1.1.0 emits a one-time stderr-only deprecation
-    warning the FIRST time `nixling status` runs in a shell
+    warning the FIRST time `d2b status` runs in a shell
     session, pointing operators at the v2 compatibility flag.
     The warning state is tracked via a marker file at
-    `~/.cache/nixling/.status-schema-v1.1-warned`; the warning
+    `~/.cache/d2b/.status-schema-v1.1-warned`; the warning
     fires once per user per host until v1.2 removes the flag.
     Schema goldens cover BOTH outputs:
     `tests/golden/cli-output/status-v2-{human,json}.golden`
@@ -1611,18 +1611,18 @@ two `microvm@*`/`microvm-virtiofsd@*` ones:
   - **New** `usbip_backend: BTreeMap<EnvName, UsbipBackendState>`
     + `usbip_proxy: BTreeMap<EnvName, UsbipProxyState>` (per-env,
     host section). `EnvName` is a `String` keyed by the env name
-    declared in `nixling.environments.<env>`. Empty map if no
+    declared in `d2b.environments.<env>`. Empty map if no
     env has USBIP enabled.
   - **Per-attach USBIP state** (`UsbipBindOneShot`, etc.) is
     transient and is NOT in `StatusServicesOutputV2`. The
-    `nixling usb status` CLI surface (NOT `nixling status`)
+    `d2b usb status` CLI surface (NOT `d2b status`)
     enumerates active per-attach sessions via a separate daemon
     RPC; the schema is owned by the USBIP component reference
     doc, not by the status-output schema.
 - Replace every `systemctl_state(...)` call in `vm_service_states`
   with a single daemon RPC `daemon-api/status QueryVmSpawnerSessions{vm}`
   that returns the active SpawnRunner-session state for every role.
-- Update the human-form `nixling status` rendering to read
+- Update the human-form `d2b status` rendering to read
   e.g. "hypervisor: running (broker-spawn)" instead of
   "microvm@<vm> (backend): {state}"; emit one line per active
   SpawnRunner role.
@@ -1829,12 +1829,12 @@ dependency we choose not to update.
 
 **Rejected** because:
 - Pinning does not eliminate the audit surface; every evaluated
-  module remains in nixling's NixOS module set.
-- Pinning does not eliminate the substrate friction; nixling still
+  module remains in d2b's NixOS module set.
+- Pinning does not eliminate the substrate friction; d2b still
   has to keep its read paths compatible with the pinned upstream
   shape.
 - Pinning carries a long-tail maintenance cost (CVE backports,
-  nixpkgs version skew) for no nixling-side benefit.
+  nixpkgs version skew) for no d2b-side benefit.
 
 ### A2. Replace `microvm.nix` with a different upstream microVM
 NixOS module (e.g. fork of microvm.nix)
@@ -1849,11 +1849,11 @@ NixOS module (e.g. fork of microvm.nix)
 for consumer compat
 
 Keep the `microvm.*` namespace as a deprecated alias that maps to
-the new `nixling.vms.<vm>.runner.*` tree.
+the new `d2b.vms.<vm>.runner.*` tree.
 
 **Rejected** because:
-- No consumer flake under nixling's control reads `microvm.*` —
-  the option tree is internal to nixling-the-framework.
+- No consumer flake under d2b's control reads `microvm.*` —
+  the option tree is internal to d2b-the-framework.
 - Aliasing adds duplicate-option-source confusion and complicates
   the eval gate that asserts no `microvm.*` remains.
 
@@ -1874,25 +1874,25 @@ Ship v1.1 without the microvm.nix removal.
 ### Positive
 
 - **Single source of truth.** Per-VM contract lives entirely under
-  `nixling.vms.<vm>.*`. Reviewers do not chase config across two
+  `d2b.vms.<vm>.*`. Reviewers do not chase config across two
   option namespaces.
-- **Tagline accuracy.** nixling stops claiming to be "on microvm.nix"
+- **Tagline accuracy.** d2b stops claiming to be "on microvm.nix"
   when its v1.0 architecture already owns every spawn path.
 - **Audit surface shrinkage.** Removing `inputs.microvm.nixosModules.host`
-  removes ~30 upstream submodules from nixling's evaluated module
+  removes ~30 upstream submodules from d2b's evaluated module
   set.
 - **Looser coupling to nixpkgs cadence.** No `microvm.nix` flake
   input means `nix flake update` no longer pulls upstream microvm
   rev bumps that change runner argv shape.
 - **Smaller flake.lock.** One fewer top-level node, plus its
-  transitive deps that nixling does not consume.
+  transitive deps that d2b does not consume.
 
 ### Negative
 
 - **Internal Nix code volume grows.** `vm-submodule.nix` is
   non-trivial; it re-implements the relevant upstream per-VM module
   evaluation. The migration tests guard against drift but the code
-  itself is now nixling's to maintain.
+  itself is now d2b's to maintain.
 - **Lifecycle audit-event surface must be reproduced in broker
   records.** Retired systemd units provided journal-level evidence
   for unit start/stop/exit/restart. Replacing them requires that
@@ -1907,11 +1907,11 @@ Ship v1.1 without the microvm.nix removal.
   fault-injection probe.
 - **One-time consumer-flake disruption.** Any consumer (none known
   in-tree) that overrode `microvm.vms.<vm>.config.*` directly must
-  migrate to `nixling.vms.<vm>.runner.*`. The v1.1 migration guide
-  (`docs/how-to/migrate-nixling-v1-0-to-v1-1.md`, future, v1.1-P12)
+  migrate to `d2b.vms.<vm>.runner.*`. The v1.1 migration guide
+  (`docs/how-to/migrate-d2b-v1-0-to-v1-1.md`, future, v1.1-P12)
   reproduces the full migration table above and lists every
-  retired upstream option with its nixling-owned counterpart.
-- **Lock-in to nixling-owned per-VM model.** Diverging from
+  retired upstream option with its d2b-owned counterpart.
+- **Lock-in to d2b-owned per-VM model.** Diverging from
   ecosystem conventions costs interop with other microvm-tooling
   (none currently consumed); the v1.0 daemon-only architecture
   already requires that divergence.
@@ -1936,7 +1936,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
 
 - `tests/processes-json-eval.sh` (future, v1.1-P8) compares the
   `bundle.json` produced by the v1.0 `microvm.*` reads against the
-  v1.1 `nixling.vms.*` reads on the same example bundle. The
+  v1.1 `d2b.vms.*` reads on the same example bundle. The
   comparison strategy is **canonical-JSON normalization**, not
   byte-for-byte raw diff:
   - Load both outputs; sort object keys recursively.
@@ -1975,7 +1975,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
     redaction (volatile-fields.json) applies to specific JSON
     pointers regardless of value shape. Runtime paths with
     volatile suffixes that are NOT Nix store paths (e.g.,
-    `/var/lib/nixling/runtime/<vm>/socket-12345.sock`) MUST be
+    `/var/lib/d2b/runtime/<vm>/socket-12345.sock`) MUST be
     listed in `bundle-json-volatile-fields.json` by JSON pointer
     — the store-path regex MUST NOT be relaxed to match them.
     The fixture set includes a negative test (a non-store path
@@ -2014,12 +2014,12 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
     activation step.
   - `config.systemd.tmpfiles.rules` (sorted).
   - `config.users.users` + `config.users.groups` (filtered to
-    nixling-relevant entries; system-default users are not
+    d2b-relevant entries; system-default users are not
     compared).
   - `config.fileSystems`.
   - `config.environment.etc.<path>.source` + `.text` + `.mode`
-    for every nixling-emitted entry.
-  - Every `nixling.vms.<vm>.runner.*` option's final
+    for every d2b-emitted entry.
+  - Every `d2b.vms.<vm>.runner.*` option's final
     `config.<runner-path>` value (the runner-adjacent options
     feeding `processes-json.nix`).
   Path-level normalization (see `processes-json-eval.sh` above)
@@ -2046,7 +2046,7 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   equivalent `OpAuditRecord` per the role-baseline + role-matrix
   tables.
 
-- `packages/nixlingd/tests/booted_notify_race.rs` (future, v1.1-P10)
+- `packages/d2bd/tests/booted_notify_race.rs` (future, v1.1-P10)
   asserts the set-booted race-free serialization contract per
   the spec above.
 

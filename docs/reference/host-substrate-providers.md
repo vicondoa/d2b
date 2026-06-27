@@ -2,7 +2,7 @@
 
 **Diataxis category:** reference.
 
-Host substrate providers report whether a host can run nixling workloads.
+Host substrate providers report whether a host can run d2b workloads.
 They do not mutate host state. Installation, package deployment, and
 network preparation remain explicit operator or broker-mediated actions.
 The underlying read-only probe model is described in
@@ -17,7 +17,7 @@ model is the same positive-assertion model documented in
 | `nixos-host-substrate` | NixOS hosts | Wraps the existing host-check report and advertises node capabilities only when the report has zero failures. |
 | `generic-linux-host-substrate` | Generic Linux/Ubuntu hosts | Uses the same host-check report contract as a dry-run capability surface. |
 
-Both adapters are backed by the existing `nixling-core::host_check`
+Both adapters are backed by the existing `d2b-core::host_check`
 findings:
 
 - failures become typed provider allocation errors that include the first

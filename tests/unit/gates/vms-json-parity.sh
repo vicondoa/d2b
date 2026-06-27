@@ -5,8 +5,8 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
-PLAN_MD=${NIXLING_PLAN_MD:-$ROOT/docs/adr/0026-native-signoz-observability.md}
-BASE_COMMIT=${NIXLING_VMS_BASELINE_COMMIT:-91d69b0}
+PLAN_MD=${D2B_PLAN_MD:-$ROOT/docs/adr/0026-native-signoz-observability.md}
+BASE_COMMIT=${D2B_VMS_BASELINE_COMMIT:-91d69b0}
 BASELINE_DIR=${BASELINE_DIR:-$ROOT/tests/golden}
 BASELINE_FIXTURE=${BASELINE_FIXTURE:-$BASELINE_DIR/vms.json-$BASE_COMMIT}
 
@@ -15,7 +15,7 @@ BASELINE_FIXTURE=${BASELINE_FIXTURE:-$BASELINE_DIR/vms.json-$BASE_COMMIT}
 
 cd "$ROOT"
 
-if [ ! -f packages/nixling-core/src/bundle.rs ] || [ ! -d docs/reference/schemas/v1 ]; then
+if [ ! -f packages/d2b-core/src/bundle.rs ] || [ ! -d docs/reference/schemas/v1 ]; then
   log "no W1 bundle schemas — skipping vms-json-parity (W1 unstaged)"
   exit 0
 fi
@@ -27,7 +27,7 @@ render_vms_json() {
   # the nix daemon when each runs its own nix-instantiate. Use the
   # shared smoke-render cache (already prewarmed serially by static.sh
   # before the parallel pool fires) instead of re-rendering.
-  if cached=$(nl_smoke_vms_json 2>/dev/null) && [ -s "$cached" ]; then
+  if cached=$(d2b_smoke_vms_json 2>/dev/null) && [ -s "$cached" ]; then
     cp -f -- "$cached" "$out"
     return 0
   fi
@@ -44,7 +44,7 @@ spec_correction_documented() {
     && grep -qiE 'vms\.json|manifestVersion' "$PLAN_MD"
 }
 
-scratch=$(nl_mktemp .vms-json-parity.XXXXXX)
+scratch=$(d2b_mktemp .vms-json-parity.XXXXXX)
 current_json=$scratch/current-vms.json
 diff_file=$scratch/vms.diff
 add_cleanup "rm -rf -- \"$scratch\""

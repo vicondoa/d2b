@@ -1,6 +1,6 @@
 # nix-unit cases migrated from tests/daemon-default-compat-eval.sh.
 #
-# Regression for the default of `nixling.daemonExperimental.enable`. In the
+# Regression for the default of `d2b.daemonExperimental.enable`. In the
 # daemon-only end state (ADR 0015) this is an obsolete compatibility option
 # that simply defaults `true`: it is no longer evidence-auto-flipped by the
 # `defaultSwitchReadiness` waves or by the per-wave evidence files under
@@ -29,12 +29,12 @@ let
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
@@ -59,15 +59,15 @@ let
     flipGateWaves);
 
   enableOf = extra:
-    (mkEval [ base extra ]).config.nixling.daemonExperimental.enable;
+    (mkEval [ base extra ]).config.d2b.daemonExperimental.enable;
 in
 {
   # Scenario 1: every wave implemented + validated. Default stays true.
   "daemon-default-compat/gate-green-all" = {
     expr = enableOf ({ ... }: {
-      nixling.daemonExperimental.defaultFlipEvidenceDir =
-        "/var/lib/nixling/validated";
-      nixling.defaultSwitchReadiness = allTrueReadiness;
+      d2b.daemonExperimental.defaultFlipEvidenceDir =
+        "/var/lib/d2b/validated";
+      d2b.defaultSwitchReadiness = allTrueReadiness;
     });
     expected = true;
   };
@@ -76,9 +76,9 @@ in
   # still defaults true.
   "daemon-default-compat/gate-red-readiness" = {
     expr = enableOf ({ ... }: {
-      nixling.daemonExperimental.defaultFlipEvidenceDir =
-        "/var/lib/nixling/validated";
-      nixling.defaultSwitchReadiness = allTrueButOneValidated;
+      d2b.daemonExperimental.defaultFlipEvidenceDir =
+        "/var/lib/d2b/validated";
+      d2b.defaultSwitchReadiness = allTrueButOneValidated;
     });
     expected = true;
   };
@@ -88,9 +88,9 @@ in
   # true (the default no longer reads evidence files).
   "daemon-default-compat/gate-red-evidence" = {
     expr = enableOf ({ ... }: {
-      nixling.daemonExperimental.defaultFlipEvidenceDir =
-        "/var/lib/nixling/validated-missing";
-      nixling.defaultSwitchReadiness = allTrueReadiness;
+      d2b.daemonExperimental.defaultFlipEvidenceDir =
+        "/var/lib/d2b/validated-missing";
+      d2b.defaultSwitchReadiness = allTrueReadiness;
     });
     expected = true;
   };
@@ -99,10 +99,10 @@ in
   # wins.
   "daemon-default-compat/override-false-wins-green" = {
     expr = enableOf ({ lib, ... }: {
-      nixling.daemonExperimental.defaultFlipEvidenceDir =
-        "/var/lib/nixling/validated";
-      nixling.daemonExperimental.enable = lib.mkForce false;
-      nixling.defaultSwitchReadiness = allTrueReadiness;
+      d2b.daemonExperimental.defaultFlipEvidenceDir =
+        "/var/lib/d2b/validated";
+      d2b.daemonExperimental.enable = lib.mkForce false;
+      d2b.defaultSwitchReadiness = allTrueReadiness;
     });
     expected = false;
   };
@@ -111,9 +111,9 @@ in
   # opts in via mkForce true. Operator wins.
   "daemon-default-compat/override-true-wins-red" = {
     expr = enableOf ({ lib, ... }: {
-      nixling.daemonExperimental.defaultFlipEvidenceDir =
-        "/var/lib/nixling/validated-empty";
-      nixling.daemonExperimental.enable = lib.mkForce true;
+      d2b.daemonExperimental.defaultFlipEvidenceDir =
+        "/var/lib/d2b/validated-empty";
+      d2b.daemonExperimental.enable = lib.mkForce true;
     });
     expected = true;
   };

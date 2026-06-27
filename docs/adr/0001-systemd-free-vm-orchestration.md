@@ -11,18 +11,18 @@
 > **v1.0 status note (per [ADR 0015](0015-daemon-only-clean-break.md)):**
 > The framework state this ADR's Context section describes is the
 > pre-P6 v0.4 baseline. v1.0 retired the per-VM
-> `nixling@<vm>.service` wrapper (pre-P6; retired in P6 per ADR 0015), the host-singleton bash dispatcher,
-> the `nixling-launcher` polkit allowlist, and the
-> `/run/nixling/locks/<vm>` filesystem lock; per-VM orchestration now
-> runs entirely in `nixlingd` with broker `SpawnRunner` + pidfd
+> `d2b@<vm>.service` wrapper (pre-P6; retired in P6 per ADR 0015), the host-singleton bash dispatcher,
+> the `d2b-launcher` polkit allowlist, and the
+> `/run/d2b/locks/<vm>` filesystem lock; per-VM orchestration now
+> runs entirely in `d2bd` with broker `SpawnRunner` + pidfd
 > handoff as the single-writer enforcement. ADR 0001's portability
-> decision (move per-VM orchestration into `nixlingd`) is the
+> decision (move per-VM orchestration into `d2bd`) is the
 > foundation; ADR 0015 documents the v1.0 clean-break completion.
 > The text below is preserved as historical record of the v0.4
 > baseline this ADR was responding to.
 
 The v0.4.0 baseline is a NixOS-host framework where the Nix module
-emits per-VM `microvm@<vm>.service`, wrapper `nixling@<vm>.service` (pre-P6; retired in P6 per ADR 0015),
+emits per-VM `microvm@<vm>.service`, wrapper `d2b@<vm>.service` (pre-P6; retired in P6 per ADR 0015),
 and framework-owned sidecar services for GPU, video, audio, swtpm,
 virtiofsd, store synchronization, and net VMs. AGENTS.md documents this
 as the current naming contract and calls out per-VM systemd services as
@@ -35,7 +35,7 @@ and `booted` symlinks plus `[pending restart]` output. The policy exists
 because restarting a sidecar can terminate Cloud Hypervisor and destroy
 session state, especially for graphics VMs.
 
-The portability plan moves per-VM orchestration into `nixlingd` while
+The portability plan moves per-VM orchestration into `d2bd` while
 retaining Nix as the producer of guest closures, manifests, runner
 metadata, and optional host bootstrap integration. This means systemd may
 remain an init mechanism for starting the daemon on NixOS or other hosts,
@@ -43,18 +43,18 @@ but it must no longer be the per-VM supervisor for daemon-owned VMs.
 
 The migration period must preserve single-writer semantics. The plan's
 required test families demand that daemon-owned VMs have no active
-matching per-VM `microvm@<vm>` or `nixling@<vm>` unit, that ownership is
+matching per-VM `microvm@<vm>` or `d2b@<vm>` unit, that ownership is
 declared in manifests, and that a filesystem lock prevents systemd and
-`nixlingd` from supervising the same VM concurrently.
+`d2bd` from supervising the same VM concurrently.
 
 ## Decision
 
 1. The product promise is "systemd-free VM orchestration", not "systemd-free installation everywhere".
-2. A daemon-owned VM produces no active `microvm@<vm>.service` or `nixling@<vm>.service` unit, and tests treat that as the orchestration ownership invariant (the wrapper unit was retired in P6 per ADR 0015, so daemon-owned VMs trivially satisfy this invariant in v1.0).
-3. `nixlingd`, legacy systemd entry points, and any transitional CLI path must acquire `/run/nixling/locks/<vm>` as the single-writer filesystem lock before mutating VM lifecycle state.
-4. NixOS may start `nixlingd` as a systemd service, non-NixOS hosts may use their native init for daemon bootstrap, and all per-VM orchestration for daemon-owned VMs runs inside `nixlingd`.
-5. Any framework-emitted unit that remains carries `restartIfChanged = false`, and `nixlingd` never auto-restarts a running child on config change because drift appears as `[pending restart]` in `nixling list` and `nixling status`.
-6. `nixlingd` updates the `booted` symlink atomically only after runner readiness, while `current` is updated only by explicit `nixling` activate flows or by NixOS activation in legacy mode.
+2. A daemon-owned VM produces no active `microvm@<vm>.service` or `d2b@<vm>.service` unit, and tests treat that as the orchestration ownership invariant (the wrapper unit was retired in P6 per ADR 0015, so daemon-owned VMs trivially satisfy this invariant in v1.0).
+3. `d2bd`, legacy systemd entry points, and any transitional CLI path must acquire `/run/d2b/locks/<vm>` as the single-writer filesystem lock before mutating VM lifecycle state.
+4. NixOS may start `d2bd` as a systemd service, non-NixOS hosts may use their native init for daemon bootstrap, and all per-VM orchestration for daemon-owned VMs runs inside `d2bd`.
+5. Any framework-emitted unit that remains carries `restartIfChanged = false`, and `d2bd` never auto-restarts a running child on config change because drift appears as `[pending restart]` in `d2b list` and `d2b status`.
+6. `d2bd` updates the `booted` symlink atomically only after runner readiness, while `current` is updated only by explicit `d2b` activate flows or by NixOS activation in legacy mode.
 
 ## Consequences
 
@@ -66,7 +66,7 @@ declared in manifests, and that a filesystem lock prevents systemd and
 
 ## Alternatives considered
 
-- Promise a completely systemd-free installation: rejected because NixOS and many non-NixOS hosts may still use systemd or another init to bootstrap `nixlingd`.
+- Promise a completely systemd-free installation: rejected because NixOS and many non-NixOS hosts may still use systemd or another init to bootstrap `d2bd`.
 - Keep per-VM systemd units as the daemon backend: rejected because it preserves systemd as the orchestrator and blocks the portability goal.
 - Auto-restart daemon children on manifest drift: rejected because it regresses the v0.4.0 session-state safety policy.
 - Rely only on manifest ownership without a runtime lock: rejected because migration modes need a kernel-enforced single-writer mechanism.

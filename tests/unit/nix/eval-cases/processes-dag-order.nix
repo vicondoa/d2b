@@ -15,8 +15,8 @@ let
       flake.nixosModules.default
       shared.baseModule
       ({ lib, ... }: {
-        nixling.observability.enable = true;
-        nixling.vms = lib.mkForce {
+        d2b.observability.enable = true;
+        d2b.vms = lib.mkForce {
           personal-dev = {
             enable = true;
             env = "work";
@@ -54,7 +54,7 @@ let
     ];
   };
 
-  dags = lib.listToAttrs (map (dag: lib.nameValuePair dag.vm dag) nixos.config.nixling._bundle.processesJson.data.vms);
+  dags = lib.listToAttrs (map (dag: lib.nameValuePair dag.vm dag) nixos.config.d2b._bundle.processesJson.data.vms);
   directDeps = dag: target:
     builtins.sort builtins.lessThan (
       map (edge: edge.from) (builtins.filter (edge: edge.to == target) dag.edges)

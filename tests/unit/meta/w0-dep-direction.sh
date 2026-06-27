@@ -4,9 +4,9 @@
 #
 # The constellation contract crates must stay codec-/transport-/host-neutral:
 #
-#   * nixling-constellation-core   — depends on NO other workspace crate and
+#   * d2b-constellation-core   — depends on NO other workspace crate and
 #                                    NOT on prost (pure, codec-neutral model).
-#   * nixling-constellation-provider, -router, -transport (when present) —
+#   * d2b-constellation-provider, -router, -transport (when present) —
 #                                    may depend only on the contract crate(s)
 #                                    listed below, and NOT on prost, a codec
 #                                    crate, a transport impl crate, or any
@@ -86,9 +86,9 @@ is_member() {
 }
 
 # External (non-member) crates a pure contract crate must never depend on.
-# nixling-priv-broker lives in a SEPARATE workspace (excluded from
+# d2b-priv-broker lives in a SEPARATE workspace (excluded from
 # packages/Cargo.toml), so it never appears in the member set — name it
-# explicitly, along with any other nixling-* host/daemon crate caught by the
+# explicitly, along with any other d2b-* host/daemon crate caught by the
 # glob in check_dep below.
 is_external_forbidden() {
   case "$1" in
@@ -99,15 +99,15 @@ is_external_forbidden() {
 
 # Classify one resolved dependency name against a pure crate's allowlist.
 # Forbidden iff it is NOT whitelisted and is any of: a workspace member
-# (catches nixling, xtask, the sibling contract crates), any `nixling`/
-# `nixling-*` crate (catches the separate-workspace nixling-priv-broker and
+# (catches d2b, xtask, the sibling contract crates), any `d2b`/
+# `d2b-*` crate (catches the separate-workspace d2b-priv-broker and
 # every host/daemon crate, member or not), or an external forbidden crate
 # (prost).
 check_dep() {
   local crate="$1" allowed="$2" dep="$3"
   case "$allowed" in *" $dep "*) return 0 ;; esac
   case "$dep" in
-    nixling | nixling-*)
+    d2b | d2b-*)
       violation "$crate declares forbidden workspace/host dependency '$dep' (dependency-direction violation)"
       return 0
       ;;
@@ -155,16 +155,16 @@ check_pure_crate() {
     | select(.kind != "dev") | .name')
 }
 
-# nixling-constellation-core: depends on no workspace crate, no prost.
-check_pure_crate nixling-constellation-core
-# nixling-constellation-provider: only the core contract crate.
-check_pure_crate nixling-constellation-provider nixling-constellation-core
-# nixling-constellation-router (s8): core + provider only, when it lands.
-check_pure_crate nixling-constellation-router \
-  nixling-constellation-core nixling-constellation-provider
-# nixling-constellation-transport (s5): trait/mock home; core + provider only.
-check_pure_crate nixling-constellation-transport \
-  nixling-constellation-core nixling-constellation-provider
+# d2b-constellation-core: depends on no workspace crate, no prost.
+check_pure_crate d2b-constellation-core
+# d2b-constellation-provider: only the core contract crate.
+check_pure_crate d2b-constellation-provider d2b-constellation-core
+# d2b-constellation-router (s8): core + provider only, when it lands.
+check_pure_crate d2b-constellation-router \
+  d2b-constellation-core d2b-constellation-provider
+# d2b-constellation-transport (s5): trait/mock home; core + provider only.
+check_pure_crate d2b-constellation-transport \
+  d2b-constellation-core d2b-constellation-provider
 
 # Prost stays confined to the protobuf codec crate (and a legitimate
 # peer-session encoder, none yet); the checks above assert it never reaches a

@@ -1,8 +1,8 @@
 # `minijail-profile.json` schema reference
 
-`minijail-profile.json` is the private sandbox profile catalog. It describes typed role profiles for `nixlingd`, broker-facing helpers, Cloud Hypervisor, sidecars, and readiness helpers without embedding kernel-version-specific syscall allowlists.
+`minijail-profile.json` is the private sandbox profile catalog. It describes typed role profiles for `d2bd`, broker-facing helpers, Cloud Hypervisor, sidecars, and readiness helpers without embedding kernel-version-specific syscall allowlists.
 
-Producer: `nixos-modules/manifest-minijail.nix` emits this artifact; `packages/nixling-core` parses it.
+Producer: `nixos-modules/manifest-minijail.nix` emits this artifact; `packages/d2b-core` parses it.
 
 Schema: [`minijail-profile.json`](./minijail-profile.json) (forward reference; generated with `cargo xtask gen-schemas`).
 

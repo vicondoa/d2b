@@ -1,5 +1,5 @@
 # P1 vsock-relay argv snapshots from
-# nixling_host::vsock_relay_argv::generate_vsock_relay_argv(<fixture>).
+# d2b_host::vsock_relay_argv::generate_vsock_relay_argv(<fixture>).
 #
 # Two shapes are covered (the EXEC form is OtelHostBridge's golden, not
 # this one):
@@ -13,10 +13,10 @@
 #
 # Fixture details (must match audit_* fns in vsock_relay_argv.rs):
 #   socat = /nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat
-#   relay names: nixling-otel-vsock-in / nixling-otel-egress@corp-vm
+#   relay names: d2b-otel-vsock-in / d2b-otel-egress@corp-vm
 #
 # One blank-stripped, comment-stripped line per shape (in declaration
 # order); the Rust parity test asserts argv.join(" ") byte-equals the
 # corresponding line.
-/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d VSOCK-LISTEN:14317,fork,reuseaddr,max-children=16 UNIX-CONNECT:/run/nixling/obs-ingress.sock
-/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d UNIX-LISTEN:/run/nixling/otlp.sock,fork,reuseaddr,max-children=16,mode=0660 VSOCK-CONNECT:2:14317
+/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d VSOCK-LISTEN:14317,fork,reuseaddr,max-children=16 UNIX-CONNECT:/run/d2b/obs-ingress.sock
+/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d UNIX-LISTEN:/run/d2b/otlp.sock,fork,reuseaddr,max-children=16,mode=0660 VSOCK-CONNECT:2:14317

@@ -9,8 +9,8 @@
 
 ## Context
 
-`nixlingd` owns VM lifecycle through the daemon-supervised process DAG. Today
-`nixling vm stop` drains registered runner pidfds in reverse DAG order by
+`d2bd` owns VM lifecycle through the daemon-supervised process DAG. Today
+`d2b vm stop` drains registered runner pidfds in reverse DAG order by
 sending `SIGTERM`, waiting for a bounded timeout, and escalating to `SIGKILL`
 when the runner does not exit. That gives the daemon one uniform stop path, but
 it treats a VM's primary VMM process the same as a replaceable sidecar.
@@ -20,7 +20,7 @@ same as asking the guest OS to shut down. A host-side signal can look like power
 loss to stateful guest services and filesystems. The failure mode is especially
 visible for NixOS guests backed by Cloud Hypervisor, but the same lifecycle
 principle applies to qemu-media: a QEMU guest should receive an ACPI/QMP
-shutdown request before nixling terminates the QEMU process.
+shutdown request before d2b terminates the QEMU process.
 
 The existing provider surfaces already expose the control channels needed for a
 clean first phase:
@@ -29,7 +29,7 @@ clean first phase:
   (`apiSocket`) and Cloud Hypervisor exposes `PUT /api/v1/vm.shutdown` plus
   `GET /api/v1/vm.info` state.
 - qemu-media VMs start QEMU with a QMP socket under
-  `/run/nixling/vms/<vm>/qmp.sock`. The broker already uses QMP for
+  `/run/d2b/vms/<vm>/qmp.sock`. The broker already uses QMP for
   qemu-media boot and hotplug transactions.
 
 The stop path still needs a force override. Operators sometimes need to bypass a
@@ -38,12 +38,12 @@ visible, and auditable; it must not become the default desktop control.
 
 ## Decision
 
-Nixling will add a provider-aware graceful guest shutdown phase before
+D2b will add a provider-aware graceful guest shutdown phase before
 terminating a local VM's primary VMM runner.
 
 ### Default stop
 
-For `nixling vm stop <vm> --apply`, the daemon will first resolve the VM's
+For `d2b vm stop <vm> --apply`, the daemon will first resolve the VM's
 runtime provider and ask the guest to shut down through the provider channel:
 
 | Runtime provider | Primary runner | Graceful request | State reconciliation | Empty-VMM cleanup |
@@ -52,14 +52,14 @@ runtime provider and ask the guest to shut down through the provider channel:
 | QEMU qemu-media | `qemu-media` | broker-mediated QMP `system_powerdown` | broker-mediated QMP `query-status`; `shutdown` means the guest is no longer running | broker-mediated QMP `quit` before pidfd cleanup |
 
 The daemon will poll provider state and pidfd liveness until the configured
-guest-shutdown timeout expires. If the VMM exits, nixling deregisters the
+guest-shutdown timeout expires. If the VMM exits, d2b deregisters the
 pidfd, removes the runner snapshot, and continues normal sidecar cleanup. If
-provider state becomes guest-stopped while the VMM pid remains alive, nixling
+provider state becomes guest-stopped while the VMM pid remains alive, d2b
 treats guest shutdown as successful and then performs clean empty-VMM cleanup.
 Clean empty-VMM cleanup must wait for the VMM pidfd to report process exit and
 release inherited resources such as TAP fds before the stop operation is
 considered complete or a restart is allowed. When a provider clean-exit command
-is sent, nixling waits on the pidfd for a short bounded cleanup grace before
+is sent, d2b waits on the pidfd for a short bounded cleanup grace before
 falling through to the existing SIGTERM/SIGKILL fallback.
 
 Sidecars keep the existing pidfd signal path. The provider graceful phase is for
@@ -78,15 +78,15 @@ not become a healthy running guest.
 ### Configurable timeout
 
 The default graceful shutdown timeout is a Nix/daemon configuration value
-rendered into `/etc/nixling/daemon-config.json` and read by `DaemonConfig`. The
-option lives under `nixling.daemon.lifecycle.gracefulShutdown.timeoutSeconds`
+rendered into `/etc/d2b/daemon-config.json` and read by `DaemonConfig`. The
+option lives under `d2b.daemon.lifecycle.gracefulShutdown.timeoutSeconds`
 so future daemon lifecycle settings have a stable namespace. It defaults to a
 more generous guest-shutdown timeout than the forced-cleanup signal window
 (initially 90 seconds unless implementation evidence selects another bounded
 value). Invalid values fail at eval/config parse time rather than silently
 clamping.
 
-`nixling.daemon.lifecycle.gracefulShutdown.enable` is the site-wide default
+`d2b.daemon.lifecycle.gracefulShutdown.enable` is the site-wide default
 toggle and defaults to `true`. Operators can disable graceful shutdown globally
 during migration or for sites where guests intentionally do not respond to ACPI
 or provider shutdown. Per-VM enablement still overrides the site default.
@@ -96,16 +96,16 @@ guests a chance to flush state without requiring a new opt-in.
 
 Each VM may override the default through a generated lifecycle contract:
 
-- `nixling.vms.<vm>.lifecycle.gracefulShutdown.enable = false` declares that
+- `d2b.vms.<vm>.lifecycle.gracefulShutdown.enable = false` declares that
   the VM intentionally bypasses provider graceful shutdown and uses force
   cleanup as its normal stop behavior without producing a spurious degraded
   marker.
-- `nixling.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds = null | <positive int>`
+- `d2b.vms.<vm>.lifecycle.gracefulShutdown.timeoutSeconds = null | <positive int>`
   overrides the daemon default for that VM when set.
 
 Provider runtimes that support graceful shutdown default this override to
 enabled. In Nix option terms, the default is derived from the VM runtime kind
-and the global toggle (`config.nixling.daemon.lifecycle.gracefulShutdown.enable`
+and the global toggle (`config.d2b.daemon.lifecycle.gracefulShutdown.enable`
 for Cloud Hypervisor NixOS and qemu-media; `false` for unsupported future
 providers unless they opt in). Unsupported future providers must declare
 unsupported/disabled graceful shutdown explicitly rather than silently waiting
@@ -155,7 +155,7 @@ broker ERROR audit event for the read-only query op.
 ### Force-stop override
 
 The public lifecycle request carries an explicit serde-defaulted force flag
-surfaced by the CLI as `nixling vm stop <vm> --force --apply`. The serde default
+surfaced by the CLI as `d2b vm stop <vm> --force --apply`. The serde default
 is load-bearing: existing JSON clients that omit the field keep the graceful
 default.
 
@@ -170,12 +170,12 @@ Force-stop is not a synonym for immediate SIGKILL. It is an emergency escape
 hatch from guest/provider shutdown wait. If SIGTERM succeeds, no SIGKILL is
 sent.
 
-`nixling vm restart <vm> --force --apply` is supported and applies the force
+`d2b vm restart <vm> --force --apply` is supported and applies the force
 flag only to the stop phase before the subsequent start. The start phase is
 unchanged.
 
 Every stop-like public surface carries the same force semantics:
-`nixling vm stop`, its top-level `down` alias, `nixling vm restart`, and any
+`d2b vm stop`, its top-level `down` alias, `d2b vm restart`, and any
 environment/all-VM down or restart surface. In particular, top-level `down` must
 support `--force` so operators can recover a hung environment without manually
 force-stopping every VM. `-f` is the short alias for `--force` on stop-like
@@ -195,42 +195,42 @@ so audit trails show whether the VM shut down cleanly, timed out, or required
 forced cleanup.
 
 Environment-wide stop/down/restart operations must preserve dependency order:
-workload VMs complete their graceful or forced stop before nixling stops the
+workload VMs complete their graceful or forced stop before d2b stops the
 auto-declared net VM for that environment. Otherwise guests can lose bridge/TAP
 connectivity while still trying to flush network-backed services.
 
 Host shutdown/reboot uses the same policy. The framework still declares no
-per-VM systemd units; instead, the singleton `nixlingd.service` participates in
+per-VM systemd units; instead, the singleton `d2bd.service` participates in
 system teardown by invoking the daemon's all-VM graceful shutdown path before
 the host reaches final process killing. That path preserves workload-before-net
 VM ordering and waits for primary VMM pidfd exit before reporting completion.
 The systemd integration must distinguish host shutdown/reboot from a manual
-`systemctl restart nixlingd.service`: daemon restarts remain continuation events
+`systemctl restart d2bd.service`: daemon restarts remain continuation events
 and must not stop VMs. The NixOS unit uses `ExecStop=` to call a CLI hook such
-as `nixling host shutdown-hook`; systemd runs that hook before sending SIGTERM
+as `d2b host shutdown-hook`; systemd runs that hook before sending SIGTERM
 to the daemon main process. The hook uses a robust systemd state check before
 invoking all-VM shutdown, preferably querying
 `org.freedesktop.systemd1.Manager` directly and falling back only to checking
 that `systemctl is-system-running` returns the exact state `stopping`. It exits
 immediately for normal daemon restarts. It does not parse job listings with
 grep, and the daemon does not trap SIGTERM to stop VMs. Unit commands use
-absolute store paths for the nixling CLI and systemd helpers, not PATH lookup.
+absolute store paths for the d2b CLI and systemd helpers, not PATH lookup.
 If the hook communicates with the daemon over `public.sock`, daemon authz
 uses the same lifecycle authorization surface as every other public operation:
-the `nixlingd` system user is a member of the `nixling` lifecycle group, and
+the `d2bd` system user is a member of the `d2b` lifecycle group, and
 `SO_PEERCRED` observes that group-authorized peer. No special hardcoded daemon
 uid bypass is added.
 
 No fourth root-visible shutdown unit is introduced. ADR 0015's three-unit
-surface remains intact: `nixlingd.service`, `nixling-priv-broker.socket`, and
-`nixling-priv-broker.service`. To avoid systemd refusing socket activation after
-the shutdown transaction starts, nixlingd ensures the existing broker service is
+surface remains intact: `d2bd.service`, `d2b-priv-broker.socket`, and
+`d2b-priv-broker.service`. To avoid systemd refusing socket activation after
+the shutdown transaction starts, d2bd ensures the existing broker service is
 already active whenever it supervises or adopts live VMM runners that may need
 broker-mediated shutdown, for example by holding a broker keepalive connection
 while live VMMs exist. If no live VMM runners exist, no graceful VMM shutdown
 needs broker activation during host teardown.
-`nixlingd.service` is ordered `After=nixling-priv-broker.service` so, during
-shutdown, systemd stops nixlingd before terminating the active broker service;
+`d2bd.service` is ordered `After=d2b-priv-broker.service` so, during
+shutdown, systemd stops d2bd before terminating the active broker service;
 broker-mediated QMP shutdown remains available for the full graceful sequence.
 
 Within each dependency phase, shutdown requests run in parallel: all workload
@@ -247,10 +247,10 @@ graceful-shutdown VMs contribute zero, and empty phases contribute zero.
 declared reverse-DAG sidecar cleanup chain, including forced-fallback windows for
 sidecar roles that still stop sequentially. The rendered systemd value includes
 the `s` suffix. This prevents systemd from reaching final shutdown killing
-before nixling's graceful, forced-fallback, and sidecar cleanup phases can
+before d2b's graceful, forced-fallback, and sidecar cleanup phases can
 complete.
-The NixOS unit orders `nixlingd.service` after the broker service, broker
-socket, dbus service/socket, and any systemd-recognized `nixling.slice` unit if
+The NixOS unit orders `d2bd.service` after the broker service, broker
+socket, dbus service/socket, and any systemd-recognized `d2b.slice` unit if
 present, so those dependencies remain available while `ExecStop=` runs. The
 calculated `TimeoutStopSec` is assigned with an override priority that still
 permits local operator overrides.
@@ -277,7 +277,7 @@ than leaking the terminal VMM process until a manual `vm stop`.
 
 Pidfd exit detection uses async pidfd readability (`tokio::io::unix::AsyncFd`
 or the daemon runtime's equivalent over `poll(2)` / `epoll(7)`), not
-`waitid(P_PIDFD, ...)`, because `nixlingd` is not necessarily the VMM's parent
+`waitid(P_PIDFD, ...)`, because `d2bd` is not necessarily the VMM's parent
 process. `waitid` can report `ECHILD` for non-child pidfds while the process is
 still alive; pidfd readability is the correct liveness signal for supervised
 broker-spawned runners.
@@ -318,7 +318,7 @@ summaries distinguish it from an explicit operator force request, for example
 When a degraded marker is present after an unexpected graceful timeout or
 cleanup failure, `status`/`doctor` remediation distinguishes guest-level timeout
 from host-level empty-VMM cleanup failure. Guest timeout text points operators to
-resolve the guest issue or run `nixling vm stop <vm> --force --apply` when they
+resolve the guest issue or run `d2b vm stop <vm> --force --apply` when they
 explicitly choose to bypass guest shutdown waiting. Empty-VMM cleanup failure
 points to host-side runner cleanup/remediation rather than blaming the guest.
 
@@ -348,7 +348,7 @@ and redacted before writing to the journal.
 ### Desktop control surfaces
 
 Downstream operator controls must preserve the safe default. In
-`nixling-wlcontrol`, the primary visible Stop button remains graceful stop.
+`d2b-wlcontrol`, the primary visible Stop button remains graceful stop.
 Force shutdown is available only from the expanded controls revealed by the
 ellipsis affordance, uses destructive styling, and requires explicit
 confirmation. It must not be offered as a primary/default button.
@@ -441,10 +441,10 @@ Required implementation validation:
   timeout plus two forced-fallback windows plus sidecar cleanup grace,
   accounting for per-VM overrides, and all-VM graceful shutdown running in
   parallel per dependency phase;
-- NixOS/unit tests cover manual `systemctl restart nixlingd.service` remaining a
+- NixOS/unit tests cover manual `systemctl restart d2bd.service` remaining a
   continuation event, not triggering all-VM shutdown;
-- NixOS/unit tests cover shutdown ordering keeping `nixling-priv-broker.service`
-  active until nixlingd completes broker-mediated QMP shutdown;
+- NixOS/unit tests cover shutdown ordering keeping `d2b-priv-broker.service`
+  active until d2bd completes broker-mediated QMP shutdown;
 - tests cover pidfd exit detection through `poll`/`epoll` semantics rather than
   `waitid(P_PIDFD)` for non-child VMMs;
 - tests cover async `AsyncFd`/runtime integration for pidfd readability so the
@@ -497,5 +497,5 @@ Required implementation validation:
   preserves exporter output and treats ENOENT, ECONNREFUSED, EOF, and
   ECONNRESET during startup/termination races as normal scrape unavailability
   rather than noisy journal spam;
-- `nixling-wlcontrol` tests cover normal Stop as graceful default and Force
+- `d2b-wlcontrol` tests cover normal Stop as graceful default and Force
   shutdown as ellipsis-only advanced action.

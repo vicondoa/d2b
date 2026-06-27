@@ -2,18 +2,18 @@
 #
 # Applies the guest-control module directly to a NixOS test node and asserts the
 # real systemd/PAM/linger boundary for the guest-local shell pool. This avoids a
-# nested nixling-managed VM while still exercising NixOS module realization.
+# nested d2b-managed VM while still exercising NixOS module realization.
 { pkgs, self }:
 
 pkgs.testers.runNixOSTest {
-  name = "nixling-guest-shell-service";
+  name = "d2b-guest-shell-service";
 
   nodes.machine = { lib, ... }: {
     imports = [
       ../../nixos-modules/guest-control.nix
       {
         _module.args = {
-          nixlingInputs = { inherit self; };
+          d2bInputs = { inherit self; };
         };
 
         users.users.alice = {
@@ -21,7 +21,7 @@ pkgs.testers.runNixOSTest {
           uid = 1000;
         };
 
-        nixling.guestControl = {
+        d2b.guestControl = {
           enable = lib.mkForce true;
           exec = {
             enable = lib.mkForce true;
@@ -50,30 +50,30 @@ pkgs.testers.runNixOSTest {
 
     # The shell pool daemon is declared but dormant: guestd owns when it starts
     # or adopts the pool.
-    machine.succeed("systemctl cat nixling-shpool-daemon.service")
+    machine.succeed("systemctl cat d2b-shpool-daemon.service")
     machine.succeed(
-        "test \"$(systemctl show -P PAMName nixling-shpool-daemon.service)\" = nixling-shpool-daemon"
+        "test \"$(systemctl show -P PAMName d2b-shpool-daemon.service)\" = d2b-shpool-daemon"
     )
     machine.succeed(
-        "test \"$(systemctl show -P User nixling-shpool-daemon.service)\" = alice"
+        "test \"$(systemctl show -P User d2b-shpool-daemon.service)\" = alice"
     )
     machine.succeed(
-        "test \"$(systemctl show -P KillMode nixling-shpool-daemon.service)\" = control-group"
+        "test \"$(systemctl show -P KillMode d2b-shpool-daemon.service)\" = control-group"
     )
     machine.succeed(
-        "test \"$(systemctl show -P Delegate nixling-shpool-daemon.service)\" = yes"
+        "test \"$(systemctl show -P Delegate d2b-shpool-daemon.service)\" = yes"
     )
     machine.succeed(
-        "! find /etc/systemd/system -path '*wants/nixling-shpool-daemon.service' | grep -q ."
+        "! find /etc/systemd/system -path '*wants/d2b-shpool-daemon.service' | grep -q ."
     )
-    machine.fail("systemctl is-active --quiet nixling-shpool-daemon.service")
+    machine.fail("systemctl is-active --quiet d2b-shpool-daemon.service")
 
-    pam_file = "/etc/pam.d/nixling-shpool-daemon"
+    pam_file = "/etc/pam.d/d2b-shpool-daemon"
     machine.succeed(f"test -f {pam_file}")
     pam = machine.succeed(f"cat {pam_file}")
     assert "pam_loginuid.so" in pam, pam
     assert "pam_systemd.so" not in pam, (
-        "nixling-shpool-daemon must not start a pam_systemd session; "
+        "d2b-shpool-daemon must not start a pam_systemd session; "
         "that would migrate the daemon out of the delegated service cgroup"
     )
 

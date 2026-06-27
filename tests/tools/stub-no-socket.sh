@@ -9,27 +9,27 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-nl_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path || true
 
 manifest="$ROOT/packages/Cargo.toml"
-workspace_target_dir=$(nl_cargo_target_dir workspace)
+workspace_target_dir=$(d2b_cargo_target_dir workspace)
 if [ ! -f "$manifest" ]; then
   fail "missing Rust workspace manifest: $manifest"
   exit 1
 fi
 
-if [ -z "${NIXLING_STUB_NO_SOCKET_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ -z "${D2B_STUB_NO_SOCKET_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "stub-no-socket: neither cargo nor nix is on PATH"
     exit 1
   fi
-  export NIXLING_STUB_NO_SOCKET_IN_NIX_SHELL=1
+  export D2B_STUB_NO_SOCKET_IN_NIX_SHELL=1
   exec nix shell --quiet --inputs-from "$ROOT" \
     nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache \
     --command bash "$0" "$@"
 fi
 
-scratch=$(nl_mktemp .nixling-stub-smoke.XXXXXX)
+scratch=$(d2b_mktemp .d2b-stub-smoke.XXXXXX)
 add_cleanup "rm -rf -- \"$scratch\""
 test_home="$scratch/home"
 test_tmp="$scratch/tmp"
@@ -110,8 +110,8 @@ assert_no_runtime_state() {
   local xdg_after=""
   local tmp_after=""
 
-  assert_path_not_modified "$bin /run/nixling" /run/nixling "$run_list_before"
-  assert_path_not_modified "$bin /var/lib/nixling" /var/lib/nixling "$var_lib_list_before"
+  assert_path_not_modified "$bin /run/d2b" /run/d2b "$run_list_before"
+  assert_path_not_modified "$bin /var/lib/d2b" /var/lib/d2b "$var_lib_list_before"
 
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     xdg_after=$(snapshot_tree "$XDG_RUNTIME_DIR")
@@ -147,8 +147,8 @@ run_stub() {
   local xdg_before="" tmp_before=""
 
   log "--> cargo run --bin $bin"
-  run_list_before=$(snapshot_listdir /run/nixling)
-  var_lib_list_before=$(snapshot_listdir /var/lib/nixling)
+  run_list_before=$(snapshot_listdir /run/d2b)
+  var_lib_list_before=$(snapshot_listdir /var/lib/d2b)
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
     xdg_before=$(snapshot_tree "$XDG_RUNTIME_DIR")
   fi
@@ -174,7 +174,7 @@ run_stub() {
     "$xdg_before" "$tmp_before"
 }
 
-run_stub nixling "nixling 0.0.0-bootstrap (bootstrap stub)"
-run_stub nixlingd "nixlingd 0.0.0-bootstrap (bootstrap stub)"
+run_stub d2b "d2b 0.0.0-bootstrap (bootstrap stub)"
+run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
 
 ok "Rust stubs left no socket/file runtime state"

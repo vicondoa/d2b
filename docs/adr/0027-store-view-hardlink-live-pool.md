@@ -4,12 +4,12 @@
 - Date: 2026-06-09
 - Related: ADR 0015 (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018 (microvm.nix removal), ADR 0021 (broker user namespace for virtiofsd)
 
-The nixling default panel has signed off on this ADR and the accompanying
+The d2b default panel has signed off on this ADR and the accompanying
 session plan. Existing worktree diffs before signoff are WIP evidence only.
 
 ## Context
 
-nixling currently has a legacy flat per-VM hardlink farm at
+d2b currently has a legacy flat per-VM hardlink farm at
 `<stateDir>/<vm>/store` that virtiofsd serves to the guest, plus a
 partially-wired daemon-native `store-view/generations/<N>` path that
 materializes full hardlink trees per generation.
@@ -25,7 +25,7 @@ canonical `store-view` tree. No bash store-view writer, env knob, backend
 toggle, or custom filesystem/device is introduced.
 
 Deep live-pool verification/repair is explicit operator surface, not VM start
-fast-path behavior: `nixling store verify <vm> [--repair] [--json]`.
+fast-path behavior: `d2b store verify <vm> [--repair] [--json]`.
 
 Target layout:
 
@@ -33,7 +33,7 @@ Target layout:
 <stateDir>/<vm>/store-view/
   live/
     <hash>-pkg/
-    .nixling-marker-<vm>
+    .d2b-marker-<vm>
   meta/
     current -> generations/<generation-id>
     generations/
@@ -57,7 +57,7 @@ Target layout:
 ```
 
 `live/` is served read-only by virtiofsd as `/nix/.ro-store`.
-`meta/` is served read-only as `/run/nixling-store-meta`.
+`meta/` is served read-only as `/run/d2b-store-meta`.
 `state/`, `gcroots/`, and `sync.lock` are host-only.
 
 The on-disk `generation-id` is collision-free (for example full closure
@@ -68,7 +68,7 @@ used as the directory key.
 
 Actors:
 
-- trusted writer: `nixling-priv-broker` StoreSync;
+- trusted writer: `d2b-priv-broker` StoreSync;
 - untrusted: guest;
 - potentially compromised: runner/virtiofsd process.
 
@@ -107,7 +107,7 @@ host absolute `system` symlinks, gcroots, caller/authz fields, retained
 generations, swept counts, timings, cleanup fields, error details, and host-only
 paths are not guest-visible.
 
-`live/.nixling-marker-<vm>` is guest-readable because it lives under `live/`.
+`live/.d2b-marker-<vm>` is guest-readable because it lives under `live/`.
 It is a zero-length readiness marker and carries no host paths, caller
 principal, generation metadata, timings, counts, audit fields, or other payload.
 
@@ -305,7 +305,7 @@ StoreSync assumes a prepared and postured store-view root already exists.
     `state/current` first and fsync `state/`, then atomically swap
     `meta/current` and fsync `meta/`. The pair is not atomic as a unit; step 4
     is the recovery path for a crash between the two swaps.
-15. Plant/refresh `live/.nixling-marker-<vm>` via tmp+rename only after
+15. Plant/refresh `live/.d2b-marker-<vm>` via tmp+rename only after
     `live/` contains every required basename for `meta/current`.
     The marker is the cold-start readiness signal; `meta/current` is not.
 16. Compute retained generations and sweep only when safe.
@@ -337,7 +337,7 @@ Offline cleanup requires virtiofsd for that VM not serving `live/`, not merely
 cloud-hypervisor exit. Any live virtiofsd process/cgroup for the VM, open fd
 under `live/`, or uncertainty defers cleanup.
 
-Every live/metadata mutator — StoreSync, `nixling gc`, and VM-stop
+Every live/metadata mutator — StoreSync, `d2b gc`, and VM-stop
 deferred cleanup — acquires `sync.lock` and revalidates that virtiofsd
 is not serving `live/` before destructive shrinkage.
 
@@ -367,14 +367,14 @@ plus every migrated VM's legacy artifact.
 If a VM fails after cutover:
 
 1. verify host-level rollback readiness for migrated VMs;
-2. revert nixling flake input or host generation to a legacy-serving version;
+2. revert d2b flake input or host generation to a legacy-serving version;
 3. rebuild/switch host;
-4. restart `nixlingd`;
+4. restart `d2bd`;
 5. restart affected VMs;
 6. select/rollback guest boot entry to the frozen migration-time
    generation if newer default entries require store-view-only paths.
 
-Plain `nixling gc` never removes legacy artifacts. Removal requires a
+Plain `d2b gc` never removes legacy artifacts. Removal requires a
 destructive opt-in flag, typed VM-name or explicit acknowledgement, and a
 warning before commit that removing any one migrated VM's artifact can make the
 whole host rollback-not-ready for migrated VMs. The warning/status enumerates whether the
@@ -382,13 +382,13 @@ action transitions the host from rollback-ready to rollback-not-ready for
 migrated VMs and which artifact/generation facts drive that decision. Deleting
 any migrated VM's artifact degrades host-level rollback.
 
-`nixling status <vm>` reports store mechanism, current generation, last
+`d2b status <vm>` reports store mechanism, current generation, last
 StoreSync outcome/timestamp/audit reference, legacy artifact existence/frozen
 generation/staleness/disk footprint, cleanup status/remediation, and
 rollback-readiness. Remediation strings are defined for each cleanup
 status/reason pair and for rollback-not-ready/stale-artifact states.
 
-`nixling status` without a VM argument reports host-level rollback readiness:
+`d2b status` without a VM argument reports host-level rollback readiness:
 migrated VMs' legacy-artifact presence/frozen generation plus the retained
 legacy-serving host generation or pinned flake input. Native VMs are listed as
 non-degrading `native -- no legacy rollback path`. It names the specific
@@ -400,17 +400,17 @@ Remediation taxonomy:
 | State | Operator action |
 | --- | --- |
 | `completed` / `none` | no action |
-| `skipped_fast_path` / `fast_path` | no action; reconsider on next non-fast-path sync or global `nixling gc` |
-| `deferred_online` / `vm_running` | wait for VM stop or stop it and run global `nixling gc` |
-| `deferred_ambiguous` / `running_generation_ambiguous` | stop/restart VM or clear stale serving/open-fd state, then run global `nixling gc` |
+| `skipped_fast_path` / `fast_path` | no action; reconsider on next non-fast-path sync or global `d2b gc` |
+| `deferred_online` / `vm_running` | wait for VM stop or stop it and run global `d2b gc` |
+| `deferred_ambiguous` / `running_generation_ambiguous` | stop/restart VM or clear stale serving/open-fd state, then run global `d2b gc` |
 | `deferred_metadata` / `missing_retained_metadata` | rerun StoreSync; if persistent, use audit ref plus legacy artifact/rollback readiness before repair |
-| `failed` / `io_error` | inspect audit/journal, fix disk/permission/topology error, rerun StoreSync or global `nixling gc` |
+| `failed` / `io_error` | inspect audit/journal, fix disk/permission/topology error, rerun StoreSync or global `d2b gc` |
 | `not_attempted` / `none` on failed attempts | no cleanup ran; fix the reported `error_stage` and rerun StoreSync |
 | rollback-not-ready for migrated VM | restore missing legacy artifact or retain/pin a legacy-serving host generation |
 | native VM | no legacy artifact exists by design; stop/recreate after host rollback if needed |
 | live-pool internal-integrity ok | no action |
-| live-pool internal-integrity suspect | run `nixling store verify <vm>`; rerun with `--repair` if verification reports repairable drift and no prior repair attempt is recorded; if repair was already attempted and drift remains, inspect the audit reference and broker logs |
-| live-pool internal-integrity unknown | status could not determine integrity because marker/manifest state is missing, unreadable, from an older host generation, or generation identity is unavailable; run `nixling store verify <vm>` |
+| live-pool internal-integrity suspect | run `d2b store verify <vm>`; rerun with `--repair` if verification reports repairable drift and no prior repair attempt is recorded; if repair was already attempted and drift remains, inspect the audit reference and broker logs |
+| live-pool internal-integrity unknown | status could not determine integrity because marker/manifest state is missing, unreadable, from an older host generation, or generation identity is unavailable; run `d2b store verify <vm>` |
 | stale legacy artifact | preserve by default; remove only through destructive host-wide warning flow |
 
 ## Process graph
@@ -421,9 +421,9 @@ readiness. `share.source` for ro-store remains `/nix/store` as the
 sentinel; only virtiofsd `--shared-dir` becomes `store-view/live`, and
 `--readonly` remains asserted.
 
-`nl-meta` source becomes `store-view/meta` and must be read-only at the
+`d2b-meta` source becomes `store-view/meta` and must be read-only at the
 virtiofsd/device layer, either by `host.nix` setting `readOnly = true` on the
-share or by `processes-json.nix` forcing `--readonly` for the `nl-meta` tag.
+share or by `processes-json.nix` forcing `--readonly` for the `d2b-meta` tag.
 
 `host-activation.nix` may create missing top-level directories and reassert
 posture on allowed directory inodes only. It must not recurse into populated
@@ -436,7 +436,7 @@ are posture-if-present: only `ENOENT`/not-found is skipped; every other stat
 error remains drift/error. File-kind entries use no-follow `symlink_metadata`,
 never `mkdir`, and never recurse; if present they must be regular files. Broker
 prep creates required `sync.lock`; StoreSync creates optional
-`live/.nixling-marker-<vm>` and broker integrity code creates optional
+`live/.d2b-marker-<vm>` and broker integrity code creates optional
 `state/integrity-unknown.json`. Legacy `store`/`store-meta` entries are also
 `required = false` so native-born post-cutover VMs without
 legacy artifacts pass preflight while migrated VMs' artifacts are still checked
@@ -444,14 +444,14 @@ when present.
 
 Host-only entries must not reuse the runner/virtiofsd-readable `users 0755`
 store-view posture: `state/`, `state/generations/`, and `gcroots/` are
-`nixlingd:nixling 0750`; per-generation host-only metadata leaves
+`d2bd:d2b 0750`; per-generation host-only metadata leaves
 (`state/generations/<id>/{marker.json,meta.json,integrity.json}`) and
-`state/integrity-unknown.json` are `nixlingd:nixling 0640`; `sync.lock` is
-broker-private `nixlingd:nixling 0600`. File-kind matrix entries re-assert
+`state/integrity-unknown.json` are `d2bd:d2b 0640`; `sync.lock` is
+broker-private `d2bd:d2b 0600`. File-kind matrix entries re-assert
 mode/uid/gid on the file inode with no-follow semantics; they are not just
 regular-file kind checks.
 
-The live readiness marker is `nixlingd:users 0644`: guest/runner may read it
+The live readiness marker is `d2bd:users 0644`: guest/runner may read it
 through the read-only `live/` share, but only the broker may write it. It is a
 single-file check inside `live/` and does not allow recursion into package
 trees.
@@ -460,14 +460,14 @@ Observability replaces, rather than silently removes, the per-VM store-sync
 unit signal. StoreSync terminal broker audit records include `vm` and host-audit
 `env`, but the unified broker audit log remains host-confidential and is not
 readable by Alloy. Instead, the broker writes a StoreSync-only observability
-JSONL export under `/var/lib/nixling/observability/store-sync/` containing only
+JSONL export under `/var/lib/d2b/observability/store-sync/` containing only
 the StoreSync observability export allow-list defined above. `host.nix` adds a
 `loki.source.file` (or Alloy equivalent) on
-`/var/lib/nixling/observability/store-sync/store-sync-*.jsonl`, follows daily
+`/var/lib/d2b/observability/store-sync/store-sync-*.jsonl`, follows daily
 rotation, and grants `alloy` focused read/traverse access only to that
 StoreSync export directory via access/default ACLs. Do not add `alloy` to the
-`nixlingd` group, do not grant it access to `/run/nixling/priv.sock`, and do not
-grant it read access to `/var/lib/nixling/audit/broker-*.jsonl`. The stream is
+`d2bd` group, do not grant it access to `/run/d2b/priv.sock`, and do not
+grant it read access to `/var/lib/d2b/audit/broker-*.jsonl`. The stream is
 labelled as a host singleton under the Loki contract, for example `vm="host"`,
 `env=<host-env>`, `role="host"`, `source="store-sync-audit"`. Target VM/env stay
 in JSON content as `target_vm`/`target_env`, not Loki stream/index labels. The source is wired to the
@@ -475,18 +475,18 @@ existing Alloy -> OTLP/vsock logs path. The obs-VM stack derives the bounded
 alerting metric from the received StoreSync log stream (stage.metrics or
 equivalent) and exports it through the obs-VM's existing Alloy self-scrape /
 Prometheus ruleFiles path. `05-per-vm-store` uses query-time JSON extraction of
-`target_vm`/`target_env`. `NixlingStoreSyncFailure` stays on the existing Prometheus
+`target_vm`/`target_env`. `D2bStoreSyncFailure` stays on the existing Prometheus
 ruleFiles evaluation/routing path with `vm`/`env` labels only on that
 replacement alerting metric. This introduces no new host- or VM-exposed port, no
 host Alloy self-scrape, no Loki ruler, no Alertmanager listener, and no
 dependency on the deferred broker `/metrics` endpoint.
 
-`nixling store verify <vm> [--repair] [--json]` is the operator-facing deep
+`d2b store verify <vm> [--repair] [--json]` is the operator-facing deep
 verification path for suspected live-pool internal-integrity drift. It is a
 typed broker operation (`StoreVerify`) with the same peer-credential
 authorization model as StoreSync; the thin CLI never reads `state/` or `live/`
 directly. Read-only verify acquires the same per-VM mutex + `sync.lock` as
-StoreSync, `nixling gc`, and stop cleanup to take a consistent snapshot and
+StoreSync, `d2b gc`, and stop cleanup to take a consistent snapshot and
 block concurrent mutation while it walks `live/`. `--repair` delegates lock
 acquisition to StoreSync and must not acquire the same lock before calling
 StoreSync, avoiding re-entrant mutex/flock deadlock. Without `--repair`, it
@@ -520,7 +520,7 @@ authorization"`,
 `#not-found` (exit 70), and `docs/reference/cli-contract.md` points all "named
 VM is not declared" exit-70 rows, including StoreVerify, at `#not-found` rather
 than `#not-yet-implemented`.
-`nixling status <vm>` reports live-pool integrity as `ok`, `suspect`, or
+`d2b status <vm>` reports live-pool integrity as `ok`, `suspect`, or
 `unknown`. `ok` means the stored integrity record is `ok`, the current
 marker/manifest pair is valid, and no drift was last observed; a stored `ok`
 record never overrides an absent/unreadable readiness marker. `suspect` is set
@@ -528,7 +528,7 @@ only when the host can identify a concrete top-level path set: a
 present-but-mismatched marker/manifest, a top-level
 basename missing from a generation already marked complete, StoreSync
 verification failure with implicated paths, repairable drift found by
-`nixling store verify`, or incomplete `--repair` with drift remaining. Routine
+`d2b store verify`, or incomplete `--repair` with drift remaining. Routine
 first-sync/new-generation/incremental materialization of missing top-level paths
 before a completion marker is planted is not suspect. The integrity state
 records the latest verify/repair audit reference and whether repair has already
@@ -536,7 +536,7 @@ been attempted, so status can avoid recommending a repair loop. `unknown` means
 the host cannot determine integrity because marker/manifest state is missing,
 unreadable, from an older host generation, generation identity itself is
 unavailable, or the live readiness marker is absent/unreadable despite a stored
-`ok` record. `suspect` and `unknown` remediation points to `nixling store verify
+`ok` record. `suspect` and `unknown` remediation points to `d2b store verify
 <vm>`; `suspect` recommends `--repair` only if drift is repairable and no prior
 repair attempt is recorded.
 
@@ -577,7 +577,7 @@ recursively verify package subtrees. A VM-start non-fast-path StoreSync that
 only stages missing top-level paths also must not clear an existing `suspect`
 record unless those staged paths cover the recorded `drift_signature`.
 
-For `unknown`, only an explicit `nixling store verify` full walk returning
+For `unknown`, only an explicit `d2b store verify` full walk returning
 `ok`, a successful `--repair`, or activation of a new StoreSync generation may
 clear the state. Explicit verify must resolve a trusted generation identity
 before it can return `ok`; otherwise it leaves/sets `unknown`, returns
@@ -685,7 +685,7 @@ so status does not recommend an endless `--repair` loop.
 - observability continuity: StoreSync-only observability file source can be
   read by the `alloy` identity, follows rotated `store-sync-*.jsonl`, and still
   reads a newly created post-rotation file from the real broker export path. The
-  unified `/var/lib/nixling/audit/broker-*.jsonl` remains unreadable to `alloy`,
+  unified `/var/lib/d2b/audit/broker-*.jsonl` remains unreadable to `alloy`,
   and no non-StoreSync privileged-operation audit records are ingested or
   egressed. It ingests ok + failed StoreSync terminal records as a host
   singleton Loki stream with `target_vm`/`target_env` in JSON content; the obs-VM stack
@@ -698,10 +698,10 @@ so status does not recommend an endless `--repair` loop.
   observability export allow-list; `caller_principal`, `retained_generations`,
   host paths, store paths/basenames, `db.dump`, marker payloads, and newly added
   host-only audit fields do not appear;
-- Alloy privilege: `alloy` is not a member of `nixlingd`, cannot connect to
-  `/run/nixling/priv.sock`, cannot read `/var/lib/nixling/audit/broker-*.jsonl`,
+- Alloy privilege: `alloy` is not a member of `d2bd`, cannot connect to
+  `/run/d2b/priv.sock`, cannot read `/var/lib/d2b/audit/broker-*.jsonl`,
   but can read a newly rotated StoreSync-only export file;
-- explicit verify/repair CLI: `nixling store verify <vm> [--repair] [--json]`
+- explicit verify/repair CLI: `d2b store verify <vm> [--repair] [--json]`
   has documented exit codes, JSON envelope, broker routing, and non-fast-path
   repair semantics; read-only verify obtains a consistent broker snapshot,
   detects drift with exit 4/status `drift`, leaves `live/` byte-for-byte and
@@ -712,7 +712,7 @@ so status does not recommend an endless `--repair` loop.
   it when live-pool integrity is `suspect` or `unknown`;
 - recovery validation: cutover, advance generation, fail, revert to
   legacy-serving version, select frozen guest generation if needed, boot;
-- host-level readiness validation: `nixling status` with no VM argument reports
+- host-level readiness validation: `d2b status` with no VM argument reports
   aggregate rollback readiness for migrated VMs, names missing migrated-VM
   artifacts, missing legacy-serving host generation, or missing pinned input,
   and reports native VMs as non-degrading `native -- no legacy rollback path`;
@@ -728,7 +728,7 @@ so status does not recommend an endless `--repair` loop.
   pure fast path; a same-generation fast-path StoreSync must not clear it.
   `suspect` may be cleared by explicit verify/repair or non-fast-path StoreSync
   that verifies every concrete `drift_signature`-implicated top-level path.
-  `unknown` may be cleared only by explicit full `nixling store verify`,
+  `unknown` may be cleared only by explicit full `d2b store verify`,
   successful `--repair`, or a new StoreSync generation. VM-start non-fast-path
   StoreSync that stages zero, unrelated, or subset paths must leave
   suspect/unknown intact;
@@ -776,7 +776,7 @@ so status does not recommend an endless `--repair` loop.
   materialization and final `gcroots/` update and assert source closure paths
   remain protected by existing bundle/profile roots until host-only StoreSync GC
   roots are planted;
-- legacy artifact protection: plain `nixling gc` preserves artifacts,
+- legacy artifact protection: plain `d2b gc` preserves artifacts,
   destructive removal is explicit/acknowledged and warns about host-wide
   rollback loss, and status reports degraded rollback readiness;
 - post-activation cleanup failure: inject I/O error during sweep/gcroots after

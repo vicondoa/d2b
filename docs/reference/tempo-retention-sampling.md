@@ -2,7 +2,7 @@
 
 Status: historical reference for the pre-SigNoz observability backend.
 
-Current nixling observability no longer emits Tempo tenants,
+Current d2b observability no longer emits Tempo tenants,
 Tempo-specific block retention, or Grafana Tempo datasources. Traces flow
 through OpenTelemetry Collector pipelines into the SigNoz OTel Collector
 and ClickHouse.
@@ -17,7 +17,7 @@ Current policy:
 - `kind=critical` remains an OTel attribute, but the old
   Tempo-tenant-specific retention model is not automatically migrated;
 - ClickHouse/SigNoz retention is the backend-retention control surface.
-  The legacy `nixling.observability.retention.*` and `sampling.*`
+  The legacy `d2b.observability.retention.*` and `sampling.*`
   options are compatibility shims and currently warn when changed; they
   do not configure ClickHouse TTL.
 

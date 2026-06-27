@@ -1,7 +1,7 @@
 {
   "uid": "obs-vm-health",
   "title": "Obs VM Health",
-  "tags": ["nixling", "v0.2.0"],
+  "tags": ["d2b", "v0.2.0"],
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",

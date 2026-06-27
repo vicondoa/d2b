@@ -21,7 +21,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | DelegateCgroupV2 | promoted-live | Delegates the trusted cgroup v2 subtree and records the delegated scope. | live in production broker |
 | DeregisterRunnerPidfd | promoted-live | Removes the runner pidfd registry entry idempotently and returns whether an entry was present. | live in production broker |
 | DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates, validates, or safely repairs disk images before runner spawn; ambiguous existing data fails closed. | live in production broker |
-| ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `nixlingd`. | live read-only callable |
+| ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `d2bd`. | live read-only callable |
 | GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag over the bound transcript; returns only the transcript-bound MAC tag. | guest-control live callable |
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | live read-only callable |
 | InjectSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret write paths are not implemented. | future work |
@@ -54,7 +54,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | RotateSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret rotation is not implemented. | future work |
 | RunActivation | promoted-live | Resolves activation and store-view intents from the trusted bundle and runs the requested activation mode. | live in production broker |
 | RunGc | promoted-live | Resolves the host GC intent from the trusted bundle and executes the typed store-prune policy. | live in production broker |
-| RunHostInstall | promoted-live | Resolves the installer intent from the trusted bundle, writes installer artifacts, and can enable/start `nixlingd.service`. | live in production broker |
+| RunHostInstall | promoted-live | Resolves the installer intent from the trusted bundle, writes installer artifacts, and can enable/start `d2bd.service`. | live in production broker |
 | RunHostKeyTrust | promoted-live | Resolves the per-VM TOFU trust intent and atomically updates the managed known-hosts file. | live in production broker |
 | RunKeysRotate | promoted-live | Resolves the managed per-VM key-rotation intent, runs `ssh-keygen`, and returns rotated key metadata. | live in production broker |
 | RunMigrate | promoted-live | Resolves the host migration intent and writes per-VM migration markers. | live in production broker |
@@ -76,4 +76,4 @@ side-effect audit operation that never reaches the wire dispatcher).
 | UsbipProxyReconcile | promoted-live | Reconciles USBIP proxy lock expectations derived from trusted bundle intents. | live in production broker |
 | UsbipUnbind | promoted-live | Resolves the current USBIP owner, revokes the backend ACL, and unbinds the device. | live in production broker |
 | ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |
-| ValidateBundle | callable-read-only | Sole validation entry point; calls `nixling_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |
+| ValidateBundle | callable-read-only | Sole validation entry point; calls `d2b_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |

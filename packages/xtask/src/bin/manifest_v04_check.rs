@@ -1,4 +1,4 @@
-use nixling_core::manifest_v04::ManifestV04;
+use d2b_core::manifest_v04::ManifestV04;
 use std::{env, fs, process::ExitCode};
 
 fn main() -> ExitCode {

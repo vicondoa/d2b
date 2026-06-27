@@ -444,7 +444,7 @@ fn should_scan_markers(path: &str) -> bool {
     !matches!(
         path,
         "packages/xtask/src/inventory.rs"
-            | "packages/nixling-contract-tests/tests/policy_compat_adr.rs"
+            | "packages/d2b-contract-tests/tests/policy_compat_adr.rs"
     )
 }
 
@@ -522,7 +522,7 @@ fn classify_generated_surface(path: &str) -> Option<&'static str> {
         Some("cli-manpage")
     } else if path.starts_with("docs/completions/") {
         Some("cli-completion")
-    } else if path.starts_with("packages/nixling-contracts/proto/") && path.ends_with(".proto") {
+    } else if path.starts_with("packages/d2b-contracts/proto/") && path.ends_with(".proto") {
         Some("guest-control-proto-source")
     } else if path.contains("/src/generated/") {
         Some("generated-rust-binding")
@@ -627,7 +627,7 @@ version = "0.0.0"
     fn marker_scan_skips_scanner_sources() {
         assert!(!should_scan_markers("packages/xtask/src/inventory.rs"));
         assert!(!should_scan_markers(
-            "packages/nixling-contract-tests/tests/policy_compat_adr.rs"
+            "packages/d2b-contract-tests/tests/policy_compat_adr.rs"
         ));
         assert!(should_scan_markers("nixos-modules/options.nix"));
     }

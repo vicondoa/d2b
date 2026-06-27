@@ -1,8 +1,8 @@
-# `nixling audit` output
+# `d2b audit` output
 
 Schema: [`audit.schema.json`](./audit.schema.json)
 
-`nixling audit --json` emits one object containing the read-only
+`d2b audit --json` emits one object containing the read-only
 security/posture report. Top-level key order is deterministic, but
 consumers should key by name rather than rely on object-order.
 
@@ -41,9 +41,9 @@ path for later minor releases.
 ## Human example
 
 ```text
-$ nixling audit --human
+$ d2b audit --human
 
-=== nixling security audit ===
+=== d2b security audit ===
 
   kvm_dev_mode:                            660 ✓
   wayland_user_in_kvm:                     false ✓

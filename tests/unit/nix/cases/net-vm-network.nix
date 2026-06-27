@@ -1,14 +1,14 @@
 # nix-unit cases migrated from tests/net-vm-network-eval.sh.
 #
 # Reconstructs the bash gate's work/safe/observability topology against the
-# root nixling module set via `mkEval`, then asserts the net-VM/firewall
+# root d2b module set via `mkEval`, then asserts the net-VM/firewall
 # contract directly from the rendered host config and composed per-VM configs.
 #
 # Spec correction (existing code is canon): the legacy bash gate read guest
 # networkd/nftables details from `config.microvm.vms.<vm>.config`, which is a
 # raw compatibility-shaped surface in the daemon-only tree and now lacks the
 # realized guest networkd details. Current code stores the composed VM NixOS
-# evaluations under `config.nixling._computed.<vm>.config`; these cases assert
+# evaluations under `config.d2b._computed.<vm>.config`; these cases assert
 # the same intended values there instead of preserving the bash gate's late
 # skip after only the catch-all DHCP neutralization check.
 { mkEval, lib, ... }:
@@ -23,7 +23,7 @@ let
     system.stateVersion = "25.11";
     users.users.alice = { isNormalUser = true; uid = 1000; };
 
-    nixling.site = {
+    d2b.site = {
       waylandUser = "alice";
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
@@ -32,21 +32,21 @@ let
 
     # Auto-declares env "obs" (lanSubnet 10.40.0.0/24, uplinkSubnet
     # 203.0.113.0/30), the sys-obs workload VM, and sys-obs-net.
-    nixling.observability.enable = true;
+    d2b.observability.enable = true;
 
-    nixling.envs.work = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
       mtu = 1280;
       mssClamp = true;
       lan.allowEastWest = true;
     };
-    nixling.envs.safe = {
+    d2b.envs.safe = {
       lanSubnet = "10.30.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
     };
 
-    nixling.vms.corp-vm = {
+    d2b.vms.corp-vm = {
       enable = true;
       env = "work";
       index = 10;
@@ -59,7 +59,7 @@ let
   };
 
   cfg = (mkEval [ fixture ]).config;
-  computed = cfg.nixling._computed;
+  computed = cfg.d2b._computed;
 
   workNet = computed.sys-work-net.config;
   safeNet = computed.sys-safe-net.config;
@@ -301,11 +301,11 @@ in
 
   # ---- auto-declared observability env/net VM --------------------------
   "net-vm-network/obs-stack-vm-name" = {
-    expr = cfg.nixling.observability.vmName;
+    expr = cfg.d2b.observability.vmName;
     expected = "sys-obs";
   };
   "net-vm-network/obs-stack-vm-env" = {
-    expr = (builtins.getAttr cfg.nixling.observability.vmName cfg.nixling.manifest).env or "";
+    expr = (builtins.getAttr cfg.d2b.observability.vmName cfg.d2b.manifest).env or "";
     expected = "obs";
   };
   "net-vm-network/obs-uplink-address" = {

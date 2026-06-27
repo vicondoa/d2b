@@ -1,6 +1,6 @@
-# host-prepare-idempotency — nixling-host drift-digest stability #[test]s.
+# host-prepare-idempotency — d2b-host drift-digest stability #[test]s.
 # Successor of tests/host-prepare-idempotency.sh, which only ran
-# `cargo test -p nixling-host --features fake-backends -- idempotency`
+# `cargo test -p d2b-host --features fake-backends -- idempotency`
 # (the drift-digest portion of the no-op invariant; the broker build was
 # best-effort and ran no test). These idempotency_* tests already run in
 # the gated `cargo test --workspace` (tests/tools/rust-workspace-checks.sh) — the

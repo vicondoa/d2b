@@ -13,7 +13,7 @@ per support tier. The integrator assembles this into
 | `vhost_net`| 6.6        | NixOS module declares; loaded at activation. |
 | `fuse`     | 6.6        | NixOS module declares; loaded at activation. |
 
-`nixling host prepare --apply` is refused on Tier 0 with
+`d2b host prepare --apply` is refused on Tier 0 with
 `tier-0-legacy-uses-nixos-module` (exit 78). The NixOS module owns the
 module + device-node activation contract.
 

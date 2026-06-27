@@ -26,7 +26,7 @@ Minimum expectations:
 bash tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh
 ```
 
-Use `NIXLING_HARDWARE_SMOKE_STRICT=1` to fail closed on cargo/minijail/
+Use `D2B_HARDWARE_SMOKE_STRICT=1` to fail closed on cargo/minijail/
 example-eval regressions instead of logging an explicit skip reason.
 
 ### What the script proves
@@ -45,11 +45,11 @@ example-eval regressions instead of logging an explicit skip reason.
 
 When the host is idle, follow the script's printed sequence:
 
-1. start `nixlingd` with the explicit broker binary overrides;
-2. run `packages/target/debug/nixling host install --apply`;
-3. run `packages/target/debug/nixling vm start work-vm --apply`;
-4. attach the YubiKey via `packages/target/debug/nixling usb attach work-vm <busid> --apply` if you are
-   validating the USBIP leg (the legacy `nixling usb work-vm` bash orchestrator was retired in v1.0 per ADR 0015);
+1. start `d2bd` with the explicit broker binary overrides;
+2. run `packages/target/debug/d2b host install --apply`;
+3. run `packages/target/debug/d2b vm start work-vm --apply`;
+4. attach the YubiKey via `packages/target/debug/d2b usb attach work-vm <busid> --apply` if you are
+   validating the USBIP leg (the legacy `d2b usb work-vm` bash orchestrator was retired in v1.0 per ADR 0015);
 5. confirm `ExportBrokerAudit` contains the expected `ApplyNftables`,
    `SpawnRunner`, `OpenPidfd`, and `UsbipBind` rows.
 
@@ -61,22 +61,22 @@ the operator's own graphics session.
 Once the live phase is green, write the readiness evidence files:
 
 ```bash
-NIXLING_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1 \
-NIXLING_HARDWARE_SMOKE_LIVE_GREEN=1 \
-NIXLING_HARDWARE_SMOKE_OPERATOR_SIGNATURE='alice@example' \
+D2B_HARDWARE_SMOKE_RECORD_EVIDENCE_ONLY=1 \
+D2B_HARDWARE_SMOKE_LIVE_GREEN=1 \
+D2B_HARDWARE_SMOKE_OPERATOR_SIGNATURE='alice@example' \
 bash tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh
 ```
 
 That writes:
 
-- `/var/lib/nixling/validated/w5Fu.json`
-- `/var/lib/nixling/validated/w6Fu.json`
+- `/var/lib/d2b/validated/w5Fu.json`
+- `/var/lib/d2b/validated/w6Fu.json`
 
 After that, set the matching readiness bits in host config:
 
 ```nix
-nixling.defaultSwitchReadiness.w5Fu.validated = true;
-nixling.defaultSwitchReadiness.w6Fu.validated = true;
+d2b.defaultSwitchReadiness.w5Fu.validated = true;
+d2b.defaultSwitchReadiness.w6Fu.validated = true;
 ```
 
 ## Ubuntu 24.04 Tier-1 manual scaffold
@@ -86,12 +86,12 @@ nixling.defaultSwitchReadiness.w6Fu.validated = true;
 Run this on an Ubuntu 24.04 x86_64 host with KVM and root access:
 
 ```bash
-sudo NIXLING_REPO=/path/to/nixling \
+sudo D2B_REPO=/path/to/d2b \
   tests/integration/distro-matrix/ubuntu-2404-tier1.sh
 ```
 
 On non-Ubuntu hosts the harness automatically flips into
-`NIXLING_UBUNTU_SCAFFOLD_ONLY=1`; you can also set that variable yourself when
+`D2B_UBUNTU_SCAFFOLD_ONLY=1`; you can also set that variable yourself when
 you only want the documented scaffold shape.
 
 ### What the Ubuntu script covers
@@ -107,7 +107,7 @@ you only want the documented scaffold shape.
 | host destroy | host-reconcile rollback leg (returns `daemon-down` (exit 1) until daemon-side dispatch ships) |
 | audit replay | required audit rows + installer artifacts |
 
-Use `NIXLING_UBUNTU_TIER1_STRICT=1` if missing audit rows or installer
+Use `D2B_UBUNTU_TIER1_STRICT=1` if missing audit rows or installer
 artifacts should fail closed.
 
 ### Inspect the expected outputs

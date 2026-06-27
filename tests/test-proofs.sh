@@ -12,8 +12,8 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
-NL_LOG=${NL_LOG:-/dev/null}
-export ROOT NL_LOG
+D2B_LOG=${D2B_LOG:-/dev/null}
+export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
@@ -26,16 +26,16 @@ pinned_channel=$(
 )
 [ -n "$pinned_channel" ] || { fail "could not read pinned Rust channel from $toolchain_file"; exit 1; }
 
-nl_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path || true
 
 # Bootstrap the pinned toolchain through rustup/nix when cargo is absent (CI).
-if [ -z "${NIXLING_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ -z "${D2B_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "cargo and nix both unavailable; cannot run proofs"
     exit 1
   fi
   log "  cargo not on PATH; re-entering via nix shell for pinned Rust $pinned_channel"
-  export NIXLING_PROOFS_IN_NIX_SHELL=1
+  export D2B_PROOFS_IN_NIX_SHELL=1
   exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc \
     --command bash -lc "
       set -euo pipefail

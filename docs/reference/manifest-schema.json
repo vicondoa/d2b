@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/vicondoa/nixling/blob/main/docs/reference/manifest-schema.json",
-  "title": "nixling JSON manifest",
-  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract consumed by the Rust CLI and daemon. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
+  "$id": "https://github.com/vicondoa/d2b/blob/main/docs/reference/manifest-schema.json",
+  "title": "d2b JSON manifest",
+  "description": "Per-VM metadata manifest emitted by the d2b NixOS framework at /run/current-system/sw/share/d2b/vms.json. The contract consumed by the Rust CLI and daemon. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
   "type": "object",
   "required": ["_manifest", "_observability"],
   "properties": {
@@ -15,7 +15,7 @@
         "manifestVersion": {
           "type": "integer",
           "const": 7,
-          "description": "Schema version. This document is the v7 schema; the field is locked to `const: 7`. v7 adds per-VM lifecycle.gracefulShutdown metadata so nixlingd can apply VM-specific graceful guest-shutdown policy while preserving v6 compatibility during the rollout."
+          "description": "Schema version. This document is the v7 schema; the field is locked to `const: 7`. v7 adds per-VM lifecycle.gracefulShutdown metadata so d2bd can apply VM-specific graceful guest-shutdown policy while preserving v6 compatibility during the rollout."
         }
       }
     },
@@ -38,7 +38,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Mirror of nixling.observability.enable. The metadata block is still present when false."
+          "description": "Mirror of d2b.observability.enable. The metadata block is still present when false."
         },
         "vmName": {
           "type": "string",
@@ -52,11 +52,11 @@
         },
         "obsVsockHostSocket": {
           "type": "string",
-          "description": "Host-side Unix socket backing the observability stack VM's vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
+          "description": "Host-side Unix socket backing the observability stack VM's vsock device. Currently /var/lib/d2b/vms/<vm>/vsock.sock."
         },
         "signozUrl": {
           "type": "string",
-          "description": "Resolved SigNoz UI URL derived from nixling.observability.signoz.{listenAddress,listenPort}."
+          "description": "Resolved SigNoz UI URL derived from d2b.observability.signoz.{listenAddress,listenPort}."
         },
         "signozOtlpGrpcPort": {
           "type": "integer",
@@ -80,17 +80,17 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.observability.enable is set."
+          "description": "True iff d2b.vms.<name>.observability.enable is set."
         },
         "vsockCid": {
           "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 4294967295,
-          "description": "Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without nixling guest-control or in-guest observability."
+          "description": "Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without d2b guest-control or in-guest observability."
         },
         "vsockHostSocket": {
           "type": ["string", "null"],
-          "description": "Host-side Unix socket backing this VM's Cloud Hypervisor vsock device. Null for providers without nixling guest-control or in-guest observability."
+          "description": "Host-side Unix socket backing this VM's Cloud Hypervisor vsock device. Null for providers without d2b guest-control or in-guest observability."
         },
         "agentSocket": {
           "type": ["string", "null"],
@@ -106,7 +106,7 @@
       "properties": {
         "allowEastWest": {
           "type": "boolean",
-          "description": "Raw nixling.envs.<env>.allowEastWest setting for this VM's env."
+          "description": "Raw d2b.envs.<env>.allowEastWest setting for this VM's env."
         },
         "effectiveEastWest": {
           "type": "boolean",
@@ -243,13 +243,13 @@
     },
     "vmShell": {
       "type": "object",
-      "description": "Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for runtime providers without nixling guest-control.",
+      "description": "Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for runtime providers without d2b guest-control.",
       "required": ["enabled", "defaultName", "maxSessions", "maxAttached"],
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.guest.shell.enable is set on a provider that supports persistent guest shells."
+          "description": "True iff d2b.vms.<name>.guest.shell.enable is set on a provider that supports persistent guest shells."
         },
         "defaultName": {
           "type": "string",
@@ -272,13 +272,13 @@
     },
     "vmGracefulShutdown": {
       "type": "object",
-      "description": "Per-VM graceful guest shutdown policy consumed by nixlingd.",
+      "description": "Per-VM graceful guest shutdown policy consumed by d2bd.",
       "required": ["enable", "timeoutSeconds"],
       "additionalProperties": false,
       "properties": {
         "enable": {
           "type": "boolean",
-          "description": "True iff nixlingd should attempt provider-aware graceful guest shutdown before falling back to forced VMM cleanup for this VM."
+          "description": "True iff d2bd should attempt provider-aware graceful guest shutdown before falling back to forced VMM cleanup for this VM."
         },
         "timeoutSeconds": {
           "type": ["integer", "null"],
@@ -290,7 +290,7 @@
     },
     "vmLifecycle": {
       "type": "object",
-      "description": "Per-VM lifecycle policy consumed by nixlingd.",
+      "description": "Per-VM lifecycle policy consumed by d2bd.",
       "required": ["gracefulShutdown"],
       "additionalProperties": false,
       "properties": {
@@ -376,19 +376,19 @@
         },
         "graphics": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.graphics.enable is set. The CLI uses this to pick the launch path."
+          "description": "True iff d2b.vms.<name>.graphics.enable is set. The CLI uses this to pick the launch path."
         },
         "tpm": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.tpm.enable is set."
+          "description": "True iff d2b.vms.<name>.tpm.enable is set."
         },
         "usbipYubikey": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb attach|detach|probe` refuses to run when false. The legacy `nixling usb <vm>` bash orchestrator was retired per ADR 0015."
+          "description": "True iff d2b.vms.<name>.usbip.yubikey is set. `d2b usb attach|detach|probe` refuses to run when false. The legacy `d2b usb <vm>` bash orchestrator was retired per ADR 0015."
         },
         "audio": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.audio.enable is set. Capability bit; live grant state lives in audioStateFile."
+          "description": "True iff d2b.vms.<name>.audio.enable is set. Capability bit; live grant state lives in audioStateFile."
         },
         "tap": {
           "type": "string",
@@ -427,11 +427,11 @@
         },
         "usbipdHostIp": {
           "type": ["string", "null"],
-          "description": "Host IP of the per-env usbipd proxy. `nixling usb attach` passes this to `usbip attach -r` via the broker SpawnRunner DAG. The legacy `nixling usb <vm>` bash orchestrator was retired per ADR 0015. Null for net VMs and legacy."
+          "description": "Host IP of the per-env usbipd proxy. `d2b usb attach` passes this to `usbip attach -r` via the broker SpawnRunner DAG. The legacy `d2b usb <vm>` bash orchestrator was retired per ADR 0015. Null for net VMs and legacy."
         },
         "stateDir": {
           "type": "string",
-          "description": "Per-VM state dir. Currently /var/lib/nixling/vms/<name>."
+          "description": "Per-VM state dir. Currently /var/lib/d2b/vms/<name>."
         },
         "apiSocket": {
           "type": ["string", "null"],
@@ -439,19 +439,19 @@
         },
         "gpuSocket": {
           "type": ["string", "null"],
-          "description": "crosvm-gpu sidecar control socket (<stateDir>/<name>-gpu.sock). Null for providers without a nixling GPU sidecar socket."
+          "description": "crosvm-gpu sidecar control socket (<stateDir>/<name>-gpu.sock). Null for providers without a d2b GPU sidecar socket."
         },
         "tpmSocket": {
           "type": ["string", "null"],
-          "description": "swtpm vTPM socket path (/run/nixling/vms/<name>/tpm.sock). Null for providers without nixling-managed TPM state."
+          "description": "swtpm vTPM socket path (/run/d2b/vms/<name>/tpm.sock). Null for providers without d2b-managed TPM state."
         },
         "audioStateFile": {
           "type": ["string", "null"],
-          "description": "Live audio-grant state file (<stateDir>/state/audio-state.json). Null for providers without the nixling audio sidecar."
+          "description": "Live audio-grant state file (<stateDir>/state/audio-state.json). Null for providers without the d2b audio sidecar."
         },
         "audioService": {
           "type": ["string", "null"],
-          "description": "Host-side audio sidecar systemd unit name (nixling-<name>-snd.service). Null for providers without the nixling audio sidecar."
+          "description": "Host-side audio sidecar systemd unit name (d2b-<name>-snd.service). Null for providers without the d2b audio sidecar."
         },
         "observability": {
           "$ref": "#/$defs/vmObservability"
@@ -461,7 +461,7 @@
             { "$ref": "#/$defs/vmShell" },
             { "type": "null" }
           ],
-          "description": "Persistent guest shell policy metadata, or null for providers without nixling guest-control."
+          "description": "Persistent guest shell policy metadata, or null for providers without d2b guest-control."
         },
         "staticIp": {
           "type": ["string", "null"],
@@ -469,7 +469,7 @@
         },
         "sshUser": {
           "type": ["string", "null"],
-          "description": "Username for nixling-driven SSH. Mirrors nixling.vms.<name>.ssh.user. Null for headless net VMs."
+          "description": "Username for d2b-driven SSH. Mirrors d2b.vms.<name>.ssh.user. Null for headless net VMs."
         }
       }
     }

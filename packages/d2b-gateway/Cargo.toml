@@ -1,0 +1,33 @@
+[package]
+name = "d2b-gateway"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Gateway-mode display-session orchestrator (ADR 0032, P0). Composes the
+# proven providers (d2b-provider-aca WorkloadProvider + d2b-provider-
+# relay TransportProvider + an operator-session Waypipe display runner) into a
+# session-credential-bound display session. The session credential (a
+# gateway-minted one-shot HMAC binding) is what admits display bytes — Azure
+# Relay / the sandbox managed identity stay reachability-only. Pure-logic cores
+# (handshake, ledger, state machine) are injected-deps testable with mocks; no
+# live Azure in unit tests. Host-side leaf crate: nothing in the constellation
+# contract crates depends on it (dep-direction gate).
+[dependencies]
+d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+

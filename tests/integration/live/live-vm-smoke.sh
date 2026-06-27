@@ -13,13 +13,13 @@
 # Exit codes:
 #   0   PASS
 #   1   FAIL
-#   77  SKIP (KVM absent / nixling not running / VMs not declared)
+#   77  SKIP (KVM absent / d2b not running / VMs not declared)
 #
 # Configurable via environment:
-#   NL_SMOKE_TIMEOUT_SSH     seconds to wait for SSH (default 120)
-#   NL_SMOKE_APIREADY_BUDGET seconds to wait for api_ready (default 60)
-#   NL_SMOKE_VM_PRIMARY      primary VM name (default personal-dev)
-#   NL_SMOKE_VM_SECONDARY    secondary VM for --full (default work-aad)
+#   D2B_SMOKE_TIMEOUT_SSH     seconds to wait for SSH (default 120)
+#   D2B_SMOKE_APIREADY_BUDGET seconds to wait for api_ready (default 60)
+#   D2B_SMOKE_VM_PRIMARY      primary VM name (default personal-dev)
+#   D2B_SMOKE_VM_SECONDARY    secondary VM for --full (default work-aad)
 
 set -euo pipefail
 
@@ -41,14 +41,14 @@ fi
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-NL_SMOKE_TIMEOUT_SSH=${NL_SMOKE_TIMEOUT_SSH:-120}
-NL_SMOKE_APIREADY_BUDGET=${NL_SMOKE_APIREADY_BUDGET:-60}
-NL_SMOKE_VM_PRIMARY=${NL_SMOKE_VM_PRIMARY:-personal-dev}
-NL_SMOKE_VM_SECONDARY=${NL_SMOKE_VM_SECONDARY:-work-aad}
+D2B_SMOKE_TIMEOUT_SSH=${D2B_SMOKE_TIMEOUT_SSH:-120}
+D2B_SMOKE_APIREADY_BUDGET=${D2B_SMOKE_APIREADY_BUDGET:-60}
+D2B_SMOKE_VM_PRIMARY=${D2B_SMOKE_VM_PRIMARY:-personal-dev}
+D2B_SMOKE_VM_SECONDARY=${D2B_SMOKE_VM_SECONDARY:-work-aad}
 
-PIDFD_TABLE=/var/lib/nixling/daemon-state/pidfd-table.json
-VM_RUN_BASE=/run/nixling/vms
-VM_STATE_BASE=/var/lib/nixling/vms
+PIDFD_TABLE=/var/lib/d2b/daemon-state/pidfd-table.json
+VM_RUN_BASE=/run/d2b/vms
+VM_STATE_BASE=/var/lib/d2b/vms
 
 MODE=full
 for arg in "$@"; do
@@ -78,25 +78,25 @@ if [ ! -e /dev/kvm ]; then
   exit 77
 fi
 
-if ! systemctl is-active --quiet nixling-priv-broker 2>/dev/null; then
-  log "==> SKIP: nixling-priv-broker is not active (systemctl is-active returned non-zero)"
+if ! systemctl is-active --quiet d2b-priv-broker 2>/dev/null; then
+  log "==> SKIP: d2b-priv-broker is not active (systemctl is-active returned non-zero)"
   exit 77
 fi
 
-if ! command -v nixling >/dev/null 2>&1; then
-  log "==> SKIP: nixling not on PATH"
+if ! command -v d2b >/dev/null 2>&1; then
+  log "==> SKIP: d2b not on PATH"
   exit 77
 fi
 
 # Check that the primary VM is declared in the manifest.
-if ! nixling vm status "$NL_SMOKE_VM_PRIMARY" >/dev/null 2>&1; then
-  log "==> SKIP: VM '$NL_SMOKE_VM_PRIMARY' not declared in manifest"
+if ! d2b vm status "$D2B_SMOKE_VM_PRIMARY" >/dev/null 2>&1; then
+  log "==> SKIP: VM '$D2B_SMOKE_VM_PRIMARY' not declared in manifest"
   exit 77
 fi
 
 if [ "$MODE" = "full" ]; then
-  if ! nixling vm status "$NL_SMOKE_VM_SECONDARY" >/dev/null 2>&1; then
-    log "==> SKIP: VM '$NL_SMOKE_VM_SECONDARY' not declared (required for --full)"
+  if ! d2b vm status "$D2B_SMOKE_VM_SECONDARY" >/dev/null 2>&1; then
+    log "==> SKIP: VM '$D2B_SMOKE_VM_SECONDARY' not declared (required for --full)"
     exit 77
   fi
 fi
@@ -110,7 +110,7 @@ wait_for_guest_exec() {
   local vm="$1" timeout="$2" elapsed=0 interval=5
   shift 2
   while [ "$elapsed" -lt "$timeout" ]; do
-    if nixling vm exec "$vm" -- "$@" >/dev/null 2>&1; then
+    if d2b vm exec "$vm" -- "$@" >/dev/null 2>&1; then
       return 0
     fi
     sleep "$interval"
@@ -119,10 +119,10 @@ wait_for_guest_exec() {
   return 1
 }
 
-# vm_ip <vm> — resolve the VM's static IP from the nixling manifest.
+# vm_ip <vm> — resolve the VM's static IP from the d2b manifest.
 vm_ip() {
   local vm="$1" ip
-  ip=$(nixling vm status "$vm" --json 2>/dev/null \
+  ip=$(d2b vm status "$vm" --json 2>/dev/null \
     | grep -Eo '"static(_i|I)p"[[:space:]]*:[[:space:]]*"[^"]*"' \
     | grep -o '"[0-9][^"]*"' \
     | tr -d '"' \
@@ -131,7 +131,7 @@ vm_ip() {
     printf '%s\n' "$ip"
     return 0
   fi
-  nixling list --json 2>/dev/null \
+  d2b list --json 2>/dev/null \
     | awk -v vm="\"$vm\"" '
       /"name"[[:space:]]*:/ { in_vm = ($0 ~ vm) }
       in_vm && /"staticIp"[[:space:]]*:/ {
@@ -144,7 +144,7 @@ vm_ip() {
 }
 
 # api_socket <vm> — path to CH HTTP API socket.
-# Convention from manifest.nix: /var/lib/nixling/vms/<vm>/<vm>.sock
+# Convention from manifest.nix: /var/lib/d2b/vms/<vm>/<vm>.sock
 api_socket() {
   printf '%s/%s/%s.sock\n' "$VM_STATE_BASE" "$1" "$1"
 }
@@ -161,12 +161,12 @@ ch_pid() {
   fi
 }
 
-# wait_for_api_ready <vm> <budget_secs> — wait until nixling vm status reports api_ready yes.
+# wait_for_api_ready <vm> <budget_secs> — wait until d2b vm status reports api_ready yes.
 wait_for_api_ready() {
   local vm="$1" budget="$2" elapsed=0 interval=5
   while [ "$elapsed" -lt "$budget" ]; do
     local status
-    status=$(nixling vm status "$vm" --json 2>/dev/null || true)
+    status=$(d2b vm status "$vm" --json 2>/dev/null || true)
     if printf '%s\n' "$status" | grep -Eq '"api_ready"[[:space:]]*:[[:space:]]*"yes"|"apiReady"[[:space:]]*:[[:space:]]*"yes"'; then
       return 0
     fi
@@ -190,22 +190,22 @@ probe_common() {
   # 1. Start VM.
   log "  starting $vm"
   local start_output
-  if ! start_output=$(nixling vm start "$vm" --apply 2>&1); then
+  if ! start_output=$(d2b vm start "$vm" --apply 2>&1); then
     if printf '%s\n' "$start_output" | grep -q 'pending un-approved guest config edit'; then
       log "  WARN: $vm has a pending un-approved guest config edit; skipping live VM probes for this host-local state"
       return 2
     fi
-    fail_check "$vm: nixling vm start failed"
+    fail_check "$vm: d2b vm start failed"
     return 1
   fi
-  pass_check "$vm: nixling vm start returned"
+  pass_check "$vm: d2b vm start returned"
   PROBE_COMMON_STARTED=1
 
   # 2. api_ready within budget.
-  if wait_for_api_ready "$vm" "$NL_SMOKE_APIREADY_BUDGET"; then
-    pass_check "$vm: api_ready=yes within ${NL_SMOKE_APIREADY_BUDGET}s"
+  if wait_for_api_ready "$vm" "$D2B_SMOKE_APIREADY_BUDGET"; then
+    pass_check "$vm: api_ready=yes within ${D2B_SMOKE_APIREADY_BUDGET}s"
   else
-    fail_check "$vm: api_ready never became yes within ${NL_SMOKE_APIREADY_BUDGET}s"
+    fail_check "$vm: api_ready never became yes within ${D2B_SMOKE_APIREADY_BUDGET}s"
   fi
 
   # 3. Guest-control exec reachability + uname.
@@ -215,16 +215,16 @@ probe_common() {
     fail_check "$vm: could not resolve static IP from manifest"
     return 1
   fi
-  if wait_for_guest_exec "$vm" "$NL_SMOKE_TIMEOUT_SSH" uname -a; then
-    pass_check "$vm: guest-control exec uname -a succeeded within ${NL_SMOKE_TIMEOUT_SSH}s"
+  if wait_for_guest_exec "$vm" "$D2B_SMOKE_TIMEOUT_SSH" uname -a; then
+    pass_check "$vm: guest-control exec uname -a succeeded within ${D2B_SMOKE_TIMEOUT_SSH}s"
   else
-    fail_check "$vm: guest-control exec unreachable after ${NL_SMOKE_TIMEOUT_SSH}s"
+    fail_check "$vm: guest-control exec unreachable after ${D2B_SMOKE_TIMEOUT_SSH}s"
     return 1
   fi
 
   # 4. virtiofsd file-IO probe.
   local store_entry
-  store_entry=$(nixling vm exec "$vm" -- sh -lc 'ls /nix/store 2>/dev/null | head -1' 2>/dev/null || true)
+  store_entry=$(d2b vm exec "$vm" -- sh -lc 'ls /nix/store 2>/dev/null | head -1' 2>/dev/null || true)
   if [ -n "$store_entry" ]; then
     pass_check "$vm: virtiofsd file-IO probe: /nix/store entry='${store_entry}'"
   else
@@ -313,13 +313,13 @@ probe_common() {
     log "  WARN: CH PID not found in pidfd-table; skipping CAP_NET_ADMIN check"
   fi
 
-  # 9. nixling host doctor --read-only.
+  # 9. d2b host doctor --read-only.
   local doctor
-  doctor=$(nixling host doctor --read-only 2>&1 || true)
+  doctor=$(d2b host doctor --read-only 2>&1 || true)
   if printf '%s\n' "$doctor" | grep -q 'fail=0'; then
-    pass_check "$vm: nixling host doctor --read-only exits 0"
+    pass_check "$vm: d2b host doctor --read-only exits 0"
   else
-    fail_check "$vm: nixling host doctor --read-only reported failures"
+    fail_check "$vm: d2b host doctor --read-only reported failures"
   fi
 }
 
@@ -330,7 +330,7 @@ probe_teardown() {
   local vm="$1"
   log "==> probe_teardown: VM=$vm"
 
-  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
+  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 3
 
   # Assert no orphan sidecar processes.
@@ -365,13 +365,13 @@ probe_tpm() {
   local vm="$1"
   log "==> probe_tpm: VM=$vm"
 
-  if ! nixling vm status "$vm" --json 2>/dev/null | grep -q '"swtpm"[[:space:]]*:[[:space:]]*"running"'; then
+  if ! d2b vm status "$vm" --json 2>/dev/null | grep -q '"swtpm"[[:space:]]*:[[:space:]]*"running"'; then
     log "  WARN: $vm has no running swtpm service; skipping TPM live probe"
     return
   fi
 
   # TPM functional probe: tpm2_getrandom 8.
-  if nixling vm exec "$vm" -- sh -lc 'tpm2_getrandom 8 >/dev/null 2>&1' >/dev/null 2>&1; then
+  if d2b vm exec "$vm" -- sh -lc 'tpm2_getrandom 8 >/dev/null 2>&1' >/dev/null 2>&1; then
     pass_check "$vm: TPM functional probe tpm2_getrandom 8 succeeded"
   else
     fail_check "$vm: TPM functional probe tpm2_getrandom 8 failed (fu36 class)"
@@ -379,7 +379,7 @@ probe_tpm() {
 
   # TPM SRK persistence pre-state.
   local srk_count_before
-  srk_count_before=$(nixling vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
+  srk_count_before=$(d2b vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
   if [ "${srk_count_before:-0}" -ge 1 ]; then
     pass_check "$vm: TPM SRK handle 0x81000001 present before restart"
   else
@@ -388,19 +388,19 @@ probe_tpm() {
 
   # Restart VM; re-assert SRK handle.
   log "  restarting $vm for TPM persistence check"
-  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
+  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 2
-  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
-    fail_check "$vm: nixling vm start (post-stop for TPM persistence) failed"
+  if ! d2b vm start "$vm" --apply >/dev/null 2>&1; then
+    fail_check "$vm: d2b vm start (post-stop for TPM persistence) failed"
     return
   fi
   # Wait for guest-control exec to come back.
-  if ! wait_for_guest_exec "$vm" "$NL_SMOKE_TIMEOUT_SSH" uname -a; then
+  if ! wait_for_guest_exec "$vm" "$D2B_SMOKE_TIMEOUT_SSH" uname -a; then
     fail_check "$vm: guest-control exec unreachable after restart for TPM persistence check"
     return
   fi
   local srk_count_after
-  srk_count_after=$(nixling vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
+  srk_count_after=$(d2b vm exec "$vm" -- sh -lc 'tpm2_getcap handles-persistent 2>/dev/null | grep -c 0x81000001 || echo 0' 2>/dev/null || echo 0)
   if [ "${srk_count_after:-0}" -ge 1 ]; then
     pass_check "$vm: TPM SRK handle 0x81000001 survived restart (panel-virt R0 #6)"
   else
@@ -414,11 +414,11 @@ probe_tpm() {
 probe_bridge_sysctl() {
   log "==> probe_bridge_sysctl: bridge sysctl persistence under networkd restart"
 
-  # Enumerate nixling-declared bridge interfaces.
-  # nixling host doctor --read-only --json outputs interface names; fall back
+  # Enumerate d2b-declared bridge interfaces.
+  # d2b host doctor --read-only --json outputs interface names; fall back
   # to reading from /sys/class/net + filtering bridge type.
   local bridges
-  bridges=$(nixling host info --json 2>/dev/null \
+  bridges=$(d2b host info --json 2>/dev/null \
     | grep -o '"[a-zA-Z0-9_-]*br[a-zA-Z0-9_-]*"' \
     | tr -d '"' \
     | sort -u || true)
@@ -464,7 +464,7 @@ probe_audio() {
 
   # Audio card probe.
   local card_count
-  card_count=$(nixling vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
+  card_count=$(d2b vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
   if [ "${card_count:-0}" -ge 1 ]; then
     pass_check "$vm: audio sidecar probe: ${card_count} card(s) visible in guest"
   else
@@ -473,10 +473,10 @@ probe_audio() {
 
   # Audio sidecar restart binding.
   log "  audio restart binding: stop + restart $vm"
-  nixling vm stop "$vm" --apply >/dev/null 2>&1 || true
+  d2b vm stop "$vm" --apply >/dev/null 2>&1 || true
   sleep 2
-  if ! nixling vm start "$vm" --apply >/dev/null 2>&1; then
-    fail_check "$vm: nixling vm start (audio restart) failed"
+  if ! d2b vm start "$vm" --apply >/dev/null 2>&1; then
+    fail_check "$vm: d2b vm start (audio restart) failed"
     return
   fi
   if ! wait_for_guest_exec "$vm" 30 uname -a; then
@@ -484,7 +484,7 @@ probe_audio() {
     return
   fi
   local card_count_after
-  card_count_after=$(nixling vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
+  card_count_after=$(d2b vm exec "$vm" -- sh -lc 'aplay -l 2>/dev/null | grep -c card || echo 0' 2>/dev/null || echo 0)
   if [ "${card_count_after:-0}" -ge 1 ]; then
     pass_check "$vm: audio sidecar restart binding: ${card_count_after} card(s) after restart"
   else
@@ -497,7 +497,7 @@ probe_audio() {
 # ---------------------------------------------------------------------------
 HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
 ISO_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-LOG_FILE="${TMPDIR:-/tmp}/nixling-smoke-run-log.txt"
+LOG_FILE="${TMPDIR:-/tmp}/d2b-smoke-run-log.txt"
 
 log "==> HEAD=$HEAD_SHA mode=$MODE ts=$ISO_TS"
 
@@ -505,7 +505,7 @@ log "==> HEAD=$HEAD_SHA mode=$MODE ts=$ISO_TS"
 primary_ready=0
 primary_started=0
 PROBE_COMMON_STARTED=0
-if probe_common "$NL_SMOKE_VM_PRIMARY"; then
+if probe_common "$D2B_SMOKE_VM_PRIMARY"; then
   primary_ready=1
 fi
 primary_started=$PROBE_COMMON_STARTED
@@ -513,7 +513,7 @@ primary_started=$PROBE_COMMON_STARTED
 if [ "$MODE" = "full" ]; then
   # Full-mode: TPM probes on primary VM (personal-dev has TPM enabled).
   if [ "$primary_ready" -eq 1 ]; then
-    probe_tpm "$NL_SMOKE_VM_PRIMARY"
+    probe_tpm "$D2B_SMOKE_VM_PRIMARY"
   fi
 
   # Full-mode: bridge sysctl persistence (global, not per-VM).
@@ -523,25 +523,25 @@ if [ "$MODE" = "full" ]; then
   secondary_ready=0
   secondary_started=0
   PROBE_COMMON_STARTED=0
-  if probe_common "$NL_SMOKE_VM_SECONDARY"; then
+  if probe_common "$D2B_SMOKE_VM_SECONDARY"; then
     secondary_ready=1
   fi
   secondary_started=$PROBE_COMMON_STARTED
 
   if [ "$secondary_ready" -eq 1 ]; then
     # Full-mode: audio probe on secondary VM (work-aad has audio sidecar).
-    probe_audio "$NL_SMOKE_VM_SECONDARY"
+    probe_audio "$D2B_SMOKE_VM_SECONDARY"
   fi
 
   # Teardown secondary VM if start returned, even if later probes failed.
   if [ "$secondary_started" -eq 1 ]; then
-    probe_teardown "$NL_SMOKE_VM_SECONDARY"
+    probe_teardown "$D2B_SMOKE_VM_SECONDARY"
   fi
 fi
 
 # Teardown primary VM if start returned, even if later probes failed.
 if [ "$primary_started" -eq 1 ]; then
-  probe_teardown "$NL_SMOKE_VM_PRIMARY"
+  probe_teardown "$D2B_SMOKE_VM_PRIMARY"
 fi
 
 # ---------------------------------------------------------------------------
