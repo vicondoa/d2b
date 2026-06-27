@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AudioPolicyState",
+  "description": "Versioned audio-policy state for a single VM.\n\nThis is the in-memory representation of `audio-state.json`. Parse with [`parse_audio_state`]; write v2 JSON with [`AudioPolicyState::to_v2_bytes`].",
+  "type": "object",
+  "required": [
+    "mic",
+    "schemaVersion",
+    "speaker"
+  ],
+  "properties": {
+    "mic": {
+      "description": "Microphone grant.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AudioGrant"
+        }
+      ]
+    },
+    "micGain": {
+      "description": "Microphone input gain, `0..=100`. `None` means \"unset; use system default\".",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LevelPercent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schemaVersion": {
+      "description": "Canonical schema version; always `\"v2\"` for newly written documents.",
+      "type": "string"
+    },
+    "speaker": {
+      "description": "Speaker grant.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AudioGrant"
+        }
+      ]
+    },
+    "speakerLevel": {
+      "description": "Speaker output volume, `0..=100`. `None` means \"unset; use system default\".",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LevelPercent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AudioGrant": {
+      "description": "On/off grant for a single audio channel (mic or speaker).",
+      "type": "string",
+      "enum": [
+        "on",
+        "off"
+      ]
+    },
+    "LevelPercent": {
+      "description": "Audio level in the range 0..=100.",
+      "type": "integer",
+      "maximum": 100.0,
+      "minimum": 0.0
+    }
+  }
+}

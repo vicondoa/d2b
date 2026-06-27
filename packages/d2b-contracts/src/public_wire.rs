@@ -5,11 +5,12 @@ use d2b_core::{
     host::IfName,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
 };
+pub use d2b_core::audio_policy::LevelPercent;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
     schema::{
-        InstanceType, Metadata, NumberValidation, Schema, SchemaObject, SingleOrVec,
+        InstanceType, Metadata, Schema, SchemaObject, SingleOrVec,
         StringValidation,
     },
 };
@@ -1687,67 +1688,6 @@ pub enum ConsoleOpResponse {
 }
 
 // ---- Audio operation (ADR 0041) ---------------------------------------------
-
-/// Audio volume/gain level bounded to 0–100 inclusive.
-///
-/// Validated at the public-wire boundary: values outside the range are
-/// rejected with a typed deserialize error. This is a local newtype; use
-/// [`LevelPercent::new`] to construct and [`LevelPercent::get`] to read
-/// the raw value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LevelPercent(u8);
-
-impl LevelPercent {
-    /// Construct a level, returning an error string if the value exceeds 100.
-    pub fn new(value: u8) -> Result<Self, String> {
-        if value > 100 {
-            return Err(format!("audio level must be 0–100, got {value}"));
-        }
-        Ok(Self(value))
-    }
-
-    /// The raw level value (always in `0..=100`).
-    pub fn get(self) -> u8 {
-        self.0
-    }
-}
-
-impl Serialize for LevelPercent {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for LevelPercent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = u8::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
-impl JsonSchema for LevelPercent {
-    fn schema_name() -> String {
-        "LevelPercent".to_owned()
-    }
-
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        Schema::Object(SchemaObject {
-            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
-            number: Some(Box::new(NumberValidation {
-                minimum: Some(0.0),
-                maximum: Some(100.0),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
-    }
-}
 
 /// An audio channel controlled by a single operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

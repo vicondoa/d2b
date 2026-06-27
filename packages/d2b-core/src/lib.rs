@@ -2,6 +2,7 @@
 
 pub mod audio_policy;
 pub mod base64_codec;
+pub mod provider_capabilities;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;

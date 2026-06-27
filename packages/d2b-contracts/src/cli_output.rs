@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::public_wire::{
+    AudioChannel, AudioEnforcementPosture, AudioProviderKind, AudioSetApplied, LevelPercent,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
@@ -637,20 +641,18 @@ pub struct VmAudioStatusEntryOutputV1 {
     pub vm: String,
     /// Speaker level (0–100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub speaker_level: Option<u8>,
+    pub speaker_level: Option<LevelPercent>,
     /// Whether the speaker is muted.
     pub speaker_muted: bool,
     /// Microphone gain (0–100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mic_level: Option<u8>,
+    pub mic_level: Option<LevelPercent>,
     /// Whether the microphone is muted.
     pub mic_muted: bool,
-    /// Low-cardinality provider kind tag (e.g. `local-hypervisor`,
-    /// `qemu-media`, `aca-sandbox`).
-    pub provider_kind: String,
-    /// Low-cardinality enforcement posture tag (e.g. `host-and-guest`,
-    /// `host-only`, `guest-only`, `unsupported`, `provider-misconfigured`).
-    pub enforcement: String,
+    /// Provider kind for this VM.
+    pub provider_kind: AudioProviderKind,
+    /// Enforcement posture for this VM.
+    pub enforcement: AudioEnforcementPosture,
 }
 
 /// Per-VM error entry in [`VmAudioStatusOutputV1`].
@@ -674,14 +676,13 @@ pub struct VmAudioSetOutputV1 {
     pub command: String,
     /// Target VM.
     pub vm: String,
-    /// Low-cardinality channel tag (`speaker` or `microphone`).
-    pub channel: String,
-    /// Low-cardinality applied tag (e.g. `host-and-guest`, `host-only`,
-    /// `guest-only`, `unsupported`).
-    pub applied: String,
+    /// Channel that was changed.
+    pub channel: AudioChannel,
+    /// Whether and how the change was applied.
+    pub applied: AudioSetApplied,
     /// Channel level after the operation (0–100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<u8>,
+    pub level: Option<LevelPercent>,
     /// Whether the channel is muted after the operation.
     pub muted: bool,
 }

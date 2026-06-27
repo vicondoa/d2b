@@ -312,7 +312,6 @@ mod tests {
 
         // qemu-media: host qemu backend only; guestd unsupported.
         let qemu = AudioCapabilitySet::qemu_media_host_only();
-        assert_eq!(ch.host_enforcement, AudioHostEnforcement::PipeWireVhostUserSound);
         assert_eq!(qemu.host_enforcement, AudioHostEnforcement::QemuAudioBackend);
         assert_eq!(qemu.guest_enforcement, AudioGuestEnforcement::Unsupported);
 
