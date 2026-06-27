@@ -241,7 +241,7 @@ pub struct AudioRuntimeConfig {
 /// the resolved workload-user UID. Only present when the wpctl binary exists
 /// and the workload user was successfully resolved.
 #[derive(Clone, Debug)]
-struct AudioRuntime {
+pub(crate) struct AudioRuntime {
     wpctl_path: PathBuf,
     /// Workload-user UID; used to build `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`
     /// for every wpctl subprocess so they target the user's PipeWire session.
@@ -1671,7 +1671,7 @@ impl GuestControlService {
     /// Attach the active audio runtime. When `Some`, the AudioStatus/AudioSet
     /// capabilities are advertised and RPCs target the workload user's PipeWire
     /// session via wpctl argv-only subprocesses.
-    pub fn with_audio_runtime(mut self, runtime: Option<Arc<AudioRuntime>>) -> Self {
+    pub(crate) fn with_audio_runtime(mut self, runtime: Option<Arc<AudioRuntime>>) -> Self {
         self.audio = runtime;
         self
     }
