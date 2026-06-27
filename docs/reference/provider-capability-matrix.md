@@ -124,7 +124,7 @@ and guest-side enforcement via `guestd`:
 - Volume and gain are bounded `0..=100` domain values validated at the
   public-wire boundary before reaching the daemon.
 - Local audio state is versioned and written atomically under an OFD
-  lock at `/run/d2b/locks/<vm>.lock`. The lock is acquired with
+  lock at `/run/d2b/locks/audio-<vm>.lock`. The lock is acquired with
   `fcntl(F_OFD_SETLKW)` (blocking exclusive write lock for state
   mutations; shared read locks for readers). Lock file descriptors are
   opened with `O_CLOEXEC` so exec'd child processes do not inherit the
@@ -137,12 +137,13 @@ and guest-side enforcement via `guestd`:
   coordination with any process that still holds the old fd. The kernel
   releases the OFD lock when all fds to the open file description close;
   the inode persisting on disk is not a stale lock.
-- The per-VM lock inode footprint is bounded by the declared VM name
-  set. Exactly one lock file per named VM is created on first audio
-  mutation; VMs that have never had an audio mutation have no lock file.
-  Declared VM names are validated at eval time
-  (`^[a-z][a-z0-9-]*$`), so the inode count is bounded by the
-  operator's declared configuration, not by dynamic runtime state.
+- Per-VM lock files (`/run/d2b/locks/audio-<vm>.lock`, mode 0660
+  `root:d2b`) are precreated by `systemd-tmpfiles` (`f` rule) on each
+  boot for every VM with `audio.enable = true`. The `f` rule never
+  overwrites an existing file, so OFD lock semantics are preserved
+  across daemon restarts. The inode footprint is bounded by the
+  declared VM name set, which is validated at eval time
+  (`^[a-z][a-z0-9-]*$`).
 - Host-side `off` requests are fail-closed: the host boundary is sealed
   even when `guestd` is unresponsive; the response carries a degraded
   result for the guest-side enforcement step so the operator knows the

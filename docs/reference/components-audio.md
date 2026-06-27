@@ -122,16 +122,22 @@ Per audio-enabled VM:
     hard if the socket never materialises.
   - `Restart = "no"` — on-demand only.
 - **State file** `/var/lib/d2b/vms/<vm>/state/audio-state.json`
-  (mode 0640, owner `root:d2b`), initial contents
+  (mode 0640, owner `d2bd:d2b`), initial contents
   `{"mic":"<allowMic>","speaker":"<allowSpeaker>"}`. The containing
-  `state/` directory is mode 0750 `root:d2b`. ACLs
+  `state/` directory is mode 0750 `d2bd:d2b`. ACLs
   grant `d2b-<vm>-gpu` `rx` on the directory and `r` on the
   file so the GPU sidecar can read state at VM-boot time without
-  joining `d2b`.
-- **Lock file** `/run/d2b/audio-<vm>.lock`, mode 0660,
-  `root:d2b`. The current Rust CLI shim returns
-  exit-78 and does not acquire this lock because the daemon-native
-  audio control plane is not yet available.
+  joining `d2b`. A default ACL (`default:u:d2b-<vm>-gpu:r--`,
+  `default:m::r--`) on `state/` ensures that replacement inodes
+  written via atomic rename (write to a temp file in `state/`, rename
+  to `audio-state.json`) inherit the GPU read permission on the new
+  inode.
+- **Lock file** `/run/d2b/locks/audio-<vm>.lock`, mode 0660,
+  `root:d2b`. Precreated via `systemd-tmpfiles` (`f` rule) on each
+  boot; the `f` type never overwrites an existing file, so OFD lock
+  semantics are preserved across daemon restarts. The current Rust CLI
+  shim returns exit-78 and does not acquire this lock because the
+  daemon-native audio control plane is not yet available.
 - **`vhost-device-sound`** vendored at
   `pkgs/vhost-device-sound/` because the nixpkgs version has a known
   PipeWire-backend format-negotiation bug. Added to

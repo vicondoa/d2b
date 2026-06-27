@@ -368,6 +368,11 @@ in
         "a+ /var/lib/d2b/vms/corp-vm - - - - g:d2b:--x"
         "a+ /var/lib/d2b/vms/corp-vm/state - - - - u:d2b-corp-vm-gpu:r-x"
         "a+ /var/lib/d2b/vms/corp-vm/state/audio-state.json - - - - u:d2b-corp-vm-gpu:r--"
+        # Default ACL ensures any replacement inode created by atomic rename
+        # (write temp file in state/, rename to audio-state.json) inherits
+        # GPU read access on the new inode.
+        "a+ /var/lib/d2b/vms/corp-vm/state - - - - default:u:d2b-corp-vm-gpu:r--"
+        "a+ /var/lib/d2b/vms/corp-vm/state - - - - default:m::r--"
       ]
     );
     expected = true;
