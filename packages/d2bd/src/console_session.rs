@@ -109,6 +109,12 @@ impl ConsoleClientHandle {
     }
 }
 
+impl Default for ConsoleClientHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// In-daemon console session table.
 ///
 /// One entry per running VM that has an active drainer.  Multiple clients
@@ -128,8 +134,15 @@ impl ConsoleSessionTable {
             clients: HashMap::new(),
         }
     }
+}
 
-    /// Register a new console session for `vm` with an already-running
+impl Default for ConsoleSessionTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConsoleSessionTable {
     /// drainer.  Replaces any existing session (e.g. after a VM restart).
     pub fn register_session(&mut self, vm: String, session: ConsoleSession) {
         // Abort any previous drainer for this VM.

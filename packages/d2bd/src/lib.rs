@@ -2700,7 +2700,7 @@ fn dispatch_console(
 
     // Only launcher-or-admin peers may use console.
     match &peer.role {
-        PeerRole::Admin | PeerRole::Launcher { .. } => {}
+        PeerRole::Admin | PeerRole::Launcher => {}
         _ => {
             return Err(TypedError::AuthzNotALauncher { peer_uid: peer.uid });
         }
