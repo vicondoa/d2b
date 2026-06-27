@@ -21,6 +21,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
@@ -3972,34 +3973,113 @@ fn run_guest_usbip_status(
     .map_err(|error| classify_guest_usbip_status_error(vm, error))
 }
 
-fn persisted_same_vm_usbip_claims(
+fn usbip_lifecycle_claim_for_intent(
     resolver: &BundleResolver,
     vm: &str,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> Option<usbip_reconcile_state::UsbipLifecycleClaim> {
+    let host = resolver
+        .manifest
+        .vms
+        .get(vm)
+        .and_then(|entry| entry.usbipd_host_ip.clone())?;
+    Some(usbip_reconcile_state::UsbipLifecycleClaim {
+        vm: vm.to_owned(),
+        env: intent.env.clone(),
+        bus_id: intent.bus_id.clone(),
+        host,
+        claim_ref: intent.intent_id.clone(),
+        required: true,
+    })
+}
+
+fn read_usbip_claim_lock_owner_path(lock_path: &Path) -> io::Result<String> {
+    let file = File::open(lock_path)?;
+    let mut owner = String::new();
+    file.take(128).read_to_string(&mut owner)?;
+    Ok(owner.trim().to_owned())
+}
+
+fn bounded_usbip_owner_label(owner: &str) -> &str {
+    if owner.len() <= 63
+        && owner
+            .bytes()
+            .enumerate()
+            .all(|(idx, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (idx > 0 && b == b'-'))
+        && owner.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+    {
+        owner
+    } else {
+        "other"
+    }
+}
+
+fn same_vm_declared_usbip_start_claims_with_reader(
+    resolver: &BundleResolver,
+    vm: &str,
+    read_owner: impl Fn(&Path) -> io::Result<String>,
 ) -> Vec<usbip_reconcile_state::UsbipLifecycleClaim> {
     resolver
         .usbip_bind_intent_ids()
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
         .filter(|intent| intent.vm_name == vm)
         .filter_map(|intent| {
-            let owner = fs::read_to_string(&intent.lock_path).ok()?;
-            if owner.trim() != vm {
-                return None;
+            match read_owner(&intent.lock_path) {
+                Ok(owner) if owner != vm => {
+                    let owner_label = bounded_usbip_owner_label(&owner);
+                    tracing::debug!(
+                        vm = %vm,
+                        bus_id = %intent.bus_id,
+                        owner_vm = %owner_label,
+                        lock_path = %intent.lock_path.display(),
+                        "USBIP start reconciliation observed foreign durable claim; strict broker bind will fail closed if the owner still holds it",
+                    );
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::debug!(
+                        vm = %vm,
+                        bus_id = %intent.bus_id,
+                        lock_path = %intent.lock_path.display(),
+                        error = %error,
+                        "USBIP start reconciliation could not read durable claim; attempting declared broker bind so policy decides",
+                    );
+                }
             }
-            let host = resolver
-                .manifest
-                .vms
-                .get(vm)
-                .and_then(|entry| entry.usbipd_host_ip.clone())?;
-            Some(usbip_reconcile_state::UsbipLifecycleClaim {
-                vm: vm.to_owned(),
-                env: intent.env.clone(),
-                bus_id: intent.bus_id.clone(),
-                host,
-                claim_ref: intent.intent_id.clone(),
-                required: true,
-            })
+            usbip_lifecycle_claim_for_intent(resolver, vm, intent)
         })
         .collect()
+}
+
+fn same_vm_declared_usbip_start_claims(
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Vec<usbip_reconcile_state::UsbipLifecycleClaim> {
+    same_vm_declared_usbip_start_claims_with_reader(resolver, vm, read_usbip_claim_lock_owner_path)
+}
+
+fn same_vm_persisted_usbip_stop_claims_with_reader(
+    resolver: &BundleResolver,
+    vm: &str,
+    read_owner: impl Fn(&Path) -> io::Result<String>,
+) -> Vec<usbip_reconcile_state::UsbipLifecycleClaim> {
+    resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+        .filter(|intent| intent.vm_name == vm)
+        .filter_map(|intent| {
+            let owner = read_owner(&intent.lock_path).ok()?;
+            (owner == vm).then(|| usbip_lifecycle_claim_for_intent(resolver, vm, intent))?
+        })
+        .collect()
+}
+
+fn same_vm_persisted_usbip_stop_claims(
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Vec<usbip_reconcile_state::UsbipLifecycleClaim> {
+    same_vm_persisted_usbip_stop_claims_with_reader(resolver, vm, read_usbip_claim_lock_owner_path)
 }
 
 fn lifecycle_broker_error_kind(
@@ -4368,7 +4448,7 @@ fn reconcile_usbip_after_vm_start(
     resolver: &BundleResolver,
     vm: &str,
 ) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
-    let claims = persisted_same_vm_usbip_claims(resolver, vm);
+    let claims = same_vm_declared_usbip_start_claims(resolver, vm);
     if claims.is_empty() {
         return None;
     }
@@ -4380,12 +4460,152 @@ fn reconcile_usbip_after_vm_start(
     Some(report)
 }
 
+const USBIP_STRICT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(15);
+const USBIP_STRICT_RECONCILE_BACKOFF: Duration = Duration::from_secs(2);
+
+fn reconcile_usbip_after_vm_start_until_converged(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    timeout: Duration,
+    backoff: Duration,
+) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let report = reconcile_usbip_after_vm_start(state, resolver, vm)?;
+        if report.degraded_count() == 0 || report.fatal() || Instant::now() >= deadline {
+            return Some(report);
+        }
+        thread::sleep(backoff);
+    }
+}
+
+fn usbip_start_reconciles_synchronously(request: &public_wire::VmLifecycleRequest) -> bool {
+    !request.no_wait_api
+}
+
+const USBIP_BACKGROUND_RECONCILE_TIMEOUT: Duration = Duration::from_secs(120);
+const USBIP_BACKGROUND_RECONCILE_BACKOFF: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsbipBackgroundReconcileSpawn {
+    NoClaims,
+    AlreadyRunning,
+    Spawned,
+}
+
+static USBIP_BACKGROUND_RECONCILE_ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+struct UsbipBackgroundReconcileGuard {
+    vm: String,
+}
+
+impl UsbipBackgroundReconcileGuard {
+    fn try_acquire(vm: &str) -> Option<Self> {
+        let active = USBIP_BACKGROUND_RECONCILE_ACTIVE.get_or_init(|| Mutex::new(HashSet::new()));
+        let mut active = active.lock().ok()?;
+        active
+            .insert(vm.to_owned())
+            .then(|| Self { vm: vm.to_owned() })
+    }
+}
+
+impl Drop for UsbipBackgroundReconcileGuard {
+    fn drop(&mut self) {
+        if let Some(active) = USBIP_BACKGROUND_RECONCILE_ACTIVE.get()
+            && let Ok(mut active) = active.lock()
+        {
+            active.remove(&self.vm);
+        }
+    }
+}
+
+fn spawn_usbip_reconcile_after_vm_start(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    runner_role_id: &str,
+) -> UsbipBackgroundReconcileSpawn {
+    if same_vm_declared_usbip_start_claims(resolver, vm).is_empty() {
+        return UsbipBackgroundReconcileSpawn::NoClaims;
+    }
+    let Some(guard) = UsbipBackgroundReconcileGuard::try_acquire(vm) else {
+        return UsbipBackgroundReconcileSpawn::AlreadyRunning;
+    };
+
+    let state = state.clone();
+    let resolver = resolver.clone();
+    let vm = vm.to_owned();
+    let log_vm = vm.clone();
+    let runner_role_id = runner_role_id.to_owned();
+    let thread_name = format!("nixling-usbip-start-{vm}");
+    if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+        let _guard = guard;
+        let deadline = Instant::now() + USBIP_BACKGROUND_RECONCILE_TIMEOUT;
+        loop {
+            if !state.pidfd_table.contains(&vm, &runner_role_id) {
+                tracing::warn!(
+                    vm = %vm,
+                    runner_role_id = %runner_role_id,
+                    "USBIP background start reconciliation aborted because VM runner is no longer supervised",
+                );
+                return;
+            }
+
+            let Some(report) = reconcile_usbip_after_vm_start(&state, &resolver, &vm) else {
+                return;
+            };
+            let degraded = report.degraded_count();
+            if degraded == 0 {
+                tracing::info!(
+                    vm = %vm,
+                    claims = report.claims.len(),
+                    "USBIP background start reconciliation converged",
+                );
+                return;
+            }
+            if report.fatal() {
+                let reason = report
+                    .first_fatal_reason()
+                    .map(|reason| reason.code.telemetry_label())
+                    .unwrap_or("unknown");
+                tracing::warn!(
+                    vm = %vm,
+                    claims = report.claims.len(),
+                    degraded,
+                    reason,
+                    "USBIP background start reconciliation failed closed",
+                );
+                return;
+            }
+            if Instant::now() >= deadline {
+                tracing::warn!(
+                    vm = %vm,
+                    claims = report.claims.len(),
+                    degraded,
+                    "USBIP background start reconciliation timed out; retry `nixling usb attach` or a strict VM start",
+                );
+                return;
+            }
+            thread::sleep(USBIP_BACKGROUND_RECONCILE_BACKOFF);
+        }
+    }) {
+        tracing::warn!(
+            vm = %log_vm,
+            error = %error,
+            "failed to spawn USBIP background start reconciliation worker",
+        );
+        return UsbipBackgroundReconcileSpawn::NoClaims;
+    }
+    UsbipBackgroundReconcileSpawn::Spawned
+}
+
 fn cleanup_usbip_before_vm_stop(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
 ) -> Option<usbip_reconcile_state::UsbipLifecycleReconcileReport> {
-    let claims = persisted_same_vm_usbip_claims(resolver, vm);
+    let claims = same_vm_persisted_usbip_stop_claims(resolver, vm);
     if claims.is_empty() {
         return None;
     }
@@ -8763,6 +8983,20 @@ fn applied_response(verb: &str, summary: String) -> Value {
     })
 }
 
+fn append_response_summary(response: &mut Value, suffix: &str) {
+    let Some(summary) = response
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let combined = format!("{summary}; {suffix}");
+    if let Some(object) = response.as_object_mut() {
+        object.insert("summary".to_owned(), Value::String(combined));
+    }
+}
+
 fn api_ready_timeout_response(verb: &str, summary: String) -> Value {
     use nixling_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
@@ -10353,6 +10587,17 @@ fn existing_vm_start_response_if_ready(
         "vm start",
         format!("vm.{vm}: already running; {runner_role_id} pidfd is live"),
     ))
+}
+
+fn vm_start_primary_runner_role_id(tracked_roles: &[String]) -> &str {
+    tracked_roles
+        .iter()
+        .find(|role_id| {
+            role_id.as_str() == VM_RUNNER_ROLE_ID
+                || role_id.as_str() == RunnerRole::QemuMedia.as_str()
+        })
+        .map(String::as_str)
+        .unwrap_or(VM_RUNNER_ROLE_ID)
 }
 
 fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
@@ -12762,16 +13007,66 @@ fn dispatch_broker_vm_start(
         .iter()
         .find(|role_id| state.pidfd_table.contains(&request.vm, role_id))
     {
-        let runner_role_id = tracked_roles
-            .iter()
-            .find(|role_id| {
-                *role_id == VM_RUNNER_ROLE_ID || role_id.as_str() == RunnerRole::QemuMedia.as_str()
-            })
-            .map(String::as_str)
-            .unwrap_or(VM_RUNNER_ROLE_ID);
+        let runner_role_id = vm_start_primary_runner_role_id(&tracked_roles);
         if let Some(response) =
             existing_vm_start_response_if_ready(state, &request.vm, runner_role_id)
         {
+            let mut response = response;
+            if usbip_start_reconciles_synchronously(&request) {
+                if let Some(usb_report) = reconcile_usbip_after_vm_start_until_converged(
+                    state,
+                    &resolver,
+                    &request.vm,
+                    USBIP_STRICT_RECONCILE_TIMEOUT,
+                    USBIP_STRICT_RECONCILE_BACKOFF,
+                ) {
+                    if usb_report.fatal() {
+                        let summary = usbip_lifecycle_report_summary("start", &usb_report)
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "USBIP reconciliation for already-running VM '{}' failed before device exposure",
+                                    request.vm
+                                )
+                            });
+                        let fatal = usb_report.first_fatal_reason();
+                        return Ok(broker_failure_response(
+                            VERB,
+                            summary,
+                            fatal
+                                .map(|reason| reason.remediation.clone())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "Fix USBIP policy or host-session claim state for VM '{}', then retry `nixling vm start {} --apply`.",
+                                        request.vm, request.vm
+                                    )
+                                }),
+                            None,
+                        ));
+                    }
+                    if let Some(usb_summary) = usbip_lifecycle_report_summary("start", &usb_report)
+                    {
+                        append_response_summary(&mut response, &usb_summary);
+                    }
+                }
+            } else {
+                let scheduled = spawn_usbip_reconcile_after_vm_start(
+                    state,
+                    &resolver,
+                    &request.vm,
+                    runner_role_id,
+                );
+                match scheduled {
+                    UsbipBackgroundReconcileSpawn::Spawned => append_response_summary(
+                        &mut response,
+                        "USBIP reconciliation scheduled in background",
+                    ),
+                    UsbipBackgroundReconcileSpawn::AlreadyRunning => append_response_summary(
+                        &mut response,
+                        "USBIP background reconciliation already running",
+                    ),
+                    UsbipBackgroundReconcileSpawn::NoClaims => {}
+                }
+            }
             return Ok(response);
         }
         return Ok(invalid_request_response(
@@ -12961,7 +13256,14 @@ fn dispatch_broker_vm_start(
                     "known-hosts refresh failed (non-fatal, retained prior pin)",
                 ),
             }
-            if let Some(usb_report) = reconcile_usbip_after_vm_start(state, &resolver, &request.vm)
+            if usbip_start_reconciles_synchronously(&request)
+                && let Some(usb_report) = reconcile_usbip_after_vm_start_until_converged(
+                    state,
+                    &resolver,
+                    &request.vm,
+                    USBIP_STRICT_RECONCILE_TIMEOUT,
+                    USBIP_STRICT_RECONCILE_BACKOFF,
+                )
             {
                 if usb_report.fatal() {
                     let fatal = usb_report.first_fatal_reason();
@@ -13002,6 +13304,21 @@ fn dispatch_broker_vm_start(
         if let Some(usb_summary) = usb_lifecycle_summary {
             summary.push_str("; ");
             summary.push_str(&usb_summary);
+        } else if !usbip_start_reconciles_synchronously(&request) {
+            match spawn_usbip_reconcile_after_vm_start(
+                state,
+                &resolver,
+                &request.vm,
+                vm_start_primary_runner_role_id(&tracked_roles),
+            ) {
+                UsbipBackgroundReconcileSpawn::Spawned => {
+                    summary.push_str("; USBIP reconciliation scheduled in background");
+                }
+                UsbipBackgroundReconcileSpawn::AlreadyRunning => {
+                    summary.push_str("; USBIP background reconciliation already running");
+                }
+                UsbipBackgroundReconcileSpawn::NoClaims => {}
+            }
         }
         let mut response = applied_response(VERB, summary);
         if request.no_wait_api {
@@ -20028,6 +20345,7 @@ mod broker_dispatch_tests {
         ShellName, ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
     };
     use nixling_contracts::types::{RoleId, VmId};
+    use nixling_core::bundle_resolver::BundleResolver;
     use nixling_core::processes::ProcessRole;
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -20043,23 +20361,25 @@ mod broker_dispatch_tests {
     };
     use super::{
         ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
-        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState, VM_RUNNER_ROLE_ID,
-        VmShutdownOutcome, VmStartNodeMode, activation_marker_path,
-        adopt_orphaned_runners_on_startup_with, block_on_future, daemon_audit,
-        dispatch_broker_boot, dispatch_broker_gc, dispatch_broker_host_destroy,
-        dispatch_broker_host_prepare, dispatch_broker_keys_rotate, dispatch_broker_rollback,
-        dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
-        dispatch_broker_run_migrate, dispatch_broker_switch, dispatch_broker_test,
-        dispatch_broker_trust, dispatch_broker_vm_restart, dispatch_broker_vm_start,
-        dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout, dispatch_request,
-        dispatch_status, force_shutdown_generation, map_shell_attach_response,
+        ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
+        UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
+        activation_marker_path, adopt_orphaned_runners_on_startup_with, block_on_future,
+        bounded_usbip_owner_label, daemon_audit, dispatch_broker_boot, dispatch_broker_gc,
+        dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
+        dispatch_broker_rollback, dispatch_broker_rotate_known_host,
+        dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
+        dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
+        dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
+        dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
         map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
         note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
         read_activation_marker, redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
         rollback_failed_vm_start, run_provider_graceful_shutdown,
+        same_vm_declared_usbip_start_claims_with_reader,
+        same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
-        vm_start_node_mode,
+        usbip_start_reconciles_synchronously, vm_start_node_mode,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -20370,6 +20690,177 @@ mod broker_dispatch_tests {
             processes_path,
             ..ArtifactPaths::default()
         }
+    }
+
+    fn write_usbip_lifecycle_bundle_artifacts(root: &Path) -> ArtifactPaths {
+        let mut artifacts = write_minimal_vm_start_bundle_artifacts(root);
+        let bundle_dir = artifacts
+            .bundle_path
+            .parent()
+            .expect("bundle path parent")
+            .to_path_buf();
+        let host_path = bundle_dir.join("host-usbip-lifecycle.json");
+
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&artifacts.public_manifest_path).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        manifest["vm-a"]["usbipYubikey"] = json!(true);
+        manifest["vm-a"]["usbipdHostIp"] = json!("192.0.2.1");
+        write_json_file(&artifacts.public_manifest_path, &manifest);
+
+        let mut host: Value =
+            serde_json::from_slice(&fs::read(host_fixture_path()).expect("read host fixture"))
+                .expect("parse host fixture");
+        host["environments"][0]["env"] = json!("dev");
+        host["environments"][0]["usbipBackendPort"] = json!(3241);
+        host["environments"][0]["usbipBusidLocks"] = json!([
+            {
+                "lockOwner": "daemon",
+                "scope": "per-busid",
+                "vm": "vm-a",
+                "busIds": ["1-2"]
+            }
+        ]);
+        write_json_file(&host_path, &host);
+
+        let mut bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        bundle["schemaVersion"] = json!("v1");
+        bundle["hostPath"] = json!(host_path.display().to_string());
+        write_json_file(&artifacts.bundle_path, &bundle);
+        for path in [
+            &artifacts.bundle_path,
+            &artifacts.public_manifest_path,
+            &host_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod usbip lifecycle artifact");
+        }
+        artifacts.host_path = host_path;
+        artifacts
+    }
+
+    fn load_usbip_lifecycle_resolver(root: &Path) -> BundleResolver {
+        let artifacts = write_usbip_lifecycle_bundle_artifacts(root);
+        BundleResolver::load_with_policy(
+            &artifacts.bundle_path,
+            &nixling_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+        )
+        .expect("load usbip lifecycle resolver")
+    }
+
+    #[test]
+    fn usbip_start_claims_include_declared_intent_when_lock_missing() {
+        let root = test_daemon_state_dir("usbip-start-missing-lock");
+        let resolver = load_usbip_lifecycle_resolver(&root);
+
+        let claims = same_vm_declared_usbip_start_claims_with_reader(&resolver, "vm-a", |_| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing lock"))
+        });
+
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].vm, "vm-a");
+        assert_eq!(claims[0].env, "dev");
+        assert_eq!(claims[0].bus_id, "1-2");
+        assert_eq!(claims[0].host, "192.0.2.1");
+        assert!(
+            claims[0]
+                .claim_ref
+                .contains("usbip-bind:env:dev:vm:vm-a:bus:1-2")
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_start_claims_include_same_owner_and_foreign_locks() {
+        let root = test_daemon_state_dir("usbip-start-owner-locks");
+        let resolver = load_usbip_lifecycle_resolver(&root);
+
+        let same_owner = same_vm_declared_usbip_start_claims_with_reader(&resolver, "vm-a", |_| {
+            Ok("vm-a".to_owned())
+        });
+        let foreign_owner =
+            same_vm_declared_usbip_start_claims_with_reader(&resolver, "vm-a", |_| {
+                Ok("other-vm".to_owned())
+            });
+
+        assert_eq!(same_owner.len(), 1);
+        assert_eq!(foreign_owner.len(), 1);
+        assert_eq!(same_owner[0].bus_id, "1-2");
+        assert_eq!(foreign_owner[0].bus_id, "1-2");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_stop_claims_only_include_same_owner_persisted_locks() {
+        let root = test_daemon_state_dir("usbip-stop-owner-locks");
+        let resolver = load_usbip_lifecycle_resolver(&root);
+
+        let missing = same_vm_persisted_usbip_stop_claims_with_reader(&resolver, "vm-a", |_| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing lock"))
+        });
+        let foreign = same_vm_persisted_usbip_stop_claims_with_reader(&resolver, "vm-a", |_| {
+            Ok("other-vm".to_owned())
+        });
+        let same = same_vm_persisted_usbip_stop_claims_with_reader(&resolver, "vm-a", |_| {
+            Ok("vm-a".to_owned())
+        });
+
+        assert!(missing.is_empty());
+        assert!(foreign.is_empty());
+        assert_eq!(same.len(), 1);
+        assert_eq!(same[0].bus_id, "1-2");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_start_reconciles_synchronously_only_for_strict_starts() {
+        let mut request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                ..MutationFlags::default()
+            },
+            force: false,
+            no_wait_api: false,
+        };
+
+        assert!(usbip_start_reconciles_synchronously(&request));
+        request.no_wait_api = true;
+        assert!(!usbip_start_reconciles_synchronously(&request));
+    }
+
+    #[test]
+    fn usbip_foreign_owner_log_label_is_bounded_to_vm_shape() {
+        assert_eq!(bounded_usbip_owner_label("work-aad"), "work-aad");
+        assert_eq!(bounded_usbip_owner_label("BadOwner"), "other");
+        assert_eq!(
+            bounded_usbip_owner_label("work-aad\nsecret-token-material"),
+            "other"
+        );
+        assert_eq!(
+            bounded_usbip_owner_label(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            "other"
+        );
+    }
+
+    #[test]
+    fn usbip_background_reconcile_guard_deduplicates_by_vm() {
+        let vm = format!("vm-guard-{}", NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed));
+        let guard = UsbipBackgroundReconcileGuard::try_acquire(&vm).expect("first guard");
+        assert!(
+            UsbipBackgroundReconcileGuard::try_acquire(&vm).is_none(),
+            "second guard for same VM must be refused"
+        );
+        drop(guard);
+        assert!(
+            UsbipBackgroundReconcileGuard::try_acquire(&vm).is_some(),
+            "dropping the guard releases the VM slot"
+        );
     }
 
     #[test]
