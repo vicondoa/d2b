@@ -172,6 +172,12 @@ pub enum ProcessRole {
     /// `/run/d2b-wlproxy/<vm>`. Empty host capabilities; mandatory
     /// `seccompPolicyRef`; no PipeWire/Pulse socket access.
     WaylandProxy,
+    /// Broker-spawned console drain helper. Holds the host end of the
+    /// broker-owned console fd (socketpair or PTY master) and drains it
+    /// into a bounded ring buffer exposed to d2bd over a control socket.
+    /// Used when the persistent fd owner is the broker rather than the
+    /// daemon (ADR 0041). One per VM that has console enabled.
+    ConsoleDrain,
 }
 
 /// Role-level minijail metadata without kernel-version syscall allowlists.

@@ -36,6 +36,16 @@ pub struct QemuMediaArgvInput {
     /// Disable KSM merging for guest RAM.
     #[serde(default = "default_true")]
     pub disable_memory_merge: bool,
+    /// Broker-opened console fd (host end of a socketpair). When `Some`,
+    /// the argv emits `-chardev fd,id=con0,fd=N -serial chardev:con0`
+    /// so QEMU's serial console is connected to the fd-backed stream
+    /// rather than discarded with `-serial none`. The broker creates the
+    /// socketpair, passes one end to QEMU via this fd, and retains the
+    /// other end for the drainer (ADR 0041).
+    ///
+    /// The fd must be ≥ 3 (not stdin/stdout/stderr).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_fd: Option<i32>,
 }
 
 /// Errors the QEMU media argv generator can return.
@@ -49,6 +59,8 @@ pub enum QemuMediaArgvError {
     InvalidTapFd { fd: i32 },
     InvalidMemoryMiB { value: u32 },
     InvalidVcpu { value: u32 },
+    /// `console_fd` must be ≥ 3 to avoid colliding with stdin/stdout/stderr.
+    InvalidConsoleFd { fd: i32 },
 }
 
 /// Render the paused fd-backed qemu-media baseline argv.
@@ -83,6 +95,11 @@ pub fn generate_qemu_media_argv(
     }
     if input.vcpu == 0 {
         return Err(QemuMediaArgvError::InvalidVcpu { value: input.vcpu });
+    }
+    if let Some(fd) = input.console_fd {
+        if fd < 3 {
+            return Err(QemuMediaArgvError::InvalidConsoleFd { fd });
+        }
     }
 
     let mut memory_backend = vec![
@@ -146,8 +163,20 @@ pub fn generate_qemu_media_argv(
         format!("unix:{},server=on,wait=off", input.qmp_socket_path),
         "-monitor".to_owned(),
         "none".to_owned(),
-        "-serial".to_owned(),
-        "none".to_owned(),
+    ]);
+    // Emit console chardev when a broker-owned fd is provided; otherwise
+    // suppress the serial port entirely (-serial none).
+    if let Some(fd) = input.console_fd {
+        argv.extend([
+            "-chardev".to_owned(),
+            format!("fd,id=con0,fd={fd}"),
+            "-serial".to_owned(),
+            "chardev:con0".to_owned(),
+        ]);
+    } else {
+        argv.extend(["-serial".to_owned(), "none".to_owned()]);
+    }
+    argv.extend([
         "-parallel".to_owned(),
         "none".to_owned(),
         "-name".to_owned(),
@@ -208,6 +237,7 @@ mod tests {
             lock_memory: false,
             exclude_memory_from_core_dump: true,
             disable_memory_merge: true,
+            console_fd: None,
         }
     }
 
@@ -294,5 +324,56 @@ mod tests {
             generate_qemu_media_argv(&bad_mac_input),
             Err(QemuMediaArgvError::InvalidMacAddress { .. })
         ));
+    }
+
+    #[test]
+    fn without_console_fd_serial_is_none() {
+        let argv = generate_qemu_media_argv(&input()).unwrap();
+        let joined = argv.join(" ");
+        assert!(joined.contains("-serial none"), "serial should be none without console_fd");
+        assert!(!joined.contains("-chardev"), "no chardev without console_fd");
+    }
+
+    #[test]
+    fn with_console_fd_emits_chardev_and_serial_chardev() {
+        let mut inp = input();
+        inp.console_fd = Some(11);
+        let argv = generate_qemu_media_argv(&inp).unwrap();
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains("-chardev fd,id=con0,fd=11"),
+            "expected fd chardev: {joined}"
+        );
+        assert!(
+            joined.contains("-serial chardev:con0"),
+            "expected serial chardev ref: {joined}"
+        );
+        assert!(
+            !joined.contains("-serial none"),
+            "should not have -serial none when console_fd is set"
+        );
+    }
+
+    #[test]
+    fn rejects_console_fd_below_3() {
+        let mut inp = input();
+        inp.console_fd = Some(2);
+        assert!(matches!(
+            generate_qemu_media_argv(&inp),
+            Err(QemuMediaArgvError::InvalidConsoleFd { fd: 2 })
+        ));
+        inp.console_fd = Some(0);
+        assert!(matches!(
+            generate_qemu_media_argv(&inp),
+            Err(QemuMediaArgvError::InvalidConsoleFd { fd: 0 })
+        ));
+    }
+
+    #[test]
+    fn console_fd_3_is_valid_boundary() {
+        let mut inp = input();
+        inp.console_fd = Some(3);
+        let argv = generate_qemu_media_argv(&inp).unwrap();
+        assert!(argv.join(" ").contains("-chardev fd,id=con0,fd=3"));
     }
 }

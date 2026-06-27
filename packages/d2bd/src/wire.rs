@@ -56,6 +56,7 @@ pub enum Request {
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
     Shell(public_wire::ShellOp),
+    Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
 }
 
@@ -92,6 +93,7 @@ impl Request {
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
             Self::Shell(_) => "shell",
+            Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
         }
     }
@@ -136,6 +138,7 @@ impl Request {
             | Self::ReadGuestConfig(_)
             | Self::Exec(_)
             | Self::Shell(_)
+            | Self::Console(_)
             | Self::GatewayDisplay(_) => OpLockClass::ReadOnly,
         }
     }
@@ -345,6 +348,12 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             object.remove("opId");
             serde_json::from_value(Value::Object(object.clone()))
                 .map(Request::Shell)
+                .map_err(map_parse_error)
+        }
+        "console" => {
+            object.remove("opId");
+            serde_json::from_value(Value::Object(object.clone()))
+                .map(Request::Console)
                 .map_err(map_parse_error)
         }
         "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
@@ -629,6 +638,15 @@ pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse
     let mut value = shell_response(payload);
     if let Some(obj) = value.as_object_mut() {
         obj.insert("opId".to_owned(), Value::from(op_id));
+    }
+    value
+}
+
+/// Serialize a `ConsoleOpResponse` as the `consoleResponse` daemon wire frame.
+pub fn console_response(payload: &public_wire::ConsoleOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("type".to_owned(), Value::String("consoleResponse".to_owned()));
     }
     value
 }

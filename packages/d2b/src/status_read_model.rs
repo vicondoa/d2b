@@ -833,6 +833,7 @@ fn process_role_name(role: &d2b_core::processes::ProcessRole) -> String {
         d2b_core::processes::ProcessRole::GuestControlHealth => "guest-control-health",
         d2b_core::processes::ProcessRole::Usbip => "usbip",
         d2b_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
+        d2b_core::processes::ProcessRole::ConsoleDrain => "console-drain",
     }
     .to_owned()
 }

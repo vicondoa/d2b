@@ -1034,7 +1034,7 @@ mod tests {
     fn all_kinds_records_are_unique_and_operator_visible() {
         let records = Error::all_kinds();
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(records.len(), 13);
+        assert_eq!(records.len(), 15);
 
         let mut codes = BTreeSet::new();
         let mut anchors = BTreeSet::new();

@@ -3468,11 +3468,237 @@ fn cmd_audit(
 }
 
 fn cmd_console(
-    _context: &Context,
-    _args: &ConsoleArgs,
+    context: &Context,
+    args: &ConsoleArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    emit_host_error(&not_yet_implemented_envelope("console"), false)
+    use d2b_contracts::public_wire::{ConsoleOp, ConsoleOpResponse};
+    use d2b_contracts::terminal_wire::TerminalStream;
+    use terminal_client::{TerminalHostIo as _, TerminalSignalSource as _};
+
+    let vm = &args.vm;
+
+    if !context.public_socket.exists() {
+        return Err(CliFailure::new(3, "daemon is not running (socket not found)"));
+    }
+
+    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|err| {
+        CliFailure::new(3, format!("failed to connect to daemon: {err}"))
+    })?;
+
+    // Handshake.
+    let hello = daemon_hello_frame("hello")?;
+    socket.send_frame(&hello).map_err(|err| {
+        CliFailure::new(1, format!("failed to send hello: {err}"))
+    })?;
+    let hello_reply = socket.recv_frame().map_err(|err| {
+        CliFailure::new(1, format!("failed to recv hello reply: {err}"))
+    })?;
+    parse_hello_reply(&hello_reply)?;
+
+    // Determine initial terminal size (best-effort; UART ignores it).
+    let size = exec_client::current_window_size()
+        .map(|(rows, cols)| d2b_contracts::terminal_wire::TerminalSize { rows, cols })
+        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+
+    // Attach to the console session.
+    let attach_response = console_round_trip(
+        &mut socket,
+        &ConsoleOp::Attach(d2b_contracts::public_wire::ConsoleAttachArgs {
+            vm: vm.clone(),
+            initial_terminal_size: size,
+        }),
+    )?;
+    let ConsoleOpResponse::Attach(attach) = attach_response else {
+        return Err(CliFailure::new(1, "console attach: unexpected daemon response"));
+    };
+
+    let session = attach.session.clone();
+    let mut stdout_offset = attach.ring_buffer_start_offset;
+
+    print_stdout(&format!(
+        "Connected to console for VM '{}' ({:?}). Press Ctrl-] to detach.\r\n",
+        vm, attach.provider_kind
+    ));
+
+    // Enter raw mode if stdin/stdout are terminals.
+    let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let _raw_guard = if is_tty {
+        exec_client::FdStateGuard::enter(true, true).ok()
+    } else {
+        None
+    };
+
+    let mut signals = exec_client::install_signals().map_err(|err| {
+        CliFailure::new(42, format!("console: failed to install signal handlers: {err}"))
+    })?;
+
+    let detach_char = b'\x1d'; // Ctrl-]
+    let mut host = exec_client::RealHostIo;
+    let mut stdin_buf = vec![0_u8; 256];
+
+    loop {
+        // Drain any pending signals first.
+        for signal in signals.drain() {
+            match signal {
+                exec_client::ExecSignal::Winch => {
+                    if let Some((rows, cols)) = host.window_size() {
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Resize(
+                                d2b_contracts::public_wire::ConsoleResizeArgs {
+                                    session: session.clone(),
+                                    size: d2b_contracts::terminal_wire::TerminalSize {
+                                        rows,
+                                        cols,
+                                    },
+                                },
+                            ),
+                        );
+                    }
+                }
+                exec_client::ExecSignal::Hangup => {
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                            session: session.clone(),
+                        }),
+                    );
+                    return Ok(0);
+                }
+                _ => {}
+            }
+        }
+
+        // Read pending stdin (non-blocking) and forward to daemon.
+        if is_tty {
+            match host.read_stdin(&mut stdin_buf) {
+                Ok(n) if n > 0 => {
+                    let chunk = &stdin_buf[..n];
+                    if chunk.contains(&detach_char) {
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                session: session.clone(),
+                            }),
+                        );
+                        print_stdout("\r\nDetached from console.\r\n");
+                        return Ok(0);
+                    }
+                    let chunk_b64 = d2b_core::base64_codec::encode(chunk);
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::WriteStdin(d2b_contracts::public_wire::ConsoleWriteStdinArgs {
+                            session: session.clone(),
+                            offset: 0,
+                            chunk_base64: chunk_b64,
+                            eof: false,
+                        }),
+                    );
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Ok(_) | Err(_) => {}
+            }
+        }
+
+        // Poll for output (wait=true, 200 ms timeout keeps the stdin loop responsive).
+        let read_result = console_round_trip(
+            &mut socket,
+            &ConsoleOp::ReadOutput(d2b_contracts::public_wire::ConsoleReadOutputArgs {
+                session: session.clone(),
+                stream: TerminalStream::Stdout,
+                offset: stdout_offset,
+                max_len: 4096,
+                wait: true,
+                timeout_ms: 200,
+            }),
+        );
+
+        match read_result {
+            Err(err) if err.exit_code == 75 => {
+                // ConsoleSessionStale: daemon restarted.
+                print_stdout("\r\nConsole session expired (daemon restarted).\r\n");
+                return Ok(0);
+            }
+            Err(err) => return Err(err),
+            Ok(ConsoleOpResponse::ReadOutput(out)) => {
+                if out.is_eof {
+                    print_stdout("\r\nVM console closed (EOF).\r\n");
+                    return Ok(0);
+                }
+                if out.ring_buffer_start_offset > stdout_offset {
+                    stdout_offset = out.ring_buffer_start_offset;
+                }
+                if !out.chunk_base64.is_empty() {
+                    let bytes = d2b_core::base64_codec::decode(&out.chunk_base64)
+                        .unwrap_or_default();
+                    let _ = write_stdout_bytes(&bytes);
+                    stdout_offset = out.offset + bytes.len() as u64;
+                }
+            }
+            Ok(_) => return Err(CliFailure::new(1, "console read: unexpected response type")),
+        }
+    }
+}
+
+/// Encode and send a [`ConsoleOp`] on `socket`, then receive and parse the
+/// `consoleResponse` reply. Each call is a complete round-trip.
+fn console_round_trip(
+    socket: &mut SeqpacketUnixSocket,
+    op: &d2b_contracts::public_wire::ConsoleOp,
+) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+    let frame = encode_console_op_frame(op)?;
+    socket
+        .send_frame(&frame)
+        .map_err(|err| CliFailure::new(69, format!("console op send failed: {err}")))?;
+    let reply = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(69, format!("console op recv failed: {err}")))?;
+    parse_console_reply(&reply)
+}
+
+/// Encode a [`ConsoleOp`] as a JSON wire frame with `"type": "console"`.
+fn encode_console_op_frame(op: &d2b_contracts::public_wire::ConsoleOp) -> Result<Vec<u8>, CliFailure> {
+    let mut value = serde_json::to_value(op)
+        .map_err(|err| CliFailure::new(1, format!("failed to encode console op: {err}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| CliFailure::new(1, "failed to encode console op: object required"))?;
+    object.insert("type".to_owned(), Value::String("console".to_owned()));
+    serde_json::to_vec(&value)
+        .map_err(|err| CliFailure::new(1, format!("failed to serialize console op: {err}")))
+}
+
+/// Parse a `consoleResponse` or `error` reply frame.
+fn parse_console_reply(
+    bytes: &[u8],
+) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse console reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("consoleResponse") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("opId");
+                obj.remove("type");
+            }
+            serde_json::from_value(value)
+                .map_err(|err| CliFailure::new(1, format!("failed to decode consoleResponse: {err}")))
+        }
+        Some("error") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("opId");
+            }
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode console error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected console reply type {:?}", other),
+        )),
+    }
 }
 
 fn cmd_audio(
