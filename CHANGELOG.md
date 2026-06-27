@@ -40,6 +40,12 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Static USBIP declarations now reconcile on strict VM start after a host reboot
+  even when volatile `/run/nixling/locks/usbip/*` claim files are gone. The
+  daemon replays declared per-VM bind intents through the existing broker policy
+  and OFD-lock path, while VM stop cleanup still touches only same-owner
+  persisted claims. No-wait/autostarted VMs schedule a bounded background
+  reconciliation worker that aborts if the VM runner is no longer supervised.
 - `nixling host shutdown-hook --apply` no longer fails with `authz-not-admin`
   on every VM: the new `HostShutdown` role permits `vmStop` from the guarded
   `ExecStop` path (uid=0) while preserving the daemon-restart continuation
