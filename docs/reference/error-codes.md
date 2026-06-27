@@ -224,7 +224,11 @@ categories described above:
 
 **Category 1 — Truly deferred verbs** (`console`, `audio`,
 `audit --strict`) emit `#not-yet-implemented` (exit 78)
-unconditionally; the remediation block renders as:
+unconditionally. `console` and `audio` are planned per
+[ADR 0041](../adr/0041-console-and-audio-controls.md) as
+provider-capability-aware daemon surfaces; see the
+[provider capability matrix](./provider-capability-matrix.md) for
+the per-provider design. The remediation block renders as:
 
 ```
 Remediation:

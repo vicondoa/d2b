@@ -20,6 +20,14 @@ provider capability boundaries.
 Audio remains separate from display; see
 [display and virtual I/O capabilities](./display-io-capabilities.md).
 
+Console and audio are provider-capability-aware daemon surfaces; the
+per-provider capability matrix and enforcement model are documented in
+[provider capability matrix](./provider-capability-matrix.md) and
+[ADR 0041](../adr/0041-console-and-audio-controls.md). The matrix covers
+Cloud Hypervisor NixOS VMs (vhost-user-sound + guestd enforcement),
+qemu-media targets (host/qemu subset only; guest enforcement unsupported),
+and ACA sandboxes (remote guestd policy only; no local host mutations).
+
 Each VM has independent **mic** and **speaker** grants. The
 host-side state file is `/var/lib/d2b/vms/<vm>/state/audio-state.json`.
 The sidecar publishes the resolved mic/speaker state as custom
@@ -287,6 +295,10 @@ sidecar-as-system-service. Compared to the GPU sidecar template:
 ## See also
 
 - [Design / threat model](../explanation/design.md)
+- [Provider capability matrix](./provider-capability-matrix.md) — per-provider
+  console and audio capability boundaries (Cloud Hypervisor, qemu-media, ACA).
+- [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding design for
+  provider-capability-aware console and audio.
 - [Manifest schema](./manifest-schema.md) — `units.snd` field;
   `audioStateFile` path.
 - [CLI contract](./cli-contract.md) — `d2b audio` subcommand.

@@ -12,6 +12,23 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `docs/reference/cli-contract.md` — `console` and `audio` verb sections now
+  reference ADR 0041 and the provider capability matrix instead of open-ended
+  "unscheduled" disposition notes; the dispatch capability table rows for all
+  five audio/console shims are updated accordingly.
+- `docs/reference/daemon-api.md` — added a `ConsoleOp`/`AudioOp` planned wire
+  types note after the auto-generated request-types block, documenting the
+  intended op shapes, cursor metadata contract, and per-target status design.
+- `docs/reference/display-io-capabilities.md` — added a "Console and audio
+  controls" section cross-linking the new provider capability matrix.
+- `docs/reference/runtime-provider-selection.md` — added a "Console and audio
+  provider capability gating" section referencing the provider capability matrix
+  and ADR 0041.
+- `docs/reference/components-audio.md` — intro paragraph and "See also" section
+  now reference ADR 0041 and the provider capability matrix.
+- `docs/reference/error-codes.md` — Category 1 deferred-verb description now
+  references ADR 0041 and the provider capability matrix for `console` and
+  `audio`.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
@@ -19,6 +36,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- New reference doc: [provider capability matrix](docs/reference/provider-capability-matrix.md)
+  documents the console and audio capability boundaries across the three d2b
+  runtime providers (Cloud Hypervisor NixOS, qemu-media, ACA sandbox), covering
+  console transport choices, persistent drainer ownership, audio enforcement
+  modes, and desktop control surface constraints. Grounded by
+  [ADR 0041](docs/adr/0041-console-and-audio-controls.md).
+- New how-to stub: [use-console-and-audio.md](docs/how-to/use-console-and-audio.md)
+  documents intended `d2b console` / `d2b audio` usage, per-provider behavior,
+  and `d2b-wlcontrol` badge semantics for operators planning their configurations.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`
