@@ -2678,41 +2678,40 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                 // Open, verify ownership, and hold the fd. The traverse ACL
                 // is applied through this fd so the inode that was verified
                 // is the exact inode mutated (no re-open window).
-                let runtime_file =
-                    match open_o_path_metadata(runtime) {
-                        Err(failure) => {
-                            return Err(LiveHandlerError::SpawnFailed {
-                                detail: format!(
-                                    "graphical-session-not-active: cannot open runtime dir for wayland-proxy uid {}: {}",
-                                    plan.uid, failure.legacy_detail
-                                ),
-                            });
-                        }
-                        Ok(None) => {
-                            return Err(LiveHandlerError::SpawnFailed {
-                                detail: format!(
-                                    "graphical-session-not-active: runtime dir {} is absent for wayland-proxy uid {}; \
+                let runtime_file = match open_o_path_metadata(runtime) {
+                    Err(failure) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: cannot open runtime dir for wayland-proxy uid {}: {}",
+                                plan.uid, failure.legacy_detail
+                            ),
+                        });
+                    }
+                    Ok(None) => {
+                        return Err(LiveHandlerError::SpawnFailed {
+                            detail: format!(
+                                "graphical-session-not-active: runtime dir {} is absent for wayland-proxy uid {}; \
                                      start the graphical session before starting this VM",
-                                    runtime.display(),
-                                    plan.uid
-                                ),
-                            });
-                        }
-                        Ok(Some((file, meta))) => {
-                            if let Some(expected_uid) = wayland_user_uid {
-                                if meta.uid() != expected_uid {
-                                    return Err(LiveHandlerError::SpawnFailed {
-                                        detail: format!(
-                                            "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
+                                runtime.display(),
+                                plan.uid
+                            ),
+                        });
+                    }
+                    Ok(Some((file, meta))) => {
+                        if let Some(expected_uid) = wayland_user_uid {
+                            if meta.uid() != expected_uid {
+                                return Err(LiveHandlerError::SpawnFailed {
+                                    detail: format!(
+                                        "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
                                              expected owner uid {expected_uid}",
-                                            plan.uid,
-                                        ),
-                                    });
-                                }
+                                        plan.uid,
+                                    ),
+                                });
                             }
-                            file
                         }
-                    };
+                        file
+                    }
+                };
 
                 // Grant traverse through the verified fd (no re-open).
                 crate::sys::pidfd_sys::run_setfacl_op_on_fd(
@@ -5555,7 +5554,10 @@ mod tests {
         assert_ne!(netns.trim(), current_netns);
     }
 
-    fn wayland_proxy_plan(runtime_dir: Option<&str>, wayland_display: Option<&str>) -> SpawnRunnerPlan {
+    fn wayland_proxy_plan(
+        runtime_dir: Option<&str>,
+        wayland_display: Option<&str>,
+    ) -> SpawnRunnerPlan {
         let mut plan = test_spawn_plan_with_argv(
             vec!["nixling-wayland-proxy@personal-dev".to_owned()],
             "w1-wayland-proxy",
@@ -5572,8 +5574,7 @@ mod tests {
     #[test]
     fn wayland_proxy_acls_error_when_xdg_runtime_dir_not_set() {
         let plan = wayland_proxy_plan(None, None);
-        let err = refresh_spawn_runner_acls(&plan)
-            .expect_err("missing XDG_RUNTIME_DIR must fail");
+        let err = refresh_spawn_runner_acls(&plan).expect_err("missing XDG_RUNTIME_DIR must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5594,8 +5595,7 @@ mod tests {
         // Point at a path that does not exist beneath the tempdir.
         let absent = root.join("run").join("user").join("1000");
         let plan = wayland_proxy_plan(Some(absent.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan)
-            .expect_err("absent runtime dir must fail");
+        let err = refresh_spawn_runner_acls(&plan).expect_err("absent runtime dir must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5612,14 +5612,17 @@ mod tests {
         // Create a dir owned by the current user but parsed path uid != current uid.
         // Pick a uid that is almost certainly not the running test uid.
         let current_uid = nix::unistd::Uid::current().as_raw();
-        let mismatch_uid = if current_uid == 9999999 { 9999998 } else { 9999999 };
+        let mismatch_uid = if current_uid == 9999999 {
+            9999998
+        } else {
+            9999999
+        };
         // Path ends in mismatch_uid so the code expects owner == mismatch_uid,
         // but the dir is owned by current_uid.
         let runtime = root.join(&format!("{mismatch_uid}"));
         std::fs::create_dir(&runtime).expect("create runtime dir");
         let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), None);
-        let err = refresh_spawn_runner_acls(&plan)
-            .expect_err("owner uid mismatch must fail");
+        let err = refresh_spawn_runner_acls(&plan).expect_err("owner uid mismatch must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5646,12 +5649,8 @@ mod tests {
         let runtime = root.join(&format!("{current_uid}"));
         std::fs::create_dir(&runtime).expect("create runtime dir");
         // Do NOT create the socket. Use a known display name.
-        let plan = wayland_proxy_plan(
-            Some(runtime.to_str().unwrap()),
-            Some("wayland-test-99"),
-        );
-        let err = refresh_spawn_runner_acls(&plan)
-            .expect_err("absent Wayland socket must fail");
+        let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-test-99"));
+        let err = refresh_spawn_runner_acls(&plan).expect_err("absent Wayland socket must fail");
         let detail = match err {
             LiveHandlerError::SpawnFailed { detail } => detail,
             other => panic!("expected SpawnFailed, got {other:?}"),
@@ -5678,10 +5677,7 @@ mod tests {
         // Plant a regular file where the socket should be.
         let socket_path = runtime.join("wayland-type-test");
         std::fs::write(&socket_path, b"not a socket").expect("write file");
-        let plan = wayland_proxy_plan(
-            Some(runtime.to_str().unwrap()),
-            Some("wayland-type-test"),
-        );
+        let plan = wayland_proxy_plan(Some(runtime.to_str().unwrap()), Some("wayland-type-test"));
         let err = refresh_spawn_runner_acls(&plan)
             .expect_err("regular file at socket location must fail");
         let detail = match err {
@@ -5704,8 +5700,7 @@ mod tests {
         // NOT setfacl_fd_safe (which would re-open the path creating a TOCTOU
         // window). The audio socket revocations may use setfacl_fd_safe since
         // a symlink there can only block a deny, not grant access.
-        let src =
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/live_handlers.rs"));
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/live_handlers.rs"));
         // Find the refresh_spawn_runner_acls function body, then the w1-wayland-proxy block.
         let fn_start = src
             .find("fn refresh_spawn_runner_acls")
@@ -5716,9 +5711,7 @@ mod tests {
             .expect("w1-wayland-proxy block must exist inside refresh_spawn_runner_acls");
         let block_body = &fn_body[block_start..];
         // Find the end of the w1-wayland-proxy block by locating w1-qemu-media.
-        let block_end = block_body
-            .find("w1-qemu-media")
-            .unwrap_or(block_body.len());
+        let block_end = block_body.find("w1-qemu-media").unwrap_or(block_body.len());
         let block = &block_body[..block_end];
 
         // The traverse and socket grants must go through run_setfacl_op_on_fd.
