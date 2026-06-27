@@ -110,6 +110,7 @@ pub struct BundleResolver {
     activation_intents: BTreeMap<String, ResolvedActivationIntent>,
     store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
     gc_intents: BTreeMap<String, ResolvedGcIntent>,
+    closure_toplevels: BTreeMap<String, String>,
     keys_rotate_intents: BTreeMap<String, ResolvedKeysRotateIntent>,
     host_key_trust_intents: BTreeMap<String, ResolvedHostKeyTrustIntent>,
     rotate_known_host_intents: BTreeMap<String, ResolvedRotateKnownHostIntent>,
@@ -996,6 +997,10 @@ impl BundleResolver {
         let activation_intents = build_activation_intents(&closures, &manifest);
         let store_view_intents = build_store_view_intents(&closures, &manifest);
         let gc_intents = build_gc_intents(&closures);
+        let closure_toplevels = closures
+            .iter()
+            .map(|closure| (closure.vm.clone(), closure.toplevel.clone()))
+            .collect();
         let keys_rotate_intents = build_keys_rotate_intents(&bundle, &manifest);
         let host_key_trust_intents = build_host_key_trust_intents(&bundle, &manifest);
         let rotate_known_host_intents = build_rotate_known_host_intents(&bundle, &manifest);
@@ -1022,6 +1027,7 @@ impl BundleResolver {
             activation_intents,
             store_view_intents,
             gc_intents,
+            closure_toplevels,
             keys_rotate_intents,
             host_key_trust_intents,
             rotate_known_host_intents,
@@ -1162,6 +1168,10 @@ impl BundleResolver {
 
     pub fn find_store_view_intent(&self, vm: &str) -> Option<&ResolvedStoreViewIntent> {
         self.store_view_intents.get(&intent_id_store_view(vm))
+    }
+
+    pub fn find_guest_closure_out_path(&self, vm: &str) -> Option<&str> {
+        self.closure_toplevels.get(vm).map(String::as_str)
     }
 
     pub fn find_gc_intent(&self, id: &str) -> Option<&ResolvedGcIntent> {

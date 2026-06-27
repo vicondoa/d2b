@@ -15418,8 +15418,9 @@ enum PublicResolverLoad {
 fn public_request_resolver_load(
     qemu_media_declared: bool,
     include_usb_status: bool,
+    include_closure_metadata: bool,
 ) -> PublicResolverLoad {
-    if qemu_media_declared {
+    if qemu_media_declared || include_closure_metadata {
         PublicResolverLoad::Required
     } else if include_usb_status {
         PublicResolverLoad::Optional
@@ -15431,6 +15432,7 @@ fn public_request_resolver_load(
 fn load_public_request_artifacts(
     state: &ServerState,
     include_usb_status: bool,
+    include_closure_metadata: bool,
 ) -> Result<PublicRequestArtifacts, TypedError> {
     let manifest = load_manifest(&state.config.artifacts.public_manifest_path)?;
     let host = load_json::<HostJson>(&state.config.artifacts.host_path).ok();
@@ -15439,7 +15441,11 @@ fn load_public_request_artifacts(
         .as_ref()
         .and_then(|host| host.qemu_media.as_ref())
         .is_some();
-    let resolver = match public_request_resolver_load(qemu_media_declared, include_usb_status) {
+    let resolver = match public_request_resolver_load(
+        qemu_media_declared,
+        include_usb_status,
+        include_closure_metadata,
+    ) {
         PublicResolverLoad::NotNeeded => None,
         PublicResolverLoad::Optional => load_bundle_resolver(state).ok(),
         PublicResolverLoad::Required => Some(load_bundle_resolver(state)?),
@@ -15490,8 +15496,9 @@ fn build_public_list(
         manifest,
         host,
         processes,
-        resolver: _,
-    } = load_public_request_artifacts(state, false)?;
+        resolver,
+    } = load_public_request_artifacts(state, false, true)?;
+    let closure_resolver = resolver.as_ref();
     let vms = std::thread::scope(|scope| {
         let workers = manifest
             .iter()
@@ -15507,6 +15514,9 @@ fn build_public_list(
             .map(|(name, value)| {
                 let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
                 let host = host.as_ref();
+                let guest_closure_out_path = closure_resolver
+                    .and_then(|resolver| resolver.find_guest_closure_out_path(name))
+                    .map(str::to_owned);
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
                     let runtime_kind = public_runtime_kind(value);
@@ -15523,6 +15533,7 @@ fn build_public_list(
                         "tpm": value.get("tpm").cloned().unwrap_or(Value::Bool(false)),
                         "usbip": value.get("usbipYubikey").cloned().unwrap_or(Value::Bool(false)),
                         "lifecycle": lifecycle,
+                        "guestClosureOutPath": guest_closure_out_path,
                         "runtime": public_runtime_summary(&lifecycle, value),
                         "autostart": public_autostart_posture(value),
                         "runtimeCapabilities": public_runtime_capabilities(value),
@@ -15601,7 +15612,7 @@ fn build_public_status(
         host,
         processes,
         resolver,
-    } = load_public_request_artifacts(state, true)?;
+    } = load_public_request_artifacts(state, true, false)?;
     let requested_vm = request.vm.clone();
 
     let statuses = std::thread::scope(|scope| {
@@ -16880,17 +16891,41 @@ mod public_status_tests {
             &public_manifest_path,
             serde_json::to_vec_pretty(&json!({
                 "_manifest": { "manifestVersion": 6 },
+                "_observability": {
+                    "enabled": false,
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
+                    "obsVsockCid": 1000,
+                    "obsVsockHostSocket": "/run/nixling/obs.sock",
+                    "vmName": "sys-obs"
+                },
                 "vm-a": {
                     "name": "vm-a",
+                    "apiSocket": "/run/nixling/vm-a.sock",
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": "br-work-lan",
                     "env": "work",
+                    "gpuSocket": "/run/nixling/vm-a-gpu.sock",
                     "staticIp": "10.20.0.10",
                     "sshUser": "alice",
                     "isNetVm": false,
+                    "netVm": "sys-work-net",
                     "stateDir": vm_a_state_dir,
                     "graphics": true,
                     "tpm": false,
+                    "tpmSocket": null,
                     "usbipYubikey": true,
+                    "usbipdHostIp": "10.20.0.1",
                     "audio": false,
+                    "tap": "work-l2",
+                    "observability": {
+                        "agentSocket": "/run/nixling/otlp.sock",
+                        "enabled": false,
+                        "vsockCid": 110,
+                        "vsockHostSocket": "/run/nixling/vm-a-vsock.sock"
+                    },
                     "runtime": {
                         "kind": "nixos",
                         "provider": {
@@ -16914,14 +16949,30 @@ mod public_status_tests {
                 },
                 "vm-b": {
                     "name": "vm-b",
+                    "apiSocket": "/run/nixling/vm-b.sock",
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": "br-personal-lan",
                     "env": "personal",
+                    "gpuSocket": null,
                     "staticIp": "10.30.0.10",
                     "sshUser": "bob",
                     "isNetVm": false,
+                    "netVm": "sys-personal-net",
+                    "stateDir": root.join("vm-b-state").display().to_string(),
                     "graphics": false,
                     "tpm": false,
+                    "tpmSocket": null,
                     "usbipYubikey": false,
+                    "usbipdHostIp": null,
                     "audio": false,
+                    "tap": "personal-l2",
+                    "observability": {
+                        "agentSocket": "/run/nixling/otlp.sock",
+                        "enabled": false,
+                        "vsockCid": 210,
+                        "vsockHostSocket": "/run/nixling/vm-b-vsock.sock"
+                    },
                     "runtime": {
                         "kind": "nixos",
                         "provider": {
@@ -16974,16 +17025,70 @@ mod public_status_tests {
         )
         .expect("write privileges");
 
+        let vm_a_toplevel = root.join("store/vm-a-system");
+        let vm_b_toplevel = root.join("store/vm-b-system");
+        let vm_a_db = root.join("vm-a.db.dump");
+        let vm_b_db = root.join("vm-b.db.dump");
+        fs::create_dir_all(&vm_a_toplevel).expect("create vm-a toplevel");
+        fs::create_dir_all(&vm_b_toplevel).expect("create vm-b toplevel");
+        fs::write(&vm_a_db, b"vm-a-db").expect("write vm-a db dump");
+        fs::write(&vm_b_db, b"vm-b-db").expect("write vm-b db dump");
+        fs::write(
+            closures_dir.join("vm-a.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": "v2",
+                "vm": "vm-a",
+                "toplevel": vm_a_toplevel.display().to_string(),
+                "closurePaths": [vm_a_toplevel.display().to_string()],
+                "dbDumpPath": vm_a_db.display().to_string(),
+                "declaredRunner": "",
+                "runnerParityPath": "",
+                "runnerParityOk": true,
+                "generation": {
+                    "hostGeneration": 11,
+                    "vmGeneration": null,
+                    "sourceRevision": null,
+                    "generatedAt": null
+                }
+            }))
+            .expect("vm-a closure json"),
+        )
+        .expect("write vm-a closure");
+        fs::write(
+            closures_dir.join("vm-b.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": "v2",
+                "vm": "vm-b",
+                "toplevel": vm_b_toplevel.display().to_string(),
+                "closurePaths": [vm_b_toplevel.display().to_string()],
+                "dbDumpPath": vm_b_db.display().to_string(),
+                "declaredRunner": "",
+                "runnerParityPath": "",
+                "runnerParityOk": true,
+                "generation": {
+                    "hostGeneration": 12,
+                    "vmGeneration": null,
+                    "sourceRevision": null,
+                    "generatedAt": null
+                }
+            }))
+            .expect("vm-b closure json"),
+        )
+        .expect("write vm-b closure");
+
         fs::write(
             &bundle_path,
             serde_json::to_vec_pretty(&json!({
                 "bundleVersion": 4,
-                "schemaVersion": "v2",
+                "schemaVersion": "v1",
                 "publicManifestPath": public_manifest_path.display().to_string(),
                 "hostPath": host_path.display().to_string(),
                 "processesPath": processes_path.display().to_string(),
                 "privilegesPath": privileges_path.display().to_string(),
-                "closures": [],
+                "closures": [
+                    { "vm": "vm-a", "path": "closures/vm-a.json" },
+                    { "vm": "vm-b", "path": "closures/vm-b.json" }
+                ],
                 "minijailProfiles": [],
                 "managedKeys": {},
                 "generation": {
@@ -17002,6 +17107,8 @@ mod public_status_tests {
             &privileges_path,
             &processes_path,
             &public_manifest_path,
+            &closures_dir.join("vm-a.json"),
+            &closures_dir.join("vm-b.json"),
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod public status test artifact");
@@ -17083,24 +17190,29 @@ mod public_status_tests {
     #[test]
     fn public_request_resolver_load_is_request_scoped_and_minimal() {
         assert_eq!(
-            public_request_resolver_load(false, false),
+            public_request_resolver_load(false, false, false),
             PublicResolverLoad::NotNeeded,
-            "list/status paths without qemu-media or USB status do not need a bundle resolver"
+            "status paths without qemu-media, USB status, or closure metadata do not need a bundle resolver"
         );
         assert_eq!(
-            public_request_resolver_load(false, true),
+            public_request_resolver_load(false, true, false),
             PublicResolverLoad::Optional,
             "USB status may use the resolver but must preserve status output when it is unavailable"
         );
         assert_eq!(
-            public_request_resolver_load(true, false),
+            public_request_resolver_load(true, false, false),
             PublicResolverLoad::Required,
             "qemu-media registry refresh needs the trusted bundle resolver"
         );
         assert_eq!(
-            public_request_resolver_load(true, true),
+            public_request_resolver_load(true, true, false),
             PublicResolverLoad::Required,
             "qemu-media plus USB status shares one required per-request resolver"
+        );
+        assert_eq!(
+            public_request_resolver_load(false, false, true),
+            PublicResolverLoad::Required,
+            "public VM closure metadata comes from the trusted bundle resolver"
         );
     }
 
@@ -17736,6 +17848,12 @@ mod public_status_tests {
         assert_eq!(vms.len(), 1);
         let vm = &vms[0];
         assert_eq!(vm.get("vm").and_then(Value::as_str), Some("vm-a"));
+        assert!(
+            vm.get("guestClosureOutPath")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.ends_with("/store/vm-a-system")),
+            "list response must expose the VM guest closure out path"
+        );
         assert_eq!(vm.get("graphics").and_then(Value::as_bool), Some(true));
         assert_eq!(vm.get("usbip").and_then(Value::as_bool), Some(true));
         assert_eq!(
@@ -17972,6 +18090,16 @@ mod public_status_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(list_names, vec!["vm-a", "vm-b"]);
+        assert!(
+            list.pointer("/vms/0/guestClosureOutPath")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.ends_with("/store/vm-a-system"))
+        );
+        assert!(
+            list.pointer("/vms/1/guestClosureOutPath")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.ends_with("/store/vm-b-system"))
+        );
         assert_eq!(
             list.pointer("/vms/1/lifecycle/state")
                 .and_then(Value::as_str),

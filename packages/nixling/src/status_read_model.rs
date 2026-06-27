@@ -61,6 +61,9 @@ pub(crate) fn list_output_from_manifest(
                     static_ip: vm.static_ip.clone(),
                     status: list_status_label(vm, &services, pending_restart),
                     is_net_vm: vm.is_net_vm,
+                    guest_closure_out_path: bundle
+                        .and_then(|bundle| bundle.closures.get(&vm.name))
+                        .map(|closure| closure.toplevel.clone()),
                     runtime_kind: output_runtime_kind(vm),
                     autostart: output_autostart_posture(vm),
                     runtime_capabilities: output_runtime_capabilities(vm),
@@ -92,6 +95,11 @@ pub(crate) fn list_output_from_public_entries(
                 static_ip: entry.static_ip.clone(),
                 status: public_lifecycle_list_status_label(&entry.lifecycle),
                 is_net_vm: entry.is_net_vm,
+                guest_closure_out_path: entry.guest_closure_out_path.clone().or_else(|| {
+                    bundle
+                        .and_then(|bundle| bundle.closures.get(&entry.vm))
+                        .map(|closure| closure.toplevel.clone())
+                }),
                 runtime_kind: entry.runtime.kind.clone(),
                 autostart: entry.autostart.clone(),
                 runtime_capabilities: entry.runtime_capabilities.clone(),

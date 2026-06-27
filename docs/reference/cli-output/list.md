@@ -18,12 +18,15 @@ status.
 | `staticIp` | string or `null` | Declared static IPv4 address. Present and `null` for DHCP-backed shapes. | Stable wire contract. |
 | `status` | string enum | One of `stopped`, `running`, `pending-restart`, `failed`, or `unknown`. | Stable wire contract. |
 | `isNetVm` | boolean | True only for auto-declared per-env net VMs. | Stable wire contract. |
+| `guestClosureOutPath` | string | Absolute Nix store path of the VM's guest system closure. Present when the daemon or local fallback can read the bundle closure metadata. | Additive stable wire contract. |
 
 ## Ordering and null handling
 
 - The top-level array is ordered by `name`.
-- No fields are omitted.
-- `env` and `staticIp` are the only nullable fields.
+- Core inventory fields are not omitted. Additive capability fields such as
+  `guestClosureOutPath` may be omitted when the active generation predates the
+  field or the static fallback cannot read bundle metadata.
+- `env` and `staticIp` are the only nullable core fields.
 
 ## Stability promise
 
@@ -52,7 +55,8 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
     "usbip": false,
     "staticIp": "10.20.0.10",
     "status": "stopped",
-    "isNetVm": false
+    "isNetVm": false,
+    "guestClosureOutPath": "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-corp-vm"
   },
   {
     "name": "sys-work-net",
@@ -62,7 +66,8 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
     "usbip": false,
     "staticIp": "192.0.2.1",
     "status": "stopped",
-    "isNetVm": true
+    "isNetVm": true,
+    "guestClosureOutPath": "/nix/store/ffffffffffffffffffffffffffffffff-nixos-system-sys-work-net"
   }
 ]
 ```
