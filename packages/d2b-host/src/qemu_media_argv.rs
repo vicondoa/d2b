@@ -110,10 +110,10 @@ pub fn generate_qemu_media_argv(
     if input.vcpu == 0 {
         return Err(QemuMediaArgvError::InvalidVcpu { value: input.vcpu });
     }
-    if let Some(fd) = input.console_fd {
-        if fd < 3 {
-            return Err(QemuMediaArgvError::InvalidConsoleFd { fd });
-        }
+    if let Some(fd) = input.console_fd
+        && fd < 3
+    {
+        return Err(QemuMediaArgvError::InvalidConsoleFd { fd });
     }
 
     let mut memory_backend = vec![
