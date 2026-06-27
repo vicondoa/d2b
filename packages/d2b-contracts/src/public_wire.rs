@@ -1697,6 +1697,10 @@ pub enum AudioChannel {
 }
 
 /// How audio enforcement is applied for a target VM (ADR 0041).
+///
+/// This enum describes only *successful* enforcement outcomes. Provider
+/// misconfiguration is not a successful outcome and is reported exclusively
+/// through [`AudioVmError`] with `kind = AudioErrorKind::ProviderMisconfigured`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioEnforcementPosture {
@@ -1710,9 +1714,26 @@ pub enum AudioEnforcementPosture {
     GuestOnly,
     /// Neither host nor guest enforcement is supported for this target.
     Unsupported,
+}
+
+/// Low-cardinality error kind for a per-VM audio failure.
+///
+/// Used in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::VmAudioErrorOutputV1)
+/// so that both the wire protocol and the generated CLI schema carry enum
+/// constraints rather than a free-form string.
+///
+/// Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioErrorKind {
     /// The provider is expected to expose a guestd-compatible agent but none
     /// was found; operator remediation is required.
     ProviderMisconfigured,
+    /// The requested VM was not found in the bundle.
+    VmNotFound,
+    /// Audio enforcement is not available for this VM (e.g. the runtime does
+    /// not support it and no degraded path exists).
+    EnforcementUnavailable,
 }
 
 /// Which runtime provider handles audio for a given target VM.
@@ -1806,10 +1827,9 @@ pub struct AudioVmState {
 pub struct AudioVmError {
     /// VM that failed.
     pub vm: String,
-    /// Low-cardinality error kind (e.g. `provider-misconfigured`,
-    /// `vm-not-found`, `enforcement-unavailable`). Never contains
-    /// provider-internal details or credential fragments.
-    pub kind: String,
+    /// Low-cardinality error kind. Never contains provider-internal details
+    /// or credential fragments.
+    pub kind: AudioErrorKind,
     /// Optional operator-facing remediation hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
@@ -3234,9 +3254,9 @@ mod tests {
     #[test]
     fn audio_public_wire_json_shape_is_stable() {
         use super::{
-            AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioMuteArgs, AudioOp,
-            AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult, AudioStatusArgs,
-            AudioStatusResult, AudioVmError, AudioVmState, PublicResponse,
+            AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind, AudioMuteArgs,
+            AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
+            AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState, PublicResponse,
         };
 
         // Status request with explicit VM list.
@@ -3284,7 +3304,7 @@ mod tests {
             }],
             errors: vec![AudioVmError {
                 vm: "missing-vm".to_owned(),
-                kind: "vm-not-found".to_owned(),
+                kind: AudioErrorKind::VmNotFound,
                 remediation: None,
             }],
         }));
@@ -3310,6 +3330,22 @@ mod tests {
             "host-and-guest"
         );
         assert_eq!(value["payload"]["result"]["errors"][0]["vm"], "missing-vm");
+        assert_eq!(
+            value["payload"]["result"]["errors"][0]["kind"],
+            "vm-not-found"
+        );
+
+        // provider-misconfigured error serializes to the canonical wire string.
+        let pm_error = AudioVmError {
+            vm: "aca-vm".to_owned(),
+            kind: AudioErrorKind::ProviderMisconfigured,
+            remediation: Some("Check the provider agent is running.".to_owned()),
+        };
+        let pm_value = serde_json::to_value(&pm_error).expect("provider-misconfigured serializes");
+        assert_eq!(pm_value["kind"], "provider-misconfigured");
+        let roundtrip: AudioVmError =
+            serde_json::from_value(pm_value).expect("provider-misconfigured roundtrips");
+        assert_eq!(roundtrip.kind, AudioErrorKind::ProviderMisconfigured);
 
         // Set-volume response.
         let set_response = PublicResponse::Audio(AudioOpResponse::SetVolume(AudioSetResult {

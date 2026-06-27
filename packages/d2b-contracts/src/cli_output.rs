@@ -4,7 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::public_wire::{
-    AudioChannel, AudioEnforcementPosture, AudioProviderKind, AudioSetApplied, LevelPercent,
+    AudioChannel, AudioEnforcementPosture, AudioErrorKind, AudioProviderKind, AudioSetApplied,
+    LevelPercent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -662,7 +663,7 @@ pub struct VmAudioErrorOutputV1 {
     /// VM that failed.
     pub vm: String,
     /// Low-cardinality error kind.
-    pub kind: String,
+    pub kind: AudioErrorKind,
     /// Optional operator-facing remediation hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,

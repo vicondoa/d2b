@@ -30,7 +30,7 @@
   "additionalProperties": false,
   "definitions": {
     "AudioEnforcementPosture": {
-      "description": "How audio enforcement is applied for a target VM (ADR 0041).",
+      "description": "How audio enforcement is applied for a target VM (ADR 0041).\n\nThis enum describes only *successful* enforcement outcomes. Provider misconfiguration is not a successful outcome and is reported exclusively through [`AudioVmError`] with `kind = AudioErrorKind::ProviderMisconfigured`.",
       "oneOf": [
         {
           "description": "Host-side PipeWire policy and guest-side guestd policy both applied.",
@@ -59,12 +59,31 @@
           "enum": [
             "unsupported"
           ]
-        },
+        }
+      ]
+    },
+    "AudioErrorKind": {
+      "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
+      "oneOf": [
         {
           "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
           "type": "string",
           "enum": [
             "provider-misconfigured"
+          ]
+        },
+        {
+          "description": "The requested VM was not found in the bundle.",
+          "type": "string",
+          "enum": [
+            "vm-not-found"
+          ]
+        },
+        {
+          "description": "Audio enforcement is not available for this VM (e.g. the runtime does not support it and no degraded path exists).",
+          "type": "string",
+          "enum": [
+            "enforcement-unavailable"
           ]
         }
       ]
@@ -111,7 +130,11 @@
       "properties": {
         "kind": {
           "description": "Low-cardinality error kind.",
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioErrorKind"
+            }
+          ]
         },
         "remediation": {
           "description": "Optional operator-facing remediation hint.",
