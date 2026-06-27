@@ -191,7 +191,7 @@ fn to_v2_bytes_produces_valid_json_with_schema_version() {
     assert_eq!(value["mic"], "on");
     assert_eq!(value["speaker"], "off");
     assert_eq!(value["speakerLevel"], 60);
-    assert!(value.get("micGain").map_or(true, |v| v.is_null()));
+    assert!(value.get("micGain").is_none_or(|v| v.is_null()));
 }
 
 #[test]
