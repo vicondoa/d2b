@@ -186,6 +186,10 @@ pub mod usbipd_perenv_autostart;
 // Audio policy dispatch: OFD-locked state I/O, provider capability
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
 mod audio_dispatch;
+// Host-side audio controller strategy (ADR 0041): typed trait plus
+// PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
+// and FakeHostController (test-only).
+mod audio_host_controller;
 // Prometheus scrape endpoint shape. Owns the canonical metric inventory (see
 // `docs/reference/daemon-metrics.md`) and a minimal HTTP/1.1
 // `GET /metrics` handler. The registry is process-local; serving is
