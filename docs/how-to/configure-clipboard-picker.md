@@ -1,0 +1,68 @@
+# Configure a clipboard picker
+
+**Diataxis category:** how-to.
+
+D2b does not include a default picker flake input. Install the separate
+`d2b-clip-picker` project and pass its package or binary path explicitly.
+
+## With a picker flake input
+
+```nix
+{
+  inputs.d2b-clip-picker.url = "github:vicondoa/d2b-clip-picker";
+
+  outputs = { nixpkgs, d2b, d2b-clip-picker, ... }: {
+    nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+      modules = [
+        d2b.nixosModules.default
+        ({ pkgs, ... }: {
+          users.users.alice = { isNormalUser = true; uid = 1000; };
+          d2b.site = {
+            waylandUser = "alice";
+            clipboard = {
+              enable = true;
+              niri.external = true;
+              clipd.executablePath = "/run/current-system/sw/bin/d2b-clipd";
+              # Or set clipd.package once the daemon package is wired.
+              picker.package = d2b-clip-picker.packages.${pkgs.system}.default;
+              policy.crossRealm.enable = true;
+            };
+          };
+        })
+      ];
+    };
+  };
+}
+```
+
+If niri is declared through NixOS, use `programs.niri.enable = true` instead of
+`d2b.site.clipboard.niri.external = true`.
+
+## Explicit fallback keybind
+
+When no trusted no-patch Niri paste-intent hook is available, keep native host
+cross-realm popups disabled and use the explicit fallback:
+
+```nix
+d2b.site.clipboard = {
+  niri.fallback.enable = true;
+  modes.hostCrossRealmPicker = true;
+};
+```
+
+Bind `d2b.site.clipboard.niri.fallback.command` (default:
+`d2b clipboard picker`) in niri. The command opens the picker and arms the chosen
+entry for the currently focused target. The user then performs a normal paste
+within the configured timeout. D2b does not synthesize Ctrl+V and the picker does
+not write to the clipboard.
+
+## What the picker must not receive
+
+- no `NIRI_SOCKET`;
+- no Wayland transfer FDs;
+- no data-control or primary-selection authority;
+- no virtual-keyboard or input-synthesis permission;
+- no persistence or policy authority.
+
+The picker talks only over its inherited socketpair and sends `Select` or
+`Cancel` for the current request.

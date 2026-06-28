@@ -13,7 +13,7 @@ decode.
 | --- | --- | --- |
 | `window-forwarding` | Local semantic Wayland/window forwarding. | Used by local graphics VMs with the Cloud Hypervisor runtime and host-side Wayland mediation. |
 | `display-streaming` | Provider/relay display byte stream. | Used when display traffic traverses an authorized gateway stream instead of a local host Wayland socket. |
-| `clipboard` | Clipboard bridge. | Separate from display; absent unless explicitly advertised. |
+| `clipboard` | Clipboard bridge. | Separate from display; absent unless explicitly advertised and backed by `d2b-clipd` plus the per-VM Wayland bridge. |
 | `audio-playback` / `audio-capture` | Speaker and microphone surfaces. | Separate grants; audio is not implied by display. |
 | `usb` / `hid` | Device operations. | Separate from display and from each other. |
 | `gpu-accel` | Local/runtime GPU acceleration. | Not automatically relay-exportable. |
@@ -29,6 +29,11 @@ families:
 These helpers intentionally leave adjacent I/O capabilities absent. Callers
 must check the specific capability they need and fail closed when it is not
 advertised.
+
+Clipboard is not implied by either display family. Local Wayland forwarding may
+share a compositor socket with the graphics path, but clipboard transfer
+authority remains a separate `d2b-clipd` policy surface with metadata-only audit
+and explicit picker/intent requirements for cross-realm transfers.
 
 ## Managed display-session lifecycle
 
@@ -61,6 +66,8 @@ sessions on close, failed open, and daemon-side stale-session collection.
 - [Provider-managed sandboxes](./provider-managed-sandboxes.md) documents the
   Azure Container Apps adapter and its absent display/I/O capabilities.
 - [Graphics](./components-graphics.md) documents local Wayland forwarding.
+- [Clipboard architecture](./clipboard-architecture.md) documents the separate
+  clipboard authority and picker split.
 - [Video](./components-video.md) documents the video sidecar.
 - [Audio](./components-audio.md) documents sound sidecar grants.
 - [USBIP](./components-usbip.md) documents USB passthrough.

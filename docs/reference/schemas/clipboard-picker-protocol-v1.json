@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vicondoa.github.io/d2b/schemas/clipboard-picker-protocol-v1.json",
+  "title": "d2b clipboard picker protocol v1",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/ClientHello" },
+    { "$ref": "#/$defs/OpenRequest" },
+    { "$ref": "#/$defs/Select" },
+    { "$ref": "#/$defs/Cancel" },
+    { "$ref": "#/$defs/Close" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "ProtocolVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "ClientHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "protocol_version_range", "picker_version"],
+      "properties": {
+        "kind": { "const": "ClientHello" },
+        "protocol_version_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 1 },
+            "max": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "picker_version": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "OpenRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "protocol_version",
+        "clipd_version",
+        "request_id",
+        "destination",
+        "requested_mime",
+        "expires_at",
+        "candidates"
+      ],
+      "properties": {
+        "kind": { "const": "OpenRequest" },
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "clipd_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "picker_version": { "type": ["string", "null"], "maxLength": 64 },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "destination": { "$ref": "#/$defs/Destination" },
+        "requested_mime": { "$ref": "#/$defs/Mime" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "candidates": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/Candidate" }
+        }
+      }
+    },
+    "Select": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "protocol_version", "request_id", "entry_id"],
+      "properties": {
+        "kind": { "const": "Select" },
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "entry_id": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
+    "Cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "protocol_version", "request_id"],
+      "properties": {
+        "kind": { "const": "Cancel" },
+        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
+    "Close": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "request_id", "reason"],
+      "properties": {
+        "kind": { "const": "Close" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "reason": { "$ref": "#/$defs/Reason" }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason"],
+      "properties": {
+        "kind": { "const": "Error" },
+        "request_id": { "anyOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] },
+        "reason": { "$ref": "#/$defs/Reason" }
+      }
+    },
+    "Destination": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["realm", "realm_kind", "attribution"],
+      "properties": {
+        "realm": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "realm_kind": { "enum": ["host", "vm"] },
+        "app_id": { "type": ["string", "null"], "maxLength": 256 },
+        "app_label": { "type": ["string", "null"], "maxLength": 256 },
+        "workspace": { "type": ["string", "null"], "maxLength": 128 },
+        "output": { "type": ["string", "null"], "maxLength": 128 },
+        "attribution": { "enum": ["ExactClient", "FocusedWindowGuess", "BrokerInjectedDebug"] }
+      }
+    },
+    "Candidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "entry_id",
+        "source_realm",
+        "source_realm_kind",
+        "source_attribution",
+        "content_type",
+        "timestamp",
+        "confirmation_required"
+      ],
+      "properties": {
+        "entry_id": { "$ref": "#/$defs/OpaqueId" },
+        "source_realm": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_realm_kind": { "enum": ["host", "vm"] },
+        "source_app": { "type": ["string", "null"], "maxLength": 256 },
+        "source_app_id": { "type": ["string", "null"], "maxLength": 256 },
+        "source_attribution": { "enum": ["ExactClient", "FocusedWindowGuess", "BrokerInjectedDebug"] },
+        "preview_text": { "type": ["string", "null"], "maxLength": 8192 },
+        "content_type": { "$ref": "#/$defs/Mime" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "thumbnail_png_base64": { "type": ["string", "null"], "maxLength": 0 },
+        "confirmation_required": { "type": "boolean" }
+      }
+    },
+    "Mime": {
+      "enum": ["text/plain;charset=utf-8", "text/plain", "text/html", "image/png"]
+    },
+    "Reason": {
+      "enum": [
+        "mime_rejected",
+        "policy_denied",
+        "background_probe",
+        "intent_missing",
+        "picker_not_configured",
+        "picker_timeout",
+        "picker_crashed",
+        "request_expired",
+        "fd_write_timeout",
+        "fd_closed",
+        "bridge_unavailable",
+        "source_materialize_timeout",
+        "memory_cap_exceeded",
+        "fd_cap_exceeded",
+        "materialization_rate_limited",
+        "audit_failure",
+        "loop_suppressed"
+      ]
+    }
+  }
+}
