@@ -66,8 +66,8 @@ Candidates may include:
 - `source_realm_kind` (`host`, `vm`)
 - `source_app`
 - `source_app_id`
-- `source_attribution` (`ExactClient`, `FocusedWindowGuess`,
-  `BrokerInjectedDebug`)
+- `source_attribution` (`exact_client`, `focused_window_guess`,
+  `cache_stale_focused_window_guess`, `broker_injected_debug`)
 - bounded, redacted `preview_text`
 - closed-allowlist `content_type`
 - `timestamp_unix_ms`

@@ -1,6 +1,6 @@
 # ADR 0041: d2b clipboard authority and picker split
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-28
 - Related: ADR 0015 (daemon-only clean break), ADR 0023
   (runner-role lifecycle matrix), ADR 0025 (host-jailed Wayland filter
@@ -114,13 +114,13 @@ that query fails, attribution is marked cache-stale and remains best-effort.
 
 Host attribution is explicitly best-effort. For host-origin copies,
 `d2b-clipd` records the Niri-focused window at the instant the host clipboard
-selection changes as `FocusedWindowGuess`, using a fresh focused-window query
+selection changes as `focused_window_guess`, using a fresh focused-window query
 when possible. It materializes allowed history representations without
 immediately replacing the host selection, preserving same-host rich custom MIME
 paste between host apps. It asserts a broker-backed host selection only when
 exposing VM data to the host or when the user explicitly selects a historical
 item through d2b. For host-destination pastes, `d2b-clipd` records the current
-focused Niri window as a destination label, also `FocusedWindowGuess`. D2b must
+focused Niri window as a destination label, also `focused_window_guess`. D2b must
 not present these as exact host client identity unless a future compositor
 protocol exposes that identity directly.
 
