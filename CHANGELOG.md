@@ -19,6 +19,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the initial `d2b-clipd` Rust crate foundation with picker NDJSON DTOs,
+  bounded framing, clipboard policy primitives, FD safety models, picker
+  supervision scaffolding, and fail-closed audit / droppable metrics queues.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

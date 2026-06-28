@@ -702,6 +702,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-clipd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "d2b-constellation-codec-protobuf"
 version = "0.0.0-bootstrap"
 dependencies = [
