@@ -5848,6 +5848,30 @@ mod tests {
         assert_eq!(not_found.retry_after_ms, None);
     }
 
+    #[test]
+    fn audio_faults_have_actionable_remediation() {
+        use pb::GuestControlErrorKind as K;
+        use pb::HealthRemediation as R;
+
+        let pipewire = guest_error(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE);
+        assert_eq!(
+            pipewire.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE
+        );
+
+        let out_of_range = guest_error(K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE);
+        assert_eq!(
+            out_of_range.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_NONE
+        );
+
+        let unknown_channel = guest_error(K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN);
+        assert_eq!(
+            unknown_channel.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_NONE
+        );
+    }
+
     // ---- ExecList service-path fakes -------------------------------------
     //
     // Minimal in-memory backends so the `exec_list` handler can be exercised

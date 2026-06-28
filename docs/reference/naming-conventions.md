@@ -108,7 +108,6 @@ reconstructing the name from the realm path.
 - `microvm@work.service`
 - `d2b-work-gpu.service`
 - `d2b-work-video.service`
-- `d2b-work-snd.service`
 - `d2b-work-swtpm.service`
 - `d2b-work-store-sync.service`
 - `microvm-virtiofsd@work.service`

@@ -1459,10 +1459,12 @@ pub struct ConsoleReadOutputArgs {
     pub offset: u64,
     /// Maximum output bytes to return in this response.
     pub max_len: u64,
-    /// Whether to block until output is available.
+    /// Compatibility flag retained on the wire. Console output reads are
+    /// non-blocking; clients should back off between empty responses.
     #[serde(default)]
     pub wait: bool,
-    /// Long-poll timeout in milliseconds (0 = no timeout).
+    /// Compatibility timeout retained on the wire. The daemon does not block
+    /// on console output reads.
     #[serde(default)]
     pub timeout_ms: u64,
 }
@@ -1499,13 +1501,14 @@ impl fmt::Debug for ConsoleResizeArgs {
     }
 }
 
-/// Wait until the console session exits, or until the optional timeout elapses.
+/// Non-blocking check for whether the console session has exited.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConsoleWaitArgs {
     /// Opaque console session handle.
     pub session: String,
-    /// Maximum time to wait in milliseconds (0 = indefinite).
+    /// Compatibility timeout retained on the wire. The daemon returns the
+    /// current EOF state immediately; clients should back off between polls.
     #[serde(default)]
     pub timeout_ms: u64,
 }

@@ -732,7 +732,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__mic)
-            opts="-h --help on off <VM>"
+            opts="-h --json --help on off <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -746,7 +746,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__off)
-            opts="-h --help <VM>"
+            opts="-h --json --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -760,7 +760,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__speaker)
-            opts="-h --help on off <VM>"
+            opts="-h --json --help on off <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -774,7 +774,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio__subcmd__status)
-            opts="-h --help [VM]"
+            opts="-h --json --help [VM]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

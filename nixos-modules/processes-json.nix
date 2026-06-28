@@ -994,7 +994,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       } (audioRunner name))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
-          unit = if vm.graphics.enable then "d2b-${name}-gpu.service" else "microvm@${name}.service";
+          unit = "microvm@${name}.service";
           runner = {
             binaryPath = cloudHypervisorBinaryPath microvm;
             argv = cloudHypervisorArgv name vm manifest;

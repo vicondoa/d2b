@@ -708,8 +708,8 @@ fn dispatch_audio_set_volume(
     };
 
     // For live PipeWire enforcement, prove the host boundary update before
-    // persisting the new policy as applied. qemu-media is offline-only, so its
-    // state-file write is the host policy.
+    // persisting an increased level as applied. Missing live nodes report
+    // Unsupported and still allow the offline boot policy to be staged.
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
         let result = enforce_host_level(state, vm_name, &cap, level, channel);
         if matches!(result, HostEnforcementResult::Failed) {
@@ -803,12 +803,21 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
         AudioChannel::Microphone => current.with_mic(grant),
     };
 
-    // For live PipeWire enforcement, prove the host boundary update before
-    // persisting the new policy as applied. qemu-media is offline-only, so its
-    // state-file write is the host policy.
+    // Persist revocations before live enforcement so a failed live update still
+    // boots with the restrictive policy. Enabling access still proves live host
+    // enforcement before persisting the less-restrictive state.
+    if grant == AudioGrant::Off {
+        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+            TypedError::InternalIo {
+                context: "write audio state".to_owned(),
+                detail: e.to_string(),
+            }
+        })?;
+    }
+
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
         let result = enforce_host_grant(state, vm_name, &cap, grant, channel);
-        if matches!(result, HostEnforcementResult::Failed) {
+        if grant == AudioGrant::On && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host grant enforcement failed; state not updated".to_owned(),
@@ -819,12 +828,14 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
         HostEnforcementResult::Unsupported
     };
 
-    write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
-        TypedError::InternalIo {
-            context: "write audio state".to_owned(),
-            detail: e.to_string(),
-        }
-    })?;
+    if grant == AudioGrant::On {
+        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+            TypedError::InternalIo {
+                context: "write audio state".to_owned(),
+                detail: e.to_string(),
+            }
+        })?;
+    }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
         enforce_host_grant(state, vm_name, &cap, grant, channel)

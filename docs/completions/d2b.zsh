@@ -153,6 +153,7 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (status)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::vm -- Optional VM name; omitted lists audio status for every audio-enabled VM:_default' \
@@ -160,24 +161,27 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (mic)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':state:((on\:"Enable the selected audio direction"
+':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
 off\:"Disable the selected audio direction"))' \
 ':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (speaker)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':state:((on\:"Enable the selected audio direction"
+':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
 off\:"Disable the selected audio direction"))' \
 ':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (off)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':vm -- VM name whose microphone and speaker grants should both be disabled:_default' \

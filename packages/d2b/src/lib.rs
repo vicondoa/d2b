@@ -8,6 +8,8 @@ use std::{
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::Duration,
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -976,7 +978,7 @@ struct ConsoleArgs {
 #[derive(Debug, Args)]
 struct AudioArgs {
     /// Emit machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
     command: Option<AudioCommand>,
@@ -1002,6 +1004,7 @@ struct AudioStatusArgs {
 
 #[derive(Debug, Args)]
 struct AudioToggleArgs {
+    /// The new grant state to apply.
     #[arg(value_enum)]
     state: AudioGrantState,
     /// VM name whose audio grant should be changed.
@@ -3637,7 +3640,8 @@ fn cmd_console(
             }
         }
 
-        // Poll for output (wait=true, 200 ms timeout keeps the stdin loop responsive).
+        // Poll for output; the daemon returns immediately so this client owns
+        // the backoff that keeps console idle loops from burning CPU.
         let read_result = console_round_trip(
             &mut socket,
             &ConsoleOp::ReadOutput(d2b_contracts::public_wire::ConsoleReadOutputArgs {
@@ -3670,6 +3674,8 @@ fn cmd_console(
                         d2b_core::base64_codec::decode(&out.chunk_base64).unwrap_or_default();
                     let _ = write_stdout_bytes(&bytes);
                     stdout_offset = out.offset + bytes.len() as u64;
+                } else {
+                    thread::sleep(Duration::from_millis(50));
                 }
             }
             Ok(_) => return Err(CliFailure::new(1, "console read: unexpected response type")),
@@ -14294,7 +14300,8 @@ mod host_install_dispatch_tests {
     #[test]
     fn audio_json_flag_parsed_for_all_subcommands() {
         // --json must be accepted at the audio subcommand level (before the
-        // sub-subcommand) so d2b-wlcontrol can call `d2b audio status --json`.
+        // sub-subcommand) and after it so d2b-wlcontrol can place the flag
+        // naturally with the requested operation.
         let with_json =
             NativeCli::try_parse_from(["d2b", "audio", "--json", "status"]).expect("json status");
         assert!(matches!(
@@ -14307,6 +14314,13 @@ mod host_install_dispatch_tests {
                 .expect("json mic");
         assert!(matches!(
             json_mic.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+
+        let trailing_json = NativeCli::try_parse_from(["d2b", "audio", "status", "--json"])
+            .expect("trailing json status");
+        assert!(matches!(
+            trailing_json.command,
             super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
         ));
     }

@@ -2157,7 +2157,7 @@
           }
         },
         {
-          "description": "Write the per-VM dnsmasq lease file. Replaces leaves of the retired `microvm-setup@<vm>.service`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nTODO: wire to a `live_seed_dnsmasq_lease` handler resolved via `BundleResolver` (per-VM dnsmasq lease row).",
+          "description": "Write the per-VM dnsmasq lease file. Replaces leaves of the retired `microvm-setup@<vm>.service`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nLive handler target: `live_seed_dnsmasq_lease`, resolved through `BundleResolver` from the per-VM dnsmasq lease row.",
           "type": "object",
           "required": [
             "kind",
@@ -2176,7 +2176,7 @@
           }
         },
         {
-          "description": "Bind-mount `/var/lib/d2b/vms/<vm>/store-view` from the per-VM hardlink farm at `<vm>/store/`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nTODO: wire to a `live_bind_mount_from_hardlink_farm` handler resolved via `BundleResolver::find_store_view_intent`.",
+          "description": "Bind-mount `/var/lib/d2b/vms/<vm>/store-view` from the per-VM hardlink farm at `<vm>/store/`. Currently a typed stub (`Unimplemented`) until the live handler is wired.\n\nLive handler target: `live_bind_mount_from_hardlink_farm`, resolved through `BundleResolver::find_store_view_intent`.",
           "type": "object",
           "required": [
             "kind",
@@ -2195,7 +2195,7 @@
           }
         },
         {
-          "description": "Enforce the per-leaf ownership/mode matrix on `/var/lib/d2b/vms/<vm>/`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to `d2b_host::ownership_matrix::check`.",
+          "description": "Enforce the per-leaf ownership/mode matrix on `/var/lib/d2b/vms/<vm>/`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nLive handler target: `d2b_host::ownership_matrix::check`.",
           "type": "object",
           "required": [
             "kind",
@@ -2214,7 +2214,7 @@
           }
         },
         {
-          "description": "Refuse VM start if `/var/lib/d2b/vms/<vm>/sshd-host-keys/` drifts from `root:root 0400`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nTODO: wire to the `O_NOFOLLOW` symlink-rejecting check.",
+          "description": "Refuse VM start if `/var/lib/d2b/vms/<vm>/sshd-host-keys/` drifts from `root:root 0400`. Currently a typed stub (`Unimplemented`) until the real check is wired.\n\nLive handler target: the `O_NOFOLLOW` symlink-rejecting check.",
           "type": "object",
           "required": [
             "kind",
@@ -3347,14 +3347,14 @@
           ]
         },
         "timeoutMs": {
-          "description": "Long-poll timeout in milliseconds (0 = no timeout).",
+          "description": "Compatibility timeout retained on the wire. The daemon does not block on console output reads.",
           "default": 0,
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
         "wait": {
-          "description": "Whether to block until output is available.",
+          "description": "Compatibility flag retained on the wire. Console output reads are non-blocking; clients should back off between empty responses.",
           "default": false,
           "type": "boolean"
         }
@@ -3438,7 +3438,7 @@
       "additionalProperties": false
     },
     "ConsoleWaitArgs": {
-      "description": "Wait until the console session exits, or until the optional timeout elapses.",
+      "description": "Non-blocking check for whether the console session has exited.",
       "type": "object",
       "required": [
         "session"
@@ -3449,7 +3449,7 @@
           "type": "string"
         },
         "timeoutMs": {
-          "description": "Maximum time to wait in milliseconds (0 = indefinite).",
+          "description": "Compatibility timeout retained on the wire. The daemon returns the current EOF state immediately; clients should back off between polls.",
           "default": 0,
           "type": "integer",
           "format": "uint64",

@@ -2693,7 +2693,16 @@ fn dispatch_request_locked(
         wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
         wire::Request::Console(op) => dispatch_console(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
-        wire::Request::Audio(op) => audio_dispatch::dispatch_audio(state, op),
+        wire::Request::Audio(op) => {
+            if !matches!(op, public_wire::AudioOp::Status(_))
+                && !matches!(peer.role, PeerRole::Admin)
+            {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "audio".to_owned(),
+                });
+            }
+            audio_dispatch::dispatch_audio(state, op)
+        }
     }
 }
 
@@ -25938,9 +25947,9 @@ mod broker_dispatch_tests {
     #[test]
     fn audio_verb_is_admin_only() {
         use super::verb_requires_admin;
-        // Audio operations mutate host and guest audio policy, so launchers
-        // must be denied before any state file or guest-control access.
-        assert!(verb_requires_admin("audio"));
+        // Audio status is read-only and remains launcher-readable; audio
+        // mutations are gated by the AudioOp arm in dispatch_request_locked.
+        assert!(!verb_requires_admin("audio"));
     }
 
     #[test]

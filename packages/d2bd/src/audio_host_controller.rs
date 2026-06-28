@@ -184,7 +184,7 @@ impl HostAudioController for PipeWireHostController {
             return HostEnforcementResult::Failed;
         }
         let Some(node_id) = self.resolve_channel_target(vm_name, channel) else {
-            return HostEnforcementResult::Failed;
+            return HostEnforcementResult::Unsupported;
         };
         self.run_wpctl_mute(&node_id, !grant.is_on())
     }
@@ -199,7 +199,7 @@ impl HostAudioController for PipeWireHostController {
             return HostEnforcementResult::Failed;
         }
         let Some(node_id) = self.resolve_channel_target(vm_name, channel) else {
-            return HostEnforcementResult::Failed;
+            return HostEnforcementResult::Unsupported;
         };
         self.run_wpctl_volume(&node_id, level)
     }

@@ -205,8 +205,6 @@ deprecations ship one minor release before removal.
   `usb_json_contract`; and 3 network-scoping contract tests in
   `usb_network_scoping`.
 
-### Fixed
-
 - `d2b switch` now threads the configured live activation timeout into
   guest-control and includes identity-flow recovery guidance when guest
   activation times out.
@@ -278,8 +276,6 @@ deprecations ship one minor release before removal.
 - QEMU media's redacted registry index is now private to declared daemon/broker
   readers (`0640`) and QEMU media state lives under a dedicated per-VM
   `qemu-media` subdirectory.
-
-### Fixed
 
 - `d2b vm exec` and `d2b vm exec -d` no longer time out with
   `guest-control-timeout` (exit 69) when a long-running GUI application
@@ -835,8 +831,6 @@ deprecations ship one minor release before removal.
   `qemuMedia.source.usbSelector.byIdName` and `d2b usb probe`, while
   running qemu-media VMs still use QMP-backed `d2b usb attach` /
   `detach` hotplug.
-
-### Fixed
 
 - CLI/docs: added the missing `vm display` authorization-matrix row so the
   declared display-session management command is covered by the generated
