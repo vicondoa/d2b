@@ -246,5 +246,4 @@ span ID; per-chunk or per-byte labelling is forbidden.
   argument and exit-code contract.
 - [CLI contract — `audio`](./cli-contract.md#audio-status) — `d2b audio`
   subcommands and exit-code contract.
-- [Daemon API](./daemon-api.md) — planned `ConsoleOp`/`AudioOp` public
-  wire types; see the [console and audio wire types note](./daemon-api.md#console-and-audio-wire-types).
+- [Daemon API](./daemon-api.md) — `ConsoleOp`/`AudioOp` public wire types; see the [console and audio wire types note](./daemon-api.md#console-and-audio-wire-types).

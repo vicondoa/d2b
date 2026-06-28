@@ -268,15 +268,16 @@ host reboot.
 
 ### Console and audio wire types
 
-`ConsoleOp` and `AudioOp` are planned public wire types that will extend
-`PublicRequest` and `PublicResponse` when the daemon-native console and audio
-backends ship. The design is governed by [ADR 0041](../adr/0041-console-and-audio-controls.md).
-Until those types land in `d2b-contracts`, the `d2b console` and `d2b audio`
-CLI verbs surface `not-yet-implemented` envelopes (exit `78`).
+`ConsoleOp` and `AudioOp` are staged runtime public wire types committed to
+`d2b-contracts` and included in the auto-generated tables above. `d2bd`
+dispatches both op families; the design is governed by
+[ADR 0041](../adr/0041-console-and-audio-controls.md).
+See [provider capability matrix](./provider-capability-matrix.md) for the
+per-provider behavior each op implements.
 
-The planned surface contracts are:
+The implemented surface contracts are:
 
-- **`ConsoleOp`** — Attach, Detach, ReadOutput. `ReadOutput` responses will
+- **`ConsoleOp`** — Attach, Detach, ReadOutput. `ReadOutput` responses
   include ring-buffer cursor metadata so clients can detect dropped output and
   fast-forward cleanly. Console bytes are never logged, audited, or used as
   metric labels.
@@ -284,13 +285,13 @@ The planned surface contracts are:
   `Status` returns per-target `AudioProviderResult` structs so one
   misconfigured provider does not fail the entire multi-target query.
   Volume and gain values are bounded `0..=100` domain integers validated
-  at the wire boundary.
+  at the wire boundary. Host PipeWire enforcement (`pw-cli`/`wpexec`) and
+  guestd `AudioSet` integration report `applied: host-only` when state is
+  persisted but live enforcement is not yet connected, rather than falsely
+  reporting `host-and-guest`.
 
-Both ops follow the standard `PublicRequest`/`PublicResponse` framing and
-will appear in the auto-generated tables above once the Rust types are
-committed to `d2b-contracts`. See
-[provider capability matrix](./provider-capability-matrix.md) for the
-per-provider behavior each op must implement.
+Both ops follow the standard `PublicRequest`/`PublicResponse` framing;
+see the auto-generated tables above for the committed Rust variants.
 
 
 
