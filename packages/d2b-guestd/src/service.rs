@@ -3903,24 +3903,35 @@ fn wpctl_channel_target(
     }
 }
 
+/// Maximum stderr bytes captured from a failed wpctl subprocess for diagnostics.
+/// The bound prevents log amplification; content is sanitized to ASCII before
+/// logging (no paths, volume values, or user identifiers).
+const WPCTL_STDERR_CAPTURE_LIMIT: usize = 256;
+
 /// Run a wpctl subcommand as an argv-only subprocess in the workload user's
-/// PipeWire session. `PIPEWIRE_RUNTIME_DIR=/run/user/<workload_uid>` is set so
-/// wpctl connects to the user's daemon, never to root's socket.
+/// PipeWire session. The subprocess drops privilege to `workload_uid` so it
+/// connects to the user's PipeWire daemon (never root's socket).
+/// Both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` are set to
+/// `/run/user/<workload_uid>` so WirePlumber locates its socket.
 async fn run_wpctl_command(
     wpctl_path: &Path,
     args: &[&str],
     workload_uid: u32,
 ) -> Result<std::process::Output, pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
-    let pipewire_runtime_dir = format!("/run/user/{workload_uid}");
+    let runtime_dir = format!("/run/user/{workload_uid}");
     let mut command = TokioCommand::new(wpctl_path);
+    // SAFETY: uid() is called before the child exec; no unsafe block needed
+    // because CommandExt::uid is a safe method in Rust's standard library.
     command
         .args(args)
-        .env("PIPEWIRE_RUNTIME_DIR", &pipewire_runtime_dir)
-        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .uid(workload_uid)
+        .env_clear()
+        .env("PIPEWIRE_RUNTIME_DIR", &runtime_dir)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     let output = tokio::time::timeout(
         Duration::from_millis(WPCTL_COMMAND_TIMEOUT_MS),
@@ -3932,6 +3943,18 @@ async fn run_wpctl_command(
     if output.status.success() {
         Ok(output)
     } else {
+        // Surface bounded, sanitized stderr for operator diagnostics. Volume
+        // values, paths, and user identifiers are NOT logged — only the first
+        // WPCTL_STDERR_CAPTURE_LIMIT bytes of printable ASCII.
+        let diag: String = output.stderr[..output.stderr.len().min(WPCTL_STDERR_CAPTURE_LIMIT)]
+            .iter()
+            .copied()
+            .filter(|b| b.is_ascii_graphic() || *b == b' ')
+            .map(char::from)
+            .collect();
+        eprintln!(
+            "d2b-guestd: wpctl subprocess failed: {diag}"
+        );
         Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)
     }
 }
