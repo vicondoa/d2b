@@ -20,6 +20,7 @@
 //! after restart.  For qemu-media, the broker re-provides the fd on daemon
 //! restart via the normal SpawnRunner adoption path.
 
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -28,6 +29,19 @@ use std::{
 
 use d2b_contracts::public_wire::{ConsoleProviderKind, ConsoleReadOutputResult};
 use d2b_core::console_ring::RingBuffer;
+
+static CONSOLE_DRAINER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn console_drainer_runtime() -> &'static tokio::runtime::Runtime {
+    CONSOLE_DRAINER_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("d2bd-console-drainer")
+            .enable_all()
+            .build()
+            .expect("build console drainer runtime")
+    })
+}
 
 /// Maximum number of console sessions allowed across all VMs.
 const MAX_SESSIONS: usize = 64;
@@ -313,7 +327,7 @@ pub fn spawn_ch_serial_drainer(
     socket_path: String,
     ring: Arc<Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
+    console_drainer_runtime().spawn(async move {
         const RECONNECT_DELAY: Duration = Duration::from_millis(500);
         loop {
             match tokio::net::UnixStream::connect(&socket_path).await {
@@ -356,7 +370,7 @@ pub fn spawn_fd_drainer(
     stream: tokio::net::UnixStream,
     ring: Arc<Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
+    console_drainer_runtime().spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut stream = stream;
         let mut buf = vec![0u8; 4096];
@@ -412,7 +426,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
 
     // We need both a reader and a writer over the same socket.  Split
     // via tokio's UnixStream from the std socket.
-    let drainer = tokio::task::spawn(async move {
+    let drainer = console_drainer_runtime().spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let stream = match tokio::net::UnixStream::from_std(std_stream) {
             Ok(s) => s,

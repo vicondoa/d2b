@@ -25,6 +25,8 @@ deprecations ship one minor release before removal.
 - Host activation grants `d2bd` narrow access to the Wayland user's
   PipeWire/Pulse sockets so daemon-owned audio policy enforcement does not
   depend on host-local ACL overrides.
+- Console drainers now spawn on a daemon-owned Tokio runtime even when console
+  attach requests are handled by synchronous public-socket worker threads.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
