@@ -33,6 +33,8 @@
 //! the caller's state-file write already committed the policy, but the live
 //! boundary was NOT sealed.
 
+use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -313,32 +315,59 @@ fn extract_env_value<'a>(env: &'a [String], key: &str) -> Option<&'a str> {
     env.iter().find_map(|entry| entry.strip_prefix(&prefix))
 }
 
-/// Spawn a subprocess at `program` with `args`, passing only
-/// `PIPEWIRE_RUNTIME_DIR` in the environment.
+/// Maximum stderr bytes captured from a failed wpctl subprocess for diagnostics.
+const WPCTL_STDERR_CAPTURE_LIMIT: usize = 256;
+
+/// Spawn a subprocess at `program` with `args`.
 ///
-/// stdin/stdout/stderr are all redirected to `/dev/null`. Returns `Applied`
-/// on exit-code 0, `Failed` on any other outcome (non-zero exit, spawn
-/// error, or signal kill).
+/// The subprocess drops privilege to the UID that owns
+/// `pipewire_runtime_dir` (so `wpctl` targets the correct user's PipeWire
+/// session, never the root socket). Both `PIPEWIRE_RUNTIME_DIR` and
+/// `XDG_RUNTIME_DIR` are set to the runtime dir path. stderr is captured and
+/// bounded diagnostics are logged on failure (no secrets, volume values, or
+/// paths in the log entry).
+///
+/// Returns `Applied` on exit-code 0, `Failed` on any other outcome.
 fn run_subprocess(
     program: &Path,
     args: &[&str],
     pipewire_runtime_dir: &Path,
 ) -> HostEnforcementResult {
-    // env_clear() drops the full daemon environment; only PIPEWIRE_RUNTIME_DIR
-    // is set so wpctl can locate the PipeWire socket. This prevents argv
-    // construction using any untrusted environment variable.
-    let result = std::process::Command::new(program)
-        .args(args)
+    // Resolve the uid that owns the PipeWire runtime dir so the subprocess
+    // targets the correct user session rather than running as d2bd (root).
+    let target_uid: Option<u32> = std::fs::metadata(pipewire_runtime_dir)
+        .ok()
+        .map(|m| m.uid());
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args)
         .env_clear()
         .env("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_dir)
+        .env("XDG_RUNTIME_DIR", pipewire_runtime_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::piped());
+    if let Some(uid) = target_uid {
+        cmd.uid(uid);
+    }
+    let output = cmd.output();
 
-    match result {
-        Ok(status) if status.success() => HostEnforcementResult::Applied,
-        Ok(_) => HostEnforcementResult::Failed,
+    match output {
+        Ok(out) if out.status.success() => HostEnforcementResult::Applied,
+        Ok(out) => {
+            // Surface bounded, sanitized stderr for operator diagnostics.
+            let diag: String = out.stderr[..out.stderr.len().min(WPCTL_STDERR_CAPTURE_LIMIT)]
+                .iter()
+                .copied()
+                .filter(|b| b.is_ascii_graphic() || *b == b' ')
+                .map(char::from)
+                .collect();
+            tracing::warn!(
+                subsystem = "d2bd-audio",
+                "wpctl subprocess failed: {diag}"
+            );
+            HostEnforcementResult::Failed
+        }
         Err(_) => HostEnforcementResult::Failed,
     }
 }

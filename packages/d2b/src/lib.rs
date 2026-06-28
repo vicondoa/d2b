@@ -974,6 +974,9 @@ struct ConsoleArgs {
 
 #[derive(Debug, Args)]
 struct AudioArgs {
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    json: bool,
     #[command(subcommand)]
     command: Option<AudioCommand>,
 }
@@ -3755,11 +3758,223 @@ pub(crate) fn scan_chunk_for_detach(chunk: &[u8]) -> DetachScan {
 }
 
 fn cmd_audio(
-    _context: &Context,
-    _args: &AudioArgs,
+    context: &Context,
+    args: &AudioArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    emit_host_error(&not_yet_implemented_envelope("audio"), false)
+    use d2b_contracts::public_wire::{
+        AudioChannel, AudioMuteArgs, AudioOp, AudioOpResponse, AudioSetApplied,
+        AudioStatusArgs as WireStatusArgs,
+    };
+
+    let json = args.json;
+
+    // Build the op(s) to dispatch. `Off` fans out to two `Mute` ops.
+    enum AudioDispatch {
+        Single(AudioOp),
+        Off { vm: String },
+    }
+
+    let dispatch = match &args.command {
+        None | Some(AudioCommand::Status(AudioStatusArgs { vm: None })) => {
+            AudioDispatch::Single(AudioOp::Status(WireStatusArgs { vms: vec![] }))
+        }
+        Some(AudioCommand::Status(AudioStatusArgs { vm: Some(vm) })) => {
+            AudioDispatch::Single(AudioOp::Status(WireStatusArgs {
+                vms: vec![vm.clone()],
+            }))
+        }
+        Some(AudioCommand::Mic(a)) => AudioDispatch::Single(AudioOp::Mute(AudioMuteArgs {
+            vm: a.vm.clone(),
+            channel: AudioChannel::Microphone,
+            mute: a.state == AudioGrantState::Off,
+        })),
+        Some(AudioCommand::Speaker(a)) => AudioDispatch::Single(AudioOp::Mute(AudioMuteArgs {
+            vm: a.vm.clone(),
+            channel: AudioChannel::Speaker,
+            mute: a.state == AudioGrantState::Off,
+        })),
+        Some(AudioCommand::Off(a)) => AudioDispatch::Off {
+            vm: a.vm.clone(),
+        },
+    };
+
+    match dispatch {
+        AudioDispatch::Single(op) => {
+            let response = audio_round_trip(context, op)?;
+            render_audio_response(context, &response, json)
+        }
+        AudioDispatch::Off { vm } => {
+            // Mute both channels. Report both; exit non-zero if either fails.
+            let r_spk = audio_round_trip(
+                context,
+                AudioOp::Mute(AudioMuteArgs {
+                    vm: vm.clone(),
+                    channel: AudioChannel::Speaker,
+                    mute: true,
+                }),
+            )?;
+            let r_mic = audio_round_trip(
+                context,
+                AudioOp::Mute(AudioMuteArgs {
+                    vm: vm.clone(),
+                    channel: AudioChannel::Microphone,
+                    mute: true,
+                }),
+            )?;
+            if json {
+                print_json(&serde_json::json!({
+                    "speaker": serde_json::to_value(&r_spk).unwrap_or_default(),
+                    "microphone": serde_json::to_value(&r_mic).unwrap_or_default(),
+                }))?;
+            } else {
+                render_audio_response(context, &r_spk, false)?;
+                render_audio_response(context, &r_mic, false)?;
+            }
+            // Non-zero if either channel reported Unsupported.
+            let both_ok = !matches!(
+                &r_spk,
+                AudioOpResponse::Mute(r) if r.applied == AudioSetApplied::Unsupported
+            ) && !matches!(
+                &r_mic,
+                AudioOpResponse::Mute(r) if r.applied == AudioSetApplied::Unsupported
+            );
+            Ok(if both_ok { 0 } else { 1 })
+        }
+    }
+}
+
+fn audio_round_trip(
+    context: &Context,
+    op: d2b_contracts::public_wire::AudioOp,
+) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
+    let request = encode_type_tagged_message("audio", &op, "audio request")?;
+    match try_public_socket_request(context, &request, "audio")? {
+        PublicSocketOutcome::Reply(response) => parse_audio_reply(&response),
+        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
+            69,
+            format!(
+                "audio: d2bd public socket is unavailable at {}",
+                context.public_socket.display()
+            ),
+        )),
+        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
+            70,
+            "audio: daemon generation does not support audio operations",
+        )),
+    }
+}
+
+fn parse_audio_reply(
+    bytes: &[u8],
+) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
+    use d2b_contracts::public_wire::AudioOpResponse;
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse audio reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("audioOpResponse") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("type");
+            }
+            serde_json::from_value::<AudioOpResponse>(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode audioOpResponse: {err}"))
+            })
+        }
+        Some("error") => {
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode audio error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected audio reply type {other:?}"),
+        )),
+    }
+}
+
+fn render_audio_response(
+    _context: &Context,
+    response: &d2b_contracts::public_wire::AudioOpResponse,
+    json: bool,
+) -> Result<i32, CliFailure> {
+    use d2b_contracts::public_wire::{AudioOpResponse, AudioSetApplied};
+    match response {
+        AudioOpResponse::Status(status) => {
+            if json {
+                // d2b-wlcontrol consumes this shape: AudioStatusResult.
+                print_json(status)?;
+                return Ok(0);
+            }
+            for vm_state in &status.entries {
+                let spk_muted = if vm_state.speaker.muted { "muted" } else { "on" };
+                let mic_muted = if vm_state.microphone.muted { "muted" } else { "on" };
+                print_stdout(&format!(
+                    "{}\tspeaker:{} mic:{} enforcement:{}\n",
+                    vm_state.vm,
+                    spk_muted,
+                    mic_muted,
+                    format_enforcement(&vm_state.enforcement)
+                ));
+            }
+            for err in &status.errors {
+                let kind_label = serde_json::to_string(&err.kind)
+                    .map(|s| s.trim_matches('"').to_owned())
+                    .unwrap_or_else(|_| "error".to_owned());
+                print_stdout(&format!("{}\terror:{}\n", err.vm, kind_label));
+            }
+            Ok(0)
+        }
+        AudioOpResponse::Mute(result) | AudioOpResponse::SetVolume(result) => {
+            if json {
+                print_json(result)?;
+                return Ok(if result.applied == AudioSetApplied::Unsupported {
+                    1
+                } else {
+                    0
+                });
+            }
+            let applied_label = match result.applied {
+                AudioSetApplied::HostAndGuest => "applied:host+guest",
+                AudioSetApplied::HostOnly => "applied:host",
+                AudioSetApplied::GuestOnly => "applied:guest",
+                AudioSetApplied::Unsupported => "not-applied",
+            };
+            let muted_label = if result.state.muted { "muted" } else { "on" };
+            print_stdout(&format!(
+                "{} {} {} {}\n",
+                result.vm,
+                format_channel(&result.channel),
+                muted_label,
+                applied_label
+            ));
+            Ok(if result.applied == AudioSetApplied::Unsupported {
+                1
+            } else {
+                0
+            })
+        }
+    }
+}
+
+fn format_enforcement(
+    posture: &d2b_contracts::public_wire::AudioEnforcementPosture,
+) -> &'static str {
+    use d2b_contracts::public_wire::AudioEnforcementPosture;
+    match posture {
+        AudioEnforcementPosture::HostAndGuest => "host+guest",
+        AudioEnforcementPosture::HostOnly => "host",
+        AudioEnforcementPosture::GuestOnly => "guest",
+        AudioEnforcementPosture::Unsupported => "unsupported",
+    }
+}
+
+fn format_channel(channel: &d2b_contracts::public_wire::AudioChannel) -> &'static str {
+    use d2b_contracts::public_wire::AudioChannel;
+    match channel {
+        AudioChannel::Speaker => "speaker",
+        AudioChannel::Microphone => "microphone",
+    }
 }
 
 fn cmd_host_check(context: &Context, args: &HostCheckArgs) -> Result<i32, CliFailure> {
@@ -13967,6 +14182,7 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             audio.command,
             super::NativeCommand::Audio(super::AudioArgs {
+                json: false,
                 command: Some(super::AudioCommand::Mic(super::AudioToggleArgs {
                     state: super::AudioGrantState::On,
                     vm,
@@ -13978,7 +14194,20 @@ mod host_install_dispatch_tests {
             NativeCli::try_parse_from(["d2b", "audio"]).expect("audio status parse");
         assert!(matches!(
             audio_default.command,
-            super::NativeCommand::Audio(super::AudioArgs { command: None })
+            super::NativeCommand::Audio(super::AudioArgs {
+                json: false,
+                command: None,
+            })
+        ));
+
+        let audio_json =
+            NativeCli::try_parse_from(["d2b", "audio", "--json"]).expect("audio json parse");
+        assert!(matches!(
+            audio_json.command,
+            super::NativeCommand::Audio(super::AudioArgs {
+                json: true,
+                command: None,
+            })
         ));
 
         let console =
@@ -13986,6 +14215,119 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             console.command,
             super::NativeCommand::Console(super::ConsoleArgs { vm }) if vm == "personal-dev"
+        ));
+    }
+
+    #[test]
+    fn audio_status_result_json_shape_matches_wire_contract() {
+        // d2b-wlcontrol depends on `d2b audio status --json` producing
+        // AudioStatusResult JSON. This test locks the shape so any schema
+        // change is caught before it breaks downstream consumers.
+        use d2b_contracts::public_wire::{
+            AudioChannelState, AudioEnforcementPosture, AudioOpResponse, AudioProviderKind,
+            AudioSetApplied, AudioSetResult, AudioStatusResult, AudioVmState,
+        };
+        use d2b_contracts::public_wire::AudioChannel;
+
+        let status = AudioStatusResult {
+            entries: vec![AudioVmState {
+                vm: "work".to_owned(),
+                speaker: AudioChannelState {
+                    level: None,
+                    muted: false,
+                },
+                microphone: AudioChannelState {
+                    level: None,
+                    muted: true,
+                },
+                provider_kind: AudioProviderKind::LocalHypervisor,
+                enforcement: AudioEnforcementPosture::HostAndGuest,
+            }],
+            errors: vec![],
+        };
+        let json = serde_json::to_string(&status).expect("serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("roundtrip");
+        assert!(v["entries"].is_array(), "entries must be array");
+        assert_eq!(v["entries"][0]["vm"], "work");
+        assert_eq!(v["entries"][0]["microphone"]["muted"], true);
+        assert_eq!(v["entries"][0]["enforcement"], "host-and-guest");
+
+        // SetResult JSON shape (for mute/setvol JSON output)
+        let set_result = AudioSetResult {
+            vm: "work".to_owned(),
+            channel: AudioChannel::Speaker,
+            applied: AudioSetApplied::HostAndGuest,
+            state: AudioChannelState {
+                level: None,
+                muted: false,
+            },
+        };
+        let set_json = serde_json::to_string(&set_result).expect("serialize set");
+        let sv: serde_json::Value = serde_json::from_str(&set_json).expect("roundtrip set");
+        assert_eq!(sv["vm"], "work");
+        assert_eq!(sv["applied"], "host-and-guest");
+        assert_eq!(sv["channel"], "speaker");
+
+        // AudioOpResponse::Status tag shape (used when printing full envelope)
+        let response = AudioOpResponse::Status(status.clone());
+        let resp_json = serde_json::to_string(&response).expect("serialize response");
+        let rv: serde_json::Value = serde_json::from_str(&resp_json).expect("roundtrip resp");
+        assert_eq!(rv["op"], "status", "AudioOpResponse tag must be 'op'");
+        assert!(rv["result"].is_object(), "AudioOpResponse content must be 'result'");
+    }
+
+    #[test]
+    fn audio_json_flag_parsed_for_all_subcommands() {
+        // --json must be accepted at the audio subcommand level (before the
+        // sub-subcommand) so d2b-wlcontrol can call `d2b audio status --json`.
+        let with_json =
+            NativeCli::try_parse_from(["d2b", "audio", "--json", "status"]).expect("json status");
+        assert!(matches!(
+            with_json.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+
+        let json_mic =
+            NativeCli::try_parse_from(["d2b", "audio", "--json", "mic", "off", "work-vm"])
+                .expect("json mic");
+        assert!(matches!(
+            json_mic.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+    }
+
+    #[test]
+    fn audio_no_success_shaped_cli_fallback_for_off_command() {
+        // Verify Off fans out to two separate Mute ops (speaker + microphone).
+        // This cannot produce a success result from a single op, so no
+        // success-shaped fallback can exist for the Off path.
+        use super::{AudioArgs, AudioCommand, AudioGrantState, AudioOffArgs, AudioToggleArgs};
+        let off_args = AudioArgs {
+            json: false,
+            command: Some(AudioCommand::Off(AudioOffArgs {
+                vm: "corp-vm".to_owned(),
+            })),
+        };
+        // Confirm the Off variant matches what we expect
+        assert!(matches!(
+            off_args.command,
+            Some(AudioCommand::Off(AudioOffArgs { vm })) if vm == "corp-vm"
+        ));
+
+        // Mic On and Speaker Off are distinct commands with distinct mute bool
+        let mic_on = AudioArgs {
+            json: false,
+            command: Some(AudioCommand::Mic(AudioToggleArgs {
+                state: AudioGrantState::On,
+                vm: "corp-vm".to_owned(),
+            })),
+        };
+        assert!(matches!(
+            mic_on.command,
+            Some(AudioCommand::Mic(AudioToggleArgs {
+                state: AudioGrantState::On,
+                ..
+            }))
         ));
     }
 

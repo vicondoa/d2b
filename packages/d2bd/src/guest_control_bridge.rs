@@ -33,11 +33,12 @@ use d2b_contracts::broker_wire::{
 use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
-    AttemptBudget, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
-    GuestFileReadError, GuestSystemActivationError, GuestSystemActivationStart,
-    GuestSystemActivationStatus, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
-    GuestUsbipImportResult, GuestUsbipStatusResult, TtrpcGuestControlClient,
-    activate_system_start_authenticated, activate_system_status_authenticated,
+    AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestControlHealthError,
+    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError,
+    GuestSystemActivationError, GuestSystemActivationStart, GuestSystemActivationStatus,
+    GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult,
+    GuestUsbipStatusResult, TtrpcGuestControlClient, activate_system_start_authenticated,
+    activate_system_status_authenticated, audio_set_authenticated,
     connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
     read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
 };
@@ -198,6 +199,21 @@ pub trait GuestControlProbe: Send + Sync {
         let _ = (params, attempt_timeout, activation_id);
         Err(GuestSystemActivationError::CapabilityUnavailable)
     }
+
+    /// Issue an authenticated AudioSet RPC. Default returns
+    /// `CapabilityUnavailable` so existing probe impls do not need updating.
+    fn audio_set(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        channel: d2b_contracts::guest_proto::AudioChannel,
+        kind: d2b_contracts::guest_proto::AudioSetKind,
+        grant_on: bool,
+        level: u32,
+    ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
+        let _ = (params, attempt_timeout, channel, kind, grant_on, level);
+        Err(GuestAudioSetError::CapabilityUnavailable)
+    }
 }
 
 /// Production probe: connects the vsock socket, builds the ttRPC client,
@@ -286,6 +302,26 @@ impl GuestControlProbe for RealGuestControlProbe {
             &self.broker_socket_path,
             attempt_timeout,
             activation_id,
+        )
+    }
+
+    fn audio_set(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+        channel: d2b_contracts::guest_proto::AudioChannel,
+        kind: d2b_contracts::guest_proto::AudioSetKind,
+        grant_on: bool,
+        level: u32,
+    ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
+        run_audio_set_once(
+            params,
+            &self.broker_socket_path,
+            attempt_timeout,
+            channel,
+            kind,
+            grant_on,
+            level,
         )
     }
 }
@@ -506,6 +542,40 @@ pub fn run_activation_status_once(
             &client,
             &signer,
             activation_id,
+        )
+        .await
+    })
+}
+
+/// Issue a single authenticated AudioSet RPC attempt on the current thread's
+/// runtime. Callers MUST be inside a current-thread Tokio runtime.
+pub fn run_audio_set_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    attempt_timeout: Duration,
+    channel: d2b_contracts::guest_proto::AudioChannel,
+    kind: d2b_contracts::guest_proto::AudioSetKind,
+    grant_on: bool,
+    level: u32,
+) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
+    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let nonce = host_nonce()
+        .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
+    let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
+    runtime.block_on(async {
+        let client =
+            connect_and_build_client(params, budget).map_err(GuestAudioSetError::Probe)?;
+        audio_set_authenticated(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
+            channel,
+            kind,
+            grant_on,
+            level,
         )
         .await
     })
@@ -785,6 +855,34 @@ pub fn run_guest_control_activation_status_loop(
             }
         }
     }
+}
+
+/// Per-attempt timeout for audio set RPCs (single attempt, no readiness loop).
+pub const GUEST_CONTROL_AUDIO_SET_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run an authenticated AudioSet RPC on a DEDICATED OS thread.
+///
+/// Audio set is a one-shot op (no readiness retry loop): the VM must already
+/// be running and guestd ready before the audio command is dispatched. If
+/// the VM is not reachable, we return `Probe(TransportIo)` so callers can
+/// report `HostOnly` rather than hanging.
+pub fn run_audio_set_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    channel: d2b_contracts::guest_proto::AudioChannel,
+    kind: d2b_contracts::guest_proto::AudioSetKind,
+    grant_on: bool,
+    level: u32,
+    deadline: Duration,
+) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let remaining = deadline;
+        let attempt_timeout = remaining.max(Duration::from_millis(1));
+        probe.audio_set(&params, attempt_timeout, channel, kind, grant_on, level)
+    })
+    .join()
+    .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::TransportIo))?
 }
 
 pub fn run_guest_control_usbip_import_loop(
@@ -2391,5 +2489,166 @@ mod tests {
                 "guest-control field leaked into rendered metrics: {leaked}"
             );
         }
+    }
+
+    // ── Audio set probe tests ──────────────────────────────────────────────
+
+    use d2b_contracts::guest_proto as pb;
+
+    struct ScriptedAudioProbe {
+        outcomes: Mutex<Vec<Result<GuestAudioChannelStatus, GuestAudioSetError>>>,
+        recorded_calls: Mutex<Vec<(pb::AudioChannel, pb::AudioSetKind, bool, u32)>>,
+    }
+
+    impl ScriptedAudioProbe {
+        fn new(outcomes: Vec<Result<GuestAudioChannelStatus, GuestAudioSetError>>) -> Self {
+            Self {
+                outcomes: Mutex::new(outcomes),
+                recorded_calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl GuestControlProbe for ScriptedAudioProbe {
+        fn probe_health(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+        ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
+            unreachable!("audio set never probes health directly")
+        }
+
+        fn read_config(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+        ) -> Result<Vec<u8>, GuestFileReadError> {
+            unreachable!("audio set never reads config")
+        }
+
+        fn usbip_import(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _action: GuestUsbipAction,
+            _host: &str,
+            _bus_id: &str,
+        ) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
+            unreachable!("audio set never imports USBIP")
+        }
+
+        fn usbip_status(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            _host: Option<&str>,
+            _bus_id: Option<&str>,
+        ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
+            unreachable!("audio set never reads USBIP status")
+        }
+
+        fn audio_set(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+            channel: pb::AudioChannel,
+            kind: pb::AudioSetKind,
+            grant_on: bool,
+            level: u32,
+        ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
+            self.recorded_calls
+                .lock()
+                .unwrap()
+                .push((channel, kind, grant_on, level));
+            let mut outcomes = self.outcomes.lock().unwrap();
+            if outcomes.is_empty() {
+                return Err(GuestAudioSetError::Probe(
+                    GuestControlHealthError::TransportIo,
+                ));
+            }
+            outcomes.remove(0)
+        }
+    }
+
+    #[test]
+    fn audio_set_probe_success_returns_applied_status() {
+        let probe = ScriptedAudioProbe::new(vec![Ok(GuestAudioChannelStatus {
+            muted: false,
+            level: 80,
+            level_known: true,
+        })]);
+        let result = probe.audio_set(
+            &test_params(),
+            Duration::from_secs(5),
+            pb::AudioChannel::AUDIO_CHANNEL_SPEAKER,
+            pb::AudioSetKind::AUDIO_SET_KIND_GRANT,
+            true,
+            0,
+        );
+        assert!(result.is_ok(), "probe success must return Ok");
+        let calls = probe.recorded_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "must record exactly one call");
+        assert_eq!(calls[0].0, pb::AudioChannel::AUDIO_CHANNEL_SPEAKER);
+        assert_eq!(calls[0].1, pb::AudioSetKind::AUDIO_SET_KIND_GRANT);
+        assert!(calls[0].2, "grant_on must be true");
+    }
+
+    #[test]
+    fn audio_set_probe_capability_unavailable_returns_capability_unavailable_not_fallback() {
+        let probe = ScriptedAudioProbe::new(vec![Err(
+            GuestAudioSetError::CapabilityUnavailable,
+        )]);
+        let result = probe.audio_set(
+            &test_params(),
+            Duration::from_secs(5),
+            pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE,
+            pb::AudioSetKind::AUDIO_SET_KIND_GRANT,
+            false,
+            0,
+        );
+        assert!(
+            matches!(result, Err(GuestAudioSetError::CapabilityUnavailable)),
+            "capability unavailable must propagate, not be silently treated as success"
+        );
+    }
+
+    #[test]
+    fn audio_set_probe_transport_failure_returns_probe_error_not_success() {
+        let probe = ScriptedAudioProbe::new(vec![Err(GuestAudioSetError::Probe(
+            GuestControlHealthError::TransportIo,
+        ))]);
+        let result = probe.audio_set(
+            &test_params(),
+            Duration::from_secs(5),
+            pb::AudioChannel::AUDIO_CHANNEL_SPEAKER,
+            pb::AudioSetKind::AUDIO_SET_KIND_LEVEL,
+            false,
+            75,
+        );
+        assert!(
+            matches!(result, Err(GuestAudioSetError::Probe(_))),
+            "transport failure must not produce a success-shaped result"
+        );
+    }
+
+    #[test]
+    fn audio_set_level_probe_records_correct_level_value() {
+        let probe = ScriptedAudioProbe::new(vec![Ok(GuestAudioChannelStatus {
+            muted: false,
+            level: 60,
+            level_known: true,
+        })]);
+        let result = probe.audio_set(
+            &test_params(),
+            Duration::from_secs(5),
+            pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE,
+            pb::AudioSetKind::AUDIO_SET_KIND_LEVEL,
+            false,
+            60,
+        );
+        assert!(result.is_ok());
+        let calls = probe.recorded_calls.lock().unwrap();
+        assert_eq!(calls[0].1, pb::AudioSetKind::AUDIO_SET_KIND_LEVEL);
+        assert_eq!(calls[0].3, 60, "level value must be forwarded verbatim");
     }
 }

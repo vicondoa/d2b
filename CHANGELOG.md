@@ -126,7 +126,30 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Static USBIP declarations now reconcile on strict VM start after a host reboot
+- `d2bd` audio dispatch now calls guestd `AudioSet` RPCs for Cloud Hypervisor
+  NixOS VMs instead of statically defaulting to `HostOnly`. `combined_audio_applied`
+  returns `HostAndGuest` when both host and guest succeed, `HostOnly` when only
+  host applies, `GuestOnly` for ACA sandboxes, and `Unsupported` on full failure.
+  qemu-media VMs never call guestd; ACA VMs fail closed when guestd is
+  unreachable.
+- `wpctl` subprocesses in guestd now drop to `workload_uid` before exec and set
+  both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` to `/run/user/<uid>`, so
+  WirePlumber locates the correct per-user socket. In d2bd the host PipeWire uid
+  is derived from `metadata(pipewire_runtime_dir).uid()` and passed via
+  `CommandExt::uid()` without shell string construction.
+- `wpctl` subprocess failures in both guestd and d2bd now capture up to 256 bytes
+  of sanitized stderr (ASCII-printable only) and log them for operator diagnostics.
+- OFD lock unlock now uses `F_OFD_SETLK` (non-blocking release) instead of the
+  incorrect `F_OFD_SETLKW` (blocking wait), which is semantically wrong for a lock
+  release path.
+- Audio lock file opens now use `OpenOptions::create(true).write(true)` instead of
+  `custom_flags(libc::O_CREAT)`, which previously required undocumented write
+  permission to function correctly.
+- `d2b audio` CLI is fully implemented: `status`, `mic on|off`, `speaker on|off`,
+  and `off` subcommands send typed `AudioOp` requests to the daemon public socket
+  and render results as human text or `--json`. `d2b audio status --json` emits
+  `AudioStatusResult` JSON for d2b-wlcontrol consumers.
+
   even when volatile `/run/d2b/locks/usbip/*` claim files are gone. The
   daemon replays declared per-VM bind intents through the existing broker policy
   and OFD-lock path, while VM stop cleanup still touches only same-owner
