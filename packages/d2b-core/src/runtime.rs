@@ -351,9 +351,6 @@ impl From<&ProcessRole> for RuntimeServiceRole {
             ProcessRole::GuestSshReadiness | ProcessRole::GuestControlHealth => Self::GuestControl,
             ProcessRole::Usbip => Self::Usb,
             ProcessRole::OtelHostBridge => Self::Observability,
-            // ConsoleDrain is a daemon-internal drainer runner;
-            // map to Host so existing role-classification code keeps working.
-            ProcessRole::ConsoleDrain => Self::Host,
         }
     }
 }

@@ -45,8 +45,9 @@ use crate::audio_host_controller::{
 };
 use crate::guest_control_bridge::{
     GUEST_CONTROL_AUDIO_SET_TIMEOUT, run_audio_set_on_dedicated_thread,
+    run_audio_status_on_dedicated_thread,
 };
-use crate::guest_control_health::GuestAudioSetError;
+use crate::guest_control_health::{GuestAudioSetError, GuestAudioStatus};
 
 // ── Lock path ────────────────────────────────────────────────────────────────
 
@@ -622,7 +623,47 @@ fn resolve_vm_audio_status(
         }
     })?;
 
-    Ok(state_to_vm_state(vm_name, &audio_state, &cap))
+    let mut vm_state = state_to_vm_state(vm_name, &audio_state, &cap);
+    if matches!(
+        cap.guest_enforcement,
+        AudioGuestEnforcementKind::GuestdCapable
+    ) {
+        if let Some(guest_status) = query_guest_audio_status(state, vm_name) {
+            apply_guest_status(&mut vm_state, guest_status);
+        } else {
+            vm_state.enforcement = match cap.host_enforcement {
+                AudioHostEnforcementKind::None => AudioEnforcementPosture::Unsupported,
+                _ => AudioEnforcementPosture::HostOnly,
+            };
+        }
+    }
+    Ok(vm_state)
+}
+
+fn query_guest_audio_status(state: &ServerState, vm_name: &str) -> Option<GuestAudioStatus> {
+    let resolver = crate::load_bundle_resolver(state).ok()?;
+    let params = crate::resolve_guest_control_probe_params(state, &resolver, vm_name).ok()?;
+    run_audio_status_on_dedicated_thread(
+        params,
+        crate::broker_socket_path(state),
+        GUEST_CONTROL_AUDIO_SET_TIMEOUT,
+    )
+    .ok()
+}
+
+fn apply_guest_status(vm_state: &mut AudioVmState, guest_status: GuestAudioStatus) {
+    vm_state.microphone.muted = guest_status.microphone.muted;
+    if guest_status.microphone.level_known {
+        vm_state.microphone.level = u8::try_from(guest_status.microphone.level)
+            .ok()
+            .and_then(|level| LevelPercent::new(level).ok());
+    }
+    vm_state.speaker.muted = guest_status.speaker.muted;
+    if guest_status.speaker.level_known {
+        vm_state.speaker.level = u8::try_from(guest_status.speaker.level)
+            .ok()
+            .and_then(|level| LevelPercent::new(level).ok());
+    }
 }
 
 // ── SetVolume ─────────────────────────────────────────────────────────────────

@@ -76,6 +76,10 @@ pub enum QemuMediaArgvError {
     InvalidConsoleFd {
         fd: i32,
     },
+    /// `console_fd` must not reuse the TAP fd slot.
+    ConsoleFdConflictsWithTapFd {
+        fd: i32,
+    },
 }
 
 /// Render the paused fd-backed qemu-media baseline argv.
@@ -115,6 +119,16 @@ pub fn generate_qemu_media_argv(
         && fd < 3
     {
         return Err(QemuMediaArgvError::InvalidConsoleFd { fd });
+    }
+    if let Some(fd) = input.console_fd
+        && fd == input.tap_fd
+    {
+        return Err(QemuMediaArgvError::ConsoleFdConflictsWithTapFd { fd });
+    }
+    if let Some(fd) = input.console_fd
+        && fd == input.tap_fd
+    {
+        return Err(QemuMediaArgvError::ConsoleFdConflictsWithTapFd { fd });
     }
 
     let mut memory_backend = vec![
@@ -387,6 +401,16 @@ mod tests {
         assert!(matches!(
             generate_qemu_media_argv(&inp),
             Err(QemuMediaArgvError::InvalidConsoleFd { fd: 0 })
+        ));
+    }
+
+    #[test]
+    fn rejects_console_fd_equal_to_tap_fd() {
+        let mut inp = input();
+        inp.console_fd = Some(inp.tap_fd);
+        assert!(matches!(
+            generate_qemu_media_argv(&inp),
+            Err(QemuMediaArgvError::ConsoleFdConflictsWithTapFd { fd }) if fd == inp.tap_fd
         ));
     }
 

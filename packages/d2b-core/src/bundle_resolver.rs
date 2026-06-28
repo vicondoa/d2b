@@ -2372,10 +2372,6 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
         ProcessRole::Usbip => Some("usbip"),
         ProcessRole::WaylandProxy => Some("wayland-proxy"),
-        // ConsoleDrain is a daemon-internal runner spawned by the broker;
-        // it is not a process-dag role that has a runner-role name used for
-        // legacy fallback resolution.
-        ProcessRole::ConsoleDrain => None,
     }
 }
 
@@ -2412,8 +2408,6 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         // WaylandProxy must always carry the d2b-wayland-filter binary
         // and closed argv from processes.json. No legacy fallback.
         ProcessRole::WaylandProxy => return None,
-        // ConsoleDrain is a daemon-internal drainer; no legacy runner spec.
-        ProcessRole::ConsoleDrain => return None,
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness

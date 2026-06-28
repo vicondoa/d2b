@@ -256,14 +256,14 @@ host reboot.
 | `UsbipExplicitFirewallRuleRequest` | struct | [`UsbipExplicitFirewallRuleRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1329) | struct { `bus_id`: `String`; `env`: `String`; `host_uplink_ip`: `String`; `net_uplink_ip`: `String`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `SignalRunnerRequest` | struct | [`SignalRunnerRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1391) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `signal`: `RunnerSignal`; `pid`: `Option<i32>`; `expected_start_time_ticks`: `Option<u64>`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `DeregisterRunnerPidfdRequest` | struct | [`DeregisterRunnerPidfdRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1413) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SpawnRunnerRequest` | struct | [`SpawnRunnerRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1508) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `bundle_runner_intent_ref`: `BundleOpId`; `runtime_allocations`: `Vec<RunnerAllocation>`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SeedDnsmasqLeaseRequest` | struct | [`SeedDnsmasqLeaseRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1656) | struct { `vm_id`: `VmId`; `scope_id`: `ScopeId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `BindMountFromHardlinkFarmRequest` | struct | [`BindMountFromHardlinkFarmRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1668) | struct { `vm_id`: `VmId`; `bundle_store_view_intent_ref`: `Option<BundleOpId>`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `OwnershipMatrixCheckRequest` | struct | [`OwnershipMatrixCheckRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1683) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SshHostKeyPreflightRequest` | struct | [`SshHostKeyPreflightRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1694) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `ReconcileStorageScopeRequest` | struct | [`ReconcileStorageScopeRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1708) | struct { `storage_ref`: `BundleOpId`; `apply`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `ValidateLockSpecRequest` | struct | [`ValidateLockSpecRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1745) | struct { `lock_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1779) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SpawnRunnerRequest` | struct | [`SpawnRunnerRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1502) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `bundle_runner_intent_ref`: `BundleOpId`; `runtime_allocations`: `Vec<RunnerAllocation>`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SeedDnsmasqLeaseRequest` | struct | [`SeedDnsmasqLeaseRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1650) | struct { `vm_id`: `VmId`; `scope_id`: `ScopeId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `BindMountFromHardlinkFarmRequest` | struct | [`BindMountFromHardlinkFarmRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1662) | struct { `vm_id`: `VmId`; `bundle_store_view_intent_ref`: `Option<BundleOpId>`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `OwnershipMatrixCheckRequest` | struct | [`OwnershipMatrixCheckRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1677) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SshHostKeyPreflightRequest` | struct | [`SshHostKeyPreflightRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1688) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `ReconcileStorageScopeRequest` | struct | [`ReconcileStorageScopeRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1702) | struct { `storage_ref`: `BundleOpId`; `apply`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `ValidateLockSpecRequest` | struct | [`ValidateLockSpecRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1739) | struct { `lock_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1773) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 <!-- END AUTO-GENERATED: request-types -->
 
 ### Console and audio wire types
@@ -348,10 +348,10 @@ see the auto-generated tables above for the committed Rust variants.
 | `ValidateBundleResponse` | struct | [`ValidateBundleResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1373) | struct { `valid`: `bool` } |
 | `SignalRunnerResponse` | struct | [`SignalRunnerResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1405) | struct { `signaled`: `bool`; `vm_id`: `VmId`; `role_id`: `RoleId` } |
 | `DeregisterRunnerPidfdResponse` | struct | [`DeregisterRunnerPidfdResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1422) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `removed`: `bool` } |
-| `SpawnRunnerResponse` | struct | [`SpawnRunnerResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1570) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
-| `ReconcileStorageScopeResponse` | struct | [`ReconcileStorageScopeResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1729) | struct { `storage_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `status`: `StorageReconcileStatus`; `applied`: `bool`; `path_hash`: `String` } |
-| `ValidateLockSpecResponse` | struct | [`ValidateLockSpecResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1753) | struct { `lock_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `cloexec_required`: `bool`; `fd_passing_mechanism`: `String`; `order_key`: `String` } |
-| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1840) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
+| `SpawnRunnerResponse` | struct | [`SpawnRunnerResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1564) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
+| `ReconcileStorageScopeResponse` | struct | [`ReconcileStorageScopeResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1723) | struct { `storage_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `status`: `StorageReconcileStatus`; `applied`: `bool`; `path_hash`: `String` } |
+| `ValidateLockSpecResponse` | struct | [`ValidateLockSpecResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1747) | struct { `lock_ref`: `BundleOpId`; `scope`: `String`; `kind`: `String`; `cloexec_required`: `bool`; `fd_passing_mechanism`: `String`; `order_key`: `String` } |
+| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/d2b-contracts/src/broker_wire.rs#L1834) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
 <!-- END AUTO-GENERATED: response-types -->
 
 ## Per-VM lifecycle state
@@ -436,12 +436,12 @@ running live guest activation.
 | `StoreVerifyStatus` | enum | [`StoreVerifyStatus`](../../packages/d2b-contracts/src/broker_wire.rs#L1164) | `Ok`; `Drift`; `Unknown`; `Repaired`; `Failed`; `NotFound` |
 | `StoreVerifyUnknownReason` | enum | [`StoreVerifyUnknownReason`](../../packages/d2b-contracts/src/broker_wire.rs#L1175) | `MarkerOrManifestMissing`; `MarkerOrManifestUnreadable`; `OlderHostGeneration`; `GenerationIdentityUnavailable` |
 | `RunnerSignal` | enum | [`RunnerSignal`](../../packages/d2b-contracts/src/broker_wire.rs#L1383) | `Term`; `Kill`; `Quit` |
-| `RunnerRole` | enum | [`RunnerRole`](../../packages/d2b-contracts/src/broker_wire.rs#L1441) | `CloudHypervisor`; `QemuMedia`; `Virtiofsd`; `Swtpm`; `SwtpmFlush`; `Gpu`; `Audio`; `Video`; `VsockRelay`; `Usbip`; `OtelHostBridge`; `WaylandProxy`; `ConsoleDrain` |
-| `RunnerAllocationKind` | enum | [`RunnerAllocationKind`](../../packages/d2b-contracts/src/broker_wire.rs#L1548) | `VsockCid`; `TapFdSlot`; `ApiSocketPath` |
-| `BrokerCallerRole` | enum | [`BrokerCallerRole`](../../packages/d2b-contracts/src/broker_wire.rs#L1614) | `AdminUid` — struct { `uid`: `u32` }; `LauncherUid` — struct { `uid`: `u32` }; `RootUid` — struct { `uid`: `u32` }; `NotAuthorized` |
-| `StorageReconcileStatus` | enum | [`StorageReconcileStatus`](../../packages/d2b-contracts/src/broker_wire.rs#L1718) | `Clean`; `Created`; `Reused`; `CheckedOnly`; `TemplateUnexpanded`; `Refused` |
-| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/d2b-contracts/src/broker_wire.rs#L1792) | `Exited`; `Signaled`; `Killed` |
-| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/d2b-contracts/src/broker_wire.rs#L1830) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
+| `RunnerRole` | enum | [`RunnerRole`](../../packages/d2b-contracts/src/broker_wire.rs#L1441) | `CloudHypervisor`; `QemuMedia`; `Virtiofsd`; `Swtpm`; `SwtpmFlush`; `Gpu`; `Audio`; `Video`; `VsockRelay`; `Usbip`; `OtelHostBridge`; `WaylandProxy` |
+| `RunnerAllocationKind` | enum | [`RunnerAllocationKind`](../../packages/d2b-contracts/src/broker_wire.rs#L1542) | `VsockCid`; `TapFdSlot`; `ApiSocketPath` |
+| `BrokerCallerRole` | enum | [`BrokerCallerRole`](../../packages/d2b-contracts/src/broker_wire.rs#L1608) | `AdminUid` — struct { `uid`: `u32` }; `LauncherUid` — struct { `uid`: `u32` }; `RootUid` — struct { `uid`: `u32` }; `NotAuthorized` |
+| `StorageReconcileStatus` | enum | [`StorageReconcileStatus`](../../packages/d2b-contracts/src/broker_wire.rs#L1712) | `Clean`; `Created`; `Reused`; `CheckedOnly`; `TemplateUnexpanded`; `Refused` |
+| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/d2b-contracts/src/broker_wire.rs#L1786) | `Exited`; `Signaled`; `Killed` |
+| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/d2b-contracts/src/broker_wire.rs#L1824) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
 | `AuthDirection` | enum | [`AuthDirection`](../../packages/d2b-contracts/src/guest_auth.rs#L13) | `HostToGuest` |
 | `AuthPurpose` | enum | [`AuthPurpose`](../../packages/d2b-contracts/src/guest_auth.rs#L26) | `GuestControlAuthV1` |
 | `ProofRole` | enum | [`ProofRole`](../../packages/d2b-contracts/src/guest_auth.rs#L39) | `Host`; `Guest` |

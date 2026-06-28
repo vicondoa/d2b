@@ -33,12 +33,12 @@ use d2b_contracts::broker_wire::{
 use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
-    AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestControlHealthError,
-    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError, GuestSystemActivationError,
-    GuestSystemActivationStart, GuestSystemActivationStatus, GuestUsbipAction,
-    GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult, GuestUsbipStatusResult,
-    TtrpcGuestControlClient, activate_system_start_authenticated,
-    activate_system_status_authenticated, audio_set_authenticated,
+    AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioStatus,
+    GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError,
+    GuestSystemActivationError, GuestSystemActivationStart, GuestSystemActivationStatus,
+    GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult,
+    GuestUsbipStatusResult, TtrpcGuestControlClient, activate_system_start_authenticated,
+    activate_system_status_authenticated, audio_set_authenticated, audio_status_authenticated,
     connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
     read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
 };
@@ -202,6 +202,17 @@ pub trait GuestControlProbe: Send + Sync {
 
     /// Issue an authenticated AudioSet RPC. Default returns
     /// `CapabilityUnavailable` so existing probe impls do not need updating.
+    fn audio_status(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+    ) -> Result<GuestAudioStatus, GuestAudioSetError> {
+        let _ = (params, attempt_timeout);
+        Err(GuestAudioSetError::CapabilityUnavailable)
+    }
+
+    /// Issue an authenticated AudioSet RPC. Default returns
+    /// `CapabilityUnavailable` so existing probe impls do not need updating.
     fn audio_set(
         &self,
         params: &ProbeParams,
@@ -302,6 +313,18 @@ impl GuestControlProbe for RealGuestControlProbe {
             &self.broker_socket_path,
             attempt_timeout,
             activation_id,
+        )
+    }
+
+    fn audio_status(
+        &self,
+        params: &ProbeParams,
+        attempt_timeout: Duration,
+    ) -> Result<GuestAudioStatus, GuestAudioSetError> {
+        run_audio_status_on_dedicated_thread(
+            params.clone(),
+            self.broker_socket_path.clone(),
+            attempt_timeout,
         )
     }
 
@@ -575,6 +598,29 @@ pub fn run_audio_set_once(
             kind,
             grant_on,
             level,
+        )
+        .await
+    })
+}
+
+pub fn run_audio_status_once(
+    params: &ProbeParams,
+    broker_socket_path: &Path,
+    attempt_timeout: Duration,
+) -> Result<GuestAudioStatus, GuestAudioSetError> {
+    let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
+    let nonce =
+        host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
+    let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
+    runtime.block_on(async {
+        let client = connect_and_build_client(params, budget).map_err(GuestAudioSetError::Probe)?;
+        audio_status_authenticated(
+            &params.vm_id,
+            Some(VMADDR_CID_HOST),
+            nonce,
+            &client,
+            &signer,
         )
         .await
     })
@@ -879,6 +925,20 @@ pub fn run_audio_set_on_dedicated_thread(
         let remaining = deadline;
         let attempt_timeout = remaining.max(Duration::from_millis(1));
         probe.audio_set(&params, attempt_timeout, channel, kind, grant_on, level)
+    })
+    .join()
+    .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::TransportIo))?
+}
+
+pub fn run_audio_status_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    deadline: Duration,
+) -> Result<GuestAudioStatus, GuestAudioSetError> {
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let attempt_timeout = deadline.max(Duration::from_millis(1));
+        probe.audio_status(&params, attempt_timeout)
     })
     .join()
     .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::TransportIo))?

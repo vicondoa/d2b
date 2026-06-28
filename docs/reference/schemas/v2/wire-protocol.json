@@ -8762,13 +8762,6 @@
           "enum": [
             "wayland-proxy"
           ]
-        },
-        {
-          "description": "Broker-spawned console drain helper (ADR 0041). Holds the host end of the broker-owned console socketpair, drains console output into a bounded ring buffer, and exposes it to d2bd over a control socket. One per VM with console enabled.",
-          "type": "string",
-          "enum": [
-            "console-drain"
-          ]
         }
       ]
     },

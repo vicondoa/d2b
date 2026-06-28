@@ -9529,7 +9529,6 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::OtelHostBridge => VmStartNodeMode::LongLived(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => VmStartNodeMode::LongLived(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
-        ProcessRole::ConsoleDrain => VmStartNodeMode::LongLived(RunnerRole::ConsoleDrain),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
@@ -11377,8 +11376,6 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
         Some(RunnerRole::Swtpm) => 6,
         Some(RunnerRole::Virtiofsd) => 7,
         Some(RunnerRole::SwtpmFlush) => 8,
-        // ConsoleDrain is a background drainer; stop after all VM processes.
-        Some(RunnerRole::ConsoleDrain) => 9,
         None => 9,
     }
 }

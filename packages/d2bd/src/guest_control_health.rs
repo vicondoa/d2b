@@ -555,6 +555,70 @@ pub struct GuestAudioChannelStatus {
     pub level_known: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestAudioStatus {
+    pub microphone: GuestAudioChannelStatus,
+    pub speaker: GuestAudioChannelStatus,
+}
+
+/// Authenticate to guestd and issue an `AudioStatus` RPC.
+pub async fn audio_status_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+) -> Result<GuestAudioStatus, GuestAudioSetError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+    let advertises = evidence.health.capabilities.iter().any(|cap| {
+        matches!(
+            cap.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS)
+        )
+    });
+    if !advertises {
+        return Err(GuestAudioSetError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::AudioStatusRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    let response = client
+        .audio_status(request)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+
+    if let Some(error) = response.error.as_ref() {
+        return Err(map_guest_audio_error(error.kind.enum_value_or_default()));
+    }
+    let microphone = response
+        .microphone
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
+    let speaker = response
+        .speaker
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
+
+    Ok(GuestAudioStatus {
+        microphone: GuestAudioChannelStatus {
+            muted: microphone.muted,
+            level: microphone.level,
+            level_known: microphone.level_known,
+        },
+        speaker: GuestAudioChannelStatus {
+            muted: speaker.muted,
+            level: speaker.level,
+            level_known: speaker.level_known,
+        },
+    })
+}
+
 /// Authenticate to the guest control endpoint and issue an `AudioSet` RPC.
 ///
 /// The `AudioSet` capability MUST be advertised; an authenticated guest that

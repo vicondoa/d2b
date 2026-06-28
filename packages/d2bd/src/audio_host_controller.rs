@@ -124,7 +124,7 @@ impl PipeWireHostController {
     /// Probe whether `d2bd` holds the necessary credentials to reach the
     /// PipeWire socket.
     ///
-    /// Uses `rustix::fs::access` with `READ_OK | WRITE_OK` on
+    /// Uses `rustix::fs::access` with `WRITE_OK` on
     /// `<pipewire_runtime_dir>/pipewire-0`.  This is an explicit credential
     /// posture check per ADR 0041 — d2bd MUST NOT traverse `/run/user/<uid>`
     /// without first confirming access.
@@ -132,12 +132,9 @@ impl PipeWireHostController {
         let socket = self.pipewire_runtime_dir.join("pipewire-0");
         // access(2) checks the *process* credentials, not file-descriptor ACLs,
         // which is exactly what we need: does the current d2bd UID/GID have
-        // read-write access to the socket?
-        rustix::fs::access(
-            &socket,
-            rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
-        )
-        .is_ok()
+        // write access to the socket? Linux unix(7) requires write permission
+        // on a stream socket path for connect(2).
+        rustix::fs::access(&socket, rustix::fs::Access::WRITE_OK).is_ok()
     }
 
     /// Run `wpctl set-mute <node> <0|1>` as a subprocess.
@@ -335,9 +332,10 @@ fn run_subprocess(
 ) -> HostEnforcementResult {
     // Resolve the uid that owns the PipeWire runtime dir so the subprocess
     // targets the correct user session rather than running as d2bd (root).
-    let target_uid: Option<u32> = std::fs::metadata(pipewire_runtime_dir)
-        .ok()
-        .map(|m| m.uid());
+    let Ok(metadata) = std::fs::metadata(pipewire_runtime_dir) else {
+        return HostEnforcementResult::Failed;
+    };
+    let target_uid = metadata.uid();
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
@@ -347,9 +345,7 @@ fn run_subprocess(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    if let Some(uid) = target_uid {
-        cmd.uid(uid);
-    }
+    cmd.uid(target_uid);
     let output = cmd.output();
 
     match output {

@@ -12,9 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- `ConsoleDrain` lifecycle reclassified from `ReadinessOnly` to a new
-  `DaemonInternal` variant in `RunnerLifecycleClass`, correctly representing it
-  as a long-lived daemon-internal tokio task rather than a one-shot probe.
+- The console drain path is now treated as a long-lived daemon-internal tokio
+  task rather than a broker-spawned runner or one-shot readiness probe.
 - `d2b console` dispatch: launcher peers can no longer access another user's VM
   console session. The per-session owner UID is now tracked at `Attach` time;
   `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
@@ -62,11 +61,9 @@ deprecations ship one minor release before removal.
   drainer task that connects to the CH serial socket and reconnects on
   drop; qemu-media and ACA targets return typed errors directing operators
   to use the appropriate broker-fd or provider-relay path.
-- `ProcessRole::ConsoleDrain` and `RunnerRole::ConsoleDrain` added to the
-  process role taxonomy for future broker-spawned drain runners (broker-fd
-  path, Wave 2+). Schemas updated accordingly.
 - `QemuMediaArgvInput.console_fd` field: when provided, QEMU emits
-  `-chardev fd,id=con0,fd=N -serial chardev:con0` instead of `-serial none`.
+  `-chardev socket,id=con0,fd=N,server=on,wait=off -serial chardev:con0`
+  instead of `-serial none`.
   Accepts only fds >= 3 (rejects stdin/stdout/stderr).
 - `d2bd` now dispatches `AudioOp` (status, set-volume, mute/off) for all
   provider types. Cloud Hypervisor NixOS VMs use OFD-locked atomic
