@@ -31,7 +31,7 @@ stable v1 daemon-received messages are rejected.
 ### `ClientHello` picker → clipd
 
 ```json
-{"kind":"ClientHello","protocol_version_range":{"min":1,"max":1},"picker_version":"0.1.0"}
+{"type":"client_hello","protocol_version_range":{"min":1,"max":1},"picker_version":"0.1.0"}
 ```
 
 ### `OpenRequest` clipd → picker
@@ -43,13 +43,13 @@ not included.
 ### `Select` picker → clipd
 
 ```json
-{"kind":"Select","protocol_version":1,"request_id":"opaque","entry_id":"opaque"}
+{"type":"select","selected_protocol_version":1,"request_id":"opaque","entry_id":"opaque"}
 ```
 
 ### `Cancel` picker → clipd
 
 ```json
-{"kind":"Cancel","protocol_version":1,"request_id":"opaque"}
+{"type":"cancel","selected_protocol_version":1,"request_id":"opaque"}
 ```
 
 ### `Error` / `Close` clipd → picker
@@ -70,7 +70,7 @@ Candidates may include:
   `BrokerInjectedDebug`)
 - bounded, redacted `preview_text`
 - closed-allowlist `content_type`
-- `timestamp`
+- `timestamp_unix_ms`
 - optional capped PNG thumbnail metadata
 - `confirmation_required`
 

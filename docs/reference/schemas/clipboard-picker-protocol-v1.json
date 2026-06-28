@@ -25,9 +25,9 @@
     "ClientHello": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "protocol_version_range", "picker_version"],
+      "required": ["type", "protocol_version_range", "picker_version"],
       "properties": {
-        "kind": { "const": "ClientHello" },
+        "type": { "const": "client_hello" },
         "protocol_version_range": {
           "type": "object",
           "additionalProperties": false,
@@ -44,24 +44,25 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "kind",
-        "protocol_version",
+        "type",
+        "selected_protocol_version",
         "clipd_version",
         "request_id",
         "destination",
-        "requested_mime",
-        "expires_at",
+        "requested_mime_type",
+        "expires_at_unix_ms",
         "candidates"
       ],
       "properties": {
-        "kind": { "const": "OpenRequest" },
-        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "type": { "const": "open_request" },
+        "selected_protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
         "clipd_version": { "type": "string", "minLength": 1, "maxLength": 64 },
         "picker_version": { "type": ["string", "null"], "maxLength": 64 },
         "request_id": { "$ref": "#/$defs/OpaqueId" },
         "destination": { "$ref": "#/$defs/Destination" },
-        "requested_mime": { "$ref": "#/$defs/Mime" },
-        "expires_at": { "type": "string", "format": "date-time" },
+        "requested_mime_type": { "$ref": "#/$defs/Mime" },
+        "expires_at_unix_ms": { "type": "integer", "minimum": 0 },
+        "placement_hints": { "anyOf": [{ "$ref": "#/$defs/PlacementHints" }, { "type": "null" }] },
         "candidates": {
           "type": "array",
           "maxItems": 500,
@@ -72,10 +73,10 @@
     "Select": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "protocol_version", "request_id", "entry_id"],
+      "required": ["type", "selected_protocol_version", "request_id", "entry_id"],
       "properties": {
-        "kind": { "const": "Select" },
-        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "type": { "const": "select" },
+        "selected_protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
         "request_id": { "$ref": "#/$defs/OpaqueId" },
         "entry_id": { "$ref": "#/$defs/OpaqueId" }
       }
@@ -83,31 +84,31 @@
     "Cancel": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "protocol_version", "request_id"],
+      "required": ["type", "selected_protocol_version", "request_id"],
       "properties": {
-        "kind": { "const": "Cancel" },
-        "protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
+        "type": { "const": "cancel" },
+        "selected_protocol_version": { "$ref": "#/$defs/ProtocolVersion" },
         "request_id": { "$ref": "#/$defs/OpaqueId" }
       }
     },
     "Close": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "request_id", "reason"],
+      "required": ["type", "request_id", "code"],
       "properties": {
-        "kind": { "const": "Close" },
+        "type": { "const": "close" },
         "request_id": { "$ref": "#/$defs/OpaqueId" },
-        "reason": { "$ref": "#/$defs/Reason" }
+        "code": { "$ref": "#/$defs/Reason" }
       }
     },
     "Error": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "reason"],
+      "required": ["type", "code"],
       "properties": {
-        "kind": { "const": "Error" },
+        "type": { "const": "error" },
         "request_id": { "anyOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] },
-        "reason": { "$ref": "#/$defs/Reason" }
+        "code": { "$ref": "#/$defs/Reason" }
       }
     },
     "Destination": {
@@ -118,10 +119,23 @@
         "realm": { "type": "string", "minLength": 1, "maxLength": 128 },
         "realm_kind": { "enum": ["host", "vm"] },
         "app_id": { "type": ["string", "null"], "maxLength": 256 },
-        "app_label": { "type": ["string", "null"], "maxLength": 256 },
+        "application": { "type": ["string", "null"], "maxLength": 256 },
         "workspace": { "type": ["string", "null"], "maxLength": 128 },
         "output": { "type": ["string", "null"], "maxLength": 128 },
-        "attribution": { "enum": ["ExactClient", "FocusedWindowGuess", "BrokerInjectedDebug"] }
+        "attribution": { "enum": ["exact_client", "focused_window_guess", "cache_stale_focused_window_guess", "broker_injected_debug"] }
+      }
+    },
+    "PlacementHints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "output": { "type": ["string", "null"], "maxLength": 128 },
+        "pointer_x": { "type": ["number", "null"] },
+        "pointer_y": { "type": ["number", "null"] },
+        "output_width": { "type": ["integer", "null"] },
+        "output_height": { "type": ["integer", "null"] },
+        "overlay_width": { "type": ["integer", "null"] },
+        "overlay_height": { "type": ["integer", "null"] }
       }
     },
     "Candidate": {
@@ -133,7 +147,7 @@
         "source_realm_kind",
         "source_attribution",
         "content_type",
-        "timestamp",
+        "timestamp_unix_ms",
         "confirmation_required"
       ],
       "properties": {
@@ -142,10 +156,10 @@
         "source_realm_kind": { "enum": ["host", "vm"] },
         "source_app": { "type": ["string", "null"], "maxLength": 256 },
         "source_app_id": { "type": ["string", "null"], "maxLength": 256 },
-        "source_attribution": { "enum": ["ExactClient", "FocusedWindowGuess", "BrokerInjectedDebug"] },
+        "source_attribution": { "enum": ["exact_client", "focused_window_guess", "cache_stale_focused_window_guess", "broker_injected_debug"] },
         "preview_text": { "type": ["string", "null"], "maxLength": 8192 },
         "content_type": { "$ref": "#/$defs/Mime" },
-        "timestamp": { "type": "string", "format": "date-time" },
+        "timestamp_unix_ms": { "type": "integer", "minimum": 0 },
         "thumbnail_png_base64": { "type": ["string", "null"], "maxLength": 0 },
         "confirmation_required": { "type": "boolean" }
       }

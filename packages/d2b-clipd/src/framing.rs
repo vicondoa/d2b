@@ -26,10 +26,15 @@ impl Default for OpenRequestFrameCaps {
 impl OpenRequestFrameCaps {
     pub fn max_frame_bytes(self) -> usize {
         const ENVELOPE_BYTES: usize = 4096;
+        const JSON_STRING_ESCAPE_EXPANSION: usize = 6;
         let per_candidate = self
             .max_preview_bytes
+            .saturating_mul(JSON_STRING_ESCAPE_EXPANSION)
             .saturating_add(self.max_thumbnail_bytes.saturating_mul(4).div_ceil(3))
-            .saturating_add(self.max_metadata_bytes);
+            .saturating_add(
+                self.max_metadata_bytes
+                    .saturating_mul(JSON_STRING_ESCAPE_EXPANSION),
+            );
         ENVELOPE_BYTES.saturating_add(self.max_candidates.saturating_mul(per_candidate))
     }
 }

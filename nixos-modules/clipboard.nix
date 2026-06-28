@@ -428,8 +428,9 @@ in
         assertion = site.waylandUser != null;
         message = ''
           d2b.site.clipboard.enable requires d2b.site.waylandUser because
-          d2b-clipd runs in the host Wayland session and uses WAYLAND_DISPLAY
-          plus NIRI_SOCKET from that user's graphical-session.target.
+          d2b-clipd runs in the host Wayland session and uses WAYLAND_DISPLAY.
+          NIRI_SOCKET is additionally required when d2b.site.clipboard.niri.enable
+          is true.
         '';
       }
       {
@@ -465,10 +466,8 @@ in
       wantedBy = [ "graphical-session.target" ];
       partOf = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
-      unitConfig.AssertEnvironment = [
-        "WAYLAND_DISPLAY"
-        "NIRI_SOCKET"
-      ];
+      unitConfig.AssertEnvironment = [ "WAYLAND_DISPLAY" ]
+        ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
       serviceConfig = {
         Type = "simple";
         ExecStart = "${clipdExec} ${serviceArgs}";

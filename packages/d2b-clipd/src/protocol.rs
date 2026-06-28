@@ -36,7 +36,7 @@ pub enum PickerToDaemonMessage {
     Cancel(Cancel),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonToPickerMessage {
     OpenRequest(Box<OpenRequest>),
@@ -44,7 +44,7 @@ pub enum DaemonToPickerMessage {
     Error(ErrorFrame),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenRequest {
     pub selected_protocol_version: u16,
     pub clipd_version: String,
@@ -53,25 +53,30 @@ pub struct OpenRequest {
     pub destination: DestinationMetadata,
     pub requested_mime_type: String,
     pub expires_at_unix_ms: u64,
+    pub placement_hints: Option<PlacementHint>,
     pub candidates: Vec<Candidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloseFrame {
     pub request_id: String,
-    pub reason: crate::policy::ReasonCode,
+    pub code: crate::policy::ReasonCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorFrame {
     pub request_id: String,
-    pub reason: crate::policy::ReasonCode,
+    pub code: crate::policy::ReasonCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub entry_id: String,
-    pub source: SourceMetadata,
+    pub source_realm: String,
+    pub source_realm_kind: RealmKind,
+    pub source_app: Option<String>,
+    pub source_app_id: Option<String>,
+    pub source_attribution: AttributionQuality,
     pub preview_text: Option<String>,
     pub content_type: String,
     pub timestamp_unix_ms: u64,
@@ -80,44 +85,26 @@ pub struct Candidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SourceMetadata {
-    pub realm: RealmMetadata,
-    pub app: Option<String>,
-    pub app_id: Option<String>,
-    pub attribution: AttributionQuality,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DestinationMetadata {
-    pub realm: RealmMetadata,
-    pub app: Option<String>,
+    pub realm: String,
+    pub realm_kind: RealmKind,
+    pub application: Option<String>,
     pub app_id: Option<String>,
     pub title: Option<String>,
     pub workspace: Option<String>,
     pub output: Option<String>,
     pub attribution: AttributionQuality,
-    pub placement: Option<PlacementHint>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacementHint {
+    pub pointer_x: Option<f64>,
+    pub pointer_y: Option<f64>,
+    pub output_width: Option<i32>,
+    pub output_height: Option<i32>,
+    pub overlay_width: Option<i32>,
+    pub overlay_height: Option<i32>,
     pub output: Option<String>,
-    pub anchor: PickerAnchor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PickerAnchor {
-    Pointer,
-    FocusedWindow,
-    CurrentOutput,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RealmMetadata {
-    pub id: String,
-    pub label: String,
-    pub kind: RealmKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,7 +156,11 @@ mod tests {
     fn display_side_candidate_tolerates_additive_metadata() {
         let json = r#"{
           "entry_id":"e",
-          "source":{"realm":{"id":"host","label":"Host","kind":"host"},"app":null,"app_id":null,"attribution":"focused_window_guess","future_label":"ignored"},
+          "source_realm":"Host",
+          "source_realm_kind":"host",
+          "source_app":null,
+          "source_app_id":null,
+          "source_attribution":"focused_window_guess",
           "preview_text":"hello",
           "content_type":"text/plain",
           "timestamp_unix_ms":7,

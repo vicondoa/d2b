@@ -88,7 +88,12 @@ pub fn path_for_user_vm(
 }
 
 fn validate_vm_path_component(vm_name: &str) -> Result<(), BridgeConfigError> {
-    if vm_name.is_empty() || vm_name.contains('/') || vm_name.contains('\0') {
+    if vm_name.is_empty()
+        || vm_name == "."
+        || vm_name == ".."
+        || vm_name.contains('/')
+        || vm_name.contains('\0')
+    {
         return Err(BridgeConfigError::InvalidVmName);
     }
     Ok(())
@@ -291,6 +296,14 @@ mod tests {
     fn bridge_path_rejects_invalid_vm_component() {
         assert!(matches!(
             path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "bad/vm"),
+            Err(BridgeConfigError::InvalidVmName)
+        ));
+        assert!(matches!(
+            path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "."),
+            Err(BridgeConfigError::InvalidVmName)
+        ));
+        assert!(matches!(
+            path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, ".."),
             Err(BridgeConfigError::InvalidVmName)
         ));
     }

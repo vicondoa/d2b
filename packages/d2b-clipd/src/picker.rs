@@ -9,8 +9,7 @@ use thiserror::Error;
 
 pub const PICKER_IPC_FD: i32 = 3;
 pub const PICKER_ENV_ALLOWLIST: &[&str] = &[
-    "WAYLAND_DISPLAY",
-    "XDG_RUNTIME_DIR",
+    "WAYLAND_SOCKET",
     "XDG_DATA_DIRS",
     "GDK_BACKEND",
     "GTK_THEME",
@@ -261,8 +260,8 @@ mod tests {
         ]);
 
         let sanitized = sanitize_picker_env(&ambient);
-        assert!(sanitized.contains_key(OsStr::new("WAYLAND_DISPLAY")));
-        assert!(sanitized.contains_key(OsStr::new("XDG_RUNTIME_DIR")));
+        assert!(!sanitized.contains_key(OsStr::new("WAYLAND_DISPLAY")));
+        assert!(!sanitized.contains_key(OsStr::new("XDG_RUNTIME_DIR")));
         assert!(!sanitized.contains_key(OsStr::new("NIRI_SOCKET")));
         assert!(!sanitized.contains_key(OsStr::new("SECRET_TOKEN")));
         assert_picker_env_excludes_niri_socket(&sanitized).expect("no niri socket");

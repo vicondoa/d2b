@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+const MAX_GUEST_METADATA_CHARS: usize = 256;
+
 /// Per-proxy client connection id assigned by `d2b-wayland-filter`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GuestClientId(pub u64);
@@ -64,15 +66,27 @@ impl ClientAttributionBook {
     }
 
     pub fn update_app_id(&mut self, client_id: GuestClientId, app_id: impl Into<String>) {
-        self.ensure_client(client_id).app_id = Some(app_id.into());
+        self.ensure_client(client_id).app_id = Some(Self::bound_guest_metadata(app_id.into()));
     }
 
     pub fn update_title(&mut self, client_id: GuestClientId, title: impl Into<String>) {
-        self.ensure_client(client_id).title = Some(title.into());
+        self.ensure_client(client_id).title = Some(Self::bound_guest_metadata(title.into()));
     }
 
     pub fn snapshot(&self, client_id: GuestClientId) -> Option<GuestClientAttribution> {
         self.clients.get(&client_id).cloned()
+    }
+
+    fn bound_guest_metadata(value: String) -> String {
+        let mut out = String::new();
+        for ch in value.chars().take(MAX_GUEST_METADATA_CHARS) {
+            if ch.is_control() {
+                out.push('�');
+            } else {
+                out.push(ch);
+            }
+        }
+        out
     }
 
     pub fn remove_client(&mut self, client_id: GuestClientId) {
@@ -161,5 +175,18 @@ mod tests {
         book.remove_client(GuestClientId(1));
 
         assert!(book.snapshot(GuestClientId(1)).is_none());
+    }
+
+    #[test]
+    fn attribution_metadata_is_bounded() {
+        let vm = VmId::new("work").expect("valid vm");
+        let mut book = ClientAttributionBook::new(vm);
+
+        book.update_title(GuestClientId(1), "x".repeat(MAX_GUEST_METADATA_CHARS + 100));
+        let snapshot = book.snapshot(GuestClientId(1)).expect("client tracked");
+        assert_eq!(
+            snapshot.title.as_deref().unwrap().chars().count(),
+            MAX_GUEST_METADATA_CHARS
+        );
     }
 }

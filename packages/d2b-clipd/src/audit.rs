@@ -4,17 +4,46 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::{AttributionQuality, ReasonCode};
 
+const MAX_AUDIT_MIME_BYTES: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub request_id: String,
     pub source_realm: String,
     pub destination_realm: String,
+    #[serde(serialize_with = "serialize_bounded_mime")]
     pub mime_type: String,
     pub byte_count: u64,
     pub decision: AuditDecision,
     pub attribution: AttributionQuality,
     pub reason: ReasonCode,
     pub timestamp_unix_ms: u64,
+}
+
+fn bounded_mime(mime_type: &str) -> String {
+    if crate::policy::is_mime_allowed(mime_type) {
+        return mime_type.to_owned();
+    }
+    let mut out = String::new();
+    for ch in mime_type.chars() {
+        if out.len() + ch.len_utf8() > MAX_AUDIT_MIME_BYTES {
+            out.push('…');
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else {
+            out.push('?');
+        }
+    }
+    out
+}
+
+fn serialize_bounded_mime<S>(mime_type: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&bounded_mime(mime_type))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +133,12 @@ impl MetricsQueue {
         self.dropped
     }
 
+    pub fn take_dropped_count(&mut self) -> u64 {
+        let dropped = self.dropped;
+        self.dropped = 0;
+        dropped
+    }
+
     pub fn len(&self) -> usize {
         self.queue.len()
     }
@@ -166,5 +201,25 @@ mod tests {
         assert!(!json.contains("preview"));
         assert!(!json.contains("payload"));
         assert!(!json.contains("clipboard"));
+    }
+
+    #[test]
+    fn audit_mime_is_bounded_for_unrecognized_values() {
+        let mut event = event("vm-a", "r1");
+        event.mime_type = format!("application/x-secret;payload={}", "x".repeat(256));
+        let json = serde_json::to_string(&event).expect("json");
+        assert!(json.contains("application/x-secret"));
+        assert!(!json.contains(&"x".repeat(128)));
+    }
+
+    #[test]
+    fn metrics_queue_take_dropped_count_resets_counter() {
+        let mut queue = MetricsQueue::new(0);
+        queue.enqueue_droppable(MetricEvent {
+            name: MetricName::PickerTimeout,
+            reason: Some(ReasonCode::PickerTimeout),
+        });
+        assert_eq!(queue.take_dropped_count(), 1);
+        assert_eq!(queue.take_dropped_count(), 0);
     }
 }
