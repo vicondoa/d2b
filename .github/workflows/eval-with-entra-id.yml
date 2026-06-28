@@ -22,4 +22,8 @@ jobs:
       - name: Eval with-entra-id example
         run: |
           cd examples/with-entra-id
-          nix flake check --no-build --all-systems
+          rm -f flake.lock
+          nix flake check --no-build --all-systems \
+            --override-input nixpkgs github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb \
+            --override-input entrablau github:vicondoa/entrablau.nix/bbefb679a5d92fd4eb939b0a6e289b22380dd4b1 \
+            --override-input entrablau/himmelblau github:himmelblau-idm/himmelblau/b3c48849cc7b468e33b9e44bb1a1210e49e1391f
