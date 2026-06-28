@@ -537,6 +537,8 @@ fn video_host_activation_runtime_and_session_acls() {
         r#"select(.role == "gpu" or .role == "gpu-render-node")"#,
         r#"select(.role == "audio")"#,
         r#"select(.role == "cloud-hypervisor-runner" or .role == "video")"#,
+        r#"--acl-spec "u:d2bd:rx""#,
+        r#"--acl-spec "u:d2bd:rwx""#,
         r#"setfacl -d -x "u:$uid" /run/d2b-video"#,
         "u:$uid:---",
         "stale_video_uid=",

@@ -22,6 +22,9 @@ deprecations ship one minor release before removal.
 - The `with-entra-id` eval workflow now overrides GitHub inputs to the
   committed lock revisions and authenticates Nix fetches with the Actions token
   to avoid transient unauthenticated API rate limits.
+- Host activation grants `d2bd` narrow access to the Wayland user's
+  PipeWire/Pulse sockets so daemon-owned audio policy enforcement does not
+  depend on host-local ACL overrides.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
