@@ -3581,7 +3581,11 @@ fn cmd_console(
                         );
                     }
                 }
-                exec_client::ExecSignal::Hangup => {
+                exec_client::ExecSignal::Interrupt
+                | exec_client::ExecSignal::Terminate
+                | exec_client::ExecSignal::Stop
+                | exec_client::ExecSignal::Hangup
+                | exec_client::ExecSignal::Quit => {
                     let _ = console_round_trip(
                         &mut socket,
                         &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
@@ -3590,7 +3594,6 @@ fn cmd_console(
                     );
                     return Ok(0);
                 }
-                _ => {}
             }
         }
 
@@ -3664,19 +3667,34 @@ fn cmd_console(
             }
             Err(err) => return Err(err),
             Ok(ConsoleOpResponse::ReadOutput(out)) => {
-                if out.is_eof {
-                    print_stderr("\r\nVM console closed (EOF).\r\n");
-                    return Ok(0);
-                }
                 if out.ring_buffer_start_offset > stdout_offset {
                     stdout_offset = out.ring_buffer_start_offset;
                 }
                 if !out.chunk_base64.is_empty() {
                     let bytes =
                         d2b_core::base64_codec::decode(&out.chunk_base64).unwrap_or_default();
-                    let _ = write_stdout_bytes(&bytes);
+                    if let Err(err) = write_stdout_bytes(&bytes) {
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                session: session.clone(),
+                            }),
+                        );
+                        if err.kind() == io::ErrorKind::BrokenPipe {
+                            return Ok(0);
+                        }
+                        return Err(CliFailure::new(
+                            1,
+                            format!("console: failed to write stdout: {err}"),
+                        ));
+                    }
                     stdout_offset = out.offset + bytes.len() as u64;
-                } else {
+                }
+                if out.is_eof {
+                    print_stderr("\r\nVM console closed (EOF).\r\n");
+                    return Ok(0);
+                }
+                if out.chunk_base64.is_empty() {
                     thread::sleep(Duration::from_millis(50));
                 }
             }
@@ -17211,7 +17229,7 @@ mod console_fsm_tests {
                             stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
                             offset: 0,
                             chunk_base64: d2b_core::base64_codec::encode(b"guest uart\n"),
-                            is_eof: false,
+                            is_eof: true,
                             ring_buffer_start_offset: 0,
                             dropped_bytes: 0,
                         },
@@ -17219,32 +17237,7 @@ mod console_fsm_tests {
                     "console read response",
                 )
                 .expect("encode console read response");
-                send_test_frame(accepted, &read_response)?;
-
-                let eof_request = recv_test_frame(accepted)?;
-                let eof_value: Value = serde_json::from_slice(&eof_request)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                assert_eq!(
-                    eof_value.get("op").and_then(Value::as_str),
-                    Some("readOutput")
-                );
-                let eof_response = encode_type_tagged_message(
-                    "consoleResponse",
-                    &public_wire::ConsoleOpResponse::ReadOutput(
-                        public_wire::ConsoleReadOutputResult {
-                            session: "console-test".to_owned(),
-                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
-                            offset: 11,
-                            chunk_base64: String::new(),
-                            is_eof: true,
-                            ring_buffer_start_offset: 0,
-                            dropped_bytes: 0,
-                        },
-                    ),
-                    "console eof response",
-                )
-                .expect("encode console eof response");
-                send_test_frame(accepted, &eof_response)
+                send_test_frame(accepted, &read_response)
             })();
             close(accepted).expect("close accepted socket");
             exchange.expect("mock console daemon exchange");
@@ -17277,5 +17270,22 @@ mod console_fsm_tests {
         assert!(stderr.contains("/dev/ttyS0"));
         assert!(stderr.contains("serial-getty"));
         assert!(stderr.contains("VM console closed (EOF)"));
+    }
+
+    #[test]
+    fn console_signal_loop_closes_on_fatal_signals() {
+        let source = include_str!("lib.rs");
+        let start = source.find("fn cmd_console(").expect("cmd_console present");
+        let body = &source[start
+            ..source[start..]
+                .find("fn console_round_trip(")
+                .expect("console_round_trip follows cmd_console")
+                + start];
+        for signal in ["Interrupt", "Terminate", "Stop", "Hangup", "Quit"] {
+            assert!(
+                body.contains(&format!("exec_client::ExecSignal::{signal}")),
+                "cmd_console must close and exit on {signal}"
+            );
+        }
     }
 }
