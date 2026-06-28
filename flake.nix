@@ -701,6 +701,7 @@
             "usbip-gating.nix"
           ];
           nix-unit-runtime = [
+            "clipboard.nix"
             "external-vm-kind.nix"
             "niri-vm-borders.nix"
             "requested-vm-config.nix"

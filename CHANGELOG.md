@@ -28,6 +28,11 @@ deprecations ship one minor release before removal.
 - `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
   IPC models, bounded Unix-socket request/response helpers, focused-window
   best-effort attribution cache behavior, and fallback arming state-machine tests.
+- Added clipboard architecture Nix/docs/schema scaffolding: a default-off
+  `d2b.site.clipboard` module, user-service wiring for externally packaged
+  `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
+  input, bridge runtime path policy, eval assertions, and reference docs for the
+  authority split, picker protocol, and policy caps.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`
