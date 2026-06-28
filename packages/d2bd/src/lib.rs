@@ -9819,27 +9819,27 @@ impl VmStartRunner<'_> {
             cleanup_vm_start_registration(self.state, vm, &role_id);
             return Err(error);
         }
-        if matches!(runner_role, RunnerRole::QemuMedia) {
-            if let Some(console_fd_index) = response.console_fd_index {
-                let console_fd = duplicate_received_fd(
-                    received_fds,
-                    console_fd_index,
-                    "duplicate qemu-media console fd",
-                )
-                .map_err(|error| {
-                    cleanup_vm_start_registration(self.state, vm, &role_id);
-                    error.message()
-                })?;
-                let console_stream: UnixStream = console_fd.into();
-                self.state
-                    .console_sessions
-                    .lock()
-                    .unwrap()
-                    .register_session(
-                        vm.to_owned(),
-                        console_session::create_qemu_session(console_stream),
-                    );
-            }
+        if matches!(runner_role, RunnerRole::QemuMedia)
+            && let Some(console_fd_index) = response.console_fd_index
+        {
+            let console_fd = duplicate_received_fd(
+                received_fds,
+                console_fd_index,
+                "duplicate qemu-media console fd",
+            )
+            .map_err(|error| {
+                cleanup_vm_start_registration(self.state, vm, &role_id);
+                error.message()
+            })?;
+            let console_stream: UnixStream = console_fd.into();
+            self.state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .register_session(
+                    vm.to_owned(),
+                    console_session::create_qemu_session(console_stream),
+                );
         }
         Ok(())
     }

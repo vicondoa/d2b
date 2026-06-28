@@ -1339,9 +1339,10 @@ pub struct UsbipStatusEntry {
 pub struct GuestAudioChannelState {
     /// True when the channel is muted (grant = off).
     pub muted: bool,
-    /// Current level 0–100 when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub level: Option<u8>,
+    /// Current level 0–100; 0 when not configured or unavailable.
+    pub level: u32,
+    /// True when the level value is meaningful.
+    pub level_known: bool,
 }
 
 /// Request: query current guest audio policy state.
@@ -1360,7 +1361,7 @@ pub struct AudioStatusResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<GuestAudioChannelState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<GuestControlErrorKind>,
+    pub error: Option<GuestControlError>,
 }
 
 /// Which audio mutation to perform.
@@ -1376,7 +1377,7 @@ pub enum AudioSetKind {
 /// The audio channel to target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum GuestAudioChannel {
+pub enum AudioChannel {
     Microphone,
     Speaker,
 }
@@ -1386,14 +1387,12 @@ pub enum GuestAudioChannel {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AudioSetRequest {
     pub metadata: GuestRequestMetadata,
-    pub channel: GuestAudioChannel,
+    pub channel: AudioChannel,
     pub kind: AudioSetKind,
     /// For `Grant`: `true` = on, `false` = off.
-    #[serde(default)]
     pub grant_on: bool,
     /// For `Level`: `0..=100`; ignored for `Grant`.
-    #[serde(default)]
-    pub level: u8,
+    pub level: u32,
 }
 
 /// Response: updated channel state after the mutation.
@@ -1403,7 +1402,7 @@ pub struct AudioSetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<GuestAudioChannelState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<GuestControlErrorKind>,
+    pub error: Option<GuestControlError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1485,7 +1484,7 @@ pub enum ExecCancelReason {
     ProtocolError,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestControlError {
     pub kind: GuestControlErrorKind,
@@ -1561,6 +1560,7 @@ pub enum GuestControlErrorKind {
     ActivationTimedOut,
     ActivationSpawnFailed,
     /// Guest PipeWire session is unavailable or not configured.
+    #[serde(rename = "audio-pipewire-unavailable")]
     AudioPipeWireUnavailable,
     /// Requested audio channel is not recognised.
     AudioChannelUnknown,

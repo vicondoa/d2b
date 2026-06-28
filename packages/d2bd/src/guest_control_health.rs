@@ -624,16 +624,21 @@ where
 /// The `AudioSet` capability MUST be advertised; an authenticated guest that
 /// never advertised it fails closed (`CapabilityUnavailable`). This prevents
 /// a silent no-op on an older guest generation that predates audio support.
+#[derive(Debug, Clone, Copy)]
+pub struct GuestAudioSetRequest {
+    pub channel: pb::AudioChannel,
+    pub kind: pb::AudioSetKind,
+    pub grant_on: bool,
+    pub level: u32,
+}
+
 pub async fn audio_set_authenticated<C, S>(
     vm_id: &str,
     peer_cid: Option<u32>,
     host_nonce: [u8; AUTH_NONCE_LEN],
     client: &C,
     signer: &S,
-    channel: pb::AudioChannel,
-    kind: pb::AudioSetKind,
-    grant_on: bool,
-    level: u32,
+    audio_set: GuestAudioSetRequest,
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError>
 where
     C: GuestControlRpc + Sync,
@@ -654,10 +659,10 @@ where
 
     let mut request = pb::AudioSetRequest::new();
     request.metadata = MessageField::some(request_metadata(vm_id));
-    request.channel = protobuf::EnumOrUnknown::new(channel);
-    request.kind = protobuf::EnumOrUnknown::new(kind);
-    request.grant_on = grant_on;
-    request.level = level;
+    request.channel = protobuf::EnumOrUnknown::new(audio_set.channel);
+    request.kind = protobuf::EnumOrUnknown::new(audio_set.kind);
+    request.grant_on = audio_set.grant_on;
+    request.level = audio_set.level;
 
     let response = client
         .audio_set(request)

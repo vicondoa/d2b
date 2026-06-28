@@ -16,6 +16,9 @@ deprecations ship one minor release before removal.
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
   point `console` and `audio` surfaces at ADR 0041 and the provider capability
   matrix.
+- The host-side `d2b-wayland-filter` proxy is source-built from the checked-out
+  workspace even when other host tools use release prebuilts, so local eval
+  gates do not depend on a matching release tarball for this policy binary.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`

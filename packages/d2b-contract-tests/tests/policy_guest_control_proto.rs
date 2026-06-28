@@ -779,14 +779,9 @@ fn guest_control_proto_schema_terminal_status_and_enums_match() {
             panic!("guest-control-proto: schema missing definition for proto enum {enum_name}")
         });
         let proto_values = enum_schema_values(values, enum_name);
-        let schema_values = node
-            .get("enum")
-            .and_then(Value::as_array)
-            .expect("guest-control-proto: enum schema values missing")
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
+        let schema_values = schema_enum_values(node).unwrap_or_else(|| {
+            panic!("guest-control-proto: enum schema values missing for {enum_name}")
+        });
         assert_eq!(
             proto_values, schema_values,
             "guest-control-proto: {enum_name} enum drift"
@@ -878,4 +873,30 @@ fn guest_control_proto_schema_terminal_status_and_enums_match() {
         });
         assert_scalar_shape("TerminalStatus", payload, prop, defs);
     }
+}
+
+fn schema_enum_values(node: &Value) -> Option<BTreeSet<String>> {
+    if let Some(values) = node.get("enum").and_then(Value::as_array) {
+        return Some(
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+    let variants = node.get("oneOf").and_then(Value::as_array)?;
+    let mut values = BTreeSet::new();
+    for variant in variants {
+        for value in variant
+            .get("enum")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            values.insert(value.to_owned());
+        }
+    }
+    (!values.is_empty()).then_some(values)
 }

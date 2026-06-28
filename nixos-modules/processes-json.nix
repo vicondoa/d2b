@@ -55,7 +55,11 @@ EOF
       runHook postInstall
     '';
   };
-  d2bWaylandFilterPackage = if prebuilt ? "d2b-wayland-filter" then prebuilt."d2b-wayland-filter" else d2bWaylandFilterSourcePackage;
+  # The filter is tied to the checked-out policy implementation and is cheap
+  # enough to build in the eval smoke fixtures. Keep it source-built even when
+  # other host tools use release prebuilts so missing release assets cannot
+  # break local validation.
+  d2bWaylandFilterPackage = d2bWaylandFilterSourcePackage;
   d2bWaylandFilterBinary = "${d2bWaylandFilterPackage}/bin/d2b-wayland-filter";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};

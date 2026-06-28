@@ -233,12 +233,11 @@ impl ReadinessWaitConfig {
     /// `unsafe` in Rust 1.81+).
     pub fn for_dispatch() -> Self {
         #[cfg(test)]
-        if let Some(cell) = TEST_CONFIG_OVERRIDE.get() {
-            if let Ok(guard) = cell.lock() {
-                if let Some(cfg) = guard.clone() {
-                    return cfg;
-                }
-            }
+        if let Some(cell) = TEST_CONFIG_OVERRIDE.get()
+            && let Ok(guard) = cell.lock()
+            && let Some(cfg) = guard.clone()
+        {
+            return cfg;
         }
         Self::from_env()
     }

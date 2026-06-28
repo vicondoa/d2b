@@ -440,6 +440,18 @@ pub struct CapabilitiesConfig {
     pub audio_set: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct CapabilitiesInputs {
+    exec_paths_present: bool,
+    exec_detached: bool,
+    exec_tty: bool,
+    read_guest_file: bool,
+    usbip_import: bool,
+    system_activation: bool,
+    shell_limits: Option<(u32, u32)>,
+    audio_usable: bool,
+}
+
 /// Derive the advertised capability set from runtime presence.
 ///
 /// Extracted as a pure function so the **`exec_attached` ⟺ `exec_logs`**
@@ -449,16 +461,17 @@ pub struct CapabilitiesConfig {
 /// SAME `exec_paths_present` input here, by construction — they can never
 /// diverge. Detached exec is gated separately on a reconciled registry backed
 /// by a resolved non-root workload user.
-fn derive_capabilities_config(
-    exec_paths_present: bool,
-    exec_detached: bool,
-    exec_tty: bool,
-    read_guest_file: bool,
-    usbip_import: bool,
-    system_activation: bool,
-    shell_limits: Option<(u32, u32)>,
-    audio_usable: bool,
-) -> CapabilitiesConfig {
+fn derive_capabilities_config(inputs: CapabilitiesInputs) -> CapabilitiesConfig {
+    let CapabilitiesInputs {
+        exec_paths_present,
+        exec_detached,
+        exec_tty,
+        read_guest_file,
+        usbip_import,
+        system_activation,
+        shell_limits,
+        audio_usable,
+    } = inputs;
     let shell_usable = shell_limits.is_some();
     let (shell_sessions_per_vm, shell_attached_sessions_per_vm) = shell_limits.unwrap_or((0, 0));
     // Audio capabilities are advertised only when the wpctl binary was found at
@@ -769,21 +782,21 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
             })
         });
 
-    let capabilities = derive_capabilities_config(
+    let capabilities = derive_capabilities_config(CapabilitiesInputs {
         // Non-TTY attached exec (and its required ReadOutput streaming) is served
         // iff the workload-user runtime paths are present.
-        exec_paths.is_some(),
-        detached.is_some(),
-        exec.tty_usable(),
-        config.guest_config_path.is_some(),
-        usbip_path.is_some(),
-        activation.is_some(),
-        shell.is_enabled().then_some((
+        exec_paths_present: exec_paths.is_some(),
+        exec_detached: detached.is_some(),
+        exec_tty: exec.tty_usable(),
+        read_guest_file: config.guest_config_path.is_some(),
+        usbip_import: usbip_path.is_some(),
+        system_activation: activation.is_some(),
+        shell_limits: shell.is_enabled().then_some((
             config.shell_policy.max_sessions,
             config.shell_policy.max_attached,
         )),
-        audio_runtime.is_some(),
-    );
+        audio_usable: audio_runtime.is_some(),
+    });
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
         config.token,
@@ -4723,16 +4736,16 @@ mod tests {
                     for read_guest_file in [false, true] {
                         for usbip_import in [false, true] {
                             for system_activation in [false, true] {
-                                let cfg = derive_capabilities_config(
+                                let cfg = derive_capabilities_config(CapabilitiesInputs {
                                     exec_paths_present,
                                     exec_detached,
                                     exec_tty,
                                     read_guest_file,
                                     usbip_import,
                                     system_activation,
-                                    None,
-                                    false,
-                                );
+                                    shell_limits: None,
+                                    audio_usable: false,
+                                });
                                 assert_eq!(
                                     cfg.exec_attached, cfg.exec_logs,
                                     "exec_attached must imply exec_logs (and vice-versa)"
@@ -4762,16 +4775,16 @@ mod tests {
         // AudioSet must not be advertised — handlers would return
         // AudioPipeWireUnavailable fail-closed which would cause d2bd to
         // incorrectly report HostAndGuest enforcement.
-        let cfg = derive_capabilities_config(
-            true,  // exec_paths_present
-            false, // exec_detached
-            false, // exec_tty
-            false, // read_guest_file
-            false, // usbip_import
-            false, // system_activation
-            None,  // shell_limits
-            false, // audio_usable
-        );
+        let cfg = derive_capabilities_config(CapabilitiesInputs {
+            exec_paths_present: true,
+            exec_detached: false,
+            exec_tty: false,
+            read_guest_file: false,
+            usbip_import: false,
+            system_activation: false,
+            shell_limits: None,
+            audio_usable: false,
+        });
         assert!(
             !cfg.audio_status,
             "audio_status must not be advertised without a usable audio runtime"
@@ -4786,16 +4799,16 @@ mod tests {
     fn audio_caps_advertised_with_runtime() {
         // When audio_usable=true (wpctl binary present + workload user resolved),
         // both AudioStatus and AudioSet must be advertised.
-        let cfg = derive_capabilities_config(
-            true,  // exec_paths_present
-            false, // exec_detached
-            false, // exec_tty
-            false, // read_guest_file
-            false, // usbip_import
-            false, // system_activation
-            None,  // shell_limits
-            true,  // audio_usable
-        );
+        let cfg = derive_capabilities_config(CapabilitiesInputs {
+            exec_paths_present: true,
+            exec_detached: false,
+            exec_tty: false,
+            read_guest_file: false,
+            usbip_import: false,
+            system_activation: false,
+            shell_limits: None,
+            audio_usable: true,
+        });
         assert!(
             cfg.audio_status,
             "audio_status must be advertised when audio runtime is usable"

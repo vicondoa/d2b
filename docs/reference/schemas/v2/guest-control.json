@@ -255,6 +255,14 @@
       "maxLength": 64,
       "minLength": 1
     },
+    "AudioChannel": {
+      "description": "The audio channel to target.",
+      "type": "string",
+      "enum": [
+        "microphone",
+        "speaker"
+      ]
+    },
     "AudioSetKind": {
       "description": "Which audio mutation to perform.",
       "oneOf": [
@@ -279,16 +287,17 @@
       "type": "object",
       "required": [
         "channel",
+        "grantOn",
         "kind",
+        "level",
         "metadata"
       ],
       "properties": {
         "channel": {
-          "$ref": "#/definitions/GuestAudioChannel"
+          "$ref": "#/definitions/AudioChannel"
         },
         "grantOn": {
           "description": "For `Grant`: `true` = on, `false` = off.",
-          "default": false,
           "type": "boolean"
         },
         "kind": {
@@ -296,9 +305,8 @@
         },
         "level": {
           "description": "For `Level`: `0..=100`; ignored for `Grant`.",
-          "default": 0,
           "type": "integer",
-          "format": "uint8",
+          "format": "uint32",
           "minimum": 0.0
         },
         "metadata": {
@@ -314,7 +322,7 @@
         "error": {
           "anyOf": [
             {
-              "$ref": "#/definitions/GuestControlErrorKind"
+              "$ref": "#/definitions/GuestControlError"
             },
             {
               "type": "null"
@@ -354,7 +362,7 @@
         "error": {
           "anyOf": [
             {
-              "$ref": "#/definitions/GuestControlErrorKind"
+              "$ref": "#/definitions/GuestControlError"
             },
             {
               "type": "null"
@@ -1364,29 +1372,24 @@
       "maxLength": 4096,
       "minLength": 1
     },
-    "GuestAudioChannel": {
-      "description": "The audio channel to target.",
-      "type": "string",
-      "enum": [
-        "microphone",
-        "speaker"
-      ]
-    },
     "GuestAudioChannelState": {
       "description": "Current state of one audio channel as seen by the guest PipeWire session.",
       "type": "object",
       "required": [
+        "level",
+        "levelKnown",
         "muted"
       ],
       "properties": {
         "level": {
-          "description": "Current level 0–100 when known.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
+          "description": "Current level 0–100; 0 when not configured or unavailable.",
+          "type": "integer",
+          "format": "uint32",
           "minimum": 0.0
+        },
+        "levelKnown": {
+          "description": "True when the level value is meaningful.",
+          "type": "boolean"
         },
         "muted": {
           "description": "True when the channel is muted (grant = off).",
@@ -1564,7 +1567,7 @@
           "description": "Guest PipeWire session is unavailable or not configured.",
           "type": "string",
           "enum": [
-            "audio-pipe-wire-unavailable"
+            "audio-pipewire-unavailable"
           ]
         },
         {

@@ -33,14 +33,15 @@ use d2b_contracts::broker_wire::{
 use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
-    AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioStatus,
-    GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError,
-    GuestSystemActivationError, GuestSystemActivationStart, GuestSystemActivationStatus,
-    GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult,
-    GuestUsbipStatusResult, TtrpcGuestControlClient, activate_system_start_authenticated,
-    activate_system_status_authenticated, audio_set_authenticated, audio_status_authenticated,
-    connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
-    read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
+    AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioSetRequest,
+    GuestAudioStatus, GuestControlHealthError, GuestControlHealthEvidence, GuestControlSigner,
+    GuestFileReadError, GuestSystemActivationError, GuestSystemActivationStart,
+    GuestSystemActivationStatus, GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError,
+    GuestUsbipImportResult, GuestUsbipStatusResult, TtrpcGuestControlClient,
+    activate_system_start_authenticated, activate_system_status_authenticated,
+    audio_set_authenticated, audio_status_authenticated, connected_stream_to_ttrpc_socket,
+    guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
+    usbip_import_authenticated, usbip_status_authenticated,
 };
 use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
 use crate::typed_error::TypedError;
@@ -590,10 +591,12 @@ pub fn run_audio_set_once(
             nonce,
             &client,
             &signer,
-            channel,
-            kind,
-            grant_on,
-            level,
+            GuestAudioSetRequest {
+                channel,
+                kind,
+                grant_on,
+                level,
+            },
         )
         .await
     })
