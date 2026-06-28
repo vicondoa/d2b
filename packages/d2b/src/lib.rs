@@ -3533,12 +3533,12 @@ fn cmd_console(
     let session = attach.session.clone();
     let mut stdout_offset = attach.ring_buffer_start_offset;
 
-    print_stdout(&format!(
+    print_stderr(&format!(
         "Connected to console for VM '{}' ({:?}). Press Ctrl-] to detach.\r\n",
         vm, attach.provider_kind
     ));
     if attach.provider_kind == d2b_contracts::public_wire::ConsoleProviderKind::QemuMedia {
-        print_stdout(
+        print_stderr(
             "Note: QEMU serial console may appear blank until the guest writes \
              to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
              or configure console= in the kernel command line).\r\n",
@@ -3620,7 +3620,7 @@ fn cmd_console(
                                 session: session.clone(),
                             }),
                         );
-                        print_stdout("\r\nDetached from console.\r\n");
+                        print_stderr("\r\nDetached from console.\r\n");
                         return Ok(0);
                     }
                     let chunk_b64 = d2b_core::base64_codec::encode(chunk);
@@ -3657,13 +3657,13 @@ fn cmd_console(
         match read_result {
             Err(err) if err.exit_code == 75 => {
                 // ConsoleSessionStale: daemon restarted.
-                print_stdout("\r\nConsole session expired (daemon restarted).\r\n");
+                print_stderr("\r\nConsole session expired (daemon restarted).\r\n");
                 return Ok(0);
             }
             Err(err) => return Err(err),
             Ok(ConsoleOpResponse::ReadOutput(out)) => {
                 if out.is_eof {
-                    print_stdout("\r\nVM console closed (EOF).\r\n");
+                    print_stderr("\r\nVM console closed (EOF).\r\n");
                     return Ok(0);
                 }
                 if out.ring_buffer_start_offset > stdout_offset {
@@ -9620,6 +9620,10 @@ fn with_test_output_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
 
 fn print_stdout(text: &str) {
     let _ = write_stdout_bytes(text.as_bytes());
+}
+
+fn print_stderr(text: &str) {
+    let _ = write_stderr_bytes(text.as_bytes());
 }
 
 fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
