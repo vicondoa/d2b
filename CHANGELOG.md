@@ -71,12 +71,11 @@ deprecations ship one minor release before removal.
   `/run/d2b/locks/audio-<vm>.lock`; qemu-media VMs report
   guest-enforcement as unsupported; ACA sandbox VMs route exclusively
   through provider guest-control (no local audio state is created).
-  Provider capability resolution runs before any state access.
-  Host PipeWire enforcement (`pw-cli`/`wpexec`) and guestd `AudioSet`
-  integration are not yet connected; `set-volume` and `mute` return
-  `applied: host-only` when state is persisted and
-  `applied: unsupported` when live enforcement is unavailable rather
-  than falsely reporting `host-and-guest`.
+  Provider capability resolution runs before any state access. Host
+  PipeWire enforcement and guestd `AudioStatus` / `AudioSet` integration
+  are connected, and responses report `host-and-guest`, `host-only`,
+  `guest-only`, or `unsupported` according to the enforcement actually
+  applied.
 - `guestd` `AudioStatus` and `AudioSet` handlers now use real `wpctl`
   argv-only subprocesses targeting the workload user's PipeWire session.
   The `--wpctl-path` flag (set to `wireplumber/bin/wpctl` by the guest
