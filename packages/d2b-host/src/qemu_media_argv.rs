@@ -36,12 +36,13 @@ pub struct QemuMediaArgvInput {
     /// Disable KSM merging for guest RAM.
     #[serde(default = "default_true")]
     pub disable_memory_merge: bool,
-    /// Broker-opened console fd (host end of a socketpair). When `Some`,
-    /// the argv emits `-chardev fd,id=con0,fd=N -serial chardev:con0`
-    /// so QEMU's serial console is connected to the fd-backed stream
+    /// Broker-opened console fd (host end of a socketpair or listening
+    /// socket). When `Some`, the argv emits
+    /// `-chardev socket,id=con0,fd=N,server=on,wait=off -serial chardev:con0`
+    /// so QEMU's serial console is connected to the fd-backed socket stream
     /// rather than discarded with `-serial none`. The broker creates the
-    /// socketpair, passes one end to QEMU via this fd, and retains the
-    /// other end for the drainer (ADR 0041).
+    /// socket, passes the listening/connected fd to QEMU via this field, and
+    /// retains the peer end for the drainer (ADR 0041).
     ///
     /// The fd must be ≥ 3 (not stdin/stdout/stderr).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,7 +184,7 @@ pub fn generate_qemu_media_argv(
     if let Some(fd) = input.console_fd {
         argv.extend([
             "-chardev".to_owned(),
-            format!("fd,id=con0,fd={fd}"),
+            format!("socket,id=con0,fd={fd},server=on,wait=off"),
             "-serial".to_owned(),
             "chardev:con0".to_owned(),
         ]);
@@ -361,8 +362,8 @@ mod tests {
         let argv = generate_qemu_media_argv(&inp).unwrap();
         let joined = argv.join(" ");
         assert!(
-            joined.contains("-chardev fd,id=con0,fd=11"),
-            "expected fd chardev: {joined}"
+            joined.contains("-chardev socket,id=con0,fd=11,server=on,wait=off"),
+            "expected socket chardev: {joined}"
         );
         assert!(
             joined.contains("-serial chardev:con0"),
@@ -394,6 +395,6 @@ mod tests {
         let mut inp = input();
         inp.console_fd = Some(3);
         let argv = generate_qemu_media_argv(&inp).unwrap();
-        assert!(argv.join(" ").contains("-chardev fd,id=con0,fd=3"));
+        assert!(argv.join(" ").contains("-chardev socket,id=con0,fd=3,server=on,wait=off"));
     }
 }

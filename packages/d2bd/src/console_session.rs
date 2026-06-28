@@ -57,7 +57,7 @@ pub struct ConsoleRing {
 }
 
 impl ConsoleRing {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             ring: RingBuffer::new(RING_CAPACITY),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -78,7 +78,7 @@ pub struct ConsoleSession {
 }
 
 impl ConsoleSession {
-    fn new(
+    pub(crate) fn new(
         provider_kind: ConsoleProviderKind,
         ring: Arc<Mutex<ConsoleRing>>,
         drainer: Option<tokio::task::JoinHandle<()>>,
@@ -125,6 +125,8 @@ pub struct ConsoleSessionTable {
     sessions: HashMap<String, ConsoleSession>,
     /// Active client handles → VM name.
     clients: HashMap<ConsoleClientHandle, String>,
+    /// Active client handles → owner UID (the peer uid that called Attach).
+    client_uids: HashMap<ConsoleClientHandle, u32>,
 }
 
 impl ConsoleSessionTable {
@@ -132,6 +134,7 @@ impl ConsoleSessionTable {
         Self {
             sessions: HashMap::new(),
             clients: HashMap::new(),
+            client_uids: HashMap::new(),
         }
     }
 }
@@ -151,7 +154,16 @@ impl ConsoleSessionTable {
                 task.abort();
             }
             // Remove all client handles for the old session.
-            self.clients.retain(|_, v| v != &vm);
+            let to_remove: Vec<ConsoleClientHandle> = self
+                .clients
+                .iter()
+                .filter(|(_, v)| *v == &vm)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for handle in to_remove {
+                self.clients.remove(&handle);
+                self.client_uids.remove(&handle);
+            }
         }
         self.sessions.insert(vm, session);
     }
@@ -159,8 +171,15 @@ impl ConsoleSessionTable {
     /// Attach a new client to the VM's session, returning an opaque handle
     /// and the ring-buffer start offset at attach time.
     ///
+    /// `peer_uid` is stored alongside the handle so subsequent operations can
+    /// verify the caller is the same user (or an admin).
+    ///
     /// Returns `None` when no session exists for `vm`.
-    pub fn attach(&mut self, vm: &str) -> Option<(ConsoleClientHandle, ConsoleProviderKind, u64)> {
+    pub fn attach(
+        &mut self,
+        vm: &str,
+        peer_uid: u32,
+    ) -> Option<(ConsoleClientHandle, ConsoleProviderKind, u64)> {
         if self.clients.len() >= MAX_SESSIONS {
             return None;
         }
@@ -171,7 +190,16 @@ impl ConsoleSessionTable {
         };
         let handle = ConsoleClientHandle::new();
         self.clients.insert(handle.clone(), vm.to_owned());
+        self.client_uids.insert(handle.clone(), peer_uid);
         Some((handle, session.provider_kind, start_offset))
+    }
+
+    /// Return the owner UID for a client handle, or `None` if the handle is
+    /// not known.
+    pub fn client_owner_uid(&self, session_handle: &str) -> Option<u32> {
+        self.client_uids
+            .get(&ConsoleClientHandle(session_handle.to_owned()))
+            .copied()
     }
 
     /// Read up to `max_len` bytes from the ring buffer for `session_handle`
@@ -222,9 +250,9 @@ impl ConsoleSessionTable {
 
     /// Close (detach) a client session.  The VM's drainer keeps running.
     pub fn close(&mut self, session_handle: &str) -> bool {
-        self.clients
-            .remove(&ConsoleClientHandle(session_handle.to_owned()))
-            .is_some()
+        let key = ConsoleClientHandle(session_handle.to_owned());
+        self.client_uids.remove(&key);
+        self.clients.remove(&key).is_some()
     }
 
     /// Whether a session exists for `vm`.
@@ -463,26 +491,29 @@ mod tests {
             "vm-a".into(),
             make_session(ConsoleProviderKind::LocalHypervisor),
         );
-        let (handle, kind, offset) = table.attach("vm-a").unwrap();
+        let (handle, kind, offset) = table.attach("vm-a", 1000).unwrap();
         assert!(!handle.as_str().is_empty());
         assert_eq!(kind, ConsoleProviderKind::LocalHypervisor);
         assert_eq!(offset, 0);
+        assert_eq!(table.client_owner_uid(handle.as_str()), Some(1000));
     }
 
     #[test]
     fn attach_unknown_vm_returns_none() {
         let mut table = ConsoleSessionTable::new();
-        assert!(table.attach("no-such-vm").is_none());
+        assert!(table.attach("no-such-vm", 1000).is_none());
     }
 
     #[test]
     fn close_removes_client() {
         let mut table = ConsoleSessionTable::new();
         table.register_session("vm-b".into(), make_session(ConsoleProviderKind::QemuMedia));
-        let (handle, _, _) = table.attach("vm-b").unwrap();
+        let (handle, _, _) = table.attach("vm-b", 1000).unwrap();
         assert!(table.close(handle.as_str()));
         // closing again is idempotent
         assert!(!table.close(handle.as_str()));
+        // uid is also cleared on close
+        assert_eq!(table.client_owner_uid(handle.as_str()), None);
     }
 
     #[test]
@@ -500,7 +531,7 @@ mod tests {
             None,
         );
         table.register_session("vm-c".into(), session);
-        let (handle, _, _) = table.attach("vm-c").unwrap();
+        let (handle, _, _) = table.attach("vm-c", 1000).unwrap();
         let out = table.read_output(handle.as_str(), 0, 64).unwrap();
         let snap = out.snap.unwrap();
         assert_eq!(snap.data, b"hello console");
@@ -519,11 +550,13 @@ mod tests {
             "vm-d".into(),
             make_session(ConsoleProviderKind::LocalHypervisor),
         );
-        let (handle, _, _) = table.attach("vm-d").unwrap();
+        let (handle, _, _) = table.attach("vm-d", 1000).unwrap();
         // Replace with a fresh session.
         table.register_session("vm-d".into(), make_session(ConsoleProviderKind::QemuMedia));
         // Old handle should be gone.
         assert!(table.read_output(handle.as_str(), 0, 64).is_none());
+        // Old handle uid should also be gone.
+        assert_eq!(table.client_owner_uid(handle.as_str()), None);
     }
 
     #[test]
@@ -537,7 +570,7 @@ mod tests {
             None,
         );
         table.register_session("vm-e".into(), session);
-        let (handle, _, _) = table.attach("vm-e").unwrap();
+        let (handle, _, _) = table.attach("vm-e", 1000).unwrap();
 
         // Fill well past ring capacity to force drops.
         {
@@ -556,5 +589,20 @@ mod tests {
             snap.actual_offset > 0,
             "fast-forward should set actual_offset > 0"
         );
+    }
+
+    #[test]
+    fn client_owner_uid_tracks_attaching_uid() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session(
+            "vm-f".into(),
+            make_session(ConsoleProviderKind::LocalHypervisor),
+        );
+        let (h1, _, _) = table.attach("vm-f", 1000).unwrap();
+        let (h2, _, _) = table.attach("vm-f", 1001).unwrap();
+        assert_eq!(table.client_owner_uid(h1.as_str()), Some(1000));
+        assert_eq!(table.client_owner_uid(h2.as_str()), Some(1001));
+        // Unknown handle returns None.
+        assert_eq!(table.client_owner_uid("no-such-handle"), None);
     }
 }
