@@ -13,7 +13,7 @@
 //! public responses. Volume/gain values never appear in audit records,
 //! metric labels, or log messages.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::io::AsRawFd as _;
@@ -117,6 +117,30 @@ impl Drop for OfdLockGuard {
     }
 }
 
+struct AudioStateLock {
+    _file: File,
+    _guard: OfdLockGuard,
+}
+
+fn acquire_audio_state_lock(
+    lock_path: &Path,
+    exclusive: bool,
+) -> Result<AudioStateLock, AudioStateIoError> {
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_CLOEXEC)
+        .open(lock_path)
+        .map_err(AudioStateIoError::LockOpen)?;
+    let fd = lock_file.as_raw_fd();
+    ofd_lock(fd, exclusive).map_err(AudioStateIoError::LockAcquire)?;
+    Ok(AudioStateLock {
+        _file: lock_file,
+        _guard: OfdLockGuard { fd },
+    })
+}
+
 // ── Audio state I/O ──────────────────────────────────────────────────────────
 
 /// Error from audio state file I/O.
@@ -159,24 +183,11 @@ pub fn read_audio_state_locked(
     lock_path: &Path,
     state_path: &Path,
 ) -> Result<AudioPolicyState, AudioStateIoError> {
-    // Open the lock file with O_CLOEXEC. `.create(true)` is used so this works
-    // even before the first systemd-tmpfiles run (e.g. in tests). Opening with
-    // write access is required for `.create(true)` to create the file; the
-    // exclusive OFD write lock below uses a separate file descriptor.
-    let lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .custom_flags(libc::O_CLOEXEC)
-        .open(lock_path)
-        .map_err(AudioStateIoError::LockOpen)?;
-    let fd = lock_file.as_raw_fd();
+    let _lock = acquire_audio_state_lock(lock_path, false)?;
+    read_audio_state_unlocked(state_path)
+}
 
-    // Shared read lock (non-destructive).
-    ofd_lock(fd, false).map_err(AudioStateIoError::LockAcquire)?;
-    let _guard = OfdLockGuard { fd };
-
-    // Read the state file; missing file → default state.
+fn read_audio_state_unlocked(state_path: &Path) -> Result<AudioPolicyState, AudioStateIoError> {
     let bytes = match std::fs::read(state_path) {
         Ok(b) => b,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -197,26 +208,21 @@ pub fn read_audio_state_locked(
 /// 4. `fsync` the temp file.
 /// 5. `rename` temp → state file (atomic on the same fs).
 /// 6. Release the lock via the RAII guard.
-pub fn write_audio_state_locked(
+#[cfg(test)]
+fn write_audio_state_locked(
     lock_path: &Path,
     state_path: &Path,
     state: &AudioPolicyState,
 ) -> Result<(), AudioStateIoError> {
+    let _lock = acquire_audio_state_lock(lock_path, true)?;
+    write_audio_state_unlocked(state_path, state)
+}
+
+fn write_audio_state_unlocked(
+    state_path: &Path,
+    state: &AudioPolicyState,
+) -> Result<(), AudioStateIoError> {
     use std::io::Write as _;
-
-    let lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .custom_flags(libc::O_CLOEXEC)
-        .open(lock_path)
-        .map_err(AudioStateIoError::LockOpen)?;
-    let fd = lock_file.as_raw_fd();
-
-    // Exclusive write lock.
-    ofd_lock(fd, true).map_err(AudioStateIoError::LockAcquire)?;
-    let _guard = OfdLockGuard { fd };
-
     let bytes = state.to_v2_bytes().map_err(AudioStateIoError::StateParse)?;
 
     // Place the temp file in the same directory to guarantee same-filesystem
@@ -695,12 +701,15 @@ fn dispatch_audio_set_volume(
     let lock_path = audio_lock_path(&state.config.locks_dir, vm_name);
     let state_path = audio_state_path(&state_dir);
 
-    // Read-modify-write under exclusive lock.
-    let current =
-        read_audio_state_locked(&lock_path, &state_path).map_err(|e| TypedError::InternalIo {
-            context: "read audio state".to_owned(),
+    let _state_lock =
+        acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
+            context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
         })?;
+    let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
+        context: "read audio state".to_owned(),
+        detail: e.to_string(),
+    })?;
 
     let old_level = match channel {
         AudioChannel::Speaker => current.speaker_level,
@@ -716,7 +725,7 @@ fn dispatch_audio_set_volume(
     // persisting an increased level as applied. Missing live nodes report
     // Unsupported and still allow the offline boot policy to be staged.
     if !level_increase {
-        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+        write_audio_state_unlocked(&state_path, &new_state).map_err(|e| {
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
@@ -738,7 +747,7 @@ fn dispatch_audio_set_volume(
     };
 
     if level_increase {
-        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+        write_audio_state_unlocked(&state_path, &new_state).map_err(|e| {
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
@@ -803,11 +812,15 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
     let lock_path = audio_lock_path(&state.config.locks_dir, vm_name);
     let state_path = audio_state_path(&state_dir);
 
-    let current =
-        read_audio_state_locked(&lock_path, &state_path).map_err(|e| TypedError::InternalIo {
-            context: "read audio state".to_owned(),
+    let _state_lock =
+        acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
+            context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
         })?;
+    let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
+        context: "read audio state".to_owned(),
+        detail: e.to_string(),
+    })?;
 
     let grant = if mute {
         AudioGrant::Off
@@ -823,7 +836,7 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
     // boots with the restrictive policy. Enabling access still proves live host
     // enforcement before persisting the less-restrictive state.
     if grant == AudioGrant::Off {
-        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+        write_audio_state_unlocked(&state_path, &new_state).map_err(|e| {
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
@@ -845,7 +858,7 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
     };
 
     if grant == AudioGrant::On {
-        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+        write_audio_state_unlocked(&state_path, &new_state).map_err(|e| {
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),

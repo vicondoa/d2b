@@ -1578,6 +1578,11 @@ pub struct SpawnRunnerResponse {
     /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
+    /// Optional index into the SCM_RIGHTS fd vector for a provider-specific
+    /// console stream. qemu-media uses this for the daemon-owned peer of the
+    /// socketpair whose other end was passed to QEMU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_fd_index: Option<u32>,
 }
 
 /// Wire envelope wrapping a [`BrokerRequest`] with the authenticated
@@ -2584,6 +2589,7 @@ mod tests {
             pid: 4242,
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
+            console_fd_index: None,
         });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");

@@ -9889,6 +9889,15 @@
         "vmId"
       ],
       "properties": {
+        "consoleFdIndex": {
+          "description": "Optional index into the SCM_RIGHTS fd vector for a provider-specific console stream. qemu-media uses this for the daemon-owned peer of the socketpair whose other end was passed to QEMU.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "pid": {
           "description": "Child PID. The daemon validates this against the pidfd it received and against `/proc/<pid>/stat` field 22 (`start_time`).",
           "type": "integer",

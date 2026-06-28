@@ -32,10 +32,8 @@ const SYSTEM_STATE_JSON: &str = r#"{
     "d2bd.service": "inactive",
     "d2b@corp-vm.service": "inactive",
     "microvm@corp-vm.service": "inactive",
-    "microvm-virtiofsd@corp-vm.service": "inactive",
     "d2b@sys-work-net.service": "active",
-    "microvm@sys-work-net.service": "active",
-    "microvm-virtiofsd@sys-work-net.service": "active"
+    "microvm@sys-work-net.service": "active"
   },
   "bridges": {
     "br-work-lan": { "state": "UP", "admin": "up", "expectedCarrier": "NO-CARRIER", "result": "ok" },

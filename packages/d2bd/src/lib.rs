@@ -9819,6 +9819,25 @@ impl VmStartRunner<'_> {
             cleanup_vm_start_registration(self.state, vm, &role_id);
             return Err(error);
         }
+        if matches!(runner_role, RunnerRole::QemuMedia) {
+            if let Some(console_fd_index) = response.console_fd_index {
+                let console_fd = duplicate_received_fd(
+                    received_fds,
+                    console_fd_index,
+                    "duplicate qemu-media console fd",
+                )
+                .map_err(|error| error.message())?;
+                let console_stream: UnixStream = console_fd.into();
+                self.state
+                    .console_sessions
+                    .lock()
+                    .unwrap()
+                    .register_session(
+                        vm.to_owned(),
+                        console_session::create_qemu_session(console_stream),
+                    );
+            }
+        }
         Ok(())
     }
 
@@ -23120,6 +23139,7 @@ mod broker_dispatch_tests {
                     pid: child.child().id() as i32,
                     start_time_ticks: read_child_start_time(child.child()),
                     pidfd_index: 0,
+                    console_fd_index: None,
                 }),
                 &[pidfd.as_raw_fd()],
             )
@@ -23387,6 +23407,7 @@ mod broker_dispatch_tests {
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
+                        console_fd_index: None,
                     }),
                     &[pidfd.as_raw_fd()],
                 )
@@ -24435,6 +24456,7 @@ mod broker_dispatch_tests {
                 pid,
                 start_time_ticks,
                 pidfd_index: 0,
+                console_fd_index: None,
             },
             &[],
         );
