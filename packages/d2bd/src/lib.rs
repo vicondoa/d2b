@@ -20979,6 +20979,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -21012,6 +21015,9 @@ mod broker_dispatch_tests {
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
             )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
