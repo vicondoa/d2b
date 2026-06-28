@@ -118,8 +118,8 @@ impl Drop for OfdLockGuard {
 }
 
 struct AudioStateLock {
-    _file: File,
     _guard: OfdLockGuard,
+    _file: File,
 }
 
 fn acquire_audio_state_lock(
@@ -136,8 +136,8 @@ fn acquire_audio_state_lock(
     let fd = lock_file.as_raw_fd();
     ofd_lock(fd, exclusive).map_err(AudioStateIoError::LockAcquire)?;
     Ok(AudioStateLock {
-        _file: lock_file,
         _guard: OfdLockGuard { fd },
+        _file: lock_file,
     })
 }
 
