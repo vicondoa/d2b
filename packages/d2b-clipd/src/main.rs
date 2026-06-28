@@ -24,7 +24,10 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     if let Some(picker) = &args.picker
         && !picker.is_absolute()
     {
-        return Err(format!("--picker path must be absolute: {}", picker.display()));
+        return Err(format!(
+            "--picker path must be absolute: {}",
+            picker.display()
+        ));
     }
     if !args.bridge_root.is_absolute() {
         return Err(format!(
