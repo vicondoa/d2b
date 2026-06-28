@@ -138,6 +138,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (audio)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ":: :_d2b__subcmd__audio_commands" \

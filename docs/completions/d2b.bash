@@ -634,7 +634,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__audio)
-            opts="-h --help status mic speaker off help"
+            opts="-h --json --help status mic speaker off help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

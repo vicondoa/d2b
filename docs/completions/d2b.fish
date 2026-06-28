@@ -86,6 +86,7 @@ complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c d2b -n "__fish_d2b_using_subcommand console" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -l json -d 'Emit machine-readable JSON output'
 complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "status" -d 'Show current grant state. With no VM, lists every audio-enabled VM'
 complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -f -a "mic" -d 'Grant or revoke microphone access'

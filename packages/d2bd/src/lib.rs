@@ -990,13 +990,13 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
+        console_sessions: Arc::new(Mutex::new(
+            crate::console_session::ConsoleSessionTable::default(),
+        )),
         gateway_display,
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-        console_sessions: Arc::new(Mutex::new(
-            crate::console_session::ConsoleSessionTable::new(),
-        )),
     };
     refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
@@ -16885,13 +16885,13 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         };
         (state, dir)
     }
@@ -19780,13 +19780,13 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         }
     }
 
@@ -20986,9 +20986,6 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         }
     }
 
@@ -21023,9 +21020,6 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         }
     }
 
@@ -23107,13 +23101,13 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -23327,13 +23321,13 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         };
 
         let listener = socket(
@@ -23580,13 +23574,13 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -25469,13 +25463,13 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
-            console_sessions: Arc::new(Mutex::new(
-                crate::console_session::ConsoleSessionTable::new(),
-            )),
         };
 
         // Emit the same event that the timeout handler in
@@ -26361,6 +26355,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -26478,6 +26475,9 @@ mod broker_dispatch_tests {
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
             )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
