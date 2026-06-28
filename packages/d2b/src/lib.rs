@@ -3672,7 +3672,9 @@ fn cmd_console(
                 }
                 if !out.chunk_base64.is_empty() {
                     let bytes =
-                        d2b_core::base64_codec::decode(&out.chunk_base64).unwrap_or_default();
+                        d2b_core::base64_codec::decode(&out.chunk_base64).map_err(|_| {
+                            CliFailure::new(1, "console: daemon returned malformed base64 output")
+                        })?;
                     if let Err(err) = write_stdout_bytes(&bytes) {
                         let _ = console_round_trip(
                             &mut socket,
@@ -3690,7 +3692,7 @@ fn cmd_console(
                     }
                     stdout_offset = out.offset + bytes.len() as u64;
                 }
-                if out.is_eof {
+                if out.is_eof && out.chunk_base64.is_empty() {
                     print_stderr("\r\nVM console closed (EOF).\r\n");
                     return Ok(0);
                 }
@@ -17237,7 +17239,32 @@ mod console_fsm_tests {
                     "console read response",
                 )
                 .expect("encode console read response");
-                send_test_frame(accepted, &read_response)
+                send_test_frame(accepted, &read_response)?;
+
+                let eof_request = recv_test_frame(accepted)?;
+                let eof_value: Value = serde_json::from_slice(&eof_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    eof_value.get("op").and_then(Value::as_str),
+                    Some("readOutput")
+                );
+                let eof_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 11,
+                            chunk_base64: String::new(),
+                            is_eof: true,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console eof response",
+                )
+                .expect("encode console eof response");
+                send_test_frame(accepted, &eof_response)
             })();
             close(accepted).expect("close accepted socket");
             exchange.expect("mock console daemon exchange");
@@ -17287,5 +17314,24 @@ mod console_fsm_tests {
                 "cmd_console must close and exit on {signal}"
             );
         }
+    }
+
+    #[test]
+    fn console_output_decode_fails_closed() {
+        let source = include_str!("lib.rs");
+        let start = source.find("fn cmd_console(").expect("cmd_console present");
+        let body = &source[start
+            ..source[start..]
+                .find("fn console_round_trip(")
+                .expect("console_round_trip follows cmd_console")
+                + start];
+        assert!(
+            body.contains("daemon returned malformed base64 output"),
+            "cmd_console must surface malformed console output explicitly"
+        );
+        assert!(
+            !body.contains("decode(&out.chunk_base64).unwrap_or_default()"),
+            "cmd_console must not turn malformed console output into an empty chunk"
+        );
     }
 }
