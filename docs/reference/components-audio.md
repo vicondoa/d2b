@@ -133,9 +133,8 @@ Per audio-enabled VM:
 - **Lock file** `/run/d2b/locks/audio-<vm>.lock`, mode 0660,
   `root:d2b`. Precreated via `systemd-tmpfiles` (`f` rule) on each
   boot; the `f` type never overwrites an existing file, so OFD lock
-  semantics are preserved across daemon restarts. The current Rust CLI
-  shim returns exit-78 and does not acquire this lock because the
-  daemon-native audio control plane is not yet available.
+  semantics are preserved across daemon restarts. The daemon acquires this
+  lock around `d2b audio` state reads and writes.
 - **`vhost-device-sound`** vendored at
   `pkgs/vhost-device-sound/` because the nixpkgs version has a known
   PipeWire-backend format-negotiation bug. Added to

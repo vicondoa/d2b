@@ -702,17 +702,31 @@ fn dispatch_audio_set_volume(
             detail: e.to_string(),
         })?;
 
+    let old_level = match channel {
+        AudioChannel::Speaker => current.speaker_level,
+        AudioChannel::Microphone => current.mic_gain,
+    };
     let new_state = match channel {
         AudioChannel::Speaker => current.with_speaker_level(level),
         AudioChannel::Microphone => current.with_mic_gain(level),
     };
+    let level_increase = old_level.map(|old| level.get() > old.get()).unwrap_or(true);
 
     // For live PipeWire enforcement, prove the host boundary update before
     // persisting an increased level as applied. Missing live nodes report
     // Unsupported and still allow the offline boot policy to be staged.
+    if !level_increase {
+        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+            TypedError::InternalIo {
+                context: "write audio state".to_owned(),
+                detail: e.to_string(),
+            }
+        })?;
+    }
+
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
         let result = enforce_host_level(state, vm_name, &cap, level, channel);
-        if matches!(result, HostEnforcementResult::Failed) {
+        if level_increase && matches!(result, HostEnforcementResult::Failed) {
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host level enforcement failed; state not updated".to_owned(),
@@ -723,12 +737,14 @@ fn dispatch_audio_set_volume(
         HostEnforcementResult::Unsupported
     };
 
-    write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
-        TypedError::InternalIo {
-            context: "write audio state".to_owned(),
-            detail: e.to_string(),
-        }
-    })?;
+    if level_increase {
+        write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
+            TypedError::InternalIo {
+                context: "write audio state".to_owned(),
+                detail: e.to_string(),
+            }
+        })?;
+    }
 
     let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
         enforce_host_level(state, vm_name, &cap, level, channel)
@@ -1198,5 +1214,22 @@ mod tests {
             AudioSetApplied::HostOnly,
             "qemu-media: offline policy applied → HostOnly; no guest enforcement"
         );
+    }
+
+    #[test]
+    fn level_increase_classifier_treats_missing_old_level_as_increase() {
+        let current = AudioPolicyState::default_v2();
+        let old = current.speaker_level;
+        let next = LevelPercent::new(1).unwrap();
+        assert!(old.map(|old| next.get() > old.get()).unwrap_or(true));
+    }
+
+    #[test]
+    fn level_increase_classifier_distinguishes_decrease() {
+        let current =
+            AudioPolicyState::default_v2().with_speaker_level(LevelPercent::new(80).unwrap());
+        let old = current.speaker_level;
+        let next = LevelPercent::new(40).unwrap();
+        assert!(!old.map(|old| next.get() > old.get()).unwrap_or(true));
     }
 }
