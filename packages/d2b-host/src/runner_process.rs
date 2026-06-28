@@ -178,6 +178,15 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         "wayland_proxy_argv",
         RegeneratorWiring::NotYetWired,
     ),
+    row(
+        ConsoleDrain,
+        // ConsoleDrain is a daemon-internal tokio task for the CH serial
+        // socket reconnect path; it is not broker-spawned in Wave 1.
+        RunnerLifecycleClass::ReadinessOnly,
+        None,
+        "runner_process::console_drain",
+        RegeneratorWiring::NotYetWired,
+    ),
 ];
 
 const fn row(
@@ -217,6 +226,7 @@ pub const fn runner_process_metadata(role: &ProcessRole) -> &'static RunnerProce
         GuestControlHealth => &RUNNER_PROCESS_MATRIX[14],
         Usbip => &RUNNER_PROCESS_MATRIX[15],
         WaylandProxy => &RUNNER_PROCESS_MATRIX[16],
+        ConsoleDrain => &RUNNER_PROCESS_MATRIX[17],
     }
 }
 
@@ -242,6 +252,7 @@ mod tests {
         GuestControlHealth,
         Usbip,
         WaylandProxy,
+        ConsoleDrain,
     ];
 
     #[test]

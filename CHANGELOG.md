@@ -31,6 +31,25 @@ deprecations ship one minor release before removal.
   The docs cover broker-owned qemu chardev posture, console stream QoS,
   OFD audio lock semantics, provider-specific enforcement modes, and
   d2b-wlcontrol badge/control constraints.
+- Console output ring buffer (`d2b-core::console_ring`) with monotonic
+  offset tracking, per-byte drop accounting, and fast-forward detection
+  for slow clients. EOF flag propagation notifies waiters when the VM console
+  closes.
+- `d2b console <vm>` CLI command attaches to the VM console via the daemon,
+  polls output in a 200 ms raw-mode loop, forwards stdin, supports Ctrl-]
+  detach, and exits cleanly on EOF or session expiry.
+- `ConsoleOp` daemon dispatch: `d2bd` handles all console operations
+  (Attach, ReadOutput, WriteStdin, Resize, Wait, Close) via a per-VM
+  `ConsoleSessionTable`. Cloud Hypervisor VMs get a d2bd-internal tokio
+  drainer task that connects to the CH serial socket and reconnects on
+  drop; qemu-media and ACA targets return typed errors directing operators
+  to use the appropriate broker-fd or provider-relay path.
+- `ProcessRole::ConsoleDrain` and `RunnerRole::ConsoleDrain` added to the
+  process role taxonomy for future broker-spawned drain runners (broker-fd
+  path, Wave 2+). Schemas updated accordingly.
+- `QemuMediaArgvInput.console_fd` field: when provided, QEMU emits
+  `-chardev fd,id=con0,fd=N -serial chardev:con0` instead of `-serial none`.
+  Accepts only fds >= 3 (rejects stdin/stdout/stderr).
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

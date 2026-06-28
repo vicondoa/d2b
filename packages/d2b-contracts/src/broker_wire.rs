@@ -1476,6 +1476,11 @@ pub enum RunnerRole {
     /// with the real host compositor socket bound read/write at a
     /// fixed in-jail upstream path.
     WaylandProxy,
+    /// Broker-spawned console drain helper (ADR 0041). Holds the host end
+    /// of the broker-owned console socketpair, drains console output into
+    /// a bounded ring buffer, and exposes it to d2bd over a control
+    /// socket. One per VM with console enabled.
+    ConsoleDrain,
 }
 
 impl RunnerRole {
@@ -1493,6 +1498,7 @@ impl RunnerRole {
             Self::Usbip => "usbip",
             Self::OtelHostBridge => "otel-host-bridge",
             Self::WaylandProxy => "wayland-proxy",
+            Self::ConsoleDrain => "console-drain",
         }
     }
 }
@@ -2524,6 +2530,7 @@ mod tests {
             (RunnerRole::Usbip, "\"usbip\""),
             (RunnerRole::OtelHostBridge, "\"otel-host-bridge\""),
             (RunnerRole::WaylandProxy, "\"wayland-proxy\""),
+            (RunnerRole::ConsoleDrain, "\"console-drain\""),
         ];
         for (role, expected) in pairs {
             assert_eq!(serde_json::to_string(&role).unwrap(), expected);
