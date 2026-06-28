@@ -17,11 +17,20 @@ pub enum RunnerLifecycleClass {
     PreStart,
     /// Host reconciliation step rather than a spawnable runner.
     HostReconcile,
+    /// Long-lived daemon-internal task (e.g. tokio async task). Not
+    /// broker-spawned and carries no argv generator, but runs for the
+    /// lifetime of the associated VM session rather than as a one-shot
+    /// readiness probe.
+    DaemonInternal,
 }
 
 impl RunnerLifecycleClass {
     pub const fn is_spawnable(self) -> bool {
         matches!(self, Self::Spawnable)
+    }
+
+    pub const fn is_long_lived(self) -> bool {
+        matches!(self, Self::Spawnable | Self::DaemonInternal)
     }
 }
 
@@ -180,9 +189,10 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
     ),
     row(
         ConsoleDrain,
-        // ConsoleDrain is a daemon-internal tokio task for the CH serial
-        // socket reconnect path; it is not broker-spawned in Wave 1.
-        RunnerLifecycleClass::ReadinessOnly,
+        // ConsoleDrain is a long-lived daemon-internal tokio task (ring-
+        // buffer drainer) that runs for the lifetime of the VM console
+        // session.  It is NOT a readiness probe and NOT broker-spawned.
+        RunnerLifecycleClass::DaemonInternal,
         None,
         "runner_process::console_drain",
         RegeneratorWiring::NotYetWired,
@@ -294,5 +304,27 @@ mod tests {
         let qemu = runner_process_metadata(&QemuMediaRunner);
         assert_eq!(qemu.argv_generator_module, Some("qemu_media_argv"));
         assert_eq!(qemu.test_coverage_label, "qemu_media_argv");
+    }
+
+    #[test]
+    fn console_drain_is_daemon_internal_not_readiness_only() {
+        let meta = runner_process_metadata(&ConsoleDrain);
+        assert_eq!(
+            meta.lifecycle,
+            RunnerLifecycleClass::DaemonInternal,
+            "ConsoleDrain must be DaemonInternal (long-lived daemon task), not ReadinessOnly"
+        );
+        assert!(
+            meta.lifecycle.is_long_lived(),
+            "ConsoleDrain must be long-lived"
+        );
+        assert!(
+            !meta.spawnable(),
+            "ConsoleDrain is a daemon-internal task, not broker-spawned"
+        );
+        assert!(
+            meta.argv_generator_module.is_none(),
+            "DaemonInternal roles carry no argv generator"
+        );
     }
 }

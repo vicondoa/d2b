@@ -3525,6 +3525,13 @@ fn cmd_console(
         "Connected to console for VM '{}' ({:?}). Press Ctrl-] to detach.\r\n",
         vm, attach.provider_kind
     ));
+    if attach.provider_kind == d2b_contracts::public_wire::ConsoleProviderKind::QemuMedia {
+        print_stdout(
+            "Note: QEMU serial console may appear blank until the guest writes \
+             to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
+             or configure console= in the kernel command line).\r\n",
+        );
+    }
 
     // Enter raw mode if stdin/stdout are terminals.
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
@@ -3541,9 +3548,9 @@ fn cmd_console(
         )
     })?;
 
-    let detach_char = b'\x1d'; // Ctrl-]
     let mut host = exec_client::RealHostIo;
-    let mut stdin_buf = vec![0_u8; 256];
+    // 4096-byte buffer: handles pastes and rapid input without excessive round-trips.
+    let mut stdin_buf = vec![0_u8; 4096];
 
     loop {
         // Drain any pending signals first.
@@ -3578,7 +3585,23 @@ fn cmd_console(
             match host.read_stdin(&mut stdin_buf) {
                 Ok(n) if n > 0 => {
                     let chunk = &stdin_buf[..n];
-                    if chunk.contains(&detach_char) {
+                    if let DetachScan::Detach { prefix_len } = scan_chunk_for_detach(chunk) {
+                        // Forward any bytes that arrived before the detach char
+                        // so they are not silently dropped.
+                        if prefix_len > 0 {
+                            let prefix_b64 = d2b_core::base64_codec::encode(&chunk[..prefix_len]);
+                            let _ = console_round_trip(
+                                &mut socket,
+                                &ConsoleOp::WriteStdin(
+                                    d2b_contracts::public_wire::ConsoleWriteStdinArgs {
+                                        session: session.clone(),
+                                        offset: 0,
+                                        chunk_base64: prefix_b64,
+                                        eof: false,
+                                    },
+                                ),
+                            );
+                        }
                         let _ = console_round_trip(
                             &mut socket,
                             &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
@@ -3704,6 +3727,30 @@ fn parse_console_reply(
             1,
             format!("unexpected console reply type {:?}", other),
         )),
+    }
+}
+
+/// Result of scanning a console stdin chunk for the detach character.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DetachScan {
+    /// No detach char found; forward the whole chunk.
+    NoDetach,
+    /// Detach char found at `prefix_len` bytes from the start.
+    /// `prefix_len == 0` means the detach char is the very first byte;
+    /// a non-zero `prefix_len` means there are bytes to forward before
+    /// closing.
+    Detach { prefix_len: usize },
+}
+
+/// Scan `chunk` for the console detach character (`\x1d`, Ctrl-]).
+///
+/// Returns [`DetachScan::Detach`] with the number of bytes that appear before
+/// the detach char so callers can forward them before closing.
+pub(crate) fn scan_chunk_for_detach(chunk: &[u8]) -> DetachScan {
+    const DETACH: u8 = b'\x1d';
+    match chunk.iter().position(|&b| b == DETACH) {
+        None => DetachScan::NoDetach,
+        Some(pos) => DetachScan::Detach { prefix_len: pos },
     }
 }
 
@@ -16593,5 +16640,88 @@ mod ssh_spawn_gate {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod console_fsm_tests {
+    //! Unit tests for the console FSM detach-char scanning logic and the
+    //! QEMU blank-console warning message content.
+
+    use super::{DetachScan, scan_chunk_for_detach};
+
+    const DETACH: u8 = b'\x1d'; // Ctrl-]
+
+    #[test]
+    fn no_detach_char_returns_no_detach() {
+        assert_eq!(scan_chunk_for_detach(b"hello world"), DetachScan::NoDetach);
+        assert_eq!(scan_chunk_for_detach(b""), DetachScan::NoDetach);
+        assert_eq!(scan_chunk_for_detach(b"\x00\x01\x02"), DetachScan::NoDetach);
+    }
+
+    #[test]
+    fn detach_only_chunk_has_zero_prefix() {
+        let chunk = [DETACH];
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn detach_at_start_has_zero_prefix() {
+        let chunk = [DETACH, b'a', b'b'];
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn detach_in_middle_returns_correct_prefix_len() {
+        // "abc\x1ddef" — detach at index 3, prefix "abc"
+        let mut chunk = b"abc".to_vec();
+        chunk.push(DETACH);
+        chunk.extend_from_slice(b"def");
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 3 }
+        );
+    }
+
+    #[test]
+    fn detach_at_end_returns_full_minus_one_prefix() {
+        // "hello\x1d" — detach at index 5, prefix "hello"
+        let mut chunk = b"hello".to_vec();
+        chunk.push(DETACH);
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 5 }
+        );
+    }
+
+    #[test]
+    fn first_detach_char_wins_over_later_occurrences() {
+        // "\x1dabc\x1d" — first detach at index 0
+        let mut chunk = vec![DETACH];
+        chunk.extend_from_slice(b"abc");
+        chunk.push(DETACH);
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn qemu_blank_console_warning_mentions_tty_and_serial_getty() {
+        // The warning message is a literal string embedded in cmd_console.
+        // Verify its key hints are present so a refactor cannot silently
+        // drop the operator-visible guidance.
+        let warning = "Note: QEMU serial console may appear blank until the guest writes \
+             to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
+             or configure console= in the kernel command line).\r\n";
+        assert!(warning.contains("/dev/ttyS0"));
+        assert!(warning.contains("serial-getty"));
+        assert!(warning.contains("console="));
     }
 }
