@@ -92,6 +92,24 @@ pub const TIMEOUT_ENV: &str = "D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS";
 /// Env var that promotes degraded-mode timeout into a hard failure.
 pub const STRICT_ENV: &str = "D2B_OTEL_BRIDGE_READINESS_STRICT";
 
+/// Test-only global config override. Set by tests that need a deterministic
+/// readiness config without mutating process env vars (which requires unsafe
+/// in Rust 1.81+). In production builds this cell is never initialised.
+#[cfg(test)]
+static TEST_CONFIG_OVERRIDE: std::sync::OnceLock<
+    std::sync::Mutex<Option<ReadinessWaitConfig>>,
+> = std::sync::OnceLock::new();
+
+/// Install a test-only readiness config override.  Pass `None` to clear it.
+/// The override is consulted by [`ReadinessWaitConfig::for_dispatch`] in
+/// `#[cfg(test)]` builds only.
+#[cfg(test)]
+pub fn set_test_readiness_config(cfg: Option<ReadinessWaitConfig>) {
+    let cell = TEST_CONFIG_OVERRIDE
+        .get_or_init(|| std::sync::Mutex::new(None));
+    *cell.lock().expect("test readiness config mutex") = cfg;
+}
+
 /// Pure verdict from [`evaluate_readiness`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
@@ -206,6 +224,25 @@ impl ReadinessWaitConfig {
             std::env::var(TIMEOUT_ENV).ok().as_deref(),
             std::env::var(STRICT_ENV).ok().as_deref(),
         )
+    }
+
+    /// The config to use inside `dispatch_broker_vm_start`.
+    ///
+    /// In production builds this is identical to [`Self::from_env`].
+    /// In `#[cfg(test)]` builds it first checks the
+    /// [`TEST_CONFIG_OVERRIDE`] cell so tests can inject a deterministic
+    /// config without mutating process-global env vars (which requires
+    /// `unsafe` in Rust 1.81+).
+    pub fn for_dispatch() -> Self {
+        #[cfg(test)]
+        if let Some(cell) = TEST_CONFIG_OVERRIDE.get() {
+            if let Ok(guard) = cell.lock() {
+                if let Some(cfg) = guard.clone() {
+                    return cfg;
+                }
+            }
+        }
+        Self::from_env()
     }
 
     /// Build a config from already-resolved raw override strings. The
@@ -542,5 +579,62 @@ mod tests {
         let cfg = ReadinessWaitConfig::from_values(Some("1234"), Some("1"));
         assert_eq!(cfg.timeout, Duration::from_millis(1234));
         assert!(cfg.strict);
+    }
+
+    /// Verify the JSON shape of the typed-error envelope that
+    /// `dispatch_broker_vm_start` inserts as `degraded` in the success
+    /// response when the OtelHostBridge readiness gate times out in
+    /// non-strict mode. This pins the contract between
+    /// `ReadinessWaitOutcome::to_typed_error()` and the JSON structure that
+    /// operators and tooling (e.g. `d2b host doctor`) parse from the
+    /// envelope so the shape can never silently drift.
+    #[test]
+    fn degraded_timeout_to_envelope_value_has_expected_json_shape() {
+        let outcome = ReadinessWaitOutcome::DegradedTimeout {
+            vm: "obs".to_owned(),
+            elapsed_ms: 5_000,
+            reason: "timeout".to_owned(),
+        };
+        let typed_err = outcome
+            .to_typed_error()
+            .expect("DegradedTimeout must produce a typed error");
+        let envelope = typed_err.to_envelope_value();
+
+        assert_eq!(
+            envelope.get("kind").and_then(|v| v.as_str()),
+            Some("otel-host-bridge-readiness-timeout"),
+            "degraded.kind must be the stable otel-host-bridge-readiness-timeout string"
+        );
+        // ErrorEnvelope uses camelCase serialization.
+        assert_eq!(
+            envelope.get("exitCode").and_then(|v| v.as_u64()),
+            Some(65),
+            "degraded.exitCode must be 65"
+        );
+        assert!(
+            envelope.get("message").and_then(|v| v.as_str()).is_some(),
+            "degraded.message must be present"
+        );
+        assert!(
+            envelope.get("remediation").and_then(|v| v.as_str()).is_some(),
+            "degraded.remediation must be present"
+        );
+        // The envelope must NOT contain opaque internal fields like paths or
+        // raw reason strings; it is returned to CLI clients as structured data.
+        assert!(
+            envelope.get("vm").is_none(),
+            "degraded envelope must not expose the vm field directly (use message text instead)"
+        );
+    }
+
+    /// Verify that `ReadinessWaitOutcome::Ready` produces no typed error
+    /// (and therefore no `degraded` field in the success envelope).
+    #[test]
+    fn ready_outcome_produces_no_typed_error() {
+        let outcome = ReadinessWaitOutcome::Ready { elapsed_ms: 120 };
+        assert!(
+            outcome.to_typed_error().is_none(),
+            "Ready outcome must not produce a typed error"
+        );
     }
 }

@@ -31,6 +31,11 @@ deprecations ship one minor release before removal.
   The docs cover broker-owned qemu chardev posture, console stream QoS,
   OFD audio lock semantics, provider-specific enforcement modes, and
   d2b-wlcontrol badge/control constraints.
+- `d2bd` now preserves a `TypedError::OtelHostBridgeReadinessTimeout` typed
+  error as a structured `degraded` field in the `vm start` success JSON
+  envelope when the OtelHostBridge readiness gate times out in non-strict
+  mode. Operators and `d2b host doctor` can detect the degraded condition
+  from the structured response without log parsing.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`
