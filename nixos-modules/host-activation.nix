@@ -778,6 +778,23 @@ in
                 if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
+                    # d2bd performs host-side audio policy enforcement by
+                    # resolving and mutating PipeWire nodes with pw-dump/wpctl.
+                    # Grant only the audio session sockets, never Wayland.
+                    ${activationHelper} setfacl-on-path \
+                      --path "$rdir" \
+                      --acl-spec "u:d2bd:rx" \
+                      --require-kind directory \
+                      --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                      2>/dev/null || true
+                    for sock in pipewire-0 pulse/native; do
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/$sock" \
+                        --acl-spec "u:d2bd:rwx" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                    done
                     if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                       # wlproxy: traversal on dir + rwx on Wayland socket only
                       ${activationHelper} setfacl-on-path \
