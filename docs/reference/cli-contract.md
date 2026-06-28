@@ -954,7 +954,6 @@ command.
 | `1` | Console launch failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console — provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
-| `130` | Console session interrupted with SIGINT. | — |
 
 **Human example**
 

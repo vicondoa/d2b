@@ -45,8 +45,7 @@
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Session ended normally. |
-| `130` | Session interrupted with SIGINT. |
+| `0` | Session ended normally, including operator detach or handled terminal signals. |
 | `1` | Console launch failure (see error envelope for details). |
 | `2` | Unknown VM, unsupported invocation, or graphics VM selected. |
 
