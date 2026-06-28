@@ -34,8 +34,8 @@
    The daemon resolves the target's runtime provider, then attaches
    your terminal to the serial console of `<vm>`.
 
-2. Type `~.` (tilde followed by a period) to detach from the console
-   session and return to your shell. The VM continues running.
+2. Press `Ctrl-]` to detach from the console session and return to your
+   shell. The VM continues running.
 
 3. If the command exits with code `2`, verify that `<vm>` is a
    declared VM name and that it is not a graphics VM. Run

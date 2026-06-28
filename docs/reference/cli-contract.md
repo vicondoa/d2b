@@ -960,9 +960,12 @@ command.
 
 ```text
 $ d2b console corp-vm
-Connected to corp-vm serial console.
-Use ~. to detach.
+Connected to console for VM 'corp-vm' (LocalHypervisor). Press Ctrl-] to detach.
 ```
+
+Console control messages are emitted on stderr. Stdout is reserved for the raw
+guest UART byte stream so `d2b console <vm> > console.log` captures only guest
+output.
 
 **Status**
 

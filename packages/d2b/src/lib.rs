@@ -3545,8 +3545,10 @@ fn cmd_console(
         );
     }
 
-    // Enter raw mode if stdin/stdout are terminals.
-    let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    // Enter raw mode when stdin is interactive and at least one operator-facing
+    // stream is a terminal. stdout may be redirected to capture the raw UART.
+    let is_tty =
+        io::stdin().is_terminal() && (io::stdout().is_terminal() || io::stderr().is_terminal());
     let _raw_guard = if is_tty {
         exec_client::FdStateGuard::enter(true, true).ok()
     } else {
@@ -17023,9 +17025,60 @@ mod console_fsm_tests {
     //! Unit tests for the console FSM detach-char scanning logic and the
     //! QEMU blank-console warning message content.
 
-    use super::{DetachScan, scan_chunk_for_detach};
+    use super::{
+        AddressFamily, Context, DetachScan, IpcHelloOk, MAX_FRAME_BYTES, MsgFlags, SockFlag,
+        SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        scan_chunk_for_detach, send, socket,
+    };
+    use d2b_contracts::{Version, public_wire};
+    use nix::{
+        sys::socket::{Backlog, accept4, bind, listen},
+        unistd::close,
+    };
+    use serde_json::Value;
+    use std::{io, os::fd::AsRawFd as _, path::PathBuf, thread};
 
     const DETACH: u8 = b'\x1d'; // Ctrl-]
+
+    fn console_test_socket_path(test_name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "d2b-console-{}-{test_name}.sock",
+            std::process::id()
+        ))
+    }
+
+    fn recv_test_frame(fd: std::os::fd::RawFd) -> io::Result<Vec<u8>> {
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
+        let received = super::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        if received < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short frame from seqpacket socket",
+            ));
+        }
+        let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
+        if expected > MAX_FRAME_BYTES || expected + 4 > received {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed seqpacket frame",
+            ));
+        }
+        Ok(buffer[4..4 + expected].to_vec())
+    }
+
+    fn send_test_frame(fd: std::os::fd::RawFd, payload: &[u8]) -> io::Result<()> {
+        let mut frame = Vec::with_capacity(payload.len() + 4);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        let sent = send(fd, &frame, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        if sent != frame.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short write on seqpacket socket",
+            ));
+        }
+        Ok(())
+    }
 
     #[test]
     fn no_detach_char_returns_no_detach() {
@@ -17088,15 +17141,141 @@ mod console_fsm_tests {
     }
 
     #[test]
-    fn qemu_blank_console_warning_mentions_tty_and_serial_getty() {
-        // The warning message is a literal string embedded in cmd_console.
-        // Verify its key hints are present so a refactor cannot silently
-        // drop the operator-visible guidance.
-        let warning = "Note: QEMU serial console may appear blank until the guest writes \
-             to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
-             or configure console= in the kernel command line).\r\n";
-        assert!(warning.contains("/dev/ttyS0"));
-        assert!(warning.contains("serial-getty"));
-        assert!(warning.contains("console="));
+    fn console_control_messages_go_to_stderr_and_payload_to_stdout() {
+        let socket_path = console_test_socket_path("streams");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let attach_request = recv_test_frame(accepted)?;
+                let attach_value: Value = serde_json::from_slice(&attach_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    attach_value.get("op").and_then(Value::as_str),
+                    Some("attach")
+                );
+                let attach_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Attach(public_wire::ConsoleAttachResult {
+                        session: "console-test".to_owned(),
+                        provider_kind: public_wire::ConsoleProviderKind::QemuMedia,
+                        ring_buffer_start_offset: 0,
+                    }),
+                    "console attach response",
+                )
+                .expect("encode console attach response");
+                send_test_frame(accepted, &attach_response)?;
+
+                let read_request = recv_test_frame(accepted)?;
+                let read_value: Value = serde_json::from_slice(&read_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    read_value.get("op").and_then(Value::as_str),
+                    Some("readOutput")
+                );
+                let read_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 0,
+                            chunk_base64: d2b_core::base64_codec::encode(b"guest uart\n"),
+                            is_eof: false,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console read response",
+                )
+                .expect("encode console read response");
+                send_test_frame(accepted, &read_response)?;
+
+                let eof_request = recv_test_frame(accepted)?;
+                let eof_value: Value = serde_json::from_slice(&eof_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    eof_value.get("op").and_then(Value::as_str),
+                    Some("readOutput")
+                );
+                let eof_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 11,
+                            chunk_base64: String::new(),
+                            is_eof: true,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console eof response",
+                )
+                .expect("encode console eof response");
+                send_test_frame(accepted, &eof_response)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock console daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = super::ConsoleArgs {
+            vm: "media".to_owned(),
+        };
+        let (result, stdout, stderr) =
+            super::with_test_output_capture(|| super::cmd_console(&context, &args, &[]));
+        server.join().expect("join mock console daemon");
+        let _ = std::fs::remove_file(&socket_path);
+
+        assert_eq!(result.expect("console exits cleanly"), 0);
+        assert_eq!(stdout, b"guest uart\n");
+        let stderr = String::from_utf8(stderr).expect("stderr utf8");
+        assert!(stderr.contains("Connected to console for VM 'media'"));
+        assert!(stderr.contains("/dev/ttyS0"));
+        assert!(stderr.contains("serial-getty"));
+        assert!(stderr.contains("VM console closed (EOF)"));
     }
 }
