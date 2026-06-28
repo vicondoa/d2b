@@ -10,6 +10,24 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ConsoleDrain` lifecycle reclassified from `ReadinessOnly` to a new
+  `DaemonInternal` variant in `RunnerLifecycleClass`, correctly representing it
+  as a long-lived daemon-internal tokio task rather than a one-shot probe.
+- `d2b console` dispatch: launcher peers can no longer access another user's VM
+  console session. The per-session owner UID is now tracked at `Attach` time;
+  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
+  peers whose UID does not match the session owner (`AuthzNotAdmin`).
+- QEMU console chardev now uses `-chardev socket,id=con0,fd=N,server=on,wait=off`
+  instead of the generic `-chardev fd` backend for correct socket semantics.
+- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
+  chunk are now forwarded to the VM before closing. Stdin buffer increased from
+  256 to 4096 bytes.
+- `d2b console` prints an operator hint when connected to a qemu-media VM
+  noting that the serial console may appear blank until the guest writes to
+  `/dev/ttyS0`.
+
 ### Changed
 
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
