@@ -18,6 +18,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+            access-tokens = github.com=${{ github.token }}
       - name: Eval with-entra-id example
         run: |
           cd examples/with-entra-id
