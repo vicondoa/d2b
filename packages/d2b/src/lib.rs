@@ -969,6 +969,7 @@ struct MigrateArgs {
 
 #[derive(Debug, Args)]
 struct ConsoleArgs {
+    /// VM name whose foreground serial console should be attached.
     vm: String,
 }
 
@@ -995,6 +996,7 @@ enum AudioCommand {
 
 #[derive(Debug, Args)]
 struct AudioStatusArgs {
+    /// Optional VM name; omitted lists audio status for every audio-enabled VM.
     vm: Option<String>,
 }
 
@@ -1002,17 +1004,21 @@ struct AudioStatusArgs {
 struct AudioToggleArgs {
     #[arg(value_enum)]
     state: AudioGrantState,
+    /// VM name whose audio grant should be changed.
     vm: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum AudioGrantState {
+    /// Enable the selected audio direction.
     On,
+    /// Disable the selected audio direction.
     Off,
 }
 
 #[derive(Debug, Args)]
 struct AudioOffArgs {
+    /// VM name whose microphone and speaker grants should both be disabled.
     vm: String,
 }
 
@@ -9939,7 +9945,7 @@ fn redact_broker_error_for_cli(
         "Broker.Unimplemented" => (
             format!("{op_name} refused: broker operation unimplemented"),
             "The daemon reached the broker, but this build does not implement the requested broker operation.".to_owned(),
-            "broker operation is not implemented in this build; Admin: use the supported fallback path for this wave.".to_owned(),
+            "broker operation is not implemented in this build; Admin: use the supported fallback path for this release.".to_owned(),
         ),
         "unknown-operation" => (
             format!("{op_name} refused: broker rejected unknown operation"),

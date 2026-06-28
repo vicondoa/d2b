@@ -2756,7 +2756,14 @@ fn dispatch_console(
             }
 
             // Attach the client, recording the peer uid for ownership checks.
-            let attach_result = state.console_sessions.lock().unwrap().attach(vm, peer.uid);
+            let attach_result = state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .attach(vm, peer.uid)
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "console: failed to allocate secure session handle".to_owned(),
+                })?;
             match attach_result {
                 Some((handle, kind, start_offset)) => {
                     let result = public_wire::ConsoleAttachResult {
@@ -2780,29 +2787,9 @@ fn dispatch_console(
                 .ok_or(TypedError::ConsoleSessionStale)?;
             drop(table);
 
-            // If wait=true and no data yet, spin once waiting on the ring
-            // notify (bounded by timeout_ms, capped at 30s).
-            let snap = if output.snap.is_none() && args.wait {
-                let notify = Arc::clone(&output.notify);
-                let timeout_ms = args.timeout_ms.clamp(0, 30_000);
-                let deadline = std::time::Duration::from_millis(if timeout_ms == 0 {
-                    2_000
-                } else {
-                    timeout_ms
-                });
-                // Block the thread briefly (dispatch is already on a worker).
-                let _ = block_on_future(tokio::time::timeout(deadline, notify.notified()));
-                // Re-read after wait.
-                state
-                    .console_sessions
-                    .lock()
-                    .unwrap()
-                    .read_output(&args.session, args.offset, args.max_len)
-                    .ok_or(TypedError::ConsoleSessionStale)?
-                    .snap
-            } else {
-                output.snap
-            };
+            // Do not long-poll while holding the public socket connection
+            // permit; clients retry with the returned cursor instead.
+            let snap = output.snap;
 
             let stream = TerminalStream::Stdout;
             let result = build_read_output_result(&args.session, stream, snap);
@@ -2859,30 +2846,13 @@ fn dispatch_console(
                 let table = state.console_sessions.lock().unwrap();
                 check_console_ownership(&table, &args.session, peer.uid, is_admin, "wait")?;
             }
-            let timeout_ms = args.timeout_ms.clamp(0, 60_000);
-            let deadline =
-                std::time::Duration::from_millis(if timeout_ms == 0 { 60_000 } else { timeout_ms });
-            let notify = state
+            let exited = state
                 .console_sessions
                 .lock()
                 .unwrap()
-                .ring_notify(&args.session)
+                .read_output(&args.session, 0, 0)
+                .map(|o| o.snap.map(|s| s.is_eof).unwrap_or(false))
                 .ok_or(TypedError::ConsoleSessionStale)?;
-            let exited = loop {
-                let is_eof = state
-                    .console_sessions
-                    .lock()
-                    .unwrap()
-                    .read_output(&args.session, 0, 0)
-                    .map(|o| o.snap.map(|s| s.is_eof).unwrap_or(false))
-                    .unwrap_or(false);
-                if is_eof {
-                    break true;
-                }
-                if block_on_future(tokio::time::timeout(deadline, notify.notified())).is_err() {
-                    break false;
-                }
-            };
             ConsoleOpResponse::Wait(ConsoleWaitResult {
                 session: args.session,
                 exited,
@@ -2940,9 +2910,8 @@ fn resolve_console_provider_kind(
 /// Create a console session for `vm` using the resolved provider.
 ///
 /// For Cloud Hypervisor, connects to the `--serial socket=<path>` endpoint.
-/// For qemu-media, requires a pre-provisioned socketpair fd (not yet wired
-/// through the broker in this wave; returns ConsoleNotRunning until the
-/// broker-fd path is implemented).
+/// For qemu-media, requires a pre-provisioned socketpair fd from the broker;
+/// returns ConsoleNotRunning if no live fd is available.
 fn create_console_session_for_vm(
     _state: &ServerState,
     vm: &str,
@@ -2958,10 +2927,9 @@ fn create_console_session_for_vm(
         }
         public_wire::ConsoleProviderKind::QemuMedia => {
             // qemu-media console requires the broker to create a
-            // socketpair and pass the host fd to the daemon.  The
-            // broker fd-passing path lands in a subsequent wave; until
-            // then, return ConsoleNotRunning so operators get a clear
-            // remediation rather than a generic not-yet-implemented.
+            // socketpair and pass the host fd to the daemon. Return
+            // ConsoleNotRunning if no live fd is available so operators get
+            // a clear remediation.
             Err(TypedError::ConsoleNotRunning { vm: vm.to_owned() })
         }
         public_wire::ConsoleProviderKind::AcaSandbox => {
@@ -9210,7 +9178,7 @@ fn redact_broker_error_for_launcher(
             "{op_name} refused: USB device is not present in sysfs. Admin: confirm the physical device is connected and recognized by the kernel, then retry."
         ),
         "Broker.Unimplemented" => {
-            "broker operation is not implemented in this build; Admin: use the supported fallback path for this wave.".to_owned()
+            "broker operation is not implemented in this build; Admin: use the supported fallback path for this release.".to_owned()
         }
         "unknown-operation" => {
             "broker rejected an unknown operation; Admin: verify daemon and broker versions match.".to_owned()
@@ -14034,6 +14002,11 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         summary.push_str(&usb_summary);
     }
     summary.push_str(&format!(" ({})", drained_roles.join(", ")));
+    state
+        .console_sessions
+        .lock()
+        .unwrap()
+        .remove_session(&request.vm);
     Ok(applied_response(VERB, summary))
 }
 
@@ -25963,6 +25936,14 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    fn audio_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // Audio operations mutate host and guest audio policy, so launchers
+        // must be denied before any state file or guest-control access.
+        assert!(verb_requires_admin("audio"));
+    }
+
+    #[test]
     fn shell_guest_responses_map_to_public_dtos() {
         let mut attach = pb::ShellAttachResponse::new();
         attach.session_id = Some("shell-1".to_owned());
@@ -26814,7 +26795,7 @@ mod console_dispatch_ownership_tests {
     fn launcher_can_access_own_session() {
         let mut table = ConsoleSessionTable::new();
         table.register_session("vm-x".into(), make_session());
-        let (handle, _, _) = table.attach("vm-x", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
         assert!(check_ownership(&table, handle.as_str(), 1000, false, "readOutput").is_ok());
         assert!(check_ownership(&table, handle.as_str(), 1000, false, "writeStdin").is_ok());
         assert!(check_ownership(&table, handle.as_str(), 1000, false, "close").is_ok());
@@ -26824,7 +26805,7 @@ mod console_dispatch_ownership_tests {
     fn launcher_is_denied_another_launchers_session() {
         let mut table = ConsoleSessionTable::new();
         table.register_session("vm-x".into(), make_session());
-        let (handle, _, _) = table.attach("vm-x", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
         let result = check_ownership(&table, handle.as_str(), 1001, false, "readOutput");
         assert!(
             matches!(result, Err(TypedError::AuthzNotAdmin { .. })),
@@ -26841,7 +26822,7 @@ mod console_dispatch_ownership_tests {
     fn admin_can_access_any_session() {
         let mut table = ConsoleSessionTable::new();
         table.register_session("vm-x".into(), make_session());
-        let (handle, _, _) = table.attach("vm-x", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
         // Admin (uid=9999, different from session owner 1000) is always allowed.
         assert!(check_ownership(&table, handle.as_str(), 9999, true, "readOutput").is_ok());
         assert!(check_ownership(&table, handle.as_str(), 9999, true, "writeStdin").is_ok());

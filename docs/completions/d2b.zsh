@@ -133,7 +133,7 @@ esac
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
-':vm:_default' \
+':vm -- VM name whose foreground serial console should be attached:_default' \
 && ret=0
 ;;
 (audio)
@@ -155,30 +155,32 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
-'::vm:_default' \
+'::vm -- Optional VM name; omitted lists audio status for every audio-enabled VM:_default' \
 && ret=0
 ;;
 (mic)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-':state:(on off)' \
-':vm:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':state:((on\:"Enable the selected audio direction"
+off\:"Disable the selected audio direction"))' \
+':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (speaker)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-':state:(on off)' \
-':vm:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':state:((on\:"Enable the selected audio direction"
+off\:"Disable the selected audio direction"))' \
+':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (off)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
-':vm:_default' \
+':vm -- VM name whose microphone and speaker grants should both be disabled:_default' \
 && ret=0
 ;;
 (help)

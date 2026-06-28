@@ -321,11 +321,7 @@ impl GuestControlProbe for RealGuestControlProbe {
         params: &ProbeParams,
         attempt_timeout: Duration,
     ) -> Result<GuestAudioStatus, GuestAudioSetError> {
-        run_audio_status_on_dedicated_thread(
-            params.clone(),
-            self.broker_socket_path.clone(),
-            attempt_timeout,
-        )
+        run_audio_status_once(params, &self.broker_socket_path, attempt_timeout)
     }
 
     fn audio_set(

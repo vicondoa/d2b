@@ -3,8 +3,7 @@
 **Diataxis category:** how-to.
 
 > **Status:** The `d2b console` and `d2b audio` CLI verbs are
-> daemon-native surfaces. This guide documents the operator workflow and
-> provider-specific behavior.
+> daemon-native surfaces. This guide documents the operator workflow.
 
 ---
 
@@ -14,7 +13,7 @@
 - For `d2b audio` commands, the target VM must have
   `d2b.vms.<vm>.audio.enable = true` in its NixOS configuration.
   Confirm with `d2b vm status <vm>` — the audio field appears in the
-  capability summary once the backend ships.
+  capability summary for audio-enabled VMs.
 - For `d2b console` on an ACA sandbox, the sandbox must be running a
   guestd-compatible in-sandbox agent. If it is absent, the daemon
   returns a typed `provider-misconfigured` error with remediation
@@ -50,20 +49,6 @@
 | `130` | Session interrupted with SIGINT. |
 | `1` | Console launch failure (see error envelope for details). |
 | `2` | Unknown VM, unsupported invocation, or graphics VM selected. |
-
-**Provider behavior:**
-
-- *Cloud Hypervisor NixOS VMs* — the daemon connects through the
-  broker-owned serial backend. A persistent drainer maintains a bounded
-  ring buffer so the guest is never blocked when no operator is
-  attached. You may see buffered output from before you attached.
-- *qemu-media VMs* — the daemon uses a broker-owned fd-backed chardev.
-  The ring-buffer drainer contract is identical to Cloud Hypervisor.
-- *ACA sandboxes* — the console attaches over the guestd-compatible
-  provider transport. Missing guestd is a `provider-misconfigured`
-  error, not a degraded-mode connection.
-
----
 
 ## Check audio state for a VM
 
@@ -123,17 +108,6 @@
 3. Confirm with `d2b audio status <vm>` and verify `mic: on` or
    `mic: off` as expected.
 
-**Provider behavior:**
-
-- *Cloud Hypervisor NixOS* — host-side PipeWire enforcement plus
-  guestd guest enforcement. `off` is fail-closed: the host boundary is
-  sealed even if guestd is unresponsive; the response carries a
-  degraded result for the guest side.
-- *qemu-media* — host/qemu subset only; `enforcement: unsupported` is
-  reported for guest-side enforcement capability while host-side controls
-  remain available when declared.
-- *ACA sandbox* — remote guestd policy only; no local host mutations.
-
 Volume and microphone gain values are bounded to `0..=100` at the wire
 boundary; values outside this range are rejected before reaching the
 daemon.
@@ -156,8 +130,7 @@ daemon.
 
 3. Confirm with `d2b audio status <vm>`.
 
-Provider behavior and fail-closed semantics are the same as for
-`audio mic`.
+Follow the same status check used for `audio mic`.
 
 ---
 

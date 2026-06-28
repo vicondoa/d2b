@@ -1331,7 +1331,7 @@ pub struct UsbipStatusEntry {
     pub bus_id: GuestUsbipBusId,
 }
 
-// ── Audio RPC types (ADR 0041 Wave 2) ────────────────────────────────────────
+// ── Audio RPC types (ADR 0041) ───────────────────────────────────────────────
 
 /// Current state of one audio channel as seen by the guest PipeWire session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

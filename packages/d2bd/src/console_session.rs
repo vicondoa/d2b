@@ -98,11 +98,11 @@ impl ConsoleSession {
 pub struct ConsoleClientHandle(pub String);
 
 impl ConsoleClientHandle {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, getrandom::Error> {
         let mut raw = [0u8; 16];
-        getrandom::getrandom(&mut raw).unwrap_or(());
+        getrandom::getrandom(&mut raw)?;
         let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-        Self(format!("console-{hex}"))
+        Ok(Self(format!("console-{hex}")))
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -111,7 +111,7 @@ impl ConsoleClientHandle {
 
 impl Default for ConsoleClientHandle {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("console handle entropy unavailable")
     }
 }
 
@@ -168,6 +168,27 @@ impl ConsoleSessionTable {
         self.sessions.insert(vm, session);
     }
 
+    /// Remove a VM console session and abort its long-lived drainer task.
+    pub fn remove_session(&mut self, vm: &str) -> bool {
+        let Some(old) = self.sessions.remove(vm) else {
+            return false;
+        };
+        if let Some(task) = old.drainer {
+            task.abort();
+        }
+        let to_remove: Vec<ConsoleClientHandle> = self
+            .clients
+            .iter()
+            .filter(|(_, v)| v.as_str() == vm)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for handle in to_remove {
+            self.clients.remove(&handle);
+            self.client_uids.remove(&handle);
+        }
+        true
+    }
+
     /// Attach a new client to the VM's session, returning an opaque handle
     /// and the ring-buffer start offset at attach time.
     ///
@@ -179,19 +200,21 @@ impl ConsoleSessionTable {
         &mut self,
         vm: &str,
         peer_uid: u32,
-    ) -> Option<(ConsoleClientHandle, ConsoleProviderKind, u64)> {
+    ) -> Result<Option<(ConsoleClientHandle, ConsoleProviderKind, u64)>, getrandom::Error> {
         if self.clients.len() >= MAX_SESSIONS {
-            return None;
+            return Ok(None);
         }
-        let session = self.sessions.get(vm)?;
+        let Some(session) = self.sessions.get(vm) else {
+            return Ok(None);
+        };
         let start_offset = {
             let guard = session.ring.lock().unwrap();
             guard.ring.base_offset()
         };
-        let handle = ConsoleClientHandle::new();
+        let handle = ConsoleClientHandle::new()?;
         self.clients.insert(handle.clone(), vm.to_owned());
         self.client_uids.insert(handle.clone(), peer_uid);
-        Some((handle, session.provider_kind, start_offset))
+        Ok(Some((handle, session.provider_kind, start_offset)))
     }
 
     /// Return the owner UID for a client handle, or `None` if the handle is
@@ -491,7 +514,7 @@ mod tests {
             "vm-a".into(),
             make_session(ConsoleProviderKind::LocalHypervisor),
         );
-        let (handle, kind, offset) = table.attach("vm-a", 1000).unwrap();
+        let (handle, kind, offset) = table.attach("vm-a", 1000).unwrap().unwrap();
         assert!(!handle.as_str().is_empty());
         assert_eq!(kind, ConsoleProviderKind::LocalHypervisor);
         assert_eq!(offset, 0);
@@ -501,19 +524,31 @@ mod tests {
     #[test]
     fn attach_unknown_vm_returns_none() {
         let mut table = ConsoleSessionTable::new();
-        assert!(table.attach("no-such-vm", 1000).is_none());
+        assert!(table.attach("no-such-vm", 1000).unwrap().is_none());
     }
 
     #[test]
     fn close_removes_client() {
         let mut table = ConsoleSessionTable::new();
         table.register_session("vm-b".into(), make_session(ConsoleProviderKind::QemuMedia));
-        let (handle, _, _) = table.attach("vm-b", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-b", 1000).unwrap().unwrap();
         assert!(table.close(handle.as_str()));
         // closing again is idempotent
         assert!(!table.close(handle.as_str()));
         // uid is also cleared on close
         assert_eq!(table.client_owner_uid(handle.as_str()), None);
+    }
+
+    #[test]
+    fn remove_session_removes_clients() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-b".into(), make_session(ConsoleProviderKind::QemuMedia));
+        let (handle, _, _) = table.attach("vm-b", 1000).unwrap().unwrap();
+        assert!(table.remove_session("vm-b"));
+        assert!(!table.has_session("vm-b"));
+        assert!(table.read_output(handle.as_str(), 0, 64).is_none());
+        assert_eq!(table.client_owner_uid(handle.as_str()), None);
+        assert!(!table.remove_session("vm-b"));
     }
 
     #[test]
@@ -531,7 +566,7 @@ mod tests {
             None,
         );
         table.register_session("vm-c".into(), session);
-        let (handle, _, _) = table.attach("vm-c", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-c", 1000).unwrap().unwrap();
         let out = table.read_output(handle.as_str(), 0, 64).unwrap();
         let snap = out.snap.unwrap();
         assert_eq!(snap.data, b"hello console");
@@ -550,7 +585,7 @@ mod tests {
             "vm-d".into(),
             make_session(ConsoleProviderKind::LocalHypervisor),
         );
-        let (handle, _, _) = table.attach("vm-d", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-d", 1000).unwrap().unwrap();
         // Replace with a fresh session.
         table.register_session("vm-d".into(), make_session(ConsoleProviderKind::QemuMedia));
         // Old handle should be gone.
@@ -570,7 +605,7 @@ mod tests {
             None,
         );
         table.register_session("vm-e".into(), session);
-        let (handle, _, _) = table.attach("vm-e", 1000).unwrap();
+        let (handle, _, _) = table.attach("vm-e", 1000).unwrap().unwrap();
 
         // Fill well past ring capacity to force drops.
         {
@@ -598,8 +633,8 @@ mod tests {
             "vm-f".into(),
             make_session(ConsoleProviderKind::LocalHypervisor),
         );
-        let (h1, _, _) = table.attach("vm-f", 1000).unwrap();
-        let (h2, _, _) = table.attach("vm-f", 1001).unwrap();
+        let (h1, _, _) = table.attach("vm-f", 1000).unwrap().unwrap();
+        let (h2, _, _) = table.attach("vm-f", 1001).unwrap().unwrap();
         assert_eq!(table.client_owner_uid(h1.as_str()), Some(1000));
         assert_eq!(table.client_owner_uid(h2.as_str()), Some(1001));
         // Unknown handle returns None.

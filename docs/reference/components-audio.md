@@ -166,17 +166,14 @@ CLI (`d2b audio` in the Rust CLI; there is no bash helper):
 
 ## Lifecycle
 
-`d2b-<vm>-snd.service` carries `restartIfChanged = false`
-(matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
-A `nixos-rebuild switch` updates the unit file but does NOT cycle
-the running `vhost-user-sound` sidecar — vhost-user-sound's socket
-connection to cloud-hypervisor cannot survive a restart, and
-killing this sidecar mid-VM produces silent speakers and mic
-stuck in whatever state it was in. After a rebuild, `d2b
-list` flags the VM with `[pending restart]` if its `current`
-closure has drifted from `booted`; apply with `d2b vm restart
-<vm> --apply` (clean down+up cycles the audio sidecar and CH together so
-the socket gets re-established). See
+The audio runner is part of the daemon-supervised VM DAG. A
+`nixos-rebuild switch` updates the runner intent but does not cycle the
+running `vhost-user-sound` sidecar in place — vhost-user-sound's socket
+connection to cloud-hypervisor cannot survive a restart, and killing the
+sidecar mid-VM produces silent speakers and mic state drift. After a rebuild,
+`d2b list` flags the VM with `[pending restart]` if its `current` closure has
+drifted from `booted`; apply with `d2b vm restart <vm> --apply` (clean down+up
+cycles the audio sidecar and CH together so the socket gets re-established). See
 [`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
 ## Guest-side resources created
@@ -188,12 +185,10 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
   invoked by microvm.nix's runner at VM start. Reads
   `audio-state.json`; if both directions are off, emits nothing
   (no virtio-snd device at all). Otherwise:
-  1. `systemctl reset-failed d2b-<vm>-snd.service` (tolerant).
-  2. `systemctl start d2b-<vm>-snd.service` (tolerant).
-  3. Polls for `/run/d2b/vms/<vm>/snd.sock` up to 5 s.
-  4. Prints `--generic-vhost-user socket=...,virtio_id=25,
-     queue_sizes=[64,64,64,64]`. virtio_id 25 = "sound" per the
-     virtio spec; queue_sizes is a 4-element list matching
+  1. Polls for `/run/d2b/vms/<vm>/snd.sock` up to 5 s.
+  2. Prints `--generic-vhost-user socket=...,virtio_id=25,
+    queue_sizes=[64,64,64,64]`. virtio_id 25 = "sound" per the
+    virtio spec; queue_sizes is a 4-element list matching
      vhost-device-sound's ctrl + event + tx + rx queues.
 - `boot.kernelModules = [ "snd_virtio" ]`.
 - `services.pulseaudio.enable = lib.mkForce false`.
@@ -231,8 +226,8 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
 
 ## Hardening notes
 
-`d2b-<vm>-snd.service` is the security baseline for
-sidecar-as-system-service. Compared to the GPU sidecar template:
+The broker-spawned audio runner profile is the security baseline for the
+sidecar. Compared to the GPU sidecar profile:
 
 - `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
   `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables/Modules`,

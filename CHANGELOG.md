@@ -10,23 +10,6 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
-### Fixed
-
-- The console drain path is now treated as a long-lived daemon-internal tokio
-  task rather than a broker-spawned runner or one-shot readiness probe.
-- `d2b console` dispatch: launcher peers can no longer access another user's VM
-  console session. The per-session owner UID is now tracked at `Attach` time;
-  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
-  peers whose UID does not match the session owner (`AuthzNotAdmin`).
-- QEMU console chardev now uses `-chardev socket,id=con0,fd=N,server=on,wait=off`
-  instead of the generic `-chardev fd` backend for correct socket semantics.
-- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
-  chunk are now forwarded to the VM before closing. Stdin buffer increased from
-  256 to 4096 bytes.
-- `d2b console` prints an operator hint when connected to a qemu-media VM
-  noting that the serial console may appear blank until the guest writes to
-  `/dev/ttyS0`.
-
 ### Changed
 
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
@@ -62,8 +45,8 @@ deprecations ship one minor release before removal.
   drop; qemu-media and ACA targets return typed errors directing operators
   to use the appropriate broker-fd or provider-relay path.
 - `QemuMediaArgvInput.console_fd` field: when provided, QEMU emits
-  `-chardev socket,id=con0,fd=N,server=on,wait=off -serial chardev:con0`
-  instead of `-serial none`.
+  `-chardev socket,id=con0,fd=N -serial chardev:con0` instead of
+  `-serial none`.
   Accepts only fds >= 3 (rejects stdin/stdout/stderr).
 - `d2bd` now dispatches `AudioOp` (status, set-volume, mute/off) for all
   provider types. Cloud Hypervisor NixOS VMs use OFD-locked atomic
@@ -121,6 +104,20 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- The console drain path is now treated as a long-lived daemon-internal tokio
+  task rather than a broker-spawned runner or one-shot readiness probe.
+- `d2b console` dispatch: launcher peers can no longer access another user's VM
+  console session. The per-session owner UID is now tracked at `Attach` time;
+  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
+  peers whose UID does not match the session owner (`AuthzNotAdmin`).
+- QEMU console chardev now uses `-chardev socket,id=con0,fd=N` instead of the
+  generic `-chardev fd` backend for correct socketpair semantics.
+- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
+  chunk are now forwarded to the VM before closing. Stdin buffer increased from
+  256 to 4096 bytes.
+- `d2b console` prints an operator hint when connected to a qemu-media VM
+  noting that the serial console may appear blank until the guest writes to
+  `/dev/ttyS0`.
 - `d2bd` audio dispatch now calls guestd `AudioSet` RPCs for Cloud Hypervisor
   NixOS VMs instead of statically defaulting to `HostOnly`. `combined_audio_applied`
   returns `HostAndGuest` when both host and guest succeed, `HostOnly` when only
@@ -132,8 +129,9 @@ deprecations ship one minor release before removal.
   WirePlumber locates the correct per-user socket. In d2bd the host PipeWire uid
   is derived from `metadata(pipewire_runtime_dir).uid()` and passed via
   `CommandExt::uid()` without shell string construction.
-- `wpctl` subprocess failures in both guestd and d2bd now capture up to 256 bytes
-  of sanitized stderr (ASCII-printable only) and log them for operator diagnostics.
+- `wpctl` subprocess failures in guestd now capture bounded sanitized stderr for
+  operator diagnostics; d2bd host-side failures log only static messages so
+  PipeWire node identifiers, paths, and volume values do not leak.
 - OFD lock unlock now uses `F_OFD_SETLK` (non-blocking release) instead of the
   incorrect `F_OFD_SETLKW` (blocking wait), which is semantically wrong for a lock
   release path.
@@ -144,7 +142,7 @@ deprecations ship one minor release before removal.
   and `off` subcommands send typed `AudioOp` requests to the daemon public socket
   and render results as human text or `--json`. `d2b audio status --json` emits
   `AudioStatusResult` JSON for d2b-wlcontrol consumers.
-
+- Static USBIP declarations now reconcile on strict VM start after a host reboot
   even when volatile `/run/d2b/locks/usbip/*` claim files are gone. The
   daemon replays declared per-VM bind intents through the existing broker policy
   and OFD-lock path, while VM stop cleanup still touches only same-owner

@@ -145,6 +145,7 @@ pub(crate) fn verb_requires_admin(verb: &str) -> bool {
             | "readGuestConfig"
             | "exec"
             | "shell"
+            | "audio"
     )
 }
 

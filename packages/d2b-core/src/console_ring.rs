@@ -129,22 +129,47 @@ impl RingBuffer {
     /// offset (which may be > `offset` if bytes were dropped), and the
     /// current `base_offset` so the caller can detect future gaps.
     ///
-    /// Returns `None` when `offset >= total_written` (no data available
-    /// at or after `offset`).
+    /// Returns `None` when `offset >= total_written` and the stream has not
+    /// reached EOF. Once EOF is set, an empty [`RingReadResult`] is returned so
+    /// clients can stop polling cleanly after consuming the final byte.
     pub fn read_at(&self, offset: u64, max_len: u64) -> Option<RingReadResult> {
         if self.is_empty() {
+            if self.is_eof {
+                return Some(RingReadResult {
+                    actual_offset: self.total_written,
+                    data: Vec::new(),
+                    base_offset: self.base_offset,
+                    dropped_bytes: self.dropped_bytes(),
+                    is_eof: true,
+                });
+            }
             return None;
         }
         // Clamp requested offset to what is still available.
         let actual_offset = offset.max(self.base_offset);
         if actual_offset >= self.total_written {
+            if self.is_eof {
+                return Some(RingReadResult {
+                    actual_offset: self.total_written,
+                    data: Vec::new(),
+                    base_offset: self.base_offset,
+                    dropped_bytes: self.dropped_bytes(),
+                    is_eof: true,
+                });
+            }
             return None;
         }
         // How many bytes are stored after `actual_offset`.
         let available = (self.total_written - actual_offset) as usize;
         let read_len = (available as u64).min(max_len) as usize;
         if read_len == 0 {
-            return None;
+            return Some(RingReadResult {
+                actual_offset,
+                data: Vec::new(),
+                base_offset: self.base_offset,
+                dropped_bytes: self.dropped_bytes(),
+                is_eof: self.is_eof,
+            });
         }
         // Index of `actual_offset` byte inside the ring.
         let start_in_ring = (self.total_written - self.len as u64 - self.base_offset) as usize
@@ -282,6 +307,27 @@ mod tests {
         r.push_bytes(b"hello");
         assert!(r.read_at(5, 64).is_none()); // exactly at total_written
         assert!(r.read_at(100, 64).is_none());
+    }
+
+    #[test]
+    fn eof_at_end_returns_empty_result() {
+        let mut r = ring(64);
+        r.push_bytes(b"hello");
+        r.is_eof = true;
+        let result = r.read_at(5, 64).unwrap();
+        assert_eq!(result.data, b"");
+        assert_eq!(result.actual_offset, 5);
+        assert!(result.is_eof);
+    }
+
+    #[test]
+    fn eof_empty_ring_returns_empty_result() {
+        let mut r = ring(64);
+        r.is_eof = true;
+        let result = r.read_at(0, 64).unwrap();
+        assert_eq!(result.data, b"");
+        assert_eq!(result.actual_offset, 0);
+        assert!(result.is_eof);
     }
 
     #[test]

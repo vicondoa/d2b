@@ -1,16 +1,16 @@
 # Host-side wiring for d2b VM audio support. Imported once at the
 # top level via modules/d2b/default.nix. Materialises
 #
-#   - A per-VM SYSTEM service `d2b-<vm>-snd.service` that runs
-#     vhost-device-sound as the per-VM d2b-<vm>-snd system user.
-#     Socket at /run/d2b/vms/<vm>/snd.sock, accessible to
-#     d2b-<vm>-gpu (cloud-hypervisor) via ACL on ExecStartPost.
+#   - A daemon-supervised per-VM audio runner that runs vhost-device-sound
+#     as the per-VM d2b-<vm>-snd system user. Socket at
+#     /run/d2b/vms/<vm>/snd.sock, accessible to the hypervisor runner via
+#     broker-managed ACLs.
 #
 #
 #   - An eval-time assertion that audio.enable = true requires
 #     autostart = false. autostart VMs are managed by the `microvm@`
-#     system service which doesn't start d2b-<vm>-gpu.service;
-#     there's no CH to connect to the audio socket.
+#     legacy lifecycle path, which does not run the daemon DAG that starts the
+#     audio runner before the hypervisor.
 #
 #   - `systemd.tmpfiles` rules that create
 #     /var/lib/d2b/vms/<vm>/state/audio-state.json for every VM with
@@ -85,10 +85,9 @@ in
   config = lib.mkMerge [
     # ---------------------------------------------------------------
     # Assertion: audio VMs must be interactively launched (not
-    # autostart). autostart VMs run via `microvm@<vm>.service` which
-    # doesn't start d2b-<vm>-gpu.service — there's no CH to
-    # connect to the audio socket. (: sidecar now runs as system
-    # service d2b-<vm>-snd, not in a host user's manager.)
+    # autostart). autostart VMs bypass the daemon DAG that starts the
+    # audio runner before the hypervisor, so CH cannot connect to the
+    # audio socket.
     # ---------------------------------------------------------------
     {
       assertions =
@@ -98,10 +97,10 @@ in
             message = ''
               d2b.vms.${name}: audio.enable = true is incompatible
               with autostart = true. The audio sidecar (d2b-${name}-snd)
-              is started on demand by `d2b up ${name}`, which also
-              starts d2b-${name}-gpu (CH + crosvm-gpu). With
-              autostart = true the microvm@ system service would boot
-              the VM without a running d2b-<vm>-gpu service — the
+              is started on demand by `d2b up ${name}` before the
+              hypervisor runner. With autostart = true the legacy
+              microvm@ system service would boot the VM without a
+              daemon-supervised audio runner — the
               vhost-device-sound socket wouldn't be ready and CH would
               fail to attach a virtio-snd device. Set autostart = false
               and launch interactively, or set audio.enable = false.
@@ -111,9 +110,7 @@ in
     }
 
     # ---------------------------------------------------------------
-    # the per-VM
-    # `d2b-<vm>-snd.service` system service template was deleted.
-    # The vhost-user-sound sidecar now runs as a broker-spawned runner
+    # The vhost-user-sound sidecar runs as a broker-spawned runner
     # via `SpawnRunner{role: Audio, vm_id: <vm>}` per the  Audio
     # role matrix in `docs/reference/privileges.md`. The PipeWire
     # client rules, system users, tmpfiles, and the host

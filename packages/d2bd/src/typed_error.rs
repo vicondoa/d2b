@@ -653,7 +653,7 @@ impl TypedError {
             Self::DaemonBusy => "daemon-busy",
             Self::ConsoleVmNotFound { .. } => "console-vm-not-found",
             Self::ConsoleNotRunning { .. } => "console-vm-not-running",
-            Self::ConsoleProviderMisconfigured { .. } => "console-provider-misconfigured",
+            Self::ConsoleProviderMisconfigured { .. } => "provider-misconfigured",
             Self::ConsoleSessionStale => "console-session-stale",
             Self::ConsoleSessionTableFull { .. } => "console-session-table-full",
         }
@@ -714,7 +714,7 @@ impl TypedError {
             Self::DaemonBusy => 75,
             Self::ConsoleVmNotFound { .. } => 2,
             Self::ConsoleNotRunning { .. } => 3,
-            Self::ConsoleProviderMisconfigured { .. } => 78,
+            Self::ConsoleProviderMisconfigured { .. } => 80,
             Self::ConsoleSessionStale => 75,
             Self::ConsoleSessionTableFull { .. } => 41,
         }

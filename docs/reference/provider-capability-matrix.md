@@ -53,7 +53,7 @@ console fd during a `d2bd` restart so draining is not interrupted.
 qemu-media VMs do not run `guestd`. The daemon accesses the console
 through a broker-owned fd-backed chardev. The broker opens a socketpair
 (or PTY master) and passes the relevant fd to QEMU at launch time using
-the `chardev fd,fd=N` or `chardev socket,fd=N` mechanism rather than a
+the `chardev socket,fd=N` mechanism rather than a
 qemu-created UNIX path socket.
 
 **Why not a qemu-created path socket**: A `chardev socket,path=...`

@@ -707,6 +707,22 @@ fn dispatch_audio_set_volume(
         AudioChannel::Microphone => current.with_mic_gain(level),
     };
 
+    // For live PipeWire enforcement, prove the host boundary update before
+    // persisting the new policy as applied. qemu-media is offline-only, so its
+    // state-file write is the host policy.
+    let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
+        let result = enforce_host_level(state, vm_name, &cap, level, channel);
+        if matches!(result, HostEnforcementResult::Failed) {
+            return Err(TypedError::InternalIo {
+                context: "audio host enforcement".to_owned(),
+                detail: "host level enforcement failed; state not updated".to_owned(),
+            });
+        }
+        result
+    } else {
+        HostEnforcementResult::Unsupported
+    };
+
     write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
         TypedError::InternalIo {
             context: "write audio state".to_owned(),
@@ -714,8 +730,11 @@ fn dispatch_audio_set_volume(
         }
     })?;
 
-    // Host enforcement for running VMs.
-    let host_result = enforce_host_level(state, vm_name, &cap, level, channel);
+    let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
+        enforce_host_level(state, vm_name, &cap, level, channel)
+    } else {
+        host_result
+    };
 
     // Guest enforcement for guestd-capable VMs (CH NixOS). qemu never calls
     // guestd. ACA has no local state file and calls guestd only.
@@ -784,6 +803,22 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
         AudioChannel::Microphone => current.with_mic(grant),
     };
 
+    // For live PipeWire enforcement, prove the host boundary update before
+    // persisting the new policy as applied. qemu-media is offline-only, so its
+    // state-file write is the host policy.
+    let host_result = if cap.host_enforcement == AudioHostEnforcementKind::PipeWireVhostUserSound {
+        let result = enforce_host_grant(state, vm_name, &cap, grant, channel);
+        if matches!(result, HostEnforcementResult::Failed) {
+            return Err(TypedError::InternalIo {
+                context: "audio host enforcement".to_owned(),
+                detail: "host grant enforcement failed; state not updated".to_owned(),
+            });
+        }
+        result
+    } else {
+        HostEnforcementResult::Unsupported
+    };
+
     write_audio_state_locked(&lock_path, &state_path, &new_state).map_err(|e| {
         TypedError::InternalIo {
             context: "write audio state".to_owned(),
@@ -791,8 +826,11 @@ fn dispatch_audio_mute(state: &ServerState, args: AudioMuteArgs) -> Result<Value
         }
     })?;
 
-    // Host enforcement: `off` seals the host boundary even if guestd fails.
-    let host_result = enforce_host_grant(state, vm_name, &cap, grant, channel);
+    let host_result = if cap.host_enforcement == AudioHostEnforcementKind::QemuAudioBackend {
+        enforce_host_grant(state, vm_name, &cap, grant, channel)
+    } else {
+        host_result
+    };
 
     // Guest enforcement for guestd-capable VMs. qemu never calls guestd.
     let guest_result = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {

@@ -659,10 +659,9 @@ let
           Per-VM live audio-grant state file
           (`<stateDir>/state/audio-state.json`). Holds
           `{ "mic": "on"|"off", "speaker": "on"|"off" }`. Read by
-          the host-side `d2b-<vm>-snd.service` sidecar (which
-          re-routes vhost-device-sound's INPUT/OUTPUT links) and
-          written atomically by `d2b audio …` subcommands. Null for
-          providers without the d2b audio sidecar.
+          the daemon-supervised audio runner and written atomically by
+          `d2b audio …` subcommands. Null for providers without the d2b
+          audio sidecar.
         '';
       };
 

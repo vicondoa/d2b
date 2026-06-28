@@ -4104,6 +4104,11 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
             (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
         }
         K::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT => (R::HEALTH_REMEDIATION_RETRY, None),
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE
+        | K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN => (R::HEALTH_REMEDIATION_NONE, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
     error.remediation = EnumOrUnknown::new(remediation);
