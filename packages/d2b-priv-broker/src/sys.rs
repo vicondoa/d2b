@@ -1685,6 +1685,20 @@ pub mod pidfd_sys {
         Ok(unsafe { OwnedFd::from_raw_fd(ret as RawFd) })
     }
 
+    /// Duplicate an already-owned fd to a descriptor >= `min_fd`, preserving
+    /// `FD_CLOEXEC`.
+    #[allow(unsafe_code)]
+    fn dup_fd_cloexec_min(fd: RawFd, min_fd: RawFd) -> io::Result<OwnedFd> {
+        // SAFETY: `F_DUPFD_CLOEXEC` duplicates the caller-owned fd and returns a
+        // fresh descriptor this process now owns.
+        let ret = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, min_fd) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `F_DUPFD_CLOEXEC` returned a fresh owned fd.
+        Ok(unsafe { OwnedFd::from_raw_fd(ret as RawFd) })
+    }
+
     /// `pidfd_open(2)` wrapper used by the fork fallback AND the
     /// reconciliation path.
     #[allow(unsafe_code)]
@@ -2887,12 +2901,30 @@ pub mod pidfd_sys {
         // when the closure is dropped after clone/fork. Parent and child
         // have independent fd tables after fork, so there is no
         // double-close hazard.
-        let pre_opened_raw_fds: Vec<libc::c_int> = isolation
+        let mut pre_opened_raw_fds: Vec<libc::c_int> = isolation
             .pre_opened_device_fds
             .iter()
             .map(|fd| fd.as_raw_fd())
             .collect();
+        let inherited_fd_range_start = RENDER_NODE_INHERITED_FD;
+        let inherited_fd_range_end =
+            inherited_fd_range_start.saturating_add(pre_opened_raw_fds.len() as libc::c_int);
+        let mut overlap_safe_pre_opened_fds = Vec::new();
+        for raw_fd in &mut pre_opened_raw_fds {
+            if *raw_fd >= inherited_fd_range_start && *raw_fd < inherited_fd_range_end {
+                let duplicated =
+                    dup_fd_cloexec_min(*raw_fd, inherited_fd_range_end).map_err(|err| {
+                        io::Error::new(
+                            err.kind(),
+                            format!("duplicate overlapping pre-opened fd {raw_fd}: {err}"),
+                        )
+                    })?;
+                *raw_fd = duplicated.as_raw_fd();
+                overlap_safe_pre_opened_fds.push(duplicated);
+            }
+        }
         let _pre_opened_device_fds_owner = isolation.pre_opened_device_fds;
+        let _overlap_safe_pre_opened_fds_owner = overlap_safe_pre_opened_fds;
         let _device_bind_fds_owner = device_bind_fds;
 
         // When a user NS is requested, create a sync pipe so the child
