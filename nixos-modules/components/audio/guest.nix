@@ -150,6 +150,12 @@ in
     alsa-utils
   ];
 
+  # Wire the wpctl binary path into guestd so it can query and mutate the
+  # workload user's PipeWire session via the AudioStatus/AudioSet RPCs.
+  # The Nix store path is fixed at eval time; guestd checks the file exists
+  # at startup and only advertises the capabilities when it does.
+  d2b.guestControl.wpctlPath = "${pkgs.wireplumber}/bin/wpctl";
+
   # The virtio-snd kernel module exposes /dev/snd/{controlC0,
   # pcmC0D0c,pcmC0D0p} as root:audio mode 0660. Every interactive
   # guest user that wants to play audio needs the `audio` group; for

@@ -364,6 +364,12 @@ pub enum GuestCapability {
     ShellForceAttach,
     UsbipStatus,
     SystemActivation,
+    /// Read current audio policy state from the guest PipeWire session.
+    /// Advertised only when guestd is configured with a PipeWire control path.
+    AudioStatus,
+    /// Mutate mic/speaker grant or level in the guest PipeWire session.
+    /// Advertised alongside `AudioStatus`; requires the same configuration.
+    AudioSet,
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
@@ -387,6 +393,7 @@ pub enum GuestSubsystem {
     Shell,
     Shpool,
     SystemActivation,
+    Audio,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -495,6 +502,10 @@ pub struct GuestControlSchema {
     pub activate_system_started: GuestActivationStartResponse,
     pub activate_system_status: GuestActivationStatusRequest,
     pub activate_system_status_result: GuestActivationStatusResponse,
+    pub audio_status: AudioStatusRequest,
+    pub audio_status_result: AudioStatusResponse,
+    pub audio_set: AudioSetRequest,
+    pub audio_set_result: AudioSetResponse,
     pub error: GuestControlError,
 }
 
@@ -1320,6 +1331,81 @@ pub struct UsbipStatusEntry {
     pub bus_id: GuestUsbipBusId,
 }
 
+// ── Audio RPC types (ADR 0041 Wave 2) ────────────────────────────────────────
+
+/// Current state of one audio channel as seen by the guest PipeWire session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestAudioChannelState {
+    /// True when the channel is muted (grant = off).
+    pub muted: bool,
+    /// Current level 0–100 when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+}
+
+/// Request: query current guest audio policy state.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioStatusRequest {
+    pub metadata: GuestRequestMetadata,
+}
+
+/// Response: per-channel guest audio state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioStatusResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone: Option<GuestAudioChannelState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<GuestAudioChannelState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<GuestControlErrorKind>,
+}
+
+/// Which audio mutation to perform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioSetKind {
+    /// Turn a channel on (unmute) or off (mute).
+    Grant,
+    /// Adjust the channel level (volume/gain), `0..=100`.
+    Level,
+}
+
+/// The audio channel to target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestAudioChannel {
+    Microphone,
+    Speaker,
+}
+
+/// Request: mutate one audio channel's grant or level in the guest session.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioSetRequest {
+    pub metadata: GuestRequestMetadata,
+    pub channel: GuestAudioChannel,
+    pub kind: AudioSetKind,
+    /// For `Grant`: `true` = on, `false` = off.
+    #[serde(default)]
+    pub grant_on: bool,
+    /// For `Level`: `0..=100`; ignored for `Grant`.
+    #[serde(default)]
+    pub level: u8,
+}
+
+/// Response: updated channel state after the mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioSetResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<GuestAudioChannelState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<GuestControlErrorKind>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputStream {
@@ -1474,6 +1560,14 @@ pub enum GuestControlErrorKind {
     ActivationStatusUnavailable,
     ActivationTimedOut,
     ActivationSpawnFailed,
+    /// Guest PipeWire session is unavailable or not configured.
+    AudioPipeWireUnavailable,
+    /// Requested audio channel is not recognised.
+    AudioChannelUnknown,
+    /// Audio level value is out of the 0–100 range.
+    AudioLevelOutOfRange,
+    /// PipeWire enforcement call succeeded but the policy could not be applied.
+    AudioEnforcementFailed,
 }
 
 #[cfg(test)]

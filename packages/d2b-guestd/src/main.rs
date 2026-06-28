@@ -1,7 +1,9 @@
 use std::{env, ffi::OsString, path::PathBuf, process};
 
 use d2b_guestd::exec::ExecPolicy;
-use d2b_guestd::service::{ActivationRuntimeConfig, DetachedRuntimeConfig, ShellPolicy};
+use d2b_guestd::service::{
+    ActivationRuntimeConfig, AudioRuntimeConfig, DetachedRuntimeConfig, ShellPolicy,
+};
 
 fn main() {
     if let Err(error) = run(env::args_os().skip(1).collect()) {
@@ -40,6 +42,9 @@ fn run(args: Vec<OsString>) -> Result<(), d2b_guestd::service::GuestdServiceErro
             if let Some(activation) = parsed.activation {
                 config = config.with_activation_runtime(activation);
             }
+            if let Some(wpctl_path) = parsed.wpctl_path {
+                config = config.with_audio_runtime(AudioRuntimeConfig { wpctl_path });
+            }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -60,6 +65,7 @@ struct ServeArgs {
     usbip_path: Option<PathBuf>,
     shell_policy: Option<ShellPolicy>,
     activation: Option<ActivationRuntimeConfig>,
+    wpctl_path: Option<PathBuf>,
 }
 
 /// Parse `--serve` arguments: the required `--vm-id <name>` plus the optional
@@ -78,6 +84,7 @@ fn parse_serve_args(
     let mut interactive_max_runtime_sec: u64 = 0;
     let mut guest_config_path: Option<PathBuf> = None;
     let mut usbip_path: Option<PathBuf> = None;
+    let mut wpctl_path: Option<PathBuf> = None;
     let mut shell_enabled = false;
     let mut shell_default_name = String::from("default");
     let mut shell_max_sessions: u32 = 8;
@@ -116,6 +123,9 @@ fn parse_serve_args(
             }
             Some("--usbip-path") => {
                 usbip_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--wpctl-path") => {
+                wpctl_path = Some(parse_abs_path(iter.next())?);
             }
             Some("--shell-enable") => shell_enabled = true,
             Some("--shell-default-name") => {
@@ -228,6 +238,7 @@ fn parse_serve_args(
         usbip_path,
         shell_policy,
         activation,
+        wpctl_path,
     })
 }
 

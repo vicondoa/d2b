@@ -50,6 +50,36 @@ deprecations ship one minor release before removal.
 - `QemuMediaArgvInput.console_fd` field: when provided, QEMU emits
   `-chardev fd,id=con0,fd=N -serial chardev:con0` instead of `-serial none`.
   Accepts only fds >= 3 (rejects stdin/stdout/stderr).
+- `d2bd` now dispatches `AudioOp` (status, set-volume, mute/off) for all
+  provider types. Cloud Hypervisor NixOS VMs use OFD-locked atomic
+  reads and writes of `/run/d2b/audio/<vm>.json` guarded by
+  `/run/d2b/locks/audio-<vm>.lock`; qemu-media VMs report
+  guest-enforcement as unsupported; ACA sandbox VMs route exclusively
+  through provider guest-control (no local audio state is created).
+  Provider capability resolution runs before any state access.
+  Host PipeWire enforcement (`pw-cli`/`wpexec`) and guestd `AudioSet`
+  integration are not yet connected; `set-volume` and `mute` return
+  `applied: host-only` when state is persisted and
+  `applied: unsupported` when live enforcement is unavailable rather
+  than falsely reporting `host-and-guest`.
+- `guestd` no longer advertises `AudioStatus` or `AudioSet` capabilities:
+  the in-guest PipeWire query/set path is not yet connected and the
+  handlers always return `AUDIO_PIPEWIRE_UNAVAILABLE`. Advertising
+  capabilities the handlers cannot fulfil would cause `d2bd` to report
+  false `HostAndGuest` enforcement. Capabilities will be re-enabled once
+  the in-guest `wpctl` integration lands.
+- `guestd` `AudioStatus` and `AudioSet` handlers now use real `wpctl`
+  argv-only subprocesses targeting the workload user's PipeWire session.
+  The `--wpctl-path` flag (set to `wireplumber/bin/wpctl` by the guest
+  audio component) enables the runtime; capabilities are only advertised
+  when the binary exists and the workload UID is known at startup.
+  `PIPEWIRE_RUNTIME_DIR` is set per-user so wpctl never touches root's
+  PipeWire socket. Level > 100 returns `AudioLevelOutOfRange`; missing
+  PipeWire returns typed `AudioPipeWireUnavailable`.
+- `audioService` (`d2b-<vm>-snd.service`) is fully retired: the field
+  is unconditionally `null` in all manifest and daemon-access paths;
+  `ProcessRole::Audio` is the sole source of truth for audio runner
+  identity.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`

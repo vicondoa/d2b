@@ -11895,6 +11895,785 @@ impl ::protobuf::reflect::ProtobufValue for GuestControlError {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:d2b.guest.v1.GuestAudioChannelState)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct GuestAudioChannelState {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v1.GuestAudioChannelState.muted)
+    pub muted: bool,
+    // @@protoc_insertion_point(field:d2b.guest.v1.GuestAudioChannelState.level)
+    pub level: u32,
+    // @@protoc_insertion_point(field:d2b.guest.v1.GuestAudioChannelState.level_known)
+    pub level_known: bool,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v1.GuestAudioChannelState.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GuestAudioChannelState {
+    fn default() -> &'a GuestAudioChannelState {
+        <GuestAudioChannelState as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GuestAudioChannelState {
+    pub fn new() -> GuestAudioChannelState {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "muted",
+            |m: &GuestAudioChannelState| { &m.muted },
+            |m: &mut GuestAudioChannelState| { &mut m.muted },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "level",
+            |m: &GuestAudioChannelState| { &m.level },
+            |m: &mut GuestAudioChannelState| { &mut m.level },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "level_known",
+            |m: &GuestAudioChannelState| { &m.level_known },
+            |m: &mut GuestAudioChannelState| { &mut m.level_known },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GuestAudioChannelState>(
+            "GuestAudioChannelState",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GuestAudioChannelState {
+    const NAME: &'static str = "GuestAudioChannelState";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.muted = is.read_bool()?;
+                },
+                16 => {
+                    self.level = is.read_uint32()?;
+                },
+                24 => {
+                    self.level_known = is.read_bool()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.muted != false {
+            my_size += 1 + 1;
+        }
+        if self.level != 0 {
+            my_size += ::protobuf::rt::uint32_size(2, self.level);
+        }
+        if self.level_known != false {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.muted != false {
+            os.write_bool(1, self.muted)?;
+        }
+        if self.level != 0 {
+            os.write_uint32(2, self.level)?;
+        }
+        if self.level_known != false {
+            os.write_bool(3, self.level_known)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GuestAudioChannelState {
+        GuestAudioChannelState::new()
+    }
+
+    fn clear(&mut self) {
+        self.muted = false;
+        self.level = 0;
+        self.level_known = false;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GuestAudioChannelState {
+        static instance: GuestAudioChannelState = GuestAudioChannelState {
+            muted: false,
+            level: 0,
+            level_known: false,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GuestAudioChannelState {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GuestAudioChannelState").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GuestAudioChannelState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GuestAudioChannelState {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.guest.v1.AudioStatusRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AudioStatusRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioStatusRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v1.AudioStatusRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AudioStatusRequest {
+    fn default() -> &'a AudioStatusRequest {
+        <AudioStatusRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AudioStatusRequest {
+    pub fn new() -> AudioStatusRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(1);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &AudioStatusRequest| { &m.metadata },
+            |m: &mut AudioStatusRequest| { &mut m.metadata },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioStatusRequest>(
+            "AudioStatusRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AudioStatusRequest {
+    const NAME: &'static str = "AudioStatusRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AudioStatusRequest {
+        AudioStatusRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AudioStatusRequest {
+        static instance: AudioStatusRequest = AudioStatusRequest {
+            metadata: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AudioStatusRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AudioStatusRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AudioStatusRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AudioStatusRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.guest.v1.AudioStatusResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AudioStatusResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioStatusResponse.microphone)
+    pub microphone: ::protobuf::MessageField<GuestAudioChannelState>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioStatusResponse.speaker)
+    pub speaker: ::protobuf::MessageField<GuestAudioChannelState>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioStatusResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v1.AudioStatusResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AudioStatusResponse {
+    fn default() -> &'a AudioStatusResponse {
+        <AudioStatusResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AudioStatusResponse {
+    pub fn new() -> AudioStatusResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestAudioChannelState>(
+            "microphone",
+            |m: &AudioStatusResponse| { &m.microphone },
+            |m: &mut AudioStatusResponse| { &mut m.microphone },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestAudioChannelState>(
+            "speaker",
+            |m: &AudioStatusResponse| { &m.speaker },
+            |m: &mut AudioStatusResponse| { &mut m.speaker },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &AudioStatusResponse| { &m.error },
+            |m: &mut AudioStatusResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioStatusResponse>(
+            "AudioStatusResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AudioStatusResponse {
+    const NAME: &'static str = "AudioStatusResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.microphone)?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.speaker)?;
+                },
+                26 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.microphone.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.speaker.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.microphone.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.speaker.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AudioStatusResponse {
+        AudioStatusResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.microphone.clear();
+        self.speaker.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AudioStatusResponse {
+        static instance: AudioStatusResponse = AudioStatusResponse {
+            microphone: ::protobuf::MessageField::none(),
+            speaker: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AudioStatusResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AudioStatusResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AudioStatusResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AudioStatusResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.guest.v1.AudioSetRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AudioSetRequest {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetRequest.channel)
+    pub channel: ::protobuf::EnumOrUnknown<AudioChannel>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetRequest.kind)
+    pub kind: ::protobuf::EnumOrUnknown<AudioSetKind>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetRequest.grant_on)
+    pub grant_on: bool,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetRequest.level)
+    pub level: u32,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v1.AudioSetRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AudioSetRequest {
+    fn default() -> &'a AudioSetRequest {
+        <AudioSetRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AudioSetRequest {
+    pub fn new() -> AudioSetRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &AudioSetRequest| { &m.metadata },
+            |m: &mut AudioSetRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "channel",
+            |m: &AudioSetRequest| { &m.channel },
+            |m: &mut AudioSetRequest| { &mut m.channel },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &AudioSetRequest| { &m.kind },
+            |m: &mut AudioSetRequest| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "grant_on",
+            |m: &AudioSetRequest| { &m.grant_on },
+            |m: &mut AudioSetRequest| { &mut m.grant_on },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "level",
+            |m: &AudioSetRequest| { &m.level },
+            |m: &mut AudioSetRequest| { &mut m.level },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioSetRequest>(
+            "AudioSetRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AudioSetRequest {
+    const NAME: &'static str = "AudioSetRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                16 => {
+                    self.channel = is.read_enum_or_unknown()?;
+                },
+                24 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.grant_on = is.read_bool()?;
+                },
+                40 => {
+                    self.level = is.read_uint32()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if self.channel != ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(2, self.channel.value());
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.kind.value());
+        }
+        if self.grant_on != false {
+            my_size += 1 + 1;
+        }
+        if self.level != 0 {
+            my_size += ::protobuf::rt::uint32_size(5, self.level);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if self.channel != ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED) {
+            os.write_enum(2, ::protobuf::EnumOrUnknown::value(&self.channel))?;
+        }
+        if self.kind != ::protobuf::EnumOrUnknown::new(AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if self.grant_on != false {
+            os.write_bool(4, self.grant_on)?;
+        }
+        if self.level != 0 {
+            os.write_uint32(5, self.level)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AudioSetRequest {
+        AudioSetRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.channel = ::protobuf::EnumOrUnknown::new(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED);
+        self.kind = ::protobuf::EnumOrUnknown::new(AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED);
+        self.grant_on = false;
+        self.level = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AudioSetRequest {
+        static instance: AudioSetRequest = AudioSetRequest {
+            metadata: ::protobuf::MessageField::none(),
+            channel: ::protobuf::EnumOrUnknown::from_i32(0),
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            grant_on: false,
+            level: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AudioSetRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AudioSetRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AudioSetRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AudioSetRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:d2b.guest.v1.AudioSetResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct AudioSetResponse {
+    // message fields
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetResponse.state)
+    pub state: ::protobuf::MessageField<GuestAudioChannelState>,
+    // @@protoc_insertion_point(field:d2b.guest.v1.AudioSetResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:d2b.guest.v1.AudioSetResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a AudioSetResponse {
+    fn default() -> &'a AudioSetResponse {
+        <AudioSetResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl AudioSetResponse {
+    pub fn new() -> AudioSetResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestAudioChannelState>(
+            "state",
+            |m: &AudioSetResponse| { &m.state },
+            |m: &mut AudioSetResponse| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &AudioSetResponse| { &m.error },
+            |m: &mut AudioSetResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioSetResponse>(
+            "AudioSetResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for AudioSetResponse {
+    const NAME: &'static str = "AudioSetResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.state)?;
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.state.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.state.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> AudioSetResponse {
+        AudioSetResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.state.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static AudioSetResponse {
+        static instance: AudioSetResponse = AudioSetResponse {
+            state: ::protobuf::MessageField::none(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for AudioSetResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("AudioSetResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for AudioSetResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for AudioSetResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 // @@protoc_insertion_point(enum:d2b.guest.v1.GuestCapability)
 pub enum GuestCapability {
@@ -11930,6 +12709,10 @@ pub enum GuestCapability {
     GUEST_CAPABILITY_USBIP_STATUS = 14,
     // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestCapability.GUEST_CAPABILITY_SYSTEM_ACTIVATION)
     GUEST_CAPABILITY_SYSTEM_ACTIVATION = 15,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestCapability.GUEST_CAPABILITY_AUDIO_STATUS)
+    GUEST_CAPABILITY_AUDIO_STATUS = 16,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestCapability.GUEST_CAPABILITY_AUDIO_SET)
+    GUEST_CAPABILITY_AUDIO_SET = 17,
 }
 
 impl ::protobuf::Enum for GuestCapability {
@@ -11957,6 +12740,8 @@ impl ::protobuf::Enum for GuestCapability {
             13 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             14 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_STATUS),
             15 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION),
+            16 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS),
+            17 => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_AUDIO_SET),
             _ => ::std::option::Option::None
         }
     }
@@ -11979,6 +12764,8 @@ impl ::protobuf::Enum for GuestCapability {
             "GUEST_CAPABILITY_SHELL_FORCE_ATTACH" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH),
             "GUEST_CAPABILITY_USBIP_STATUS" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_USBIP_STATUS),
             "GUEST_CAPABILITY_SYSTEM_ACTIVATION" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION),
+            "GUEST_CAPABILITY_AUDIO_STATUS" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS),
+            "GUEST_CAPABILITY_AUDIO_SET" => ::std::option::Option::Some(GuestCapability::GUEST_CAPABILITY_AUDIO_SET),
             _ => ::std::option::Option::None
         }
     }
@@ -12000,6 +12787,8 @@ impl ::protobuf::Enum for GuestCapability {
         GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
         GuestCapability::GUEST_CAPABILITY_USBIP_STATUS,
         GuestCapability::GUEST_CAPABILITY_SYSTEM_ACTIVATION,
+        GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS,
+        GuestCapability::GUEST_CAPABILITY_AUDIO_SET,
     ];
 }
 
@@ -12052,6 +12841,8 @@ pub enum GuestSubsystem {
     GUEST_SUBSYSTEM_SHPOOL = 9,
     // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_SYSTEM_ACTIVATION)
     GUEST_SUBSYSTEM_SYSTEM_ACTIVATION = 10,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestSubsystem.GUEST_SUBSYSTEM_AUDIO)
+    GUEST_SUBSYSTEM_AUDIO = 11,
 }
 
 impl ::protobuf::Enum for GuestSubsystem {
@@ -12074,6 +12865,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             8 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
             9 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
             10 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION),
+            11 => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_AUDIO),
             _ => ::std::option::Option::None
         }
     }
@@ -12091,6 +12883,7 @@ impl ::protobuf::Enum for GuestSubsystem {
             "GUEST_SUBSYSTEM_SHELL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHELL),
             "GUEST_SUBSYSTEM_SHPOOL" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL),
             "GUEST_SUBSYSTEM_SYSTEM_ACTIVATION" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION),
+            "GUEST_SUBSYSTEM_AUDIO" => ::std::option::Option::Some(GuestSubsystem::GUEST_SUBSYSTEM_AUDIO),
             _ => ::std::option::Option::None
         }
     }
@@ -12107,6 +12900,7 @@ impl ::protobuf::Enum for GuestSubsystem {
         GuestSubsystem::GUEST_SUBSYSTEM_SHELL,
         GuestSubsystem::GUEST_SUBSYSTEM_SHPOOL,
         GuestSubsystem::GUEST_SUBSYSTEM_SYSTEM_ACTIVATION,
+        GuestSubsystem::GUEST_SUBSYSTEM_AUDIO,
     ];
 }
 
@@ -13666,6 +14460,14 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT = 63,
     // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED)
     GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED = 64,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)
+    GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE = 65,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN)
+    GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN = 66,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE)
+    GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE = 67,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED)
+    GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED = 68,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -13742,6 +14544,10 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             62 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE),
             63 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT),
             64 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED),
+            65 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE),
+            66 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN),
+            67 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE),
+            68 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED),
             _ => ::std::option::Option::None
         }
     }
@@ -13813,6 +14619,10 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE),
             "GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT),
             "GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED),
+            "GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE),
+            "GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN),
+            "GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE),
+            "GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED),
             _ => ::std::option::Option::None
         }
     }
@@ -13883,6 +14693,10 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED,
     ];
 }
 
@@ -13907,6 +14721,140 @@ impl ::std::default::Default for GuestControlErrorKind {
 impl GuestControlErrorKind {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
         ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GuestControlErrorKind>("GuestControlErrorKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.guest.v1.AudioChannel)
+pub enum AudioChannel {
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioChannel.AUDIO_CHANNEL_UNSPECIFIED)
+    AUDIO_CHANNEL_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioChannel.AUDIO_CHANNEL_MICROPHONE)
+    AUDIO_CHANNEL_MICROPHONE = 1,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioChannel.AUDIO_CHANNEL_SPEAKER)
+    AUDIO_CHANNEL_SPEAKER = 2,
+}
+
+impl ::protobuf::Enum for AudioChannel {
+    const NAME: &'static str = "AudioChannel";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AudioChannel> {
+        match value {
+            0 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_MICROPHONE),
+            2 => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_SPEAKER),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AudioChannel> {
+        match str {
+            "AUDIO_CHANNEL_UNSPECIFIED" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_UNSPECIFIED),
+            "AUDIO_CHANNEL_MICROPHONE" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_MICROPHONE),
+            "AUDIO_CHANNEL_SPEAKER" => ::std::option::Option::Some(AudioChannel::AUDIO_CHANNEL_SPEAKER),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AudioChannel] = &[
+        AudioChannel::AUDIO_CHANNEL_UNSPECIFIED,
+        AudioChannel::AUDIO_CHANNEL_MICROPHONE,
+        AudioChannel::AUDIO_CHANNEL_SPEAKER,
+    ];
+}
+
+impl ::protobuf::EnumFull for AudioChannel {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AudioChannel").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AudioChannel {
+    fn default() -> Self {
+        AudioChannel::AUDIO_CHANNEL_UNSPECIFIED
+    }
+}
+
+impl AudioChannel {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AudioChannel>("AudioChannel")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:d2b.guest.v1.AudioSetKind)
+pub enum AudioSetKind {
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioSetKind.AUDIO_SET_KIND_UNSPECIFIED)
+    AUDIO_SET_KIND_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioSetKind.AUDIO_SET_KIND_GRANT)
+    AUDIO_SET_KIND_GRANT = 1,
+    // @@protoc_insertion_point(enum_value:d2b.guest.v1.AudioSetKind.AUDIO_SET_KIND_LEVEL)
+    AUDIO_SET_KIND_LEVEL = 2,
+}
+
+impl ::protobuf::Enum for AudioSetKind {
+    const NAME: &'static str = "AudioSetKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<AudioSetKind> {
+        match value {
+            0 => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED),
+            1 => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_GRANT),
+            2 => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_LEVEL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn from_str(str: &str) -> ::std::option::Option<AudioSetKind> {
+        match str {
+            "AUDIO_SET_KIND_UNSPECIFIED" => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED),
+            "AUDIO_SET_KIND_GRANT" => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_GRANT),
+            "AUDIO_SET_KIND_LEVEL" => ::std::option::Option::Some(AudioSetKind::AUDIO_SET_KIND_LEVEL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [AudioSetKind] = &[
+        AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED,
+        AudioSetKind::AUDIO_SET_KIND_GRANT,
+        AudioSetKind::AUDIO_SET_KIND_LEVEL,
+    ];
+}
+
+impl ::protobuf::EnumFull for AudioSetKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("AudioSetKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for AudioSetKind {
+    fn default() -> Self {
+        AudioSetKind::AUDIO_SET_KIND_UNSPECIFIED
+    }
+}
+
+impl AudioSetKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<AudioSetKind>("AudioSetKind")
     }
 }
 
@@ -14226,154 +15174,180 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x127\n\x04kind\x18\x01\x20\x01(\x0e2#.d2b.guest.v1.GuestControlErrorKin\
     dR\x04kind\x12A\n\x0bremediation\x18\x02\x20\x01(\x0e2\x1f.d2b.guest.v1.\
     HealthRemediationR\x0bremediation\x12)\n\x0eretry_after_ms\x18\x03\x20\
-    \x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after_ms*\xc2\
-    \x04\n\x0fGuestCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIFIED\x10\
-    \0\x12\x1b\n\x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_CAPABILI\
-    TY_CAPABILITIES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\x10\
-    \x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19GUES\
-    T_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOGS\
-    \x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18G\
-    UEST_CAPABILITY_SIGNALS\x10\x08\x12$\n\x20GUEST_CAPABILITY_READ_GUEST_FI\
-    LE\x10\t\x12!\n\x1dGUEST_CAPABILITY_USBIP_IMPORT\x10\n\x12#\n\x1fGUEST_C\
-    APABILITY_SHELL_ATTACHED\x10\x0b\x12%\n!GUEST_CAPABILITY_SHELL_MANAGEMEN\
-    T\x10\x0c\x12'\n#GUEST_CAPABILITY_SHELL_FORCE_ATTACH\x10\r\x12!\n\x1dGUE\
-    ST_CAPABILITY_USBIP_STATUS\x10\x0e\x12&\n\"GUEST_CAPABILITY_SYSTEM_ACTIV\
-    ATION\x10\x0f*\xd2\x02\n\x0eGuestSubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_\
-    UNSPECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\
-    \x15GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\
-    \x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST\
-    _SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM_VSOCK\x10\x06\x12\
-    \x19\n\x15GUEST_SUBSYSTEM_USBIP\x10\x07\x12\x19\n\x15GUEST_SUBSYSTEM_SHE\
-    LL\x10\x08\x12\x1a\n\x16GUEST_SUBSYSTEM_SHPOOL\x10\t\x12%\n!GUEST_SUBSYS\
-    TEM_SYSTEM_ACTIVATION\x10\n*^\n\x0cTerminalKind\x12\x1d\n\x19TERMINAL_KI\
-    ND_UNSPECIFIED\x10\0\x12\x16\n\x12TERMINAL_KIND_EXEC\x10\x01\x12\x17\n\
-    \x13TERMINAL_KIND_SHELL\x10\x02*\xc6\x01\n\x13GuestActivationMode\x12%\n\
-    !GUEST_ACTIVATION_MODE_UNSPECIFIED\x10\0\x12\x20\n\x1cGUEST_ACTIVATION_M\
-    ODE_SWITCH\x10\x01\x12\x1e\n\x1aGUEST_ACTIVATION_MODE_BOOT\x10\x02\x12\
-    \x1e\n\x1aGUEST_ACTIVATION_MODE_TEST\x10\x03\x12&\n\"GUEST_ACTIVATION_MO\
-    DE_DRY_ACTIVATE\x10\x04*\xf2\x01\n\x14GuestActivationState\x12&\n\"GUEST\
-    _ACTIVATION_STATE_UNSPECIFIED\x10\0\x12\"\n\x1eGUEST_ACTIVATION_STATE_RU\
-    NNING\x10\x01\x12$\n\x20GUEST_ACTIVATION_STATE_SUCCEEDED\x10\x02\x12!\n\
-    \x1dGUEST_ACTIVATION_STATE_FAILED\x10\x03\x12$\n\x20GUEST_ACTIVATION_STA\
-    TE_TIMED_OUT\x10\x04\x12\x1f\n\x1bGUEST_ACTIVATION_STATE_LOST\x10\x05*\
-    \xd5\x01\n\nShellState\x12\x1b\n\x17SHELL_STATE_UNSPECIFIED\x10\0\x12\
-    \x18\n\x14SHELL_STATE_ATTACHED\x10\x01\x12\x18\n\x14SHELL_STATE_DETACHED\
-    \x10\x02\x12\x16\n\x12SHELL_STATE_KILLED\x10\x03\x12\x20\n\x1cSHELL_STAT\
-    E_POOL_UNAVAILABLE\x10\x04\x12\x20\n\x1cSHELL_STATE_FEATURE_DISABLED\x10\
-    \x05\x12\x1a\n\x16SHELL_STATE_OUTPUT_GAP\x10\x06*\xa1\x02\n\x0fShellClos\
-    eCause\x12!\n\x1dSHELL_CLOSE_CAUSE_UNSPECIFIED\x10\0\x12#\n\x1fSHELL_CLO\
-    SE_CAUSE_CLIENT_DETACH\x10\x01\x12&\n\"SHELL_CLOSE_CAUSE_EVICTED_BY_FORC\
-    E\x10\x02\x12-\n)SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH\x10\x03\x12%\
-    \n!SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN\x10\x04\x12&\n\"SHELL_CLOSE_CAUSE_P\
-    OOL_UNAVAILABLE\x10\x05\x12\x20\n\x1cSHELL_CLOSE_CAUSE_OUTPUT_GAP\x10\
-    \x06*L\n\x0bGuestFileId\x12\x1d\n\x19GUEST_FILE_ID_UNSPECIFIED\x10\0\x12\
-    \x1e\n\x1aGUEST_FILE_ID_GUEST_CONFIG\x10\x01*x\n\x11UsbipImportAction\
-    \x12#\n\x1fUSBIP_IMPORT_ACTION_UNSPECIFIED\x10\0\x12\x1e\n\x1aUSBIP_IMPO\
-    RT_ACTION_ATTACH\x10\x01\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_DETACH\x10\x02\
-    *s\n\x0cHealthOrigin\x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\
-    \x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_\
-    HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\x18HEALTH_S\
-    TATE_UNSPECIFIED\x10\0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\
-    \n\x15HEALTH_STATE_DEGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_\
-    GENERATION\x10\x03\x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12\
-    &\n\"HEALTH_STATE_TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STAT\
-    E_AUTH_FAILED\x10\x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\
-    \x12\x1e\n\x1aHEALTH_STATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthRea\
-    son\x12\x1d\n\x19HEALTH_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REA\
-    SON_NONE\x10\x01\x12\x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\
-    \n\x1dHEALTH_REASON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONN\
-    ECT_REFUSED\x10\x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\
-    \x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASO\
-    N_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\
-    \x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH\
-    _TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\
-    \x10\x0b\x12-\n)HEALTH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n\
-    (HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG\
-    _STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\
-    \x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_R\
-    EASON_INTERNAL_HEALTH_CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthRemediati\
-    on\x12\"\n\x1eHEALTH_REMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_R\
-    EMEDIATION_NONE\x10\x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\
-    \x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDI\
-    ATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\
-    \x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\
-    \x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INS\
-    PECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_U\
-    NSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14\
-    OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWR\
-    ITE_DISPOSITION_UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTE\
-    D\x10\x01\x12\x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1a\
-    WRITE_DISPOSITION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EX\
-    EC_STATE_UNSPECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\
-    \x16\n\x12EXEC_STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\
-    \x03\x12\x17\n\x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CA\
-    NCELLED\x10\x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\
-    \x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST\
-    _GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinSt\
-    ate\x12\x1b\n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_\
-    OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN\
-    _STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\
-    \x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\
-    \x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREG\
-    ROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\
-    \x02*\xd4\x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPEC\
-    IFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!E\
-    XEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SL\
-    OW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\
-    \xcf\x19\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSP\
-    ECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12\
-    /\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CON\
-    TROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KI\
-    ND_STDIN_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\
-    \x10\x05\x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\
-    \x122\n.GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\n4GU\
-    EST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'GUEST_\
-    CONTROL_ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_\
-    OFFSET_IN_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\
-    \x10\x0b\x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUES\
-    T_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTROL_E\
-    RROR_KIND_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPA\
-    CITY_EXCEEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACI\
-    TY_EXCEEDED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\
-    \x11\x120\n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x120\n,\
-    GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CONTRO\
-    L_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERROR_K\
-    IND_GUEST_EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_I\
-    NVALID\x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\x125\n\
-    1GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_\
-    CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUEST_CONT\
-    ROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_\
-    ERROR_KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIN\
-    D_SUPERSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMI\
-    TED\x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\
-    \x121\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUE\
-    ST_CONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTR\
-    OL_ERROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_C\
-    ONTROL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_\
-    AUTH_FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\
-    \x10$\x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CON\
-    TROL_ERROR_KIND_FILE_NOT_FOUND\x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE\
-    _TOO_LARGE\x10'\x12(\n$GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$\
-    GUEST_CONTROL_ERROR_KIND_READ_DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIN\
-    D_INVALID_PROGRAM\x10*\x12.\n*GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\
-    \x10+\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-G\
-    UEST_CONTROL_ERROR_KIND_USBIP_INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_E\
-    RROR_KIND_USBIP_INVALID_HOST\x10.\x121\n-GUEST_CONTROL_ERROR_KIND_GUEST_\
-    SHELL_DISABLED\x10/\x12/\n+GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME\
-    \x100\x124\n0GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED\x101\x12;\
-    \n7GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED\x102\x12,\n(G\
-    UEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND\x103\x123\n/GUEST_CONTROL_ERROR_\
-    KIND_SHELL_ALREADY_ATTACHED\x104\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_P\
-    OOL_UNAVAILABLE\x105\x128\n4GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_\
-    MISMATCH\x106\x12-\n)GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP\x107\x122\
-    \n.GUEST_CONTROL_ERROR_KIND_USBIP_COMMAND_TIMEOUT\x108\x121\n-GUEST_CONT\
-    ROL_ERROR_KIND_USBIP_INVALID_OUTPUT\x109\x122\n.GUEST_CONTROL_ERROR_KIND\
-    _ACTIVATION_INVALID_ID\x10:\x124\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_I\
-    NVALID_PATH\x10;\x124\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE\
-    \x10<\x121\n-GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND\x10=\x12:\n6G\
-    UEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE\x10>\x121\n-GUEST_\
-    CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT\x10?\x124\n0GUEST_CONTROL_ERROR_\
-    KIND_ACTIVATION_SPAWN_FAILED\x10@b\x06proto3\
+    \x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after_ms\"e\n\
+    \x16GuestAudioChannelState\x12\x14\n\x05muted\x18\x01\x20\x01(\x08R\x05m\
+    uted\x12\x14\n\x05level\x18\x02\x20\x01(\rR\x05level\x12\x1f\n\x0blevel_\
+    known\x18\x03\x20\x01(\x08R\nlevelKnown\"O\n\x12AudioStatusRequest\x129\
+    \n\x08metadata\x18\x01\x20\x01(\x0b2\x1d.d2b.guest.v1.RequestMetadataR\
+    \x08metadata\"\xd2\x01\n\x13AudioStatusResponse\x12D\n\nmicrophone\x18\
+    \x01\x20\x01(\x0b2$.d2b.guest.v1.GuestAudioChannelStateR\nmicrophone\x12\
+    >\n\x07speaker\x18\x02\x20\x01(\x0b2$.d2b.guest.v1.GuestAudioChannelStat\
+    eR\x07speaker\x125\n\x05error\x18\x03\x20\x01(\x0b2\x1f.d2b.guest.v1.Gue\
+    stControlErrorR\x05error\"\xe3\x01\n\x0fAudioSetRequest\x129\n\x08metada\
+    ta\x18\x01\x20\x01(\x0b2\x1d.d2b.guest.v1.RequestMetadataR\x08metadata\
+    \x124\n\x07channel\x18\x02\x20\x01(\x0e2\x1a.d2b.guest.v1.AudioChannelR\
+    \x07channel\x12.\n\x04kind\x18\x03\x20\x01(\x0e2\x1a.d2b.guest.v1.AudioS\
+    etKindR\x04kind\x12\x19\n\x08grant_on\x18\x04\x20\x01(\x08R\x07grantOn\
+    \x12\x14\n\x05level\x18\x05\x20\x01(\rR\x05level\"\x85\x01\n\x10AudioSet\
+    Response\x12:\n\x05state\x18\x01\x20\x01(\x0b2$.d2b.guest.v1.GuestAudioC\
+    hannelStateR\x05state\x125\n\x05error\x18\x02\x20\x01(\x0b2\x1f.d2b.gues\
+    t.v1.GuestControlErrorR\x05error*\x85\x05\n\x0fGuestCapability\x12\x20\n\
+    \x1cGUEST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_HEA\
+    LTH\x10\x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILITIES\x10\x02\x12\"\n\x1eG\
+    UEST_CAPABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_D\
+    ETACHED\x10\x04\x12\x1d\n\x19GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\
+    \x1aGUEST_CAPABILITY_EXEC_LOGS\x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY\
+    _RESIZE\x10\x07\x12\x1c\n\x18GUEST_CAPABILITY_SIGNALS\x10\x08\x12$\n\x20\
+    GUEST_CAPABILITY_READ_GUEST_FILE\x10\t\x12!\n\x1dGUEST_CAPABILITY_USBIP_\
+    IMPORT\x10\n\x12#\n\x1fGUEST_CAPABILITY_SHELL_ATTACHED\x10\x0b\x12%\n!GU\
+    EST_CAPABILITY_SHELL_MANAGEMENT\x10\x0c\x12'\n#GUEST_CAPABILITY_SHELL_FO\
+    RCE_ATTACH\x10\r\x12!\n\x1dGUEST_CAPABILITY_USBIP_STATUS\x10\x0e\x12&\n\
+    \"GUEST_CAPABILITY_SYSTEM_ACTIVATION\x10\x0f\x12!\n\x1dGUEST_CAPABILITY_\
+    AUDIO_STATUS\x10\x10\x12\x1e\n\x1aGUEST_CAPABILITY_AUDIO_SET\x10\x11*\
+    \xed\x02\n\x0eGuestSubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\
+    \x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\x15GUEST_SU\
+    BSYSTEM_USERD\x10\x02\x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\x03\x12\x1f\
+    \n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST_SUBSYSTEM_T\
+    OKEN\x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM_VSOCK\x10\x06\x12\x19\n\x15GUE\
+    ST_SUBSYSTEM_USBIP\x10\x07\x12\x19\n\x15GUEST_SUBSYSTEM_SHELL\x10\x08\
+    \x12\x1a\n\x16GUEST_SUBSYSTEM_SHPOOL\x10\t\x12%\n!GUEST_SUBSYSTEM_SYSTEM\
+    _ACTIVATION\x10\n\x12\x19\n\x15GUEST_SUBSYSTEM_AUDIO\x10\x0b*^\n\x0cTerm\
+    inalKind\x12\x1d\n\x19TERMINAL_KIND_UNSPECIFIED\x10\0\x12\x16\n\x12TERMI\
+    NAL_KIND_EXEC\x10\x01\x12\x17\n\x13TERMINAL_KIND_SHELL\x10\x02*\xc6\x01\
+    \n\x13GuestActivationMode\x12%\n!GUEST_ACTIVATION_MODE_UNSPECIFIED\x10\0\
+    \x12\x20\n\x1cGUEST_ACTIVATION_MODE_SWITCH\x10\x01\x12\x1e\n\x1aGUEST_AC\
+    TIVATION_MODE_BOOT\x10\x02\x12\x1e\n\x1aGUEST_ACTIVATION_MODE_TEST\x10\
+    \x03\x12&\n\"GUEST_ACTIVATION_MODE_DRY_ACTIVATE\x10\x04*\xf2\x01\n\x14Gu\
+    estActivationState\x12&\n\"GUEST_ACTIVATION_STATE_UNSPECIFIED\x10\0\x12\
+    \"\n\x1eGUEST_ACTIVATION_STATE_RUNNING\x10\x01\x12$\n\x20GUEST_ACTIVATIO\
+    N_STATE_SUCCEEDED\x10\x02\x12!\n\x1dGUEST_ACTIVATION_STATE_FAILED\x10\
+    \x03\x12$\n\x20GUEST_ACTIVATION_STATE_TIMED_OUT\x10\x04\x12\x1f\n\x1bGUE\
+    ST_ACTIVATION_STATE_LOST\x10\x05*\xd5\x01\n\nShellState\x12\x1b\n\x17SHE\
+    LL_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14SHELL_STATE_ATTACHED\x10\x01\x12\
+    \x18\n\x14SHELL_STATE_DETACHED\x10\x02\x12\x16\n\x12SHELL_STATE_KILLED\
+    \x10\x03\x12\x20\n\x1cSHELL_STATE_POOL_UNAVAILABLE\x10\x04\x12\x20\n\x1c\
+    SHELL_STATE_FEATURE_DISABLED\x10\x05\x12\x1a\n\x16SHELL_STATE_OUTPUT_GAP\
+    \x10\x06*\xa1\x02\n\x0fShellCloseCause\x12!\n\x1dSHELL_CLOSE_CAUSE_UNSPE\
+    CIFIED\x10\0\x12#\n\x1fSHELL_CLOSE_CAUSE_CLIENT_DETACH\x10\x01\x12&\n\"S\
+    HELL_CLOSE_CAUSE_EVICTED_BY_FORCE\x10\x02\x12-\n)SHELL_CLOSE_CAUSE_EVICT\
+    ED_BY_ADMIN_DETACH\x10\x03\x12%\n!SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN\x10\
+    \x04\x12&\n\"SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE\x10\x05\x12\x20\n\x1cSHE\
+    LL_CLOSE_CAUSE_OUTPUT_GAP\x10\x06*L\n\x0bGuestFileId\x12\x1d\n\x19GUEST_\
+    FILE_ID_UNSPECIFIED\x10\0\x12\x1e\n\x1aGUEST_FILE_ID_GUEST_CONFIG\x10\
+    \x01*x\n\x11UsbipImportAction\x12#\n\x1fUSBIP_IMPORT_ACTION_UNSPECIFIED\
+    \x10\0\x12\x1e\n\x1aUSBIP_IMPORT_ACTION_ATTACH\x10\x01\x12\x1e\n\x1aUSBI\
+    P_IMPORT_ACTION_DETACH\x10\x02*s\n\x0cHealthOrigin\x12\x1d\n\x19HEALTH_O\
+    RIGIN_UNSPECIFIED\x10\0\x12\x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\
+    \x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\x0bHea\
+    lthState\x12\x1c\n\x18HEALTH_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14HEALTH\
+    _STATE_HEALTHY\x10\x01\x12\x19\n\x15HEALTH_STATE_DEGRADED\x10\x02\x12+\n\
+    'HEALTH_STATE_UNAVAILABLE_OLD_GENERATION\x10\x03\x12\x20\n\x1cHEALTH_STA\
+    TE_LISTENER_ABSENT\x10\x04\x12&\n\"HEALTH_STATE_TRANSPORT_UNREACHABLE\
+    \x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH_FAILED\x10\x06\x12\"\n\x1eHEALTH\
+    _STATE_PROTOCOL_MISMATCH\x10\x07\x12\x1e\n\x1aHEALTH_STATE_STALE_SESSION\
+    \x10\x08*\xa4\x05\n\x0cHealthReason\x12\x1d\n\x19HEALTH_REASON_UNSPECIFI\
+    ED\x10\0\x12\x16\n\x12HEALTH_REASON_NONE\x10\x01\x12\x20\n\x1cHEALTH_REA\
+    SON_OLD_GENERATION\x10\x02\x12!\n\x1dHEALTH_REASON_LISTENER_ABSENT\x10\
+    \x03\x12!\n\x1dHEALTH_REASON_CONNECT_REFUSED\x10\x04\x12!\n\x1dHEALTH_RE\
+    ASON_CONNECT_TIMEOUT\x10\x05\x12\x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\
+    \x10\x06\x12\x1f\n\x1bHEALTH_REASON_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aH\
+    EALTH_REASON_ACK_TOO_LONG\x10\x08\x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_I\
+    O\x10\t\x12%\n!HEALTH_REASON_AUTH_TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REA\
+    SON_PROTOCOL_VERSION_UNSUPPORTED\x10\x0b\x12-\n)HEALTH_REASON_SESSION_GE\
+    NERATION_MISMATCH\x10\x0c\x12,\n(HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABL\
+    E\x10\r\x12)\n%HEALTH_REASON_LOG_STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\
+    \x1cHEALTH_REASON_QUOTA_EXCEEDED\x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE\
+    _LIMITED\x10\x10\x12.\n*HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED\x10\
+    \x11*\xe0\x02\n\x11HealthRemediation\x12\"\n\x1eHEALTH_REMEDIATION_UNSPE\
+    CIFIED\x10\0\x12\x1b\n\x17HEALTH_REMEDIATION_NONE\x10\x01\x12\x1c\n\x18H\
+    EALTH_REMEDIATION_RETRY\x10\x02\x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\
+    \x10\x03\x12$\n\x20HEALTH_REMEDIATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALT\
+    H_REMEDIATION_CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_G\
+    UESTD_SERVICE\x10\x06\x12\"\n\x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\
+    \x12)\n%HEALTH_REMEDIATION_INSPECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStrea\
+    m\x12\x1d\n\x19OUTPUT_STREAM_UNSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREA\
+    M_STDOUT\x10\x01\x12\x18\n\x14OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\
+    \x10WriteDisposition\x12!\n\x1dWRITE_DISPOSITION_UNSPECIFIED\x10\0\x12\
+    \x1e\n\x1aWRITE_DISPOSITION_ACCEPTED\x10\x01\x12\x1f\n\x1bWRITE_DISPOSIT\
+    ION_DUPLICATE\x10\x02\x12\x1e\n\x1aWRITE_DISPOSITION_REJECTED\x10\x03*\
+    \x9b\x02\n\tExecState\x12\x1a\n\x16EXEC_STATE_UNSPECIFIED\x10\0\x12\x16\
+    \n\x12EXEC_STATE_CREATED\x10\x01\x12\x16\n\x12EXEC_STATE_RUNNING\x10\x02\
+    \x12\x15\n\x11EXEC_STATE_EXITED\x10\x03\x12\x17\n\x13EXEC_STATE_SIGNALED\
+    \x10\x04\x12\x18\n\x14EXEC_STATE_CANCELLED\x10\x05\x12&\n\"EXEC_STATE_SL\
+    OW_CONSUMER_CANCELLED\x10\x06\x12\x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\
+    \x07\x12\x1a\n\x16EXEC_STATE_LOST_GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE\
+    _REAPED\x10\t*\xbd\x01\n\nStdinState\x12\x1b\n\x17STDIN_STATE_UNSPECIFIE\
+    D\x10\0\x12\x14\n\x10STDIN_STATE_OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_C\
+    LOSING\x10\x02\x12\x16\n\x12STDIN_STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_S\
+    TATE_CLOSED_BY_PROCESS\x10\x04\x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTI\
+    VE\x10\x05*y\n\x0cSignalTarget\x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\
+    \x10\0\x12*\n&SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\
+    \x1aSIGNAL_TARGET_PROCESS_TREE\x10\x02*\xd4\x01\n\x10ExecCancelReason\
+    \x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\0\x12(\n$EXEC_CANCEL_REAS\
+    ON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCEL_REASON_USER_REQUESTED\
+    \x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_\
+    CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xaa\x1b\n\x15GuestControlErrorKind\
+    \x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\x10\0\x12+\n'GUEST_CONTROL_\
+    ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CH\
+    UNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\
+    \x10\x03\x12)\n%GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED\x10\x04\x12+\n'GUE\
+    ST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\x10\x05\x124\n0GUEST_CONTROL_ERROR_\
+    KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\x122\n.GUEST_CONTROL_ERROR_KIND_STD\
+    IN_OFFSET_MISMATCH\x10\x07\x128\n4GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BU\
+    DGET_EXHAUSTED\x10\x08\x12+\n'GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED\
+    \x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE\x10\n\x12-\n)GUE\
+    ST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\x10\x0b\x12(\n$GUEST_CONTROL_ERRO\
+    R_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UN\
+    AVAILABLE\x10\r\x12)\n%GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED\x10\x0e\x12\
+    3\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED\x10\x0f\x12:\n6GUEST\
+    _CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED\x10\x10\x12+\n'GUEST_C\
+    ONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\x11\x120\n,GUEST_CONTROL_ERROR_KIND\
+    _EXEC_ALREADY_EXITED\x10\x12\x120\n,GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_\
+    DISABLED\x10\x13\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\
+    \x10\x14\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED\x10\x15\
+    \x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_INVALID\x10\x16\x12'\n#GUEST_CONTRO\
+    L_ERROR_KIND_CWD_DENIED\x10\x17\x125\n1GUEST_CONTROL_ERROR_KIND_RETAINED\
+    _LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QU\
+    OTA_EXCEEDED\x10\x19\x128\n4GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_\
+    EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED\
+    \x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIND_SUPERSEDED_READ_WAIT\x10\x1c\
+    \x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMITED\x10\x1d\x120\n,GUEST_CONTR\
+    OL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\x121\n-GUEST_CONTROL_ERROR_KIN\
+    D_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUEST_CONTROL_ERROR_KIND_SLOW_CONS\
+    UMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10\
+    !\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATI\
+    ON\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_C\
+    ONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$\x12)\n%GUEST_CONTROL_ERROR_\
+    KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND\
+    \x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE\x10'\x12(\n$GUEST_C\
+    ONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$GUEST_CONTROL_ERROR_KIND_READ_\
+    DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM\x10*\x12.\n*\
+    GUEST_CONTROL_ERROR_KIND_USBIP_UNAVAILABLE\x10+\x121\n-GUEST_CONTROL_ERR\
+    OR_KIND_USBIP_COMMAND_FAILED\x10,\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_\
+    INVALID_BUS_ID\x10-\x12/\n+GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_HOST\
+    \x10.\x121\n-GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED\x10/\x12/\n+G\
+    UEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME\x100\x124\n0GUEST_CONTROL_ERR\
+    OR_KIND_SHELL_CAPACITY_EXCEEDED\x101\x12;\n7GUEST_CONTROL_ERROR_KIND_SHE\
+    LL_ATTACH_CAPACITY_EXCEEDED\x102\x12,\n(GUEST_CONTROL_ERROR_KIND_SHELL_N\
+    OT_FOUND\x103\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED\x10\
+    4\x123\n/GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE\x105\x128\n4GUE\
+    ST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH\x106\x12-\n)GUEST_CONT\
+    ROL_ERROR_KIND_SHELL_OUTPUT_GAP\x107\x122\n.GUEST_CONTROL_ERROR_KIND_USB\
+    IP_COMMAND_TIMEOUT\x108\x121\n-GUEST_CONTROL_ERROR_KIND_USBIP_INVALID_OU\
+    TPUT\x109\x122\n.GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_ID\x10:\x12\
+    4\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_INVALID_PATH\x10;\x124\n0GUEST_C\
+    ONTROL_ERROR_KIND_ACTIVATION_INVALID_MODE\x10<\x121\n-GUEST_CONTROL_ERRO\
+    R_KIND_ACTIVATION_NOT_FOUND\x10=\x12:\n6GUEST_CONTROL_ERROR_KIND_ACTIVAT\
+    ION_STATUS_UNAVAILABLE\x10>\x121\n-GUEST_CONTROL_ERROR_KIND_ACTIVATION_T\
+    IMED_OUT\x10?\x124\n0GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED\
+    \x10@\x127\n3GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE\x10A\
+    \x122\n.GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN\x10B\x125\n1GUEST\
+    _CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE\x10C\x125\n1GUEST_CONTROL_E\
+    RROR_KIND_AUDIO_ENFORCEMENT_FAILED\x10D*f\n\x0cAudioChannel\x12\x1d\n\
+    \x19AUDIO_CHANNEL_UNSPECIFIED\x10\0\x12\x1c\n\x18AUDIO_CHANNEL_MICROPHON\
+    E\x10\x01\x12\x19\n\x15AUDIO_CHANNEL_SPEAKER\x10\x02*b\n\x0cAudioSetKind\
+    \x12\x1e\n\x1aAUDIO_SET_KIND_UNSPECIFIED\x10\0\x12\x18\n\x14AUDIO_SET_KI\
+    ND_GRANT\x10\x01\x12\x18\n\x14AUDIO_SET_KIND_LEVEL\x10\x02b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -14391,7 +15365,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(63);
+            let mut messages = ::std::vec::Vec::with_capacity(68);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(ExecRequestMetadata::generated_message_descriptor_data());
             messages.push(TerminalRequestMetadata::generated_message_descriptor_data());
@@ -14455,7 +15429,12 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(TerminalTtyWinResizeRequest::generated_message_descriptor_data());
             messages.push(TerminalStatus::generated_message_descriptor_data());
             messages.push(GuestControlError::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(20);
+            messages.push(GuestAudioChannelState::generated_message_descriptor_data());
+            messages.push(AudioStatusRequest::generated_message_descriptor_data());
+            messages.push(AudioStatusResponse::generated_message_descriptor_data());
+            messages.push(AudioSetRequest::generated_message_descriptor_data());
+            messages.push(AudioSetResponse::generated_message_descriptor_data());
+            let mut enums = ::std::vec::Vec::with_capacity(22);
             enums.push(GuestCapability::generated_enum_descriptor_data());
             enums.push(GuestSubsystem::generated_enum_descriptor_data());
             enums.push(TerminalKind::generated_enum_descriptor_data());
@@ -14476,6 +15455,8 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             enums.push(SignalTarget::generated_enum_descriptor_data());
             enums.push(ExecCancelReason::generated_enum_descriptor_data());
             enums.push(GuestControlErrorKind::generated_enum_descriptor_data());
+            enums.push(AudioChannel::generated_enum_descriptor_data());
+            enums.push(AudioSetKind::generated_enum_descriptor_data());
             ::protobuf::reflect::GeneratedFileDescriptor::new_generated(
                 file_descriptor_proto(),
                 deps,

@@ -1734,6 +1734,11 @@ pub enum AudioErrorKind {
     /// Audio enforcement is not available for this VM (e.g. the runtime does
     /// not support it and no degraded path exists).
     EnforcementUnavailable,
+    /// The VM exists but audio is not enabled in its manifest entry.
+    AudioNotEnabled,
+    /// An unexpected I/O or deserialization error occurred while reading or
+    /// writing audio state. Operator should check daemon logs.
+    InternalError,
 }
 
 /// Which runtime provider handles audio for a given target VM.

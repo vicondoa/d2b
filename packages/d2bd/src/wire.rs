@@ -58,6 +58,7 @@ pub enum Request {
     Shell(public_wire::ShellOp),
     Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
+    Audio(public_wire::AudioOp),
 }
 
 impl Request {
@@ -95,6 +96,7 @@ impl Request {
             Self::Shell(_) => "shell",
             Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
+            Self::Audio(_) => "audio",
         }
     }
 
@@ -126,6 +128,11 @@ impl Request {
             | Self::HostDestroy(_)
             | Self::HostInstall(_)
             | Self::HostReconcile(_) => OpLockClass::Global,
+            // Per-VM audio set ops serialize on the named VM. Status is read-only.
+            Self::Audio(public_wire::AudioOp::SetVolume(args)) => {
+                OpLockClass::PerVm(args.vm.clone())
+            }
+            Self::Audio(public_wire::AudioOp::Mute(args)) => OpLockClass::PerVm(args.vm.clone()),
             // Read-only / status / session-managed verbs: no lock.
             Self::List(_)
             | Self::Status(_)
@@ -139,7 +146,8 @@ impl Request {
             | Self::Exec(_)
             | Self::Shell(_)
             | Self::Console(_)
-            | Self::GatewayDisplay(_) => OpLockClass::ReadOnly,
+            | Self::GatewayDisplay(_)
+            | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
         }
     }
 }
@@ -358,6 +366,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         }
         "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::GatewayDisplay)
+            .map_err(map_parse_error),
+        "audio" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::Audio)
             .map_err(map_parse_error),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
@@ -649,6 +660,18 @@ pub fn console_response(payload: &public_wire::ConsoleOpResponse) -> Value {
         obj.insert(
             "type".to_owned(),
             Value::String("consoleResponse".to_owned()),
+        );
+    }
+    value
+}
+
+/// Serialize an `AudioOpResponse` as the `audioOpResponse` daemon wire frame.
+pub fn audio_response(payload: &public_wire::AudioOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("audioOpResponse".to_owned()),
         );
     }
     value

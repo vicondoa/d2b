@@ -7,6 +7,10 @@
     "activateSystemStarted",
     "activateSystemStatus",
     "activateSystemStatusResult",
+    "audioSet",
+    "audioSetResult",
+    "audioStatus",
+    "audioStatusResult",
     "authenticate",
     "authenticated",
     "capabilities",
@@ -72,6 +76,18 @@
     },
     "activateSystemStatusResult": {
       "$ref": "#/definitions/GuestActivationStatusResponse"
+    },
+    "audioSet": {
+      "$ref": "#/definitions/AudioSetRequest"
+    },
+    "audioSetResult": {
+      "$ref": "#/definitions/AudioSetResponse"
+    },
+    "audioStatus": {
+      "$ref": "#/definitions/AudioStatusRequest"
+    },
+    "audioStatusResult": {
+      "$ref": "#/definitions/AudioStatusResponse"
     },
     "authenticate": {
       "$ref": "#/definitions/AuthenticateRequest"
@@ -238,6 +254,135 @@
       "type": "string",
       "maxLength": 64,
       "minLength": 1
+    },
+    "AudioSetKind": {
+      "description": "Which audio mutation to perform.",
+      "oneOf": [
+        {
+          "description": "Turn a channel on (unmute) or off (mute).",
+          "type": "string",
+          "enum": [
+            "grant"
+          ]
+        },
+        {
+          "description": "Adjust the channel level (volume/gain), `0..=100`.",
+          "type": "string",
+          "enum": [
+            "level"
+          ]
+        }
+      ]
+    },
+    "AudioSetRequest": {
+      "description": "Request: mutate one audio channel's grant or level in the guest session.",
+      "type": "object",
+      "required": [
+        "channel",
+        "kind",
+        "metadata"
+      ],
+      "properties": {
+        "channel": {
+          "$ref": "#/definitions/GuestAudioChannel"
+        },
+        "grantOn": {
+          "description": "For `Grant`: `true` = on, `false` = off.",
+          "default": false,
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/definitions/AudioSetKind"
+        },
+        "level": {
+          "description": "For `Level`: `0..=100`; ignored for `Grant`.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioSetResponse": {
+      "description": "Response: updated channel state after the mutation.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestAudioChannelState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioStatusRequest": {
+      "description": "Request: query current guest audio policy state.",
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AudioStatusResponse": {
+      "description": "Response: per-channel guest audio state.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "microphone": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestAudioChannelState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestAudioChannelState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "AuthenticateRequest": {
       "type": "object",
@@ -1219,6 +1364,37 @@
       "maxLength": 4096,
       "minLength": 1
     },
+    "GuestAudioChannel": {
+      "description": "The audio channel to target.",
+      "type": "string",
+      "enum": [
+        "microphone",
+        "speaker"
+      ]
+    },
+    "GuestAudioChannelState": {
+      "description": "Current state of one audio channel as seen by the guest PipeWire session.",
+      "type": "object",
+      "required": [
+        "muted"
+      ],
+      "properties": {
+        "level": {
+          "description": "Current level 0–100 when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "muted": {
+          "description": "True when the channel is muted (grant = off).",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "GuestAuthTag": {
       "type": "array",
       "items": {
@@ -1236,23 +1412,41 @@
       "minLength": 1
     },
     "GuestCapability": {
-      "type": "string",
-      "enum": [
-        "health",
-        "capabilities",
-        "exec-attached",
-        "exec-detached",
-        "exec-tty",
-        "exec-logs",
-        "tty-resize",
-        "signals",
-        "read-guest-file",
-        "usbip-import",
-        "shell-attached",
-        "shell-management",
-        "shell-force-attach",
-        "usbip-status",
-        "system-activation"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "health",
+            "capabilities",
+            "exec-attached",
+            "exec-detached",
+            "exec-tty",
+            "exec-logs",
+            "tty-resize",
+            "signals",
+            "read-guest-file",
+            "usbip-import",
+            "shell-attached",
+            "shell-management",
+            "shell-force-attach",
+            "usbip-status",
+            "system-activation"
+          ]
+        },
+        {
+          "description": "Read current audio policy state from the guest PipeWire session. Advertised only when guestd is configured with a PipeWire control path.",
+          "type": "string",
+          "enum": [
+            "audio-status"
+          ]
+        },
+        {
+          "description": "Mutate mic/speaker grant or level in the guest PipeWire session. Advertised alongside `AudioStatus`; requires the same configuration.",
+          "type": "string",
+          "enum": [
+            "audio-set"
+          ]
+        }
       ]
     },
     "GuestConnectAckLine": {
@@ -1296,72 +1490,104 @@
       "additionalProperties": false
     },
     "GuestControlErrorKind": {
-      "type": "string",
-      "enum": [
-        "protocol-error",
-        "max-chunk-exceeded",
-        "stdin-backpressure",
-        "stdin-closed",
-        "stdin-not-open",
-        "stdin-closed-by-process",
-        "stdin-offset-mismatch",
-        "stdin-byte-budget-exhausted",
-        "offset-expired",
-        "offset-in-future",
-        "offset-exhausted",
-        "output-lost",
-        "tty-stderr-unavailable",
-        "tty-required",
-        "exec-capacity-exceeded",
-        "exec-attach-capacity-exceeded",
-        "exec-not-found",
-        "exec-already-exited",
-        "guest-exec-disabled",
-        "guest-exec-root-denied",
-        "guest-exec-user-denied",
-        "cwd-invalid",
-        "cwd-denied",
-        "retained-log-path-unsafe",
-        "retained-log-quota-exceeded",
-        "read-wait-capacity-exceeded",
-        "wait-capacity-exceeded",
-        "superseded-read-wait",
-        "rate-limited",
-        "request-id-conflict",
-        "control-seq-mismatch",
-        "slow-consumer-cancelled",
-        "stale-session",
-        "guest-control-unavailable-old-generation",
-        "auth-failed",
-        "transport-unreachable",
-        "exec-expired",
-        "file-not-found",
-        "file-too-large",
-        "path-unsafe",
-        "read-denied",
-        "invalid-program",
-        "usbip-unavailable",
-        "usbip-command-failed",
-        "usbip-invalid-bus-id",
-        "usbip-invalid-host",
-        "guest-shell-disabled",
-        "shell-invalid-name",
-        "shell-capacity-exceeded",
-        "shell-attach-capacity-exceeded",
-        "shell-not-found",
-        "shell-already-attached",
-        "shell-pool-unavailable",
-        "shell-daemon-epoch-mismatch",
-        "shell-output-gap",
-        "usbip-command-timeout",
-        "usbip-invalid-output",
-        "activation-invalid-id",
-        "activation-invalid-path",
-        "activation-invalid-mode",
-        "activation-not-found",
-        "activation-status-unavailable",
-        "activation-timed-out",
-        "activation-spawn-failed"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "protocol-error",
+            "max-chunk-exceeded",
+            "stdin-backpressure",
+            "stdin-closed",
+            "stdin-not-open",
+            "stdin-closed-by-process",
+            "stdin-offset-mismatch",
+            "stdin-byte-budget-exhausted",
+            "offset-expired",
+            "offset-in-future",
+            "offset-exhausted",
+            "output-lost",
+            "tty-stderr-unavailable",
+            "tty-required",
+            "exec-capacity-exceeded",
+            "exec-attach-capacity-exceeded",
+            "exec-not-found",
+            "exec-already-exited",
+            "guest-exec-disabled",
+            "guest-exec-root-denied",
+            "guest-exec-user-denied",
+            "cwd-invalid",
+            "cwd-denied",
+            "retained-log-path-unsafe",
+            "retained-log-quota-exceeded",
+            "read-wait-capacity-exceeded",
+            "wait-capacity-exceeded",
+            "superseded-read-wait",
+            "rate-limited",
+            "request-id-conflict",
+            "control-seq-mismatch",
+            "slow-consumer-cancelled",
+            "stale-session",
+            "guest-control-unavailable-old-generation",
+            "auth-failed",
+            "transport-unreachable",
+            "exec-expired",
+            "file-not-found",
+            "file-too-large",
+            "path-unsafe",
+            "read-denied",
+            "invalid-program",
+            "usbip-unavailable",
+            "usbip-command-failed",
+            "usbip-invalid-bus-id",
+            "usbip-invalid-host",
+            "guest-shell-disabled",
+            "shell-invalid-name",
+            "shell-capacity-exceeded",
+            "shell-attach-capacity-exceeded",
+            "shell-not-found",
+            "shell-already-attached",
+            "shell-pool-unavailable",
+            "shell-daemon-epoch-mismatch",
+            "shell-output-gap",
+            "usbip-command-timeout",
+            "usbip-invalid-output",
+            "activation-invalid-id",
+            "activation-invalid-path",
+            "activation-invalid-mode",
+            "activation-not-found",
+            "activation-status-unavailable",
+            "activation-timed-out",
+            "activation-spawn-failed"
+          ]
+        },
+        {
+          "description": "Guest PipeWire session is unavailable or not configured.",
+          "type": "string",
+          "enum": [
+            "audio-pipe-wire-unavailable"
+          ]
+        },
+        {
+          "description": "Requested audio channel is not recognised.",
+          "type": "string",
+          "enum": [
+            "audio-channel-unknown"
+          ]
+        },
+        {
+          "description": "Audio level value is out of the 0–100 range.",
+          "type": "string",
+          "enum": [
+            "audio-level-out-of-range"
+          ]
+        },
+        {
+          "description": "PipeWire enforcement call succeeded but the policy could not be applied.",
+          "type": "string",
+          "enum": [
+            "audio-enforcement-failed"
+          ]
+        }
       ]
     },
     "GuestCwd": {
@@ -1666,7 +1892,8 @@
         "usbip",
         "shell",
         "shpool",
-        "system-activation"
+        "system-activation",
+        "audio"
       ]
     },
     "GuestSwitchScriptPath": {
