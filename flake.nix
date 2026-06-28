@@ -397,7 +397,16 @@
             };
           };
         };
-        smokeEval = mkEval [ smokeConfigModule ];
+        smokeEval = mkEval [
+          smokeConfigModule
+          ({ lib, ... }: {
+            # Contract fixtures must render the just-built workspace tools.
+            # Release prebuilts may not exist for unreleased development
+            # versions, and using prebuilts would hide changes to runner argv
+            # and helper paths from the rendered artifact tests.
+            d2b.site.usePrebuiltHostTools = lib.mkForce false;
+          })
+        ];
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
           manifestPkg = smokeEval.config.d2b._manifestPkg;
@@ -474,7 +483,14 @@
             };
           };
         };
-        fullEval = mkEval [ fullConfigModule ];
+        fullEval = mkEval [
+          fullConfigModule
+          ({ lib, ... }: {
+            # See smokeEval above: fixture-smoke-full is a rendered-contract
+            # oracle, so it must consume source-built host tools.
+            d2b.site.usePrebuiltHostTools = lib.mkForce false;
+          })
+        ];
         fullFixture = let
           bundle = fullEval.config.d2b._bundle;
           manifestPkg = fullEval.config.d2b._manifestPkg;

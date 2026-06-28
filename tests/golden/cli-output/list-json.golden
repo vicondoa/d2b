@@ -8,6 +8,7 @@
     "staticIp": "10.20.0.10",
     "status": "stopped",
     "isNetVm": false,
+    "guestClosureOutPath": "/nix/store/2y3f62885d76qraq8j1bjsclmn09x114-nixos-system-corp-vm-26.05pre-git",
     "runtimeCapabilities": [
       "config-sync",
       "display",
@@ -21,8 +22,8 @@
       "usb-hotplug"
     ],
     "serviceCapabilities": [
-      "microvm",
       "d2b",
+      "microvm",
       "virtiofsd"
     ],
     "runnerParityOk": true
@@ -36,6 +37,7 @@
     "staticIp": "192.0.2.2",
     "status": "running",
     "isNetVm": true,
+    "guestClosureOutPath": "/nix/store/f6dn3byavsspl0bw7bh8k11g2cxnksw5-nixos-system-sys-work-net-26.05pre-git",
     "runtimeCapabilities": [
       "config-sync",
       "display",
@@ -49,8 +51,8 @@
       "usb-hotplug"
     ],
     "serviceCapabilities": [
-      "microvm",
       "d2b",
+      "microvm",
       "virtiofsd"
     ],
     "runnerParityOk": true

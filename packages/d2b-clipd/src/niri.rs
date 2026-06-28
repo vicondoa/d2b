@@ -380,11 +380,11 @@ impl NiriStateCache {
     ) -> Option<FocusedWindowSnapshot> {
         self.focused = focused;
         self.stale = false;
-        if let Some(window) = &self.focused {
-            if let Some(id) = window.id {
-                self.focused_window_id = Some(id);
-                self.windows.insert(id, window.clone());
-            }
+        if let Some(window) = &self.focused
+            && let Some(id) = window.id
+        {
+            self.focused_window_id = Some(id);
+            self.windows.insert(id, window.clone());
         }
         self.focused_window()
     }
