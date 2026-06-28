@@ -19,8 +19,9 @@ deprecations ship one minor release before removal.
 - The host-side `d2b-wayland-filter` proxy is source-built from the checked-out
   workspace even when other host tools use release prebuilts, so local eval
   gates do not depend on a matching release tarball for this policy binary.
-- The `with-entra-id` eval workflow now authenticates Nix GitHub fetches with
-  the Actions token to avoid transient unauthenticated API rate limits.
+- The `with-entra-id` eval workflow now uses the committed lock file and
+  authenticates Nix GitHub fetches with the Actions token to avoid transient
+  unauthenticated API rate limits.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
