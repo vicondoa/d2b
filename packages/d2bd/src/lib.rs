@@ -2756,11 +2756,7 @@ fn dispatch_console(
             }
 
             // Attach the client, recording the peer uid for ownership checks.
-            let attach_result = state
-                .console_sessions
-                .lock()
-                .unwrap()
-                .attach(vm, peer.uid);
+            let attach_result = state.console_sessions.lock().unwrap().attach(vm, peer.uid);
             match attach_result {
                 Some((handle, kind, start_offset)) => {
                     let result = public_wire::ConsoleAttachResult {
@@ -2902,13 +2898,7 @@ fn dispatch_console(
                 // If the handle is unknown it was already closed; allow the
                 // idempotent path to proceed regardless of uid.
                 if table.client_owner_uid(&args.session).is_some() {
-                    check_console_ownership(
-                        &table,
-                        &args.session,
-                        peer.uid,
-                        is_admin,
-                        "close",
-                    )?;
+                    check_console_ownership(&table, &args.session, peer.uid, is_admin, "close")?;
                 }
             }
             let closed = state.console_sessions.lock().unwrap().close(&args.session);
@@ -26412,9 +26402,9 @@ mod broker_dispatch_tests {
 
         // The `degraded` field must be present and carry the typed-error
         // envelope so operators can detect the condition without log parsing.
-        let degraded = response
-            .get("degraded")
-            .expect("response must contain a `degraded` field when the OtelHostBridge gate times out");
+        let degraded = response.get("degraded").expect(
+            "response must contain a `degraded` field when the OtelHostBridge gate times out",
+        );
 
         assert_eq!(
             degraded.get("kind").and_then(serde_json::Value::as_str),
@@ -26428,11 +26418,17 @@ mod broker_dispatch_tests {
             "degraded.exitCode must be 65"
         );
         assert!(
-            degraded.get("message").and_then(serde_json::Value::as_str).is_some(),
+            degraded
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
             "degraded.message must be present and non-empty"
         );
         assert!(
-            degraded.get("remediation").and_then(serde_json::Value::as_str).is_some(),
+            degraded
+                .get("remediation")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
             "degraded.remediation must be present and non-empty"
         );
 

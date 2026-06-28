@@ -34,10 +34,10 @@ use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestControlHealthError,
-    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError,
-    GuestSystemActivationError, GuestSystemActivationStart, GuestSystemActivationStatus,
-    GuestUsbipAction, GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult,
-    GuestUsbipStatusResult, TtrpcGuestControlClient, activate_system_start_authenticated,
+    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError, GuestSystemActivationError,
+    GuestSystemActivationStart, GuestSystemActivationStatus, GuestUsbipAction,
+    GuestUsbipImportCall, GuestUsbipImportError, GuestUsbipImportResult, GuestUsbipStatusResult,
+    TtrpcGuestControlClient, activate_system_start_authenticated,
     activate_system_status_authenticated, audio_set_authenticated,
     connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
     read_guest_config_authenticated, usbip_import_authenticated, usbip_status_authenticated,
@@ -560,12 +560,11 @@ pub fn run_audio_set_once(
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
     let budget = AttemptBudget::from_now(attempt_timeout, attempt_timeout);
     let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
-    let nonce = host_nonce()
-        .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
+    let nonce =
+        host_nonce().map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestAudioSetError::Probe)?;
     runtime.block_on(async {
-        let client =
-            connect_and_build_client(params, budget).map_err(GuestAudioSetError::Probe)?;
+        let client = connect_and_build_client(params, budget).map_err(GuestAudioSetError::Probe)?;
         audio_set_authenticated(
             &params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -2595,9 +2594,7 @@ mod tests {
 
     #[test]
     fn audio_set_probe_capability_unavailable_returns_capability_unavailable_not_fallback() {
-        let probe = ScriptedAudioProbe::new(vec![Err(
-            GuestAudioSetError::CapabilityUnavailable,
-        )]);
+        let probe = ScriptedAudioProbe::new(vec![Err(GuestAudioSetError::CapabilityUnavailable)]);
         let result = probe.audio_set(
             &test_params(),
             Duration::from_secs(5),

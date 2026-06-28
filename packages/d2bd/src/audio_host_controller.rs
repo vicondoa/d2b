@@ -362,10 +362,7 @@ fn run_subprocess(
                 .filter(|b| b.is_ascii_graphic() || *b == b' ')
                 .map(char::from)
                 .collect();
-            tracing::warn!(
-                subsystem = "d2bd-audio",
-                "wpctl subprocess failed: {diag}"
-            );
+            tracing::warn!(subsystem = "d2bd-audio", "wpctl subprocess failed: {diag}");
             HostEnforcementResult::Failed
         }
         Err(_) => HostEnforcementResult::Failed,

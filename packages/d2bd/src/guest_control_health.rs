@@ -604,7 +604,10 @@ where
         return Err(map_guest_audio_error(error.kind.enum_value_or_default()));
     }
 
-    let state = response.state.as_ref().ok_or(GuestAudioSetError::Protocol)?;
+    let state = response
+        .state
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
     Ok(GuestAudioChannelStatus {
         muted: state.muted,
         level: state.level,

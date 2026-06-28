@@ -96,17 +96,15 @@ pub const STRICT_ENV: &str = "D2B_OTEL_BRIDGE_READINESS_STRICT";
 /// readiness config without mutating process env vars (which requires unsafe
 /// in Rust 1.81+). In production builds this cell is never initialised.
 #[cfg(test)]
-static TEST_CONFIG_OVERRIDE: std::sync::OnceLock<
-    std::sync::Mutex<Option<ReadinessWaitConfig>>,
-> = std::sync::OnceLock::new();
+static TEST_CONFIG_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<ReadinessWaitConfig>>> =
+    std::sync::OnceLock::new();
 
 /// Install a test-only readiness config override.  Pass `None` to clear it.
 /// The override is consulted by [`ReadinessWaitConfig::for_dispatch`] in
 /// `#[cfg(test)]` builds only.
 #[cfg(test)]
 pub fn set_test_readiness_config(cfg: Option<ReadinessWaitConfig>) {
-    let cell = TEST_CONFIG_OVERRIDE
-        .get_or_init(|| std::sync::Mutex::new(None));
+    let cell = TEST_CONFIG_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
     *cell.lock().expect("test readiness config mutex") = cfg;
 }
 
@@ -616,7 +614,10 @@ mod tests {
             "degraded.message must be present"
         );
         assert!(
-            envelope.get("remediation").and_then(|v| v.as_str()).is_some(),
+            envelope
+                .get("remediation")
+                .and_then(|v| v.as_str())
+                .is_some(),
             "degraded.remediation must be present"
         );
         // The envelope must NOT contain opaque internal fields like paths or

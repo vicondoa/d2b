@@ -3952,9 +3952,7 @@ async fn run_wpctl_command(
             .filter(|b| b.is_ascii_graphic() || *b == b' ')
             .map(char::from)
             .collect();
-        eprintln!(
-            "d2b-guestd: wpctl subprocess failed: {diag}"
-        );
+        eprintln!("d2b-guestd: wpctl subprocess failed: {diag}");
         Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE)
     }
 }

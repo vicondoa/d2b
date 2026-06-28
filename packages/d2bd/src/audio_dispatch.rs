@@ -530,7 +530,10 @@ fn run_guestd_audio_set(
     ) {
         Ok(_) => GuestEnforcementResult::Applied,
         Err(GuestAudioSetError::CapabilityUnavailable) => {
-            tracing::debug!(vm = vm_name, "audio guestd: AudioSet capability not advertised");
+            tracing::debug!(
+                vm = vm_name,
+                "audio guestd: AudioSet capability not advertised"
+            );
             GuestEnforcementResult::Unavailable
         }
         Err(e) => {

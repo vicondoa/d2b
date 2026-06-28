@@ -3794,9 +3794,7 @@ fn cmd_audio(
             channel: AudioChannel::Speaker,
             mute: a.state == AudioGrantState::Off,
         })),
-        Some(AudioCommand::Off(a)) => AudioDispatch::Off {
-            vm: a.vm.clone(),
-        },
+        Some(AudioCommand::Off(a)) => AudioDispatch::Off { vm: a.vm.clone() },
     };
 
     match dispatch {
@@ -3907,8 +3905,16 @@ fn render_audio_response(
                 return Ok(0);
             }
             for vm_state in &status.entries {
-                let spk_muted = if vm_state.speaker.muted { "muted" } else { "on" };
-                let mic_muted = if vm_state.microphone.muted { "muted" } else { "on" };
+                let spk_muted = if vm_state.speaker.muted {
+                    "muted"
+                } else {
+                    "on"
+                };
+                let mic_muted = if vm_state.microphone.muted {
+                    "muted"
+                } else {
+                    "on"
+                };
                 print_stdout(&format!(
                     "{}\tspeaker:{} mic:{} enforcement:{}\n",
                     vm_state.vm,
@@ -14223,11 +14229,11 @@ mod host_install_dispatch_tests {
         // d2b-wlcontrol depends on `d2b audio status --json` producing
         // AudioStatusResult JSON. This test locks the shape so any schema
         // change is caught before it breaks downstream consumers.
+        use d2b_contracts::public_wire::AudioChannel;
         use d2b_contracts::public_wire::{
             AudioChannelState, AudioEnforcementPosture, AudioOpResponse, AudioProviderKind,
             AudioSetApplied, AudioSetResult, AudioStatusResult, AudioVmState,
         };
-        use d2b_contracts::public_wire::AudioChannel;
 
         let status = AudioStatusResult {
             entries: vec![AudioVmState {
@@ -14273,7 +14279,10 @@ mod host_install_dispatch_tests {
         let resp_json = serde_json::to_string(&response).expect("serialize response");
         let rv: serde_json::Value = serde_json::from_str(&resp_json).expect("roundtrip resp");
         assert_eq!(rv["op"], "status", "AudioOpResponse tag must be 'op'");
-        assert!(rv["result"].is_object(), "AudioOpResponse content must be 'result'");
+        assert!(
+            rv["result"].is_object(),
+            "AudioOpResponse content must be 'result'"
+        );
     }
 
     #[test]

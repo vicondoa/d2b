@@ -395,6 +395,9 @@ mod tests {
         let mut inp = input();
         inp.console_fd = Some(3);
         let argv = generate_qemu_media_argv(&inp).unwrap();
-        assert!(argv.join(" ").contains("-chardev socket,id=con0,fd=3,server=on,wait=off"));
+        assert!(
+            argv.join(" ")
+                .contains("-chardev socket,id=con0,fd=3,server=on,wait=off")
+        );
     }
 }
