@@ -950,11 +950,11 @@ command.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | Typed `#not-yet-implemented` envelope (the daemon-native console surface is planned per ADR 0041; the current release delivers only typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration guide. When the backend ships the codes below will become active. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (planned) Success. | — |
-| `1` | (planned) Console launch failure. | [`generic`](./error-codes.md#generic) |
+| `0` | Success. | — |
+| `1` | Console launch failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
-| `130` | (planned) Console session interrupted with SIGINT. | — |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console — provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `130` | Console session interrupted with SIGINT. | — |
 
 **Human example**
 
@@ -966,11 +966,11 @@ Use ~. to detach.
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native foreground console handoff is planned per ADR 0041 — provider-capability-aware console streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider transport model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
+The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon owns a persistent ring-buffer drainer per VM and hands the attached operator session reads from that buffer. Provider-capability resolution runs before attach; ACA targets without an active guestd-compatible terminal transport surface a typed `provider-misconfigured` error (exit `80`) rather than falling back to any shell channel. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider transport model; the design is governed by [ADR 0041](../adr/0041-console-and-audio-controls.md) and [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
 **Native**
 
-- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+- Parses and validates arguments natively, then dispatches `ConsoleOp` to `d2bd` over the public socket; surfaces typed error envelopes on failure.
 
 **Bash**
 
@@ -996,10 +996,10 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio status surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (planned) Success. | — |
-| `1` | (planned) Unexpected filesystem or sidecar probe failure. | [`generic`](./error-codes.md#generic) |
+| `0` | Success. Per-target `enforcement: unsupported` (e.g. qemu-media guest-side) is reported in the output body, not as an error exit. | — |
+| `1` | Unexpected filesystem or state probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport; see [provider capability matrix](./provider-capability-matrix.md#aca-audio). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1014,11 +1014,11 @@ device:   detached
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-status surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
+The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Provider capability resolution runs before any state access; Cloud Hypervisor NixOS VMs read OFD-locked state from `/run/d2b/audio/<vm>.json`, qemu-media VMs report `enforcement: unsupported` for guest-side, and ACA sandbox VMs route through provider guestd. Multi-target queries return per-target errors so one misconfigured provider does not fail the entire response. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
-- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+- Parses and validates arguments natively, then dispatches `AudioOp::GetState` to `d2bd` over the public socket; surfaces typed error envelopes on failure.
 
 **Bash**
 
@@ -1045,10 +1045,10 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio mic surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (planned) Success. | — |
-| `1` | (planned) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported in output when live guest enforcement is not yet connected. | — |
+| `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1065,11 +1065,11 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-hotplug surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
+The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The daemon writes OFD-locked state atomically and, where live enforcement is available, applies the guest mic grant via guestd; when live enforcement is not yet connected it persists state and reports `applied: host-only` in the response. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
-- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+- Parses and validates arguments natively, then dispatches `AudioOp::SetMic` to `d2bd` over the public socket; surfaces typed error envelopes on failure.
 
 **Bash**
 
@@ -1096,10 +1096,10 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio speaker surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (planned) Success. | — |
-| `1` | (planned) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported in output when live guest enforcement is not yet connected. | — |
+| `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1116,11 +1116,11 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-speaker surface is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
+The Rust CLI dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket. Behavior mirrors `audio mic`: state is persisted atomically under OFD lock and guest enforcement is applied where available. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
-- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+- Parses and validates arguments natively, then dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket; surfaces typed error envelopes on failure.
 
 **Bash**
 
@@ -1146,10 +1146,10 @@ The Rust CLI owns help and argument validation, but returns a typed exit-78 `not
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | Typed `#not-yet-implemented` envelope (the daemon-native audio off surface is planned per ADR 0041 — provider-capability-aware enforcement across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md); the current release delivers typed-envelope rendering + remediation per ADR 0017). Invocation returns this exit code unconditionally until the backend ships. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `0` | (planned) Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. | — |
-| `1` | (planned) Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
+| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported when live guest enforcement is not yet connected. | — |
+| `1` | Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1166,11 +1166,11 @@ device:   detached
 
 **Status**
 
-The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-off shorthand is planned per ADR 0041; see [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model; the current CLI behavior is governed by ADR 0015 and ADR 0017).
+The Rust CLI dispatches `AudioOp::Mute` to `d2bd` over the public socket. The daemon atomically revokes both mic and speaker grants, persisting state under OFD lock and applying guest enforcement where available. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
-- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+- Parses and validates arguments natively, then dispatches `AudioOp::Mute` to `d2bd` over the public socket; surfaces typed error envelopes on failure.
 
 **Bash**
 

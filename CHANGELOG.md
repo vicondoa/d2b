@@ -80,12 +80,6 @@ deprecations ship one minor release before removal.
   `applied: host-only` when state is persisted and
   `applied: unsupported` when live enforcement is unavailable rather
   than falsely reporting `host-and-guest`.
-- `guestd` no longer advertises `AudioStatus` or `AudioSet` capabilities:
-  the in-guest PipeWire query/set path is not yet connected and the
-  handlers always return `AUDIO_PIPEWIRE_UNAVAILABLE`. Advertising
-  capabilities the handlers cannot fulfil would cause `d2bd` to report
-  false `HostAndGuest` enforcement. Capabilities will be re-enabled once
-  the in-guest `wpctl` integration lands.
 - `guestd` `AudioStatus` and `AudioSet` handlers now use real `wpctl`
   argv-only subprocesses targeting the workload user's PipeWire session.
   The `--wpctl-path` flag (set to `wireplumber/bin/wpctl` by the guest
