@@ -35,9 +35,8 @@ PipeWire properties (`d2b.mic`, `d2b.speaker`); a
 host-side `client.conf.d` rule reads those properties and
 null-routes the corresponding stream direction with
 `target.object = "-1"` when it's `off`. Setting `audio.enable = true`
-only enables the *capability* — the current `d2b audio` Rust
-CLI verbs return typed `not-yet-implemented` exit-78 envelopes, so
-there is no daemon-native audio control plane yet. Both directions
+enables the capability; live status and grant changes are driven through
+the daemon-native `d2b audio` Rust CLI surface. Both directions
 default to `off` on first materialisation unless the
 `allow{Mic,Speaker}ByDefault` options are flipped.
 
@@ -87,9 +86,8 @@ The matching guest-visible option (declared in
 > There is no `d2b-<vm>-snd.service` systemd unit. The broker
 > spawns the audio runner under `d2b.slice/<vm>/snd`, and the
 > hardening shape documented below is enforced as the runner
-> contract. The `d2b audio mic|speaker|status` CLI verbs are
-> rust-native shims that currently return a typed
-> `not-yet-implemented` envelope.
+> contract. The `d2b audio mic|speaker|status` CLI verbs dispatch
+> through `d2bd` and provider-specific audio enforcement.
 
 Per audio-enabled VM:
 
@@ -158,9 +156,7 @@ Per any audio-enabled host (emitted when at least one VM has
   direction is `on`, WirePlumber's normal default-target hook selects
   the host source.
 
-CLI (`d2b audio` in the Rust CLI — currently a rust-native shim
-that returns typed `not-yet-implemented` exit-78; there is no bash
-helper and no daemon-native audio control plane yet):
+CLI (`d2b audio` in the Rust CLI; there is no bash helper):
 
 - `d2b audio mic on|off <vm>`
 - `d2b audio speaker on|off <vm>`

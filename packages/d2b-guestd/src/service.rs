@@ -246,6 +246,9 @@ pub(crate) struct AudioRuntime {
     /// Workload-user UID; used to build `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`
     /// for every wpctl subprocess so they target the user's PipeWire session.
     workload_uid: u32,
+    /// Workload-user primary GID. `uid()` alone would leave root's primary gid
+    /// on a root-started guestd child process.
+    workload_gid: u32,
 }
 
 impl GuestdServeConfig {
@@ -531,6 +534,9 @@ pub struct ServiceRuntime {
 
 trait StartupProbe {
     fn classify_workload_user(&self, user: &str) -> crate::login_session::WorkloadUserUid;
+    fn workload_user_gid(&self, user: &str) -> Option<u32> {
+        crate::login_session::workload_user_gid(user)
+    }
     fn guest_boot_id(&self) -> Result<String, GuestAuthError>;
     fn path_is_file(&self, path: &Path) -> bool;
     fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool;
@@ -585,10 +591,20 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
     // (fail closed). Refusal clears the workload user, disabling every exec
     // path (non-TTY pipe and interactive PTY) — never root.
     let mut exec_uid: Option<u32> = None;
+    let mut exec_gid: Option<u32> = None;
     if let Some(user) = config.exec_policy.exec_user.clone() {
         match probe.classify_workload_user(&user) {
             crate::login_session::WorkloadUserUid::NonRoot(uid) => {
                 exec_uid = Some(uid);
+                exec_gid = probe.workload_user_gid(&user);
+                if exec_gid.is_none() {
+                    eprintln!(
+                        "d2b-guestd: refusing guest exec: workload user '{user}' primary GID is \
+                         not resolvable in /etc/passwd; failing closed"
+                    );
+                    exec_uid = None;
+                    config.exec_policy.exec_user = None;
+                }
             }
             crate::login_session::WorkloadUserUid::Root => {
                 eprintln!(
@@ -744,10 +760,11 @@ async fn prepare_service_runtime_with_probe<P: StartupProbe>(
         .as_ref()
         .filter(|cfg| probe.path_is_file(&cfg.wpctl_path))
         .and_then(|cfg| {
-            exec_uid.map(|uid| {
+            exec_uid.zip(exec_gid).map(|(uid, gid)| {
                 Arc::new(AudioRuntime {
                     wpctl_path: cfg.wpctl_path.clone(),
                     workload_uid: uid,
+                    workload_gid: gid,
                 })
             })
         });
@@ -2107,11 +2124,16 @@ impl GuestControlService {
             &runtime.wpctl_path,
             "@DEFAULT_SOURCE@",
             runtime.workload_uid,
+            runtime.workload_gid,
         )
         .await?;
-        let speaker =
-            query_wpctl_channel_state(&runtime.wpctl_path, "@DEFAULT_SINK@", runtime.workload_uid)
-                .await?;
+        let speaker = query_wpctl_channel_state(
+            &runtime.wpctl_path,
+            "@DEFAULT_SINK@",
+            runtime.workload_uid,
+            runtime.workload_gid,
+        )
+        .await?;
         Ok((microphone, speaker))
     }
 
@@ -2137,6 +2159,7 @@ impl GuestControlService {
                     &runtime.wpctl_path,
                     &["set-mute", target, mute_arg],
                     runtime.workload_uid,
+                    runtime.workload_gid,
                 )
                 .await?;
             }
@@ -2149,13 +2172,20 @@ impl GuestControlService {
                     &runtime.wpctl_path,
                     &["set-volume", target, &vol],
                     runtime.workload_uid,
+                    runtime.workload_gid,
                 )
                 .await?;
             }
             _ => return Err(K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN),
         }
         // Return the updated state after the mutation.
-        query_wpctl_channel_state(&runtime.wpctl_path, target, runtime.workload_uid).await
+        query_wpctl_channel_state(
+            &runtime.wpctl_path,
+            target,
+            runtime.workload_uid,
+            runtime.workload_gid,
+        )
+        .await
     }
 }
 
@@ -3917,6 +3947,7 @@ async fn run_wpctl_command(
     wpctl_path: &Path,
     args: &[&str],
     workload_uid: u32,
+    workload_gid: u32,
 ) -> Result<std::process::Output, pb::GuestControlErrorKind> {
     use pb::GuestControlErrorKind as K;
     let runtime_dir = format!("/run/user/{workload_uid}");
@@ -3926,6 +3957,7 @@ async fn run_wpctl_command(
     command
         .args(args)
         .uid(workload_uid)
+        .gid(workload_gid)
         .env_clear()
         .env("PIPEWIRE_RUNTIME_DIR", &runtime_dir)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
@@ -3963,8 +3995,15 @@ async fn query_wpctl_channel_state(
     wpctl_path: &Path,
     target: &str,
     workload_uid: u32,
+    workload_gid: u32,
 ) -> Result<pb::GuestAudioChannelState, pb::GuestControlErrorKind> {
-    let output = run_wpctl_command(wpctl_path, &["get-volume", target], workload_uid).await?;
+    let output = run_wpctl_command(
+        wpctl_path,
+        &["get-volume", target],
+        workload_uid,
+        workload_gid,
+    )
+    .await?;
     let stdout = std::str::from_utf8(&output.stdout).map_err(|_| {
         pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE
     })?;
@@ -4566,6 +4605,13 @@ mod tests {
             self.uid
         }
 
+        fn workload_user_gid(&self, _user: &str) -> Option<u32> {
+            match self.uid {
+                crate::login_session::WorkloadUserUid::NonRoot(uid) => Some(uid),
+                _ => None,
+            }
+        }
+
         fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
             Ok("boot-1".to_owned())
         }
@@ -4883,6 +4929,7 @@ mod tests {
         let audio_rt = Arc::new(AudioRuntime {
             wpctl_path: PathBuf::from("/nix/store/fake-wpctl/bin/wpctl"),
             workload_uid: 1000,
+            workload_gid: 1000,
         });
         let service = test_service(222).with_audio_runtime(Some(audio_rt));
         let err = service

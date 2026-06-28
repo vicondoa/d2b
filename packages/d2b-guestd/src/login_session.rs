@@ -131,6 +131,14 @@ pub enum WorkloadUserUid {
 /// Returns `None` when the user is absent or its UID field is missing/malformed.
 /// Blank lines, comment lines, and entries with too few fields are skipped.
 pub fn passwd_uid_for(content: &str, user: &str) -> Option<u32> {
+    passwd_uid_gid_for(content, user).map(|(uid, _gid)| uid)
+}
+
+/// The numeric UID/GID `getpwnam` would resolve for `user` from
+/// `/etc/passwd`-format `content`: the FIRST matching entry's UID/GID fields.
+/// Returns `None` when the user is absent or either numeric field is
+/// missing/malformed.
+pub fn passwd_uid_gid_for(content: &str, user: &str) -> Option<(u32, u32)> {
     for line in content.lines() {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() || line.starts_with('#') {
@@ -142,10 +150,19 @@ pub fn passwd_uid_for(content: &str, user: &str) -> Option<u32> {
         if name != Some(user) {
             continue;
         }
-        // Skip the password field, then take the UID field.
-        return fields.nth(1).and_then(|uid| uid.parse::<u32>().ok());
+        // Skip the password field, then take UID and GID.
+        let uid = fields.nth(1)?.parse::<u32>().ok()?;
+        let gid = fields.next()?.parse::<u32>().ok()?;
+        return Some((uid, gid));
     }
     None
+}
+
+/// Resolve `user`'s primary GID from the guest passwd database.
+pub fn workload_user_gid(user: &str) -> Option<u32> {
+    std::fs::read_to_string(GUEST_PASSWD_PATH)
+        .ok()
+        .and_then(|content| passwd_uid_gid_for(&content, user).map(|(_uid, gid)| gid))
 }
 
 /// Classify `user` against `/etc/passwd`-format `content` (pure; testable).

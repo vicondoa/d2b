@@ -336,6 +336,7 @@ fn run_subprocess(
         return HostEnforcementResult::Failed;
     };
     let target_uid = metadata.uid();
+    let target_gid = metadata.gid();
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
@@ -345,6 +346,7 @@ fn run_subprocess(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    cmd.gid(target_gid);
     cmd.uid(target_uid);
     let output = cmd.output();
 

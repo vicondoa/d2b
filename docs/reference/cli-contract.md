@@ -1045,7 +1045,7 @@ The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Pr
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported in output when live guest enforcement is not yet connected. | — |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1065,7 +1065,7 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The daemon writes OFD-locked state atomically and, where live enforcement is available, applies the guest mic grant via guestd; when live enforcement is not yet connected it persists state and reports `applied: host-only` in the response. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
+The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The daemon writes OFD-locked state atomically and, where guest enforcement is supported, applies the guest mic grant via guestd before reporting `host-and-guest`. Providers without guest enforcement, such as qemu-media, report the explicit `host-only` posture. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
@@ -1096,7 +1096,7 @@ The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The 
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported in output when live guest enforcement is not yet connected. | — |
+| `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
@@ -1146,7 +1146,7 @@ The Rust CLI dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket. 
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported when live guest enforcement is not yet connected. | — |
+| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | — |
 | `1` | Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 | `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |

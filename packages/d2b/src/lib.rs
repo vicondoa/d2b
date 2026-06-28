@@ -114,9 +114,9 @@ enum NativeCommand {
     Status(StatusArgs),
     /// USB attach / detach / probe.
     Usb(UsbArgs),
-    /// Foreground serial console bridge for headless VMs (not yet implemented).
+    /// Foreground serial console bridge for headless VMs.
     Console(ConsoleArgs),
-    /// Per-VM audio grant bridge (not yet implemented).
+    /// Per-VM audio status and grant controls.
     Audio(AudioArgs),
     /// Tail the broker audit log.
     Audit(AuditArgs),

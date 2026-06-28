@@ -105,14 +105,10 @@ pub enum PublicRequest {
     /// closed until guestd and d2bd runtime implementations are available.
     #[serde(rename = "shell")]
     Shell(ShellOp),
-    /// Console streaming operation (ADR 0041). Staged contract DTOs; daemons
-    /// return a typed not-yet-implemented envelope until runtime backends
-    /// are available.
+    /// Console streaming operation (ADR 0041).
     #[serde(rename = "console")]
     Console(ConsoleOp),
-    /// Audio policy and status operation (ADR 0041). Staged contract DTOs;
-    /// daemons return a typed not-yet-implemented envelope until runtime
-    /// backends are available.
+    /// Audio policy and status operation (ADR 0041).
     #[serde(rename = "audio")]
     Audio(AudioOp),
     /// Gateway-mode display-session operation. Host-mode daemons reject this
@@ -1540,9 +1536,6 @@ impl fmt::Debug for ConsoleCloseArgs {
 }
 
 /// Console operation sub-request dispatched inside [`PublicRequest::Console`].
-///
-/// The staged DTOs fail closed with a typed not-yet-implemented response until
-/// the runtime backend implementations land.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", content = "args", rename_all = "camelCase")]
 pub enum ConsoleOp {
@@ -1787,9 +1780,6 @@ pub struct AudioMuteArgs {
 }
 
 /// Audio operation sub-request dispatched inside [`PublicRequest::Audio`].
-///
-/// The staged DTOs fail closed with a typed not-yet-implemented response until
-/// the runtime backend implementations land.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", content = "args", rename_all = "camelCase")]
 pub enum AudioOp {

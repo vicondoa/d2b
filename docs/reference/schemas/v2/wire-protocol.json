@@ -371,7 +371,7 @@
       "additionalProperties": false
     },
     "AudioOp": {
-      "description": "Audio operation sub-request dispatched inside [`PublicRequest::Audio`].\n\nThe staged DTOs fail closed with a typed not-yet-implemented response until the runtime backend implementations land.",
+      "description": "Audio operation sub-request dispatched inside [`PublicRequest::Audio`].",
       "oneOf": [
         {
           "type": "object",
@@ -3061,7 +3061,7 @@
       }
     },
     "ConsoleOp": {
-      "description": "Console operation sub-request dispatched inside [`PublicRequest::Console`].\n\nThe staged DTOs fail closed with a typed not-yet-implemented response until the runtime backend implementations land.",
+      "description": "Console operation sub-request dispatched inside [`PublicRequest::Console`].",
       "oneOf": [
         {
           "type": "object",
@@ -7315,7 +7315,7 @@
           }
         },
         {
-          "description": "Console streaming operation (ADR 0041). Staged contract DTOs; daemons return a typed not-yet-implemented envelope until runtime backends are available.",
+          "description": "Console streaming operation (ADR 0041).",
           "type": "object",
           "required": [
             "kind",
@@ -7334,7 +7334,7 @@
           }
         },
         {
-          "description": "Audio policy and status operation (ADR 0041). Staged contract DTOs; daemons return a typed not-yet-implemented envelope until runtime backends are available.",
+          "description": "Audio policy and status operation (ADR 0041).",
           "type": "object",
           "required": [
             "kind",

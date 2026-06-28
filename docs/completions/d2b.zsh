@@ -1630,8 +1630,8 @@ _d2b_commands() {
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
-'audio:Per-VM audio grant bridge (not yet implemented)' \
+'console:Foreground serial console bridge for headless VMs' \
+'audio:Per-VM audio status and grant controls' \
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
@@ -1877,8 +1877,8 @@ _d2b__subcmd__help_commands() {
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
-'audio:Per-VM audio grant bridge (not yet implemented)' \
+'console:Foreground serial console bridge for headless VMs' \
+'audio:Per-VM audio status and grant controls' \
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
