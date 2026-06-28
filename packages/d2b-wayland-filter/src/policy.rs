@@ -28,6 +28,8 @@ pub enum Classification {
     AcceleratedRendering,
     /// High-risk global; warn if the operator enables it.
     HighRisk,
+    /// Clipboard/DND global reserved for d2b virtualization; warn if forwarded.
+    ClipboardBoundary,
     /// Ordinary app global that is on by default but not required.
     AppDefault,
     /// Global that is off by default but not considered high-risk.
@@ -51,6 +53,7 @@ pub enum PolicyWarning {
     RequiredGlobalDenied { interface: String },
     AcceleratedRenderingDisabled { interface: String },
     HighRiskGlobalEnabled { interface: String },
+    ClipboardBoundaryBypassEnabled { interface: String },
     AppIdPrefixNotVmPrefix { vm: String, prefix: String },
     TitlePrefixDisabled,
     UnclassifiedGlobalAllowed { interface: String },
@@ -70,6 +73,10 @@ impl PolicyWarning {
             Self::HighRiskGlobalEnabled { interface } => format!(
                 "waylandFilter: high-risk global `{interface}` is enabled; \
                  this global has elevated access to host compositor state"
+            ),
+            Self::ClipboardBoundaryBypassEnabled { interface } => format!(
+                "waylandFilter: clipboard boundary global `{interface}` is enabled; \
+                 guest clipboard/DND objects may bypass d2b virtualization policy"
             ),
             Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
                 "waylandFilter: appIdPrefix is `{prefix}` rather than the default \
@@ -220,6 +227,13 @@ impl FilterPolicy {
                     interface: iface.clone(),
                 });
             }
+            if entry.classification == Classification::ClipboardBoundary
+                && entry.action == GlobalAction::Allow
+            {
+                warnings.push(PolicyWarning::ClipboardBoundaryBypassEnabled {
+                    interface: iface.clone(),
+                });
+            }
             if entry.classification == Classification::Unclassified
                 && entry.action == GlobalAction::Allow
             {
@@ -347,7 +361,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("xdg_wm_base", Allow, RequiredBaseline);
     entry!("wl_output", Allow, RequiredBaseline);
     entry!("wl_subcompositor", Allow, RequiredBaseline);
-    entry!("wl_data_device_manager", Allow, AppDefault);
+    entry!("wl_data_device_manager", Deny, ClipboardBoundary);
 
     // --- accelerated-rendering (enabled, warn if denied) ---
     entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering);
@@ -381,7 +395,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("xdg_dialog_v1", Allow, AppDefault);
     entry!("xdg_wm_dialog_v1", Allow, AppDefault);
     entry!("xdg_toplevel_icon_manager_v1", Allow, AppDefault);
-    entry!("xdg_toplevel_drag_manager_v1", Allow, AppDefault);
+    entry!("xdg_toplevel_drag_manager_v1", Deny, ClipboardBoundary);
     entry!("xdg_activation_token_v1", Allow, AppDefault);
     entry!("xdg_toplevel_tag_manager_v1", Allow, AppDefault);
 
@@ -420,8 +434,22 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     // --- clipboard-control (disabled by default, high-risk) ---
     entry!("ext_data_control_manager_v1", Deny, HighRisk);
     entry!("zwlr_data_control_manager_v1", Deny, HighRisk);
-    entry!("zwp_primary_selection_device_manager_v1", Deny, HighRisk);
-    entry!("wp_primary_selection_unstable_v1", Deny, HighRisk);
+    entry!(
+        "zwp_primary_selection_device_manager_v1",
+        Deny,
+        ClipboardBoundary
+    );
+    entry!(
+        "wp_primary_selection_device_manager_v1",
+        Deny,
+        ClipboardBoundary
+    );
+    entry!("wp_primary_selection_unstable_v1", Deny, ClipboardBoundary);
+    entry!(
+        "gtk_primary_selection_device_manager",
+        Deny,
+        ClipboardBoundary
+    );
 
     // --- desktop-shell (disabled by default, high-risk) ---
     entry!("zwlr_layer_shell_v1", Deny, HighRisk);
@@ -496,6 +524,23 @@ mod tests {
             assert!(
                 !p.is_allowed(iface),
                 "high-risk global `{iface}` must be denied by default"
+            );
+        }
+    }
+
+    #[test]
+    fn clipboard_boundary_globals_are_denied() {
+        let p = policy_for("work");
+        for iface in &[
+            "wl_data_device_manager",
+            "zwp_primary_selection_device_manager_v1",
+            "wp_primary_selection_device_manager_v1",
+            "gtk_primary_selection_device_manager",
+            "xdg_toplevel_drag_manager_v1",
+        ] {
+            assert!(
+                !p.is_allowed(iface),
+                "clipboard boundary global `{iface}` must be denied until virtualized"
             );
         }
     }
@@ -581,6 +626,20 @@ mod tests {
             w,
             PolicyWarning::HighRiskGlobalEnabled { interface }
             if interface == "zwlr_screencopy_manager_v1"
+        )));
+    }
+
+    #[test]
+    fn enable_clipboard_boundary_global_produces_warning() {
+        let p = FilterPolicy::build(PolicyInput {
+            vm_name: "work".to_owned(),
+            allow_globals: vec!["wl_data_device_manager".to_owned()],
+            ..Default::default()
+        });
+        assert!(p.warnings.iter().any(|w| matches!(
+            w,
+            PolicyWarning::ClipboardBoundaryBypassEnabled { interface }
+            if interface == "wl_data_device_manager"
         )));
     }
 

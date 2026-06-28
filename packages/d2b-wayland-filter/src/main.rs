@@ -26,6 +26,7 @@ use d2b_wayland_filter::filter::{
     FilterClientHandler, FilterStateHandler, build_state, install_client_handlers,
 };
 use d2b_wayland_filter::{
+    bridge::{BridgeConfig, BridgeReconnectPolicy},
     diag::DiagRateLimiter,
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
@@ -79,6 +80,30 @@ struct Args {
     /// Emit a log line for every global filtered from advertisement.
     #[arg(long)]
     log_filtered_globals: bool,
+
+    /// Exact d2b-clipd bridge socket path for this per-user/per-VM proxy.
+    #[arg(long = "clipd-bridge-socket", value_name = "PATH")]
+    clipd_bridge_socket: Option<PathBuf>,
+
+    /// Root used to derive `/run/d2b/clipd/<uid>/bridge/<vm>/clip.sock`.
+    #[arg(
+        long = "clipd-bridge-root",
+        value_name = "PATH",
+        default_value = "/run/d2b/clipd"
+    )]
+    clipd_bridge_root: PathBuf,
+
+    /// Host Wayland user's numeric uid for derived d2b-clipd bridge paths.
+    #[arg(long = "clipd-bridge-user-uid", value_name = "UID")]
+    clipd_bridge_user_uid: Option<u32>,
+
+    /// Initial reconnect backoff for the future d2b-clipd bridge.
+    #[arg(long = "clipd-bridge-reconnect-initial-ms", default_value_t = 250)]
+    clipd_bridge_reconnect_initial_ms: u64,
+
+    /// Maximum reconnect backoff for the future d2b-clipd bridge.
+    #[arg(long = "clipd-bridge-reconnect-max-ms", default_value_t = 5000)]
+    clipd_bridge_reconnect_max_ms: u64,
 }
 
 fn parse_max_version(s: &str) -> Result<(String, u32), String> {
@@ -123,6 +148,21 @@ fn main() {
         std::process::exit(1);
     });
 
+    let bridge_config = BridgeConfig::from_parts(
+        args.clipd_bridge_socket.clone(),
+        &args.clipd_bridge_root,
+        args.clipd_bridge_user_uid,
+        &args.vm_name,
+        BridgeReconnectPolicy {
+            initial_delay: Duration::from_millis(args.clipd_bridge_reconnect_initial_ms),
+            max_delay: Duration::from_millis(args.clipd_bridge_reconnect_max_ms),
+        },
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("d2b-wayland-filter: error in clipboard bridge configuration: {e}");
+        std::process::exit(1);
+    });
+
     let input = PolicyInput {
         vm_name: args.vm_name.clone(),
         app_id_prefix: args.app_id_prefix.clone(),
@@ -141,6 +181,18 @@ fn main() {
     // Emit advisory warnings to stderr so they appear in the journal.
     for w in &policy.warnings {
         eprintln!("d2b-wayland-filter: warning: {}", w.message());
+    }
+    if let Some(path) = &bridge_config.socket_path {
+        log::info!(
+            "[d2b-wlproxy] vm={} clipboard-bridge={} status=scaffolded",
+            args.vm_name,
+            path.display()
+        );
+    } else {
+        log::debug!(
+            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=scaffolded",
+            args.vm_name
+        );
     }
 
     // Step 3: prove the upstream compositor is reachable before exposing a

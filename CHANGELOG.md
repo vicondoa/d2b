@@ -19,6 +19,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `d2b-wayland-filter` now includes clipboard virtualization groundwork:
+  bridge socket configuration scaffolding, exact guest-client attribution
+  bookkeeping, v1 clipboard/DND policy helpers, and FD-handoff lifecycle tests.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`
