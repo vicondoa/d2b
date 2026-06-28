@@ -159,10 +159,6 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   exit 2
 fi
 
-# Shared scratch VM name we use for sidecar lifecycle tests. Doesn't
-# need to be a real VM (the .socket template instantiates per any name).
-SCRATCH_VM=__d2b_test_audio__
-
 # ---------------------------------------------------------------------
 # Cleanups: at exit, stop the scratch sidecar and reset every
 # audio-enabled VM's state file to what we found it as.
@@ -346,8 +342,6 @@ test_cli_grant_revoke() {
   local vm rc=0
   vm=$(printf '%s\n' "$TEST_VMS" | head -1)
   local f="$STATE_ROOT/$vm/state/audio-state.json"
-  local sock
-  sock="/run/d2b/vms/${vm}/snd.sock"
 
   # baseline reset
   d2b audio off "$vm" >/dev/null
