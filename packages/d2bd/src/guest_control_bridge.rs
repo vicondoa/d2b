@@ -2429,6 +2429,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn real_audio_set_uses_single_probe_call() {
+        let source = include_str!("guest_control_bridge.rs");
+        let impl_start = source
+            .find("impl GuestControlProbe for RealGuestControlProbe")
+            .expect("RealGuestControlProbe impl present");
+        let impl_source = &source[impl_start..];
+        let method_start = impl_source
+            .find("fn audio_set(\n        &self,")
+            .expect("RealGuestControlProbe::audio_set present");
+        let method_end = impl_source[method_start..]
+            .find("\n    }\n}")
+            .expect("audio_set ends before impl close")
+            + method_start;
+        let method = &impl_source[method_start..method_end];
+        assert!(
+            method.contains("run_audio_set_once"),
+            "real audio set must call the one-shot guest-control RPC helper"
+        );
+        assert!(
+            !method.contains("run_audio_set_on_dedicated_thread"),
+            "real audio set must not recurse through the dedicated-thread wrapper"
+        );
+    }
+
     /// Build evidence whose every guest-controlled string carries a
     /// sentinel, so a leak into the observability projection is detectable.
     fn sentinel_evidence(

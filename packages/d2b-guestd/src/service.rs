@@ -4107,7 +4107,8 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE => {
             (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
         }
-        K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED
+        | K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE
         | K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN => (R::HEALTH_REMEDIATION_NONE, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
@@ -5868,6 +5869,12 @@ mod tests {
         let unknown_channel = guest_error(K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN);
         assert_eq!(
             unknown_channel.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_NONE
+        );
+
+        let enforcement = guest_error(K::GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED);
+        assert_eq!(
+            enforcement.remediation.enum_value().unwrap(),
             R::HEALTH_REMEDIATION_NONE
         );
     }
