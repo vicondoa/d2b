@@ -2807,7 +2807,7 @@ fn dispatch_console(
 
         ConsoleOp::WriteStdin(args) => {
             let bytes = d2b_core::base64_codec::decode(&args.chunk_base64).map_err(|_| {
-                TypedError::InternalConfig {
+                TypedError::WireInvalidFrame {
                     detail: "console: invalid base64 stdin chunk".to_owned(),
                 }
             })?;

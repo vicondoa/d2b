@@ -46,7 +46,7 @@
 | Code | Meaning |
 | --- | --- |
 | `0` | Session ended normally, including operator detach or handled terminal signals. |
-| `1` | Console launch failure (see error envelope for details). |
+| `1` | Console launch or output read failure (see error envelope for details). |
 | `2` | Unknown VM, unsupported invocation, or graphics VM selected. |
 
 ## Check audio state for a VM

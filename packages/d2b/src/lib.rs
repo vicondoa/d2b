@@ -3671,10 +3671,21 @@ fn cmd_console(
                     stdout_offset = out.ring_buffer_start_offset;
                 }
                 if !out.chunk_base64.is_empty() {
-                    let bytes =
-                        d2b_core::base64_codec::decode(&out.chunk_base64).map_err(|_| {
-                            CliFailure::new(1, "console: daemon returned malformed base64 output")
-                        })?;
+                    let bytes = match d2b_core::base64_codec::decode(&out.chunk_base64) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            let _ = console_round_trip(
+                                &mut socket,
+                                &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                }),
+                            );
+                            return Err(CliFailure::new(
+                                1,
+                                "console: daemon returned malformed base64 output",
+                            ));
+                        }
+                    };
                     if let Err(err) = write_stdout_bytes(&bytes) {
                         let _ = console_round_trip(
                             &mut socket,
@@ -3693,6 +3704,12 @@ fn cmd_console(
                     stdout_offset = out.offset + bytes.len() as u64;
                 }
                 if out.is_eof && out.chunk_base64.is_empty() {
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                            session: session.clone(),
+                        }),
+                    );
                     print_stderr("\r\nVM console closed (EOF).\r\n");
                     return Ok(0);
                 }
@@ -17264,7 +17281,22 @@ mod console_fsm_tests {
                     "console eof response",
                 )
                 .expect("encode console eof response");
-                send_test_frame(accepted, &eof_response)
+                send_test_frame(accepted, &eof_response)?;
+
+                let close_request = recv_test_frame(accepted)?;
+                let close_value: Value = serde_json::from_slice(&close_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(close_value.get("op").and_then(Value::as_str), Some("close"));
+                let close_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Close(public_wire::ConsoleCloseResult {
+                        session: "console-test".to_owned(),
+                        closed: true,
+                    }),
+                    "console close response",
+                )
+                .expect("encode console close response");
+                send_test_frame(accepted, &close_response)
             })();
             close(accepted).expect("close accepted socket");
             exchange.expect("mock console daemon exchange");
@@ -17318,20 +17350,118 @@ mod console_fsm_tests {
 
     #[test]
     fn console_output_decode_fails_closed() {
-        let source = include_str!("lib.rs");
-        let start = source.find("fn cmd_console(").expect("cmd_console present");
-        let body = &source[start
-            ..source[start..]
-                .find("fn console_round_trip(")
-                .expect("console_round_trip follows cmd_console")
-                + start];
+        let socket_path = console_test_socket_path("bad-base64");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let _attach_request = recv_test_frame(accepted)?;
+                let attach_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Attach(public_wire::ConsoleAttachResult {
+                        session: "console-test".to_owned(),
+                        provider_kind: public_wire::ConsoleProviderKind::LocalHypervisor,
+                        ring_buffer_start_offset: 0,
+                    }),
+                    "console attach response",
+                )
+                .expect("encode console attach response");
+                send_test_frame(accepted, &attach_response)?;
+
+                let _read_request = recv_test_frame(accepted)?;
+                let bad_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 0,
+                            chunk_base64: "not valid base64!".to_owned(),
+                            is_eof: false,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console malformed output response",
+                )
+                .expect("encode malformed output response");
+                send_test_frame(accepted, &bad_response)?;
+
+                let close_request = recv_test_frame(accepted)?;
+                let close_value: Value = serde_json::from_slice(&close_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(close_value.get("op").and_then(Value::as_str), Some("close"));
+                let close_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Close(public_wire::ConsoleCloseResult {
+                        session: "console-test".to_owned(),
+                        closed: true,
+                    }),
+                    "console close response",
+                )
+                .expect("encode console close response");
+                send_test_frame(accepted, &close_response)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock console daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = super::ConsoleArgs {
+            vm: "media".to_owned(),
+        };
+        let (result, stdout, _stderr) =
+            super::with_test_output_capture(|| super::cmd_console(&context, &args, &[]));
+        server.join().expect("join mock console daemon");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let err = result.expect_err("malformed console output must fail closed");
+        assert_eq!(err.exit_code, 1);
+        assert!(err.message.contains("malformed base64"));
         assert!(
-            body.contains("daemon returned malformed base64 output"),
-            "cmd_console must surface malformed console output explicitly"
-        );
-        assert!(
-            !body.contains("decode(&out.chunk_base64).unwrap_or_default()"),
-            "cmd_console must not turn malformed console output into an empty chunk"
+            stdout.is_empty(),
+            "malformed chunks must not emit synthetic stdout"
         );
     }
 }

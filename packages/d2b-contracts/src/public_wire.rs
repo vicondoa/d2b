@@ -1594,6 +1594,8 @@ pub struct ConsoleReadOutputResult {
     /// Total bytes dropped from the ring buffer since VM start.
     pub dropped_bytes: u64,
     /// Whether the output stream has ended (VM exited or session closed).
+    /// Clients must still consume any non-empty `chunk_base64` in this response
+    /// and continue polling until `is_eof` is true with an empty chunk.
     pub is_eof: bool,
 }
 
