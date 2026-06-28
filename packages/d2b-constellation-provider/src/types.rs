@@ -199,10 +199,21 @@ pub struct ProviderGuestdBootstrapContract {
     /// Whether the agent can answer health/capabilities from inside the
     /// sandbox. Without this, capability advertisement must stay fail-closed.
     pub health_capability_advertisement: bool,
+    /// Console capability for this sandbox's guestd-compatible agent (ADR
+    /// 0041). `None` means the capability was not declared; routing fails
+    /// closed and the daemon returns a typed provider-misconfigured error
+    /// rather than falling back to a provider-specific shell side channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console: Option<ProviderConsoleCapability>,
+    /// Audio enforcement capability for this sandbox (ADR 0041). `None`
+    /// means the capability was not declared; routing fails closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ProviderAudioCapability>,
 }
 
 impl ProviderGuestdBootstrapContract {
-    /// Execute-only provider sandboxes start fail-closed for persistent shell.
+    /// Execute-only provider sandboxes start fail-closed for persistent shell,
+    /// console, and audio.
     pub fn execute_only_fail_closed() -> Self {
         Self {
             guestd_binary: ProviderGuestdBinaryPlacement::Absent,
@@ -212,6 +223,8 @@ impl ProviderGuestdBootstrapContract {
             shell_helper: ProviderShellHelperAvailability::Absent,
             shell_limits: None,
             health_capability_advertisement: false,
+            console: None,
+            audio: None,
         }
     }
 
@@ -245,8 +258,108 @@ impl ProviderGuestdBootstrapContract {
         if self.persistent_shell_ready() {
             caps = caps.with(Capability::PersistentShell);
         }
+        if self.console_ready() {
+            caps = caps.with(Capability::Pty);
+        }
+        if self.audio_guest_enforcement_ready() {
+            caps = caps
+                .with(Capability::AudioPlayback)
+                .with(Capability::AudioCapture);
+        }
         WorkloadCapabilitySet { caps }
     }
+
+    /// True iff the sandbox's guestd-compatible agent advertises a
+    /// guestd-backed console capability (ADR 0041).
+    pub fn console_ready(&self) -> bool {
+        matches!(self.console, Some(ProviderConsoleCapability::GuestdBacked))
+    }
+
+    /// True iff guest-side audio enforcement is available via the
+    /// guestd-compatible agent (ADR 0041).
+    pub fn audio_guest_enforcement_ready(&self) -> bool {
+        matches!(
+            self.audio,
+            Some(ProviderAudioCapability {
+                guest_enforcement: ProviderAudioGuestEnforcement::GuestdCapable,
+                ..
+            })
+        )
+    }
+}
+
+// ---- Provider console/audio capability types (ADR 0041) ---------------------
+
+/// Console capability advertised by a provider-managed sandbox's
+/// guestd-compatible agent. This is a typed capability descriptor, not a relay
+/// URL, resource identifier, or credential: it never exposes where or how the
+/// agent runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderConsoleCapability {
+    /// guestd-backed console stream available over the provider peer transport.
+    /// The daemon routes `ConsoleOp::Attach` through the authenticated
+    /// guest-control relay; no local socket or broker fd is used.
+    GuestdBacked,
+    /// No console capability is present in this sandbox. The daemon returns a
+    /// typed provider-misconfigured error with remediation rather than falling
+    /// back to a provider-specific shell side channel.
+    Absent,
+}
+
+/// Audio enforcement posture for a provider-managed sandbox (ADR 0041).
+///
+/// Host-side PipeWire/vhost-user-sound enforcement is never available for
+/// provider-managed sandboxes; only guest-side guestd policy applies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAudioCapability {
+    /// Host audio enforcement: always `Absent` for provider-managed sandboxes
+    /// (no local PipeWire node or vhost-user-sound sidecar is created).
+    pub host_enforcement: ProviderAudioHostEnforcement,
+    /// Guest-side audio enforcement via the guestd-compatible sandbox agent.
+    pub guest_enforcement: ProviderAudioGuestEnforcement,
+}
+
+impl ProviderAudioCapability {
+    /// No audio capability (execute-only / missing-guestd failure posture).
+    pub fn absent() -> Self {
+        Self {
+            host_enforcement: ProviderAudioHostEnforcement::Absent,
+            guest_enforcement: ProviderAudioGuestEnforcement::Unsupported,
+        }
+    }
+
+    /// Full guestd-backed guest enforcement; no host enforcement (the
+    /// standard ACA sandbox audio posture).
+    pub fn guestd_guest_only() -> Self {
+        Self {
+            host_enforcement: ProviderAudioHostEnforcement::Absent,
+            guest_enforcement: ProviderAudioGuestEnforcement::GuestdCapable,
+        }
+    }
+}
+
+/// Host-side audio enforcement for a provider-managed sandbox.
+///
+/// Provider sandboxes never control local PipeWire or vhost-user-sound nodes
+/// on the host; this enum has a single value to make the posture explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderAudioHostEnforcement {
+    /// No host audio enforcement (the only valid value for provider-managed
+    /// sandboxes).
+    Absent,
+}
+
+/// Guest-side audio enforcement for a provider-managed sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderAudioGuestEnforcement {
+    /// guestd-capable audio policy over the provider peer transport.
+    GuestdCapable,
+    /// Guest-side enforcement is unsupported (missing guestd, execute-only
+    /// provider, or capability not declared by the sandbox agent).
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -602,6 +715,8 @@ mod tests {
                 max_attached: 1,
             }),
             health_capability_advertisement: true,
+            console: None,
+            audio: None,
         };
         assert!(ready.persistent_shell_ready());
         assert!(
@@ -620,5 +735,118 @@ mod tests {
                 .advertised_capabilities()
                 .has(Capability::PersistentShell)
         );
+    }
+
+    #[test]
+    fn provider_guestd_console_ready_requires_guestd_backed() {
+        let mut contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
+        assert!(!contract.console_ready());
+        assert!(!contract.advertised_capabilities().has(Capability::Pty));
+
+        contract.console = Some(ProviderConsoleCapability::Absent);
+        assert!(!contract.console_ready());
+
+        contract.console = Some(ProviderConsoleCapability::GuestdBacked);
+        assert!(contract.console_ready());
+        assert!(contract.advertised_capabilities().has(Capability::Pty));
+    }
+
+    #[test]
+    fn provider_guestd_audio_enforcement_ready_requires_guestd_capable() {
+        let mut contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
+        assert!(!contract.audio_guest_enforcement_ready());
+        assert!(
+            !contract
+                .advertised_capabilities()
+                .has(Capability::AudioPlayback)
+        );
+        assert!(
+            !contract
+                .advertised_capabilities()
+                .has(Capability::AudioCapture)
+        );
+
+        contract.audio = Some(ProviderAudioCapability::absent());
+        assert!(!contract.audio_guest_enforcement_ready());
+
+        contract.audio = Some(ProviderAudioCapability::guestd_guest_only());
+        assert!(contract.audio_guest_enforcement_ready());
+        assert!(
+            contract
+                .advertised_capabilities()
+                .has(Capability::AudioPlayback)
+        );
+        assert!(
+            contract
+                .advertised_capabilities()
+                .has(Capability::AudioCapture)
+        );
+    }
+
+    #[test]
+    fn execute_only_fail_closed_has_no_console_or_audio() {
+        let contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
+        assert!(contract.console.is_none());
+        assert!(contract.audio.is_none());
+        assert!(!contract.console_ready());
+        assert!(!contract.audio_guest_enforcement_ready());
+    }
+
+    #[test]
+    fn provider_audio_capability_constructors_match_adr_0041() {
+        // absent: no host or guest enforcement.
+        let absent = ProviderAudioCapability::absent();
+        assert_eq!(
+            absent.host_enforcement,
+            ProviderAudioHostEnforcement::Absent
+        );
+        assert_eq!(
+            absent.guest_enforcement,
+            ProviderAudioGuestEnforcement::Unsupported
+        );
+
+        // guestd_guest_only: no host; guest via guestd.
+        let guest_only = ProviderAudioCapability::guestd_guest_only();
+        assert_eq!(
+            guest_only.host_enforcement,
+            ProviderAudioHostEnforcement::Absent
+        );
+        assert_eq!(
+            guest_only.guest_enforcement,
+            ProviderAudioGuestEnforcement::GuestdCapable
+        );
+    }
+
+    #[test]
+    fn provider_guestd_bootstrap_contract_console_audio_fields_are_optional_in_serde() {
+        // Serializing an execute-only contract (console/audio = None) must
+        // produce JSON without those keys, and deserializing the old JSON
+        // shape (without console/audio keys) must succeed fail-closed.
+        let contract = ProviderGuestdBootstrapContract::execute_only_fail_closed();
+        let json = serde_json::to_string(&contract).expect("serialize");
+        assert!(
+            !json.contains("console"),
+            "absent console must not appear in JSON"
+        );
+        assert!(
+            !json.contains("audio"),
+            "absent audio must not appear in JSON"
+        );
+
+        // A JSON blob without console/audio keys (from an older peer) must
+        // deserialize with console/audio defaulting to None.
+        let old_json = serde_json::json!({
+            "guestd_binary": "absent",
+            "auth_material": "absent",
+            "relay_endpoint": "absent",
+            "workload_identity": "absent",
+            "shell_helper": "absent",
+            "shell_limits": null,
+            "health_capability_advertisement": false
+        });
+        let decoded: ProviderGuestdBootstrapContract =
+            serde_json::from_value(old_json).expect("old JSON deserializes");
+        assert!(decoded.console.is_none());
+        assert!(decoded.audio.is_none());
     }
 }

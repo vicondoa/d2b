@@ -55,7 +55,11 @@ EOF
       runHook postInstall
     '';
   };
-  d2bWaylandFilterPackage = if prebuilt ? "d2b-wayland-filter" then prebuilt."d2b-wayland-filter" else d2bWaylandFilterSourcePackage;
+  # The filter is tied to the checked-out policy implementation and is cheap
+  # enough to build in the eval smoke fixtures. Keep it source-built even when
+  # other host tools use release prebuilts so missing release assets cannot
+  # break local validation.
+  d2bWaylandFilterPackage = d2bWaylandFilterSourcePackage;
   d2bWaylandFilterBinary = "${d2bWaylandFilterPackage}/bin/d2b-wayland-filter";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
@@ -246,8 +250,10 @@ EOF
       "unix:${qemuMediaQmpSocket name},server=on,wait=off"
       "-monitor"
       "none"
+      "-chardev"
+      "socket,id=con0,fd=11"
       "-serial"
-      "none"
+      "chardev:con0"
       "-parallel"
       "none"
       "-name"
@@ -772,6 +778,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "PIPEWIRE_RUNTIME_DIR=/run/user/${waylandUid}"
       "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
       ''PIPEWIRE_PROPS={ application.name = "d2b-${name}" node.name = "d2b-${name}" node.description = "d2b ${name}" d2b.vm = "${name}" }''
+      "WPCTL_PATH=${pkgs.wireplumber}/bin/wpctl"
+      "PW_DUMP_PATH=${pkgs.pipewire}/bin/pw-dump"
     ] ++ lib.optional (cfg.site.audio.inputTargetNode != null)
       "D2B_AUDIO_INPUT_TARGET_NODE=${cfg.site.audio.inputTargetNode}";
   };
@@ -897,7 +905,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         mkRunnerNode name {
           id = shareNodeId share;
           role = "virtiofsd";
-          unit = "microvm-virtiofsd@${name}.service";
           readiness = [ (unixSocketExists (shareSocketPath name share)) ];
         } (virtiofsdRunner name share));
       shareNodeIds = builtins.map shareNodeId virtiofsShares;
@@ -945,20 +952,17 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm-flush";
         role = "swtpm-pre-start-flush";
-        unit = "d2b-${name}-swtpm.service";
         readiness = [ ];
       } (swtpmFlushRunner name))
       ++ lib.optional vm.tpm.enable (mkRunnerNode name {
         id = "swtpm";
         role = "swtpm";
-        unit = "d2b-${name}-swtpm.service";
         readiness = [ (unixSocketListening manifest.tpmSocket) ];
       } (swtpmRunner name))
       ++ shareNodes
       ++ lib.optional (vm.graphics.enable && !vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu";
         role = "gpu";
-        unit = "d2b-${name}-gpu.service";
       # (Option B): readiness uses microvm.graphics.socket
       # (the same path the argv tells crosvm to create), not the
       # stale /var/lib/d2b/vms/<vm>/<vm>-gpu.sock from manifest.
@@ -975,7 +979,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional (vm.graphics.enable && vm.graphics.renderNodeOnly) (mkRunnerNode name {
         id = "gpu-render-node";
         role = "gpu-render-node";
-        unit = "d2b-${name}-gpu.service";
         readiness = graphicsReadiness;
       } (gpuRenderNodeRunner name vm))
       ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (mkRunnerNode name {
@@ -993,12 +996,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";
-        unit = "d2b-${name}-snd.service";
         readiness = [ (unixSocketExists "/run/d2b/vms/${name}/snd.sock") ];
       } (audioRunner name))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
-          unit = if vm.graphics.enable then "d2b-${name}-gpu.service" else "microvm@${name}.service";
           runner = {
             binaryPath = cloudHypervisorBinaryPath microvm;
             argv = cloudHypervisorArgv name vm manifest;

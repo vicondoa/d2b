@@ -52,6 +52,7 @@ shape, remediation hint, and docs anchor.
 | <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated d2b input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window. |
 | <a id="internal-io"></a>`#internal-io` | `internal-io` | `50` | `daemon-api/internal` | an internal I/O step failed (opaque reason: {opaque_reason}) | Retry the command; if the error persists, inspect the daemon logs with the opaque reason token. |
 | <a id="bundle-tampered"></a>`#bundle-tampered` | `bundle-tampered` | `60` | `bundle-load` | bundle artifact {path} failed tamper-resistance check: {reason} | Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state. |
+| <a id="provider-misconfigured"></a>`#provider-misconfigured` | `provider-misconfigured` | `80` | `provider` | provider for {vm} is misconfigured: {reason} | Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running. |
 <!-- END AUTO-GENERATED: error-table -->
 
 ## CLI host-verb refusal envelope
@@ -210,21 +211,19 @@ envelope EXCEPT the four cases below; operator grep patterns
 targeting other remediation strings are unaffected.
 
 **Multi-line `Remediation:` block format** applies to ONLY
-these four CLI verbs when they emit `#daemon-down` or
+these two CLI verbs when they emit `#daemon-down` or
 `#not-yet-implemented` envelopes pointing operators at the
 migration guide:
 
 - `d2b audit` (and `d2b audit --strict`)
-- `d2b console`
-- `d2b audio` (and subcommands `audio status|mic|speaker|off`)
 - `d2b keys` (read-only subcommands)
 
 The multi-line block format renders differently for the two verb
 categories described above:
 
-**Category 1 — Truly deferred verbs** (`console`, `audio`,
-`audit --strict`) emit `#not-yet-implemented` (exit 78)
-unconditionally; the remediation block renders as:
+**Category 1 — Truly deferred verbs** (`audit --strict`) emit
+`#not-yet-implemented` (exit 78) unconditionally. The remediation
+block renders as:
 
 ```
 Remediation:
@@ -255,21 +254,20 @@ own line ensures the full path is copy-paste-safe on terminals
 narrower than 80 columns (the old inline rendering wrapped the
 URL across lines on narrow terminals, breaking
 copy-paste). Operator-facing grep patterns previously matching
-`Remediation: <inline-hint>` on the four verbs above MUST switch
+`Remediation: <inline-hint>` on the two verbs above MUST switch
 to matching `Remediation:` as a line prefix followed by the
 multi-line block; grep patterns targeting other envelopes (e.g.,
 `#bridge-port-flag-drift`, `#nft-coexistence-*`) keep working
 unchanged because their inline rendering is preserved.
 
-The four affected verbs and their migration-guide anchors are:
+The two affected verbs and their migration-guide anchors are:
 
 - `d2b audit`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** — non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
-- `d2b console`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-console`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-console) (Category 1 — truly deferred)
-- `d2b audio`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audio`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audio) (Category 1 — truly deferred)
 - `d2b keys list` / `d2b keys show`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 — daemon-down only)
 
-The Rust `Display` impl is verified against this rendering
-convention byte-for-byte for the four verbs; goldens at
-`tests/golden/cli-output/audit-*-deferred.golden`,
-`console-deferred.golden`, `audio-deferred.golden`, and
-`keys-deferred.golden` lock the multi-line format.
+`d2b console` and `d2b audio` (subcommands `status|mic|speaker|off`)
+are implemented and no longer emit `#not-yet-implemented` envelopes.
+Their golden files (`console-deferred.golden`, `audio-deferred.golden`)
+are retired. The Rust `Display` impl for the two remaining deferred verbs
+is verified byte-for-byte against `tests/golden/cli-output/audit-*-deferred.golden`
+and `keys-deferred.golden`.

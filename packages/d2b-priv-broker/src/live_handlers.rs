@@ -1676,6 +1676,7 @@ pub fn live_usbip_proxy_reconcile(
 #[derive(Debug)]
 pub struct SpawnRunnerResult {
     pub pidfd: OwnedFd,
+    pub extra_response_fds: Vec<OwnedFd>,
     pub pid: i32,
     pub start_time_ticks: u64,
     /// True if the broker fell back to `fork(2)` + `pidfd_open(2)`
@@ -3498,6 +3499,7 @@ pub fn live_spawn_runner(
 
     Ok(SpawnRunnerResult {
         pidfd: outcome.pidfd,
+        extra_response_fds: Vec::new(),
         pid: outcome.pid,
         start_time_ticks,
         used_fork_fallback: outcome.used_fork_fallback,

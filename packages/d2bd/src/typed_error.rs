@@ -548,6 +548,29 @@ pub enum TypedError {
     /// (non-blocking) from the accept path so a burst of clients cannot
     /// stall the accept loop. Transient: the caller should retry shortly.
     DaemonBusy,
+    /// The console `Attach` was requested for a VM that is not declared in
+    /// the bundle or is otherwise unknown to the daemon.
+    ConsoleVmNotFound {
+        vm: String,
+    },
+    /// The console `Attach` was requested for a VM that exists but is not
+    /// currently running (no active drainer session).
+    ConsoleNotRunning {
+        vm: String,
+    },
+    /// The console provider for this VM is misconfigured. Used for ACA
+    /// sandboxes when a guestd-compatible agent is absent (ADR 0041).
+    ConsoleProviderMisconfigured {
+        vm: String,
+        detail: String,
+    },
+    /// A console op referenced an opaque session handle that is no longer
+    /// valid (session was closed or daemon restarted).
+    ConsoleSessionStale,
+    /// The console session table is full; no new sessions can be created.
+    ConsoleSessionTableFull {
+        vm: String,
+    },
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -628,6 +651,11 @@ impl TypedError {
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
             Self::GuestControlShellFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
+            Self::ConsoleVmNotFound { .. } => "console-vm-not-found",
+            Self::ConsoleNotRunning { .. } => "console-vm-not-running",
+            Self::ConsoleProviderMisconfigured { .. } => "provider-misconfigured",
+            Self::ConsoleSessionStale => "console-session-stale",
+            Self::ConsoleSessionTableFull { .. } => "console-session-table-full",
         }
     }
 
@@ -684,6 +712,11 @@ impl TypedError {
             // transient back-pressure refusals (session-capacity,
             // rate-limited): a retry may succeed.
             Self::DaemonBusy => 75,
+            Self::ConsoleVmNotFound { .. } => 2,
+            Self::ConsoleNotRunning { .. } => 3,
+            Self::ConsoleProviderMisconfigured { .. } => 80,
+            Self::ConsoleSessionStale => 75,
+            Self::ConsoleSessionTableFull { .. } => 41,
         }
     }
 
@@ -824,6 +857,22 @@ impl TypedError {
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlShellFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
+            Self::ConsoleVmNotFound { vm } => {
+                format!("console: VM '{vm}' not found in the bundle")
+            }
+            Self::ConsoleNotRunning { vm } => {
+                format!("console: VM '{vm}' is not running or has no active console session")
+            }
+            Self::ConsoleProviderMisconfigured { vm, detail } => {
+                format!("console: VM '{vm}' provider is misconfigured: {detail}")
+            }
+            Self::ConsoleSessionStale => {
+                "console: session handle is stale (daemon restarted or session was closed)"
+                    .to_owned()
+            }
+            Self::ConsoleSessionTableFull { vm } => {
+                format!("console: session table is full for VM '{vm}'")
+            }
         }
     }
 
@@ -966,6 +1015,21 @@ impl TypedError {
             Self::GuestControlShellFailed { kind } => kind.remediation().to_owned(),
             Self::DaemonBusy => {
                 "the daemon is briefly at capacity; retry the command shortly".to_owned()
+            }
+            Self::ConsoleVmNotFound { vm } => {
+                format!("verify that '{vm}' is declared in the d2b configuration and the bundle is up to date")
+            }
+            Self::ConsoleNotRunning { vm } => {
+                format!("start VM '{vm}' first with `d2b vm start {vm}`")
+            }
+            Self::ConsoleProviderMisconfigured { vm, .. } => {
+                format!("ensure the provider-managed agent for '{vm}' is running and reachable over the configured transport")
+            }
+            Self::ConsoleSessionStale => {
+                "re-attach with `d2b console <vm>` to obtain a fresh session".to_owned()
+            }
+            Self::ConsoleSessionTableFull { .. } => {
+                "close an existing console session before opening a new one".to_owned()
             }
         }
     }
@@ -1148,7 +1212,12 @@ impl TypedError {
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
             | Self::GuestControlShellFailed { .. }
-            | Self::DaemonBusy => "internalError",
+            | Self::DaemonBusy
+            | Self::ConsoleVmNotFound { .. }
+            | Self::ConsoleNotRunning { .. }
+            | Self::ConsoleProviderMisconfigured { .. }
+            | Self::ConsoleSessionStale
+            | Self::ConsoleSessionTableFull { .. } => "internalError",
         }
     }
 }

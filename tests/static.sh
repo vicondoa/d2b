@@ -1128,13 +1128,6 @@ if [ -n "$SYS" ]; then
   else
     ok "no stale wireplumber.conf.d/90-d2b.conf (moved to pipewire client.conf.d)"
   fi
-  # d2b-<vm>-snd.service is now a per-VM system service (not user).
-  SYS_UNITS=$(find -L "$SYS" -path '*systemd/system*' -name 'd2b-*-snd.service' -print -quit 2>/dev/null || true)
-  if [ -n "$SYS_UNITS" ]; then
-    ok "d2b-<vm>-snd.service unit(s) present in system closure (system service)"
-  else
-    fail "no d2b-<vm>-snd.service unit in system closure"
-  fi
 fi
 
 fi  # end: _HAS_HOST_CONFIG

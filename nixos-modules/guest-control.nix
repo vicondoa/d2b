@@ -53,6 +53,20 @@ in
       '';
     };
 
+    wpctlPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      internal = true;
+      description = ''
+        Absolute in-guest path to the `wpctl` binary (from the
+        `wireplumber` package). Non-null only for guests with the audio
+        component enabled. When non-null and the workload user is
+        configured, guestd advertises the `AudioStatus` and `AudioSet`
+        capabilities and serves PipeWire queries targeting the workload
+        user's session via argv-only wpctl subprocesses.
+      '';
+    };
+
     exec = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -261,6 +275,9 @@ in
               usbipFlags =
                 lib.optionalString (cfg.usbipPath != null)
                   " --usbip-path ${lib.escapeShellArg cfg.usbipPath}";
+              audioFlags =
+                lib.optionalString (cfg.wpctlPath != null)
+                  " --wpctl-path ${lib.escapeShellArg cfg.wpctlPath}";
               activationFlags =
                 " --activation-systemd-run-path ${pkgs.systemd}/bin/systemd-run"
                 + " --activation-systemctl-path ${pkgs.systemd}/bin/systemctl";
@@ -276,7 +293,7 @@ in
                       " --shell-systemctl-path ${pkgs.systemd}/bin/systemctl"
                 );
             in
-            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${activationFlags}${shellFlags}";
+            "${guestPackages.d2b-guestd-static}/bin/d2b-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${execRuntimeFlags}${configFlags}${usbipFlags}${audioFlags}${activationFlags}${shellFlags}";
           LoadCredential = [
             "guest_control_token:/run/d2b-guest-control-host/token"
           ];

@@ -23,6 +23,10 @@ impl RunnerLifecycleClass {
     pub const fn is_spawnable(self) -> bool {
         matches!(self, Self::Spawnable)
     }
+
+    pub const fn is_long_lived(self) -> bool {
+        matches!(self, Self::Spawnable)
+    }
 }
 
 /// Current regenerator wiring state for a role.

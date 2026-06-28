@@ -3,6 +3,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::public_wire::{
+    AudioChannel, AudioEnforcementPosture, AudioErrorKind, AudioProviderKind, AudioSetApplied,
+    LevelPercent,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
@@ -609,4 +614,76 @@ pub struct StoreVerifyOutputV2 {
     pub unknown_reason: Option<String>,
     pub audit_ref: Option<String>,
     pub remediation: Option<String>,
+}
+
+// ---- Audio CLI output (ADR 0041) --------------------------------------------
+
+/// Output for `d2b audio status --json` (version 1).
+///
+/// Per-VM entries are sorted by VM name. Per-VM errors are emitted separately
+/// so a single misconfigured provider does not suppress all other entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmAudioStatusOutputV1 {
+    /// CLI command string for display/logging.
+    pub command: String,
+    /// Per-VM state for targets that resolved successfully.
+    pub entries: Vec<VmAudioStatusEntryOutputV1>,
+    /// Per-VM errors for targets that could not be resolved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<VmAudioErrorOutputV1>,
+}
+
+/// Per-VM audio status entry in [`VmAudioStatusOutputV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmAudioStatusEntryOutputV1 {
+    /// VM name.
+    pub vm: String,
+    /// Speaker level (0–100), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_level: Option<LevelPercent>,
+    /// Whether the speaker is muted.
+    pub speaker_muted: bool,
+    /// Microphone gain (0–100), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic_level: Option<LevelPercent>,
+    /// Whether the microphone is muted.
+    pub mic_muted: bool,
+    /// Provider kind for this VM.
+    pub provider_kind: AudioProviderKind,
+    /// Enforcement posture for this VM.
+    pub enforcement: AudioEnforcementPosture,
+}
+
+/// Per-VM error entry in [`VmAudioStatusOutputV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmAudioErrorOutputV1 {
+    /// VM that failed.
+    pub vm: String,
+    /// Low-cardinality error kind.
+    pub kind: AudioErrorKind,
+    /// Optional operator-facing remediation hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+}
+
+/// Output for `d2b audio set-volume` and `d2b audio mute --json` (version 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmAudioSetOutputV1 {
+    /// CLI command string for display/logging.
+    pub command: String,
+    /// Target VM.
+    pub vm: String,
+    /// Channel that was changed.
+    pub channel: AudioChannel,
+    /// Whether and how the change was applied.
+    pub applied: AudioSetApplied,
+    /// Channel level after the operation (0–100), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<LevelPercent>,
+    /// Whether the channel is muted after the operation.
+    pub muted: bool,
 }

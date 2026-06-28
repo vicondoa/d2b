@@ -2,10 +2,9 @@
 # PipeWire). Imported into the GUEST config by host.nix whenever a
 # VM sets `d2b.vms.<name>.audio.enable = true`.
 #
-# Host-side wiring (the per-VM sidecar systemd service, the
-# WirePlumber rule, the activation script that materialises per-VM
-# state files) lives in modules/d2b/audio-host.nix and is imported
-# at the host scope from modules/d2b/default.nix.
+# Host-side wiring (the daemon-supervised sidecar runner, the WirePlumber
+# rule, and per-VM state files) lives in the host audio component and is
+# imported at the host scope from the framework module aggregator.
 #
 # Architecture
 # ------------
@@ -17,21 +16,17 @@
 # named `d2b-<vm>` — giving the user a normal per-stream mute/
 # volume UX through the Plasma mixer.
 #
-# The vhost-user protocol is 1:1 frontend<->backend, so one daemon
-# process per VM that currently has audio. We use one per-VM system
-# service (`d2b-<vm>-snd.service`, declared in audio-host.nix)
-# and start it on demand when the VM has audio actively granted via
-# `d2b audio …`.
+# The vhost-user protocol is 1:1 frontend<->backend, so d2bd supervises one
+# broker-spawned runner per VM that currently has audio.
 #
 # Boot-time enable: this module wires `microvm.extraArgsScript` to a
 # tiny shell helper that reads /var/lib/d2b/<vm>/audio-state.json
 # at VM start. If both mic and speaker are "off", the helper emits
 # nothing — no virtio-snd device, the guest sees no soundcard. If at
 # least one direction is "on", the helper:
-#   1. Asks systemd to start `d2b-<vm>-snd.service` if not running.
-#   2. Waits up to 5s for the vhost-user socket to appear under
+#   1. Waits up to 5s for the vhost-user socket to appear under
 #      /run/d2b/vms/<vm>/.
-#   3. Echoes `--generic-vhost-user socket=...,virtio_id=25,
+#   2. Echoes `--generic-vhost-user socket=...,virtio_id=25,
 #      queue_sizes=[64,64,64,64]` on stdout, which microvm.nix's
 #      runner template captures into `runtime_args` and appends to
 #      the cloud-hypervisor command line.
@@ -67,23 +62,10 @@ let
       exit 0
     fi
 
-    # Per-VM d2b-<vm>-snd.service puts the socket at this
-    # path under RuntimeDirectory=d2b/vms/<vm>.
+    # The daemon-supervised audio runner puts the socket at this path.
     sock="/run/d2b/vms/${vmName}/snd.sock"
 
-    # Best-effort: ensure the sidecar's service is running. `d2b
-    # up` (the CLI) is the canonical entry point and starts the sidecar
-    # explicitly before launching CH. This block is a belt-and-
-    # suspenders for direct `microvm -r <vm>` invocations and for
-    # users who flip a state file by hand. We use the .service unit
-    # (no socket activation — vhost-device-sound v0.2.0 has no
-    # --socket-fd flag, see audio-host.nix for details).
-    ${pkgs.systemd}/bin/systemctl reset-failed \
-      "d2b-${vmName}-snd.service" >/dev/null 2>&1 || true
-    ${pkgs.systemd}/bin/systemctl start \
-      "d2b-${vmName}-snd.service" >/dev/null 2>&1 || true
-
-    # Wait briefly for the listening socket to appear.
+    # Wait briefly for the daemon-supervised listening socket to appear.
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       [ -S "$sock" ] && break
       ${pkgs.coreutils}/bin/sleep 0.5
@@ -149,6 +131,12 @@ in
     wireplumber
     alsa-utils
   ];
+
+  # Wire the wpctl binary path into guestd so it can query and mutate the
+  # workload user's PipeWire session via the AudioStatus/AudioSet RPCs.
+  # The Nix store path is fixed at eval time; guestd checks the file exists
+  # at startup and only advertises the capabilities when it does.
+  d2b.guestControl.wpctlPath = "${pkgs.wireplumber}/bin/wpctl";
 
   # The virtio-snd kernel module exposes /dev/snd/{controlC0,
   # pcmC0D0c,pcmC0D0p} as root:audio mode 0660. Every interactive

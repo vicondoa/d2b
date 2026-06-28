@@ -166,27 +166,27 @@ pub enum BrokerRequest {
     /// retired `microvm-setup@<vm>.service`. Currently a typed stub
     /// (`Unimplemented`) until the live handler is wired.
     ///
-    /// TODO: wire to a `live_seed_dnsmasq_lease` handler resolved via
-    /// `BundleResolver` (per-VM dnsmasq lease row).
+    /// Live handler target: `live_seed_dnsmasq_lease`, resolved through
+    /// `BundleResolver` from the per-VM dnsmasq lease row.
     SeedDnsmasqLease(SeedDnsmasqLeaseRequest),
     /// Bind-mount `/var/lib/d2b/vms/<vm>/store-view` from the
     /// per-VM hardlink farm at `<vm>/store/`. Currently a typed stub
     /// (`Unimplemented`) until the live handler is wired.
     ///
-    /// TODO: wire to a `live_bind_mount_from_hardlink_farm` handler
-    /// resolved via `BundleResolver::find_store_view_intent`.
+    /// Live handler target: `live_bind_mount_from_hardlink_farm`, resolved
+    /// through `BundleResolver::find_store_view_intent`.
     BindMountFromHardlinkFarm(BindMountFromHardlinkFarmRequest),
     /// Enforce the per-leaf ownership/mode matrix on
     /// `/var/lib/d2b/vms/<vm>/`. Currently a typed stub
     /// (`Unimplemented`) until the real check is wired.
     ///
-    /// TODO: wire to `d2b_host::ownership_matrix::check`.
+    /// Live handler target: `d2b_host::ownership_matrix::check`.
     OwnershipMatrixCheck(OwnershipMatrixCheckRequest),
     /// Refuse VM start if `/var/lib/d2b/vms/<vm>/sshd-host-keys/`
     /// drifts from `root:root 0400`. Currently a typed stub
     /// (`Unimplemented`) until the real check is wired.
     ///
-    /// TODO: wire to the `O_NOFOLLOW` symlink-rejecting check.
+    /// Live handler target: the `O_NOFOLLOW` symlink-rejecting check.
     SshHostKeyPreflight(SshHostKeyPreflightRequest),
     /// Broker-provisioned disk-image creation.
     ///
@@ -1578,6 +1578,11 @@ pub struct SpawnRunnerResponse {
     /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
+    /// Optional index into the SCM_RIGHTS fd vector for a provider-specific
+    /// console stream. qemu-media uses this for the daemon-owned peer of the
+    /// socketpair whose other end was passed to QEMU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_fd_index: Option<u32>,
 }
 
 /// Wire envelope wrapping a [`BrokerRequest`] with the authenticated
@@ -2584,6 +2589,7 @@ mod tests {
             pid: 4242,
             start_time_ticks: 987_654_321,
             pidfd_index: 0,
+            console_fd_index: None,
         });
         let frame = encode_frame(&response).expect("encodes");
         let decoded = decode_frame::<BrokerResponse>("BrokerResponse", &frame).expect("decodes");

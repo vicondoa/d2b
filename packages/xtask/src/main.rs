@@ -33,15 +33,16 @@ use d2b_contracts::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
         RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1, ShellKillOutputV1,
         ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
-        VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
-        VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
+        VmAudioSetOutputV1, VmAudioStatusOutputV1, VmDisplayCloseOutputV1, VmDisplayListOutputV1,
+        VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1, VmExecLogsOutputV1,
+        VmExecStatusOutputV1,
     },
 };
 use d2b_core::{
-    bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
-    manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
-    processes::ProcessesJson, storage::StorageJson, storage_lifecycle::StorageLifecycleReport,
-    sync::SyncJson,
+    audio_policy::AudioPolicyState, bundle::Bundle, closures::ClosureMetadata, error::Error,
+    host::HostJson, manifest_v04::ManifestV04, minijail_profile::MinijailProfile,
+    privileges::PrivilegesJson, processes::ProcessesJson, storage::StorageJson,
+    storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
 };
 use schemars::schema::RootSchema;
 
@@ -326,7 +327,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 13] = [
+    let schemas: [(&str, RootSchema); 14] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
             "constellation-core.json",
@@ -355,6 +356,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
             schemars::schema_for!(GuestControlSchema),
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
+        ("audio-state.json", schemars::schema_for!(AudioPolicyState)),
     ];
 
     write_schemas(&out_dir, &schemas)
@@ -365,7 +367,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 20] = [
+    let schemas: [(&str, RootSchema); 22] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         (
@@ -436,6 +438,14 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         (
             "store-verify.schema.json",
             schemars::schema_for!(StoreVerifyOutputV2),
+        ),
+        (
+            "vm-audio-status.schema.json",
+            schemars::schema_for!(VmAudioStatusOutputV1),
+        ),
+        (
+            "vm-audio-set.schema.json",
+            schemars::schema_for!(VmAudioSetOutputV1),
         ),
     ];
 
