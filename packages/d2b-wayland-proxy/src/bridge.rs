@@ -11,7 +11,7 @@ use std::{
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
@@ -126,10 +126,13 @@ pub enum BridgeConnectionState {
     Backoff { attempt: u32, delay: Duration },
 }
 
+const STABLE_CONNECTION_RESET_AFTER: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone)]
 pub struct BridgeReconnectMachine {
     policy: BridgeReconnectPolicy,
     state: BridgeConnectionState,
+    connected_at: Option<Instant>,
 }
 
 impl BridgeReconnectMachine {
@@ -141,6 +144,7 @@ impl BridgeReconnectMachine {
             } else {
                 BridgeConnectionState::Disabled
             },
+            connected_at: None,
         }
     }
 
@@ -164,6 +168,7 @@ impl BridgeReconnectMachine {
     pub fn connect_succeeded(&mut self) {
         if matches!(self.state, BridgeConnectionState::Connecting { .. }) {
             self.state = BridgeConnectionState::Connected;
+            self.connected_at = Some(Instant::now());
         }
     }
 
@@ -173,12 +178,24 @@ impl BridgeReconnectMachine {
                 attempt: attempt.saturating_add(1),
                 delay: self.delay_for_attempt(attempt),
             };
+            self.connected_at = None;
         }
     }
 
     pub fn disconnected(&mut self) {
         if matches!(self.state, BridgeConnectionState::Connected) {
-            self.state = BridgeConnectionState::Disconnected;
+            let stable = self.connected_at.is_some_and(|connected_at| {
+                connected_at.elapsed() >= STABLE_CONNECTION_RESET_AFTER
+            });
+            self.connected_at = None;
+            if stable {
+                self.state = BridgeConnectionState::Disconnected;
+            } else {
+                self.state = BridgeConnectionState::Backoff {
+                    attempt: 1,
+                    delay: self.policy.initial_delay,
+                };
+            }
         }
     }
 
@@ -390,6 +407,17 @@ mod tests {
         );
         machine.connect_succeeded();
         assert_eq!(machine.state(), BridgeConnectionState::Connected);
+        machine.disconnected();
+        assert_eq!(
+            machine.state(),
+            BridgeConnectionState::Backoff {
+                attempt: 1,
+                delay: Duration::from_millis(250)
+            }
+        );
+        machine.retry_due();
+        machine.connect_succeeded();
+        machine.connected_at = Some(Instant::now() - Duration::from_secs(2));
         machine.disconnected();
         assert_eq!(machine.state(), BridgeConnectionState::Disconnected);
     }

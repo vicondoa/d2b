@@ -100,7 +100,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     pub fn refresh_focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
-        self.attributor.on_host_selection_changed().window
+        self.attributor.refresh_from_provider().window
     }
 
     /// Called when the data-control device reports a new host selection.
@@ -191,19 +191,31 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         notifier: &mut impl Notifier,
     ) -> Result<(), ReasonCode> {
         let paste = self.pending_paste.take().ok_or(ReasonCode::IntentMissing)?;
-        match write_all_nonblocking(&paste.fd, data, paste.deadline) {
-            Ok(()) => {
-                log::debug!("d2b-clipd: paste write complete");
+        let bytes = data.to_vec();
+        let mime = paste.mime_type.clone();
+        let deadline = paste.deadline;
+        std::thread::Builder::new()
+            .name("d2b-clipd-paste-write".to_owned())
+            .spawn(move || {
+                match write_all_nonblocking(&paste.fd, &bytes, deadline) {
+                    Ok(()) => {
+                        log::debug!("d2b-clipd: paste write complete");
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            "d2b-clipd: paste write failed for mime={}: {error}",
+                            crate::audit::bounded_mime(&mime)
+                        );
+                    }
+                }
                 drop(paste.fd);
-                let _ = notifier;
-                Ok(())
-            }
-            Err(e) => {
-                log::debug!("d2b-clipd: paste write failed: {e}");
-                drop(paste.fd);
-                Err(ReasonCode::FdWriteTimeout)
-            }
-        }
+            })
+            .map_err(|error| {
+                log::debug!("d2b-clipd: paste writer spawn failed: {error}");
+                ReasonCode::FdWriteTimeout
+            })?;
+        let _ = notifier;
+        Ok(())
     }
 
     /// Check whether the pending paste fd has expired and close it if so.
@@ -255,11 +267,13 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 
 // ─── Non-blocking write helper ────────────────────────────────────────────────
 
-/// Write available `data` bytes to `fd` without waiting for a slow peer. The
-/// event loop must never block behind a malicious or stalled Wayland requester.
+/// Write all `data` bytes to `fd` which must already be in non-blocking mode.
+/// This helper is run from a detached short-lived writer thread, not the daemon
+/// event loop, so a slow Wayland requester cannot stall unrelated clipboard work.
 ///
 /// Returns `Ok(())` on success, `Err(String)` on any error.
-fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], _deadline: Instant) -> Result<(), String> {
+fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], deadline: Instant) -> Result<(), String> {
+    use rustix::event::{PollFd, PollFlags, poll};
     use std::os::fd::AsFd;
 
     rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|error| error.to_string())?;
@@ -270,7 +284,29 @@ fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], _deadline: Instant) -> Resul
             Ok(0) => return Err("short write to closed fd".to_owned()),
             Ok(written) => remaining = &remaining[written..],
             Err(rustix::io::Errno::INTR) => {}
-            Err(rustix::io::Errno::AGAIN) => return Err("write would block".to_owned()),
+            Err(rustix::io::Errno::AGAIN) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err("write timed out".to_owned());
+                }
+                let timeout = deadline
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .min(i32::MAX as u128) as i32;
+                let mut fds = [PollFd::new(
+                    fd,
+                    PollFlags::OUT | PollFlags::ERR | PollFlags::HUP,
+                )];
+                match poll(&mut fds, timeout) {
+                    Ok(0) => return Err("write timed out".to_owned()),
+                    Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
+                        return Err("write fd closed".to_owned());
+                    }
+                    Ok(_) => {}
+                    Err(rustix::io::Errno::INTR) => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
             Err(error) => return Err(error.to_string()),
         }
     }

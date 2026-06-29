@@ -352,7 +352,14 @@ impl VirtualClipboardState {
     fn mark_bridge_disconnected(&mut self) {
         self.bridge.take();
         self.bridge_reconnect.disconnected();
-        self.schedule_bridge_retry();
+        if matches!(
+            self.bridge_reconnect.state(),
+            BridgeConnectionState::Backoff { .. }
+        ) {
+            self.schedule_bridge_retry();
+        } else {
+            self.next_bridge_retry = None;
+        }
     }
 
     fn schedule_bridge_retry(&mut self) {

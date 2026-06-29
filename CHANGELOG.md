@@ -79,12 +79,18 @@ deprecations ship one minor release before removal.
   connects to the host Wayland compositor via `ext-data-control-v1`
   (preferring the stable extension, falling back to `zwlr-data-control-v1`
   when only the WLR variant is advertised); subscribes Niri IPC events for
-  focused-window attribution via `$NIRI_SOCKET`; materialises host copy
+  focused-window attribution via `$NIRI_SOCKET`; uses the Niri event-stream
+  cache for native clipboard events so the Wayland event loop does not block
+  on synchronous compositor IPC; materialises host copy
   events with `FocusedWindowGuess` attribution; holds paste write-FDs open
   until the picker resolves or a 30-second deadline fires; launches the
   picker process over a `socketpair` using `CommandPickerSpawner`; falls
   back to native-paste arming (no synthetic input) when no picker command is
   configured; logs notification errors without exposing raw clipboard content.
+- `d2b-clipd` now writes selected payloads to Wayland transfer FDs from a
+  bounded helper task instead of blocking the daemon event loop, and bridge /
+  picker failures emit content-free, rate-limited warnings such as
+  `connect-failed`, `handoff-failed`, and picker-closed-before-selection.
 - Staged the console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,

@@ -108,14 +108,16 @@ optional title.
 must not repeatedly shell out to `niri msg`. It maintains a cache from Niri's
 event stream and uses focused-window metadata for host labels: app id, title,
 workspace, and output when available.
-On host clipboard selection changes, it queries Niri's current focused window as
-a fresh attribution sample rather than relying only on the event-stream cache; if
-that query fails, attribution is marked cache-stale and remains best-effort.
+On host clipboard selection changes and native paste requests, it uses the
+event-stream cache so clipboard event handling does not block on synchronous
+compositor IPC. Explicit operator actions such as `d2b clipboard arm` may issue a
+fresh focused-window query before opening the picker or arming fallback. If a
+query fails, attribution is marked cache-stale and remains best-effort.
 
 Host attribution is explicitly best-effort. For host-origin copies,
 `d2b-clipd` records the Niri-focused window at the instant the host clipboard
-selection changes as `focused_window_guess`, using a fresh focused-window query
-when possible. It materializes allowed history representations without
+selection changes as `focused_window_guess`, using the maintained event-stream
+cache. It materializes allowed history representations without
 immediately replacing the host selection, preserving same-host rich custom MIME
 paste between host apps. It asserts a broker-backed host selection only when
 exposing VM data to the host or when the user explicitly selects a historical
@@ -240,13 +242,10 @@ success. Path generation must fit Linux `sockaddr_un.sun_path`, using a
 hash-shortened VM component when necessary.
 
 The bridge uses local-only Unix-domain sockets with peer-credential validation.
-Prefer `SOCK_SEQPACKET` so SCM_RIGHTS descriptors and typed messages preserve
-boundaries. Because Tokio does not provide a native `UnixSeqpacket` wrapper, the
-implementation creates non-blocking seqpacket sockets with a safe low-level API
-such as `rustix` and drives `sendmsg`/`recvmsg` through `AsyncFd` or an
-equivalent wrapper. It uses `SCM_RIGHTS` only between d2b components. Received
-transfer FDs are wrapped as owned FDs received atomically with close-on-exec,
-using `MSG_CMSG_CLOEXEC` or an equivalent memory-safe `recvmsg` path. The
+It currently uses newline-delimited JSON over non-blocking Unix streams with
+`SCM_RIGHTS` for transfer FDs. Received transfer FDs are wrapped as owned FDs
+received atomically with close-on-exec, using `MSG_CMSG_CLOEXEC` or an
+equivalent memory-safe `recvmsg` path. The
 implementation must detect control-message truncation (`MSG_CTRUNC`) and fail
 that frame closed after closing any FDs that were partially received in the
 returned control buffer. Setting close-on-exec after receipt is not sufficient
@@ -318,16 +317,16 @@ reads and target writes. Regular files are accepted only when `fstatfs()` or
 `statfs()` proves they are memory-backed Wayland transfers such as memfd/tmpfs
 or ramfs; disk regular files, block devices, and other fd types are rejected
 because `O_NONBLOCK` does not prevent disk-file I/O from blocking executor
-threads. Pipes and sockets are explicitly set to non-blocking mode before
-registration with the async executor; d2b does not trust peers to have set file
-status flags correctly. Memory-backed regular files are handled in short-lived
-helper processes that can be killed on deadline, not with unkillable
-`spawn_blocking` threads and not by registering regular files with epoll/Tokio
-`AsyncFd`. `d2b-clipd` ignores or handles
-`SIGPIPE`, maps `EPIPE` to a bounded
-closed-FD reason, and closes the target FD immediately on successful write
-completion, cancel, timeout, or policy denial so the target observes EOF. A
-stalled or malicious peer must not block the daemon event loop.
+threads. Pipes and sockets are explicitly set to non-blocking mode; d2b does not trust
+peers to have set file status flags correctly. Target paste writes are moved out
+of the daemon event loop into a short-lived bounded writer task that polls until
+the transfer deadline, so a stalled or malicious peer cannot block unrelated
+clipboard work. Memory-backed regular files are handled in short-lived helper
+processes that can be killed on deadline, not with unkillable `spawn_blocking`
+threads and not by registering regular files with epoll/Tokio `AsyncFd`.
+`d2b-clipd` ignores or handles `SIGPIPE`, maps `EPIPE` to a bounded closed-FD
+reason, and closes the target FD immediately on successful write completion,
+cancel, timeout, or policy denial so the target observes EOF.
 
 When held-FD caps are reached, `d2b-clipd` continues draining bridge messages
 and immediately drops excess received FDs so descriptors do not remain pinned in

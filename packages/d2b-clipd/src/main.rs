@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -468,6 +468,7 @@ impl EventLoop<'_> {
             if let Some(_reason) = self.supervisor.reap_expired(now) {
                 let _ = self.fallback.cancel_picker();
             }
+            self.supervisor.reap_terminated(now);
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
                 log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
             }
@@ -478,6 +479,9 @@ impl EventLoop<'_> {
         let now = Instant::now();
         let mut next = self.host_clipboard.pending_paste_deadline();
         if let Some(deadline) = self.supervisor.deadline() {
+            next = Some(next.map_or(deadline, |old| old.min(deadline)));
+        }
+        if let Some(deadline) = self.supervisor.maintenance_deadline() {
             next = Some(next.map_or(deadline, |old| old.min(deadline)));
         }
         if let FallbackState::Armed { expires_at, .. } = self.fallback.state() {
@@ -542,10 +546,11 @@ fn install_bridge_listeners(
         let parent = path
             .parent()
             .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
-        std::fs::create_dir_all(parent)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o770)
+            .create(parent)
             .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o770))
-            .map_err(|e| format!("set bridge socket dir mode {}: {e}", parent.display()))?;
         if path.exists() {
             let meta = std::fs::symlink_metadata(&path)
                 .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
@@ -763,20 +768,7 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
                 stream.received_fds.extend(fds);
             }
         }
-        if stream.received_fds.len() > 64 {
-            stream.received_fds.clear();
-            return Err(BridgeReadError::Invalid(
-                "bridge frame carried too many queued transfer fds".to_owned(),
-            ));
-        }
-        let control_truncated =
-            rustix::net::RecvFlags::from_bits_retain(nix::libc::MSG_CTRUNC as u32);
-        if msg.flags.contains(control_truncated) {
-            stream.received_fds.clear();
-            return Err(BridgeReadError::Invalid(
-                "bridge control message truncated".to_owned(),
-            ));
-        }
+        validate_bridge_fd_queue(stream, msg.flags)?;
         if msg.bytes == 0 {
             return Err(BridgeReadError::Invalid(
                 "bridge stream closed before complete frame".to_owned(),
@@ -788,7 +780,9 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
             .iter()
             .filter(|byte| **byte == b'\n')
             .count();
-        if queued_frames > 0 && stream.received_fds.len() > queued_frames {
+        let has_partial_followup = stream.read_buffer.last().is_some_and(|byte| *byte != b'\n');
+        let max_expected_fds = queued_frames + usize::from(has_partial_followup);
+        if max_expected_fds > 0 && stream.received_fds.len() > max_expected_fds {
             stream.received_fds.clear();
             return Err(BridgeReadError::Invalid(
                 "bridge frame carried too many transfer fds".to_owned(),
@@ -803,6 +797,26 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
             return parse_bridge_frame(stream);
         }
     }
+}
+
+fn validate_bridge_fd_queue(
+    stream: &mut BridgeStream,
+    flags: rustix::net::RecvFlags,
+) -> Result<(), BridgeReadError> {
+    if stream.received_fds.len() > 64 {
+        stream.received_fds.clear();
+        return Err(BridgeReadError::Invalid(
+            "bridge frame carried too many queued transfer fds".to_owned(),
+        ));
+    }
+    let control_truncated = rustix::net::RecvFlags::from_bits_retain(nix::libc::MSG_CTRUNC as u32);
+    if flags.contains(control_truncated) {
+        stream.received_fds.clear();
+        return Err(BridgeReadError::Invalid(
+            "bridge control message truncated".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
@@ -1986,6 +2000,90 @@ mod tests {
         assert!(err.message().contains("too many transfer fds"));
         drop(read_a);
         drop(read_b);
+    }
+
+    #[test]
+    fn bridge_frame_allows_fd_for_partial_followup_frame() {
+        let (sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let (read_a, write_a) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe a");
+        let (read_b, write_b) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe b");
+        let first = br#"{"type":"vm_paste_request","vm_name":"work","mime_type":"text/plain","source_id":7,"source_attribution":"exact_client"}
+"#;
+        let second_prefix = br#"{"#;
+        let iov = [
+            std::io::IoSlice::new(first),
+            std::io::IoSlice::new(second_prefix),
+        ];
+        let fds = [write_a.as_raw_fd(), write_b.as_raw_fd()];
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
+        nix::sys::socket::sendmsg::<()>(
+            sender.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            None,
+        )
+        .expect("sendmsg");
+        drop(write_a);
+        drop(write_b);
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: Vec::new(),
+        };
+        let request = recv_bridge_frame(&mut stream).expect("first frame");
+        assert_eq!(request.source_id, 7);
+        assert_eq!(stream.received_fds.len(), 1);
+        assert_eq!(stream.read_buffer, b"{");
+        drop(request.fd);
+        drop(read_a);
+        drop(read_b);
+    }
+
+    #[test]
+    fn bridge_fd_queue_rejects_more_than_sixty_four_queued_fds() {
+        let (_sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let mut reads = Vec::new();
+        let mut received_fds = Vec::new();
+        for _ in 0..65 {
+            let (read, write) =
+                rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+            reads.push(read);
+            received_fds.push(write);
+        }
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds,
+        };
+        let err = validate_bridge_fd_queue(&mut stream, rustix::net::RecvFlags::empty())
+            .expect_err("queued fd cap rejected");
+        assert!(err.message().contains("too many queued transfer fds"));
+        assert!(stream.received_fds.is_empty());
+        drop(reads);
+    }
+
+    #[test]
+    fn bridge_fd_queue_rejects_ctrunc_and_clears_fds() {
+        let (_sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: vec![write_fd],
+        };
+        let flags = rustix::net::RecvFlags::from_bits_retain(nix::libc::MSG_CTRUNC as u32);
+        let err =
+            validate_bridge_fd_queue(&mut stream, flags).expect_err("ctrunc must be rejected");
+        assert!(err.message().contains("control message truncated"));
+        assert!(stream.received_fds.is_empty());
+        drop(read_fd);
     }
 
     #[test]
