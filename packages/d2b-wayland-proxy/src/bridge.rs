@@ -1,4 +1,4 @@
-//! Internal bridge scaffolding between `d2b-wayland-filter` and `d2b-clipd`.
+//! Internal bridge helpers between `d2b-wayland-proxy` and `d2b-clipd`.
 //!
 //! The bridge socket is d2b-internal and per user/per VM. It is not the picker
 //! protocol, does not depend on `NIRI_SOCKET`, and may carry transfer FDs only

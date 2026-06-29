@@ -1,9 +1,9 @@
 [package]
-name = "d2b-wayland-filter"
+name = "d2b-wayland-proxy"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
-description = "Host-side Wayland filter proxy for d2b graphics VMs"
+description = "Host-side Wayland proxy for d2b graphics VMs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

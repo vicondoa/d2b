@@ -32,7 +32,7 @@ let
 
   # wl-cross-domain-proxy handles the guest-side virtio-gpu Wayland
   # transport only. Filtering, global hiding, and app-id rewriting are
-  # performed by the host-side d2b-wayland-filter proxy. The binary
+  # performed by the host-side d2b-wayland-proxy proxy. The binary
   # is gated on crossDomainTrusted so it does not start crash-looping
   # when the cross-domain crosvm context is absent.
   wlCrossDomainProxy = import ../../pkgs/wl-cross-domain-proxy { inherit pkgs; };
@@ -504,7 +504,7 @@ in
     # cross-domain channel exists for the proxy to connect to).
     #
     # Title rewriting and app-id prefixing are performed on the HOST
-    # side by d2b-wayland-filter; the guest proxy does not use
+    # side by d2b-wayland-proxy; the guest proxy does not use
     # --tag or any filtering flag.
     systemd.user.services.wayland-proxy = lib.mkIf config.d2b.graphics.crossDomainTrusted {
       description = "Wayland cross-domain proxy (guest virtio-gpu transport)";

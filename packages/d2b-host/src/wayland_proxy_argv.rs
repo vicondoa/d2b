@@ -1,4 +1,4 @@
-//! `d2b-wayland-filter` host-side Wayland proxy argv generator.
+//! `d2b-wayland-proxy` host-side Wayland proxy argv generator.
 //!
 //! Pure Rust function that emits the argv for the per-VM
 //! `d2b-<vm>-wlproxy` role spawned by `d2b-priv-broker`
@@ -15,7 +15,7 @@
 //! Shape (Wave 2 / Lane A will fill the binary and policy):
 //!
 //! ```text
-//! d2b-wayland-filter \
+//! d2b-wayland-proxy \
 //!   --listen /run/d2b-wlproxy/<vm>/wayland-0 \
 //!   --connect /run/d2b-wlproxy/<vm>/upstream \
 //!   --vm-name <vm>
@@ -85,7 +85,7 @@ pub enum WaylandProxyArgvError {
 ///
 /// The returned vec's first element is `argv[0]` (the process title);
 /// subsequent elements are the flag arguments consumed by
-/// `d2b-wayland-filter`.
+/// `d2b-wayland-proxy`.
 pub fn generate_wayland_proxy_argv(
     input: &WaylandProxyArgvInput,
 ) -> Result<Vec<String>, WaylandProxyArgvError> {

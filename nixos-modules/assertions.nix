@@ -494,7 +494,7 @@ let
       }
       {
         # Xwayland is intentionally unsupported during the Wayland-only
-        # migration to wl-cross-domain-proxy + d2b-wayland-filter.
+        # migration to wl-cross-domain-proxy + d2b-wayland-proxy.
         # wl-cross-domain-proxy is a plain cross-domain transport and
         # carries no Xwayland helper. A standalone host-side Xwayland
         # proxy is tracked as future work.

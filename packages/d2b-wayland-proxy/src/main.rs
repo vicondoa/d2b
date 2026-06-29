@@ -14,18 +14,18 @@
 use std::{
     cell::RefCell,
     io,
-    os::{fd::OwnedFd, unix::net::UnixListener},
+    os::unix::net::UnixListener,
     path::PathBuf,
     rc::Rc,
-    thread,
     time::{Duration, Instant},
 };
 
 use clap::Parser;
-use d2b_wayland_filter::filter::{
-    FilterClientHandler, FilterStateHandler, build_state, install_client_handlers,
+use d2b_wayland_proxy::filter::{
+    FilterClientHandler, FilterStateHandler, VirtualClipboardState, build_state,
+    install_client_handlers,
 };
-use d2b_wayland_filter::{
+use d2b_wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
     diag::DiagRateLimiter,
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
@@ -34,8 +34,8 @@ use d2b_wayland_filter::{
 use env_logger::Env;
 
 #[derive(Parser, Debug)]
-#[command(name = "d2b-wayland-filter")]
-#[command(about = "Host-side Wayland filter proxy for d2b graphics VMs")]
+#[command(name = "d2b-wayland-proxy")]
+#[command(about = "Host-side Wayland proxy for d2b graphics VMs")]
 struct Args {
     /// Path of the Unix socket to create and accept client connections on.
     #[arg(long)]
@@ -135,16 +135,16 @@ fn main() {
         .map(|s| parse_max_version(s))
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_else(|e| {
-            eprintln!("d2b-wayland-filter: error in --max-version: {e}");
+            eprintln!("d2b-wayland-proxy: error in --max-version: {e}");
             std::process::exit(1);
         });
 
     let dmabuf_allow = parse_dmabuf_filters(&args.dmabuf_allow).unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in --dmabuf-allow: {e}");
+        eprintln!("d2b-wayland-proxy: error in --dmabuf-allow: {e}");
         std::process::exit(1);
     });
     let dmabuf_deny = parse_dmabuf_filters(&args.dmabuf_deny).unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in --dmabuf-deny: {e}");
+        eprintln!("d2b-wayland-proxy: error in --dmabuf-deny: {e}");
         std::process::exit(1);
     });
 
@@ -159,7 +159,7 @@ fn main() {
         },
     )
     .unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in clipboard bridge configuration: {e}");
+        eprintln!("d2b-wayland-proxy: error in clipboard bridge configuration: {e}");
         std::process::exit(1);
     });
 
@@ -180,17 +180,17 @@ fn main() {
 
     // Emit advisory warnings to stderr so they appear in the journal.
     for w in &policy.warnings {
-        eprintln!("d2b-wayland-filter: warning: {}", w.message());
+        eprintln!("d2b-wayland-proxy: warning: {}", w.message());
     }
     if let Some(path) = &bridge_config.socket_path {
         log::info!(
-            "[d2b-wlproxy] vm={} clipboard-bridge={} status=scaffolded",
+            "[d2b-wlproxy] vm={} clipboard-bridge={} status=configured",
             args.vm_name,
             path.display()
         );
     } else {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=scaffolded",
+            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=configured",
             args.vm_name
         );
     }
@@ -201,7 +201,7 @@ fn main() {
         Ok(_) => {}
         Err(e) => {
             eprintln!(
-                "d2b-wayland-filter: failed to connect to upstream compositor `{}`: {e}",
+                "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
                 args.connect
             );
             std::process::exit(1);
@@ -216,7 +216,7 @@ fn main() {
         && let Err(e) = std::fs::remove_file(listen_path)
     {
         eprintln!(
-            "d2b-wayland-filter: failed to remove stale socket `{}`: {e}",
+            "d2b-wayland-proxy: failed to remove stale socket `{}`: {e}",
             listen_path.display()
         );
         std::process::exit(1);
@@ -226,7 +226,7 @@ fn main() {
         Ok(l) => l,
         Err(e) => {
             eprintln!(
-                "d2b-wayland-filter: failed to bind listen socket `{}`: {e}",
+                "d2b-wayland-proxy: failed to bind listen socket `{}`: {e}",
                 listen_path.display()
             );
             std::process::exit(1);
@@ -245,80 +245,70 @@ fn main() {
 }
 
 fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
+    if let Err(e) = listener.set_nonblocking(true) {
+        eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
+        std::process::exit(1);
+    }
+
+    let policy = Rc::new(policy);
     let vm = policy.vm_name.clone();
+    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
+    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(vm.clone())));
+    let state = match build_state(&upstream) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("d2b-wayland-proxy: failed to connect to upstream compositor `{upstream}`: {e}");
+            std::process::exit(1);
+        }
+    };
+    state.set_handler(FilterStateHandler::new(
+        policy.clone(),
+        diag.clone(),
+        clipboard.clone(),
+    ));
+
     let mut next_client_id: u64 = 1;
-    loop {
+    let mut last_diag_flush = Instant::now();
+    while state.is_not_destroyed() {
         match listener.accept() {
             Ok((stream, _)) => {
                 let client_id = next_client_id;
                 next_client_id += 1;
-                let upstream = upstream.clone();
-                let policy = policy.clone();
-                let vm = vm.clone();
-                let name = format!("d2b-wlproxy-{vm}-{client_id}");
-                let spawn = thread::Builder::new().name(name).spawn(move || {
-                    run_client(client_id, stream.into(), &upstream, policy);
-                });
-                if let Err(e) = spawn {
-                    log::warn!("[d2b-wlproxy] vm={vm} failed to spawn client thread: {e}");
-                }
+                let fd = Rc::new(stream.into());
+                let client = match state.add_client(&fd) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::warn!(
+                            "[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}"
+                        );
+                        continue;
+                    }
+                };
+                client.set_handler(FilterClientHandler::with_destructor(
+                    vm.clone(),
+                    state.create_destructor(),
+                ));
+                install_client_handlers(
+                    &client,
+                    policy.clone(),
+                    diag.clone(),
+                    clipboard.clone(),
+                );
             }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) if is_recoverable_accept_error(&e) => {
                 log::warn!("[d2b-wlproxy] vm={vm} recoverable accept error: {e}");
             }
             Err(e) => {
-                eprintln!("d2b-wayland-filter: accept error: {e}");
+                eprintln!("d2b-wayland-proxy: accept error: {e}");
                 std::process::exit(1);
             }
         }
-    }
-}
 
-fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy) {
-    let policy = Rc::new(policy);
-    let vm = policy.vm_name.clone();
-    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
-
-    let state = match build_state(upstream) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("[d2b-wlproxy] vm={vm} client={client_id} upstream connect failed: {e}");
-            return;
-        }
-    };
-    state.set_handler(FilterStateHandler::new(policy.clone(), diag.clone()));
-
-    let fd = Rc::new(fd);
-    let client = match state.add_client(&fd) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}");
-            return;
-        }
-    };
-    client.set_handler(FilterClientHandler::with_destructor(
-        vm.clone(),
-        state.create_destructor(),
-    ));
-    install_client_handlers(&client, policy, diag.clone());
-
-    let mut last_diag_flush = Instant::now();
-    while state.is_not_destroyed() {
         match state.dispatch(Some(Duration::from_millis(10))) {
             Ok(_) => {}
             Err(e) => {
-                // Log the full source chain, not just the top-level
-                // `StateError` message. A server-event dispatch failure renders
-                // as the generic "could not dispatch server events"; the
-                // `#[source]` `EndpointError`/`MessageError` underneath names the
-                // actual failing object/interface/event (e.g. `NoReceiver`, the
-                // destroy-vs-event race), which is what's needed to diagnose a
-                // window that vanishes from the host compositor while the guest
-                // keeps rendering.
-                log::warn!(
-                    "[d2b-wlproxy] vm={vm} client={client_id} dispatch error: {}",
-                    error_source_chain(&e)
-                );
+                log::warn!("[d2b-wlproxy] vm={vm} dispatch error: {}", error_source_chain(&e));
                 break;
             }
         }

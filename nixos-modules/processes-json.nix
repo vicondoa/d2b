@@ -26,19 +26,19 @@ let
   vhostDeviceSound = import ../pkgs/vhost-device-sound { inherit pkgs; };
   spectrumCH = import ../pkgs/spectrum-ch { inherit pkgs; };
 
-  # d2b-wayland-filter: host-side Wayland filter proxy.
+  # d2b-wayland-proxy: host-side Wayland proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  d2bWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-wayland-filter";
+  d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-wayland-proxy";
     version = "0.0.0";
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
-    cargoBuildFlags = [ "--package" "d2b-wayland-filter" ];
+    cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -50,8 +50,8 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-filter $out/bin/d2b-wayland-filter 2>/dev/null \
-        || install -Dm755 target/release/d2b-wayland-filter $out/bin/d2b-wayland-filter
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy 2>/dev/null \
+        || install -Dm755 target/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy
       runHook postInstall
     '';
   };
@@ -59,8 +59,8 @@ EOF
   # enough to build in the eval smoke fixtures. Keep it source-built even when
   # other host tools use release prebuilts so missing release assets cannot
   # break local validation.
-  d2bWaylandFilterPackage = d2bWaylandFilterSourcePackage;
-  d2bWaylandFilterBinary = "${d2bWaylandFilterPackage}/bin/d2b-wayland-filter";
+  d2bWaylandProxyPackage = d2bWaylandProxySourcePackage;
+  d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
@@ -605,7 +605,7 @@ EOF
       ];
     };
 
-  # wayland-proxy runner: d2b-wayland-filter host-side filter proxy.
+  # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
   # Runs as d2b-<vm>-wlproxy, listens on the per-VM filter socket,
   # and connects upstream to the real host compositor socket. The broker
   # grants the wlproxy principal an ACL on exactly that socket.
@@ -626,7 +626,7 @@ EOF
       dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
       dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
     in {
-      binaryPath = d2bWaylandFilterBinary;
+      binaryPath = d2bWaylandProxyBinary;
       env = [
         "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
         "WAYLAND_DISPLAY=${waylandDisplay}"

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use crate::policy::ReasonCode;
@@ -9,7 +10,9 @@ use thiserror::Error;
 
 pub const PICKER_IPC_FD: i32 = 3;
 pub const PICKER_ENV_ALLOWLIST: &[&str] = &[
+    "WAYLAND_DISPLAY",
     "WAYLAND_SOCKET",
+    "XDG_RUNTIME_DIR",
     "XDG_DATA_DIRS",
     "GDK_BACKEND",
     "GTK_THEME",
@@ -37,6 +40,38 @@ pub trait PickerProcess {
     fn id(&self) -> u32;
     fn terminate(&mut self);
     fn kill(&mut self);
+}
+
+impl PickerProcess for Child {
+    fn id(&self) -> u32 {
+        Child::id(self)
+    }
+
+    fn terminate(&mut self) {
+        let _ = self.kill();
+    }
+
+    fn kill(&mut self) {
+        let _ = Child::kill(self);
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CommandPickerSpawner;
+
+impl PickerSpawner for CommandPickerSpawner {
+    type Process = Child;
+
+    fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
+        let mut command = Command::new(&launch.command.program);
+        command.args(&launch.argv);
+        command.env_clear();
+        command.envs(&launch.env);
+        let _keep_child_fd_open_until_spawn = launch.child_ipc_fd;
+        command
+            .spawn()
+            .map_err(|err| PickerError::Spawn(err.to_string()))
+    }
 }
 
 pub trait PickerSpawner {
@@ -120,18 +155,16 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         parent_socket
             .set_nonblocking(true)
             .map_err(|err| PickerError::Socketpair(err.to_string()))?;
-        child_socket
-            .set_nonblocking(true)
-            .map_err(|err| PickerError::Socketpair(err.to_string()))?;
         let child_ipc_fd = OwnedFd::from(child_socket);
-        let argv = picker_argv(&command, PICKER_IPC_FD);
+        let child_fd_number = child_ipc_fd.as_raw_fd();
+        let argv = picker_argv(&command, child_fd_number);
         let env = sanitize_picker_env(ambient_env);
         let deadline = Instant::now() + timeout;
         let launch = PickerLaunch {
             command,
             argv,
             env,
-            ipc_fd_number: PICKER_IPC_FD,
+            ipc_fd_number: child_fd_number,
             child_ipc_fd,
         };
         let process = self.spawner.spawn(launch)?;
@@ -260,8 +293,14 @@ mod tests {
         ]);
 
         let sanitized = sanitize_picker_env(&ambient);
-        assert!(!sanitized.contains_key(OsStr::new("WAYLAND_DISPLAY")));
-        assert!(!sanitized.contains_key(OsStr::new("XDG_RUNTIME_DIR")));
+        assert_eq!(
+            sanitized.get(OsStr::new("WAYLAND_DISPLAY")),
+            Some(&OsString::from("wayland-1"))
+        );
+        assert_eq!(
+            sanitized.get(OsStr::new("XDG_RUNTIME_DIR")),
+            Some(&OsString::from("/run/user/1000"))
+        );
         assert!(!sanitized.contains_key(OsStr::new("NIRI_SOCKET")));
         assert!(!sanitized.contains_key(OsStr::new("SECRET_TOKEN")));
         assert_picker_env_excludes_niri_socket(&sanitized).expect("no niri socket");

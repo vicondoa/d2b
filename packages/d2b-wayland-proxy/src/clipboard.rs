@@ -1,22 +1,18 @@
-//! Clipboard virtualization policy scaffolding.
+//! Clipboard virtualization policy.
 //!
-//! Current substrate gap: the pinned `wl-proxy` crate exposes handlers for
-//! fd-bearing Wayland clipboard objects, but this crate does not yet provide a
-//! supported API for synthesizing a client-visible `wl_data_device_manager`
-//! global and related objects without binding/forwarding the compositor's real
-//! global. Until that substrate is extended, d2b-wayland-filter reserves the
-//! standard clipboard global for local virtualization and never forwards guest
-//! clipboard objects upstream.
+//! d2b-wayland-proxy synthesizes the guest-visible standard
+//! `wl_data_device_manager` path locally. Guest `wl_data_*` objects are never
+//! bound into the host compositor clipboard namespace. Same-VM transfers are
+//! routed within the proxy; host and cross-realm materialization routes through
+//! d2b-clipd.
 
 use std::collections::BTreeSet;
-
-pub const WL_PROXY_CLIPBOARD_SUBSTRATE_GAP: &str = "wl-proxy needs a supported synthetic-global/object path for fd-bearing clipboard virtualization";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardGlobalDisposition {
     /// Hide the compositor global from the guest in v1.
     DenyGlobal,
-    /// Reserve for a future synthetic guest-facing global; do not bind upstream.
+    /// Synthesize a guest-facing global locally; do not bind upstream.
     VirtualizeLocally,
     /// Not part of the clipboard/DND boundary.
     NotClipboard,
@@ -183,9 +179,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn substrate_gap_is_explicit_until_wl_proxy_grows_synthetic_globals() {
-        assert!(WL_PROXY_CLIPBOARD_SUBSTRATE_GAP.contains("wl-proxy"));
-        assert!(WL_PROXY_CLIPBOARD_SUBSTRATE_GAP.contains("synthetic"));
-    }
 }

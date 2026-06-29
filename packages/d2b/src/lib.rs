@@ -172,6 +172,8 @@ enum NativeCommand {
     /// (`guestConfigFile`): pull the operator's in-VM edits to a
     /// host-side staging file, diff them, and approve them.
     Config(ConfigArgs),
+    /// Clipboard authority operations (two-step fallback paste arming via d2b-clipd).
+    Clipboard(ClipboardArgs),
 }
 
 #[derive(Debug, Args)]
@@ -487,6 +489,30 @@ enum ShellAction {
     Detach,
     /// Kill a persistent shell session by name.
     Kill,
+}
+
+#[derive(Debug, Args)]
+struct ClipboardArgs {
+    #[command(subcommand)]
+    command: ClipboardCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ClipboardCommand {
+    /// Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V).
+    ///
+    /// Opens the d2b-clip-picker, waits for a selection, then arms d2b-clipd
+    /// to satisfy the next native paste request from the current focused window.
+    /// Requires d2b-clipd to be running.
+    Arm(ClipboardArmArgs),
+}
+
+#[derive(Debug, Args)]
+struct ClipboardArmArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2438,16 +2464,71 @@ fn dispatch(
             ConfigCommand::Reject(args) => cmd_config_reject(args),
             ConfigCommand::Status(args) => cmd_config_status(args),
         },
+        NativeCommand::Clipboard(args) => match &args.command {
+            ClipboardCommand::Arm(args) => cmd_clipboard_arm(context, args),
+        },
+    }
+}
+
+// ============================================================
+// `d2b clipboard` — clipboard authority fallback arming
+// ============================================================
+
+fn cmd_clipboard_arm(
+    _context: &Context,
+    args: &ClipboardArmArgs,
+) -> Result<i32, CliFailure> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+        CliFailure::new(
+            2,
+            "XDG_RUNTIME_DIR is not set; cannot locate d2b-clipd control socket",
+        )
+    })?;
+    let socket_path = PathBuf::from(runtime).join("d2b/clipd.sock");
+    let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
+        CliFailure::new(
+            2,
+            format!(
+                "failed to connect to d2b-clipd control socket {}: {error}",
+                socket_path.display()
+            ),
+        )
+    })?;
+    stream
+        .write_all(b"{\"type\":\"arm\"}\n")
+        .map_err(|error| CliFailure::new(2, format!("failed to request clipboard arm: {error}")))?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .map_err(|error| CliFailure::new(2, format!("failed to read clipboard arm response: {error}")))?;
+    let value: serde_json::Value = serde_json::from_str(&line)
+        .map_err(|error| CliFailure::new(2, format!("invalid d2b-clipd response: {error}")))?;
+    if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
+        if args.json {
+            print_stdout(&format!("{value}\n"));
+        } else {
+            let message = value
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("picker opened");
+            print_stdout(&format!("{message}\n"));
+        }
+        Ok(0)
+    } else {
+        let error = value
+            .get("error")
+            .and_then(|error| error.as_str())
+            .unwrap_or("d2b-clipd rejected clipboard arm request");
+        Err(CliFailure::new(2, error))
     }
 }
 
 // ============================================================
 // `d2b config` — guest-editable config sync / review / approve
 // ============================================================
-//
-// The per-VM `guestConfigFile` is the guest-editable OS layer. An
-// operator edits it from inside the VM; these verbs move that edit
-// host-side under review:
 //
 //   sync    pull the in-VM edited file into a host-side staging copy
 //   diff    compare the staging copy against the live host-side file

@@ -177,6 +177,11 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
         summary: "Docs blast-radius + v1.0 cut.",
         validators: &[],
     },
+    WaveSpec {
+        wave: "p0Cb",
+        summary: "Clipboard authority (d2b-clipd + picker protocol handshake smoke).",
+        validators: &["clipboard-picker-smoke.sh"],
+    },
 ];
 
 /// Per-wave status reported by both dry-run and apply modes.

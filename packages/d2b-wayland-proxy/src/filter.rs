@@ -213,8 +213,6 @@ impl VirtualClipboardState {
         let Some(source) = offer.borrow().source.borrow().source.upgrade() else {
             // Source was already destroyed; the fd will drop and the receiver
             // will see EOF. Log so operators can see clipboard data loss events.
-            // TODO: bridge handoff to d2b-clipd for cross-VM/host fallback
-            // (see bridge.rs BridgeHandoff trait).
             log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: source gone at receive; returning EOF to requester mime={}",
                 self.vm_name,

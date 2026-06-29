@@ -60,7 +60,7 @@ pub enum PolicyWarning {
 }
 
 impl PolicyWarning {
-    /// Human-readable runtime advisory emitted by d2b-wayland-filter.
+    /// Human-readable runtime advisory emitted by d2b-wayland-proxy.
     pub fn message(&self) -> String {
         match self {
             Self::RequiredGlobalDenied { interface } => format!(

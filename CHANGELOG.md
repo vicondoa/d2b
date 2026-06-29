@@ -60,6 +60,16 @@ deprecations ship one minor release before removal.
   `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
   input, bridge runtime path policy, eval assertions, and reference docs for the
   authority split, picker protocol, and policy caps.
+- Added `d2b clipboard arm` CLI subcommand stub for the ADR 0042 two-step fallback
+  paste arming workflow; returns a typed error when `d2b-clipd` is not running.
+- Added ADR 0042 test gates: scaffold-detection test asserting `d2b-clipd`
+  uses no `thread::park()` stub; picker handshake integration test
+  (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
+  flake export of `d2b-clipd`, `Clipboard` subcommand existence in the CLI,
+  Wayland filter synthetic-clipboard invariant, and substrate-gap contract;
+  `clipboard-picker-smoke.sh` Layer-2 script for `d2b host validate --wave p0Cb`.
+- Added `p0Cb` readiness wave to `WAVE_CATALOG` and `readinessWaveSpecs`
+  covering the clipboard authority foundation smoke validation.
 - Staged the ADR 0041 console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,
