@@ -70,7 +70,11 @@ pub fn emit_user_visible_failure<N: Notifier>(
     source_realm: &str,
     destination_realm: &str,
 ) {
-    notifier.notify(user_visible_failure(reason, source_realm, destination_realm));
+    notifier.notify(user_visible_failure(
+        reason,
+        source_realm,
+        destination_realm,
+    ));
 }
 
 pub fn sanitize_notification_text(input: &str, max_chars: usize) -> String {
