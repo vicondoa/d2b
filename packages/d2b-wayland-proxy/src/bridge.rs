@@ -1,16 +1,17 @@
-//! Internal bridge scaffolding between `d2b-wayland-filter` and `d2b-clipd`.
+//! Internal bridge helpers between `d2b-wayland-proxy` and `d2b-clipd`.
 //!
 //! The bridge socket is d2b-internal and per user/per VM. It is not the picker
 //! protocol, does not depend on `NIRI_SOCKET`, and may carry transfer FDs only
 //! between d2b components once the protocol is implemented.
 
 use std::{
+    io::IoSlice,
     os::{
-        fd::OwnedFd,
+        fd::{AsRawFd, OwnedFd},
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
@@ -121,14 +122,17 @@ pub enum BridgeConnectionState {
     Disabled,
     Disconnected,
     Connecting { attempt: u32 },
-    Connected,
+    Connected { attempt: u32 },
     Backoff { attempt: u32, delay: Duration },
 }
+
+const STABLE_CONNECTION_RESET_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct BridgeReconnectMachine {
     policy: BridgeReconnectPolicy,
     state: BridgeConnectionState,
+    connected_at: Option<Instant>,
 }
 
 impl BridgeReconnectMachine {
@@ -140,6 +144,7 @@ impl BridgeReconnectMachine {
             } else {
                 BridgeConnectionState::Disabled
             },
+            connected_at: None,
         }
     }
 
@@ -161,8 +166,9 @@ impl BridgeReconnectMachine {
     }
 
     pub fn connect_succeeded(&mut self) {
-        if matches!(self.state, BridgeConnectionState::Connecting { .. }) {
-            self.state = BridgeConnectionState::Connected;
+        if let BridgeConnectionState::Connecting { attempt } = self.state {
+            self.state = BridgeConnectionState::Connected { attempt };
+            self.connected_at = Some(Instant::now());
         }
     }
 
@@ -172,15 +178,25 @@ impl BridgeReconnectMachine {
                 attempt: attempt.saturating_add(1),
                 delay: self.delay_for_attempt(attempt),
             };
+            self.connected_at = None;
         }
     }
 
     pub fn disconnected(&mut self) {
-        if matches!(self.state, BridgeConnectionState::Connected) {
-            self.state = BridgeConnectionState::Backoff {
-                attempt: 1,
-                delay: self.policy.initial_delay,
-            };
+        if let BridgeConnectionState::Connected { attempt } = self.state {
+            let stable = self.connected_at.is_some_and(|connected_at| {
+                connected_at.elapsed() >= STABLE_CONNECTION_RESET_AFTER
+            });
+            self.connected_at = None;
+            if stable {
+                self.state = BridgeConnectionState::Disconnected;
+            } else {
+                let backoff_attempt = attempt.saturating_add(1);
+                self.state = BridgeConnectionState::Backoff {
+                    attempt: backoff_attempt,
+                    delay: self.delay_for_attempt(attempt),
+                };
+            }
         }
     }
 
@@ -224,22 +240,73 @@ impl LocalTransferFd {
     }
 }
 
-/// Placeholder for the future FD-bearing bridge transport. It establishes the
-/// shape tests can compile against without implementing SCM_RIGHTS yet.
 pub trait BridgeHandoff {
-    fn handoff_transfer_fd(&mut self, fd: LocalTransferFd) -> HandoffStatus;
+    fn handoff_transfer_fd(
+        &mut self,
+        fd: &OwnedFd,
+        metadata: &BridgeTransferMetadata,
+    ) -> HandoffStatus;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeTransferMetadata {
+    pub vm_name: String,
+    pub mime_type: String,
+    pub source_id: u64,
 }
 
 impl BridgeHandoff for UnixStream {
-    fn handoff_transfer_fd(&mut self, fd: LocalTransferFd) -> HandoffStatus {
-        fd.close_after_handoff(HandoffStatus::Failed)
+    fn handoff_transfer_fd(
+        &mut self,
+        local_fd: &OwnedFd,
+        metadata: &BridgeTransferMetadata,
+    ) -> HandoffStatus {
+        let raw_fd = local_fd.as_raw_fd();
+        let frame = bridge_frame(metadata);
+        let iov = [IoSlice::new(frame.as_bytes())];
+        let fds = [raw_fd];
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
+        match nix::sys::socket::sendmsg::<()>(
+            self.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+            None,
+        ) {
+            Ok(n) if n == frame.len() => HandoffStatus::Delivered,
+            Ok(_) | Err(_) => HandoffStatus::Failed,
+        }
     }
+}
+
+fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
+    format!(
+        "{{\"type\":\"vm_paste_request\",\"vm_name\":\"{}\",\"mime_type\":\"{}\",\"source_id\":{},\"source_attribution\":\"exact_client\"}}\n",
+        json_escape(&metadata.vm_name),
+        json_escape(&metadata.mime_type),
+        metadata.source_id
+    )
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            ch if ch.is_control() => "?".chars().collect::<Vec<_>>(),
+            ch => vec![ch],
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{IoSliceMut, Read};
 
     fn assert_peer_observes_local_close(status: HandoffStatus) {
         let (local, mut peer) = UnixStream::pair().expect("socket pair");
@@ -340,15 +407,27 @@ mod tests {
             BridgeConnectionState::Connecting { attempt: 2 }
         );
         machine.connect_succeeded();
-        assert_eq!(machine.state(), BridgeConnectionState::Connected);
+        assert_eq!(
+            machine.state(),
+            BridgeConnectionState::Connected { attempt: 2 }
+        );
         machine.disconnected();
         assert_eq!(
             machine.state(),
             BridgeConnectionState::Backoff {
-                attempt: 1,
-                delay: Duration::from_millis(250)
+                attempt: 3,
+                delay: Duration::from_millis(500)
             }
         );
+        machine.retry_due();
+        assert_eq!(
+            machine.state(),
+            BridgeConnectionState::Connecting { attempt: 3 }
+        );
+        machine.connect_succeeded();
+        machine.connected_at = Some(Instant::now() - Duration::from_secs(2));
+        machine.disconnected();
+        assert_eq!(machine.state(), BridgeConnectionState::Disconnected);
     }
 
     #[test]
@@ -359,5 +438,51 @@ mod tests {
     #[test]
     fn failed_handoff_closes_local_fd_copy() {
         assert_peer_observes_local_close(HandoffStatus::Failed);
+    }
+
+    #[test]
+    fn bridge_handoff_sends_fd_with_scm_rights() {
+        let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
+        let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
+        let local: OwnedFd = local.into();
+        let metadata = BridgeTransferMetadata {
+            vm_name: "work".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            source_id: 7,
+        };
+
+        assert_eq!(
+            bridge.handoff_transfer_fd(&local, &metadata),
+            HandoffStatus::Delivered
+        );
+        drop(local);
+
+        let mut frame = [0_u8; 256];
+        let mut iov = [IoSliceMut::new(&mut frame)];
+        let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+        let msg = nix::sys::socket::recvmsg::<()>(
+            peer.as_raw_fd(),
+            &mut iov,
+            Some(&mut cmsg_space),
+            nix::sys::socket::MsgFlags::empty(),
+        )
+        .expect("recvmsg");
+        let bytes = msg.bytes;
+        let mut saw_fd = false;
+        for cmsg in msg.cmsgs().expect("cmsgs") {
+            if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
+                saw_fd = !fds.is_empty();
+                for fd in fds {
+                    let _ = nix::unistd::close(fd);
+                }
+            }
+        }
+        assert!(saw_fd, "bridge handoff must carry one SCM_RIGHTS fd");
+        let frame = std::str::from_utf8(&frame[..bytes]).expect("utf8 frame");
+        assert!(frame.contains("\"type\":\"vm_paste_request\""));
+        assert!(frame.contains("\"source_attribution\":\"exact_client\""));
+        assert!(frame.contains("\"vm_name\":\"work\""));
+        let mut buf = [0_u8; 1];
+        assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
     }
 }

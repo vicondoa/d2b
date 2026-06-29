@@ -4,6 +4,7 @@
 let
   cfg = config.d2b.site.clipboard;
   site = config.d2b.site;
+  d2bLib = import ./lib.nix { inherit lib; };
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
@@ -28,6 +29,38 @@ let
     || (cfg.policy.crossRealm.enable && (cfg.modes.hostCrossRealmPicker || cfg.modes.vmCrossRealmPicker));
 
   niriProgramEnabled = config.programs.niri.enable or false;
+  bridgeVmSet =
+    (lib.filterAttrs (_name: vm:
+      vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
+    ) (d2bLib.normalNixosVms config.d2b.vms))
+    // (d2bLib.qemuMediaVms config.d2b.vms);
+  bridgeVms = lib.attrNames bridgeVmSet;
+  bridgePeers = map (vm: {
+    vmName = vm;
+    expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
+  }) bridgeVms;
+  waylandUid = toString config.users.users.${site.waylandUser}.uid;
+  clipdBridgeRootTmpfiles =
+    lib.optionals (cfg.enable && bridgeVms != [ ]) (
+      [
+        "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${site.waylandUser}:--x"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${site.waylandUser}:--x"
+      ]
+      ++ lib.concatMap (vm: [
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "a+ /run/d2b - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
+      ]) bridgeVms
+    );
 
   configJson = builtins.toJSON {
     version = 1;
@@ -48,6 +81,8 @@ let
     runtime = {
       bridgeRoot = cfg.runtime.bridgeRoot;
       bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<vm>/${cfg.runtime.bridgeSocketName}";
+      inherit bridgeVms;
+      inherit bridgePeers;
       parentProvisioning = "d2bd-broker-lifecycle";
       staticTmpfilesOnly = false;
     };
@@ -316,7 +351,7 @@ in
         };
         command = lib.mkOption {
           type = lib.types.str;
-          default = "d2b clipboard picker";
+          default = "d2b clipboard arm";
           description = "Command operators bind in niri for the explicit fallback action.";
         };
         notification = lib.mkOption {
@@ -375,6 +410,7 @@ in
       bridgeSocketName = lib.mkOption {
         type = lib.types.strMatching "^[A-Za-z0-9_.-]+\\.sock$";
         default = "clip.sock";
+        readOnly = true;
         description = "Basename for each per-VM internal clipboard bridge socket.";
       };
     };
@@ -451,12 +487,25 @@ in
           paste-intent token.
         '';
       }
+      {
+        assertion = !(cfg.policy.crossRealm.enable && cfg.policy.crossRealm.requirePasteIntent)
+          || cfg.niri.pasteIntentHook != "disabled"
+          || cfg.niri.fallback.enable;
+        message = ''
+          d2b.site.clipboard.policy.crossRealm.enable with requirePasteIntent
+          needs a trusted niri paste-intent hook, an upstream-equivalent IPC
+          event, or the explicit fallback workflow. Otherwise cross-realm
+          transfers would be denied without an operator-visible path.
+        '';
+      }
     ];
 
     environment.etc."d2b/clipboard.json" = {
       text = configJson;
       mode = "0644";
     };
+
+    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
 
     systemd.user.services.d2b-clipd = {
       description = "d2b clipboard authority daemon";
@@ -473,10 +522,10 @@ in
         ExecStart = "${clipdExec} ${serviceArgs}";
         Restart = "on-failure";
         RestartSec = "2s";
+        UMask = "0000";
         RuntimeDirectory = "d2b-clipd";
         RuntimeDirectoryMode = "0700";
         NoNewPrivileges = true;
-        PrivateTmp = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         RestrictRealtime = true;

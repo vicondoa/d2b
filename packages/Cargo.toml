@@ -23,7 +23,7 @@ members = [
     "d2b",
     "d2bd",
     "d2b-clipd",
-    "d2b-wayland-filter",
+    "d2b-wayland-proxy",
     "d2b-contract-tests",
     "xtask",
 ]

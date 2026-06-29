@@ -1021,6 +1021,7 @@ fn run_usbip_driver_isolated(
                     attempt = attempt + 1,
                     elapsed_ms,
                     deadline_remaining_ms = remaining_ms,
+                    error = ?error,
                     "usbip driver helper retrying transient failure"
                 );
                 last_error = Some(error);
@@ -1240,6 +1241,10 @@ fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
                 || detail.contains("temporarily unavailable")
                 || detail.contains("interrupted")
                 || detail.contains("eintr")
+        }
+        ReconcileExecError::BinaryMissing { detail, .. } => {
+            let detail = detail.to_ascii_lowercase();
+            detail.contains("text file busy") || detail.contains("etxtbsy")
         }
         _ => false,
     }
@@ -1713,6 +1718,10 @@ pub use fake::{FakeReconcileExecutor, ReconcileOp};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static HELPER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Sysctl key validation: the broker callers pass dotted keys
     /// (`net.ipv4.ip_forward`); the executor translates dots to
@@ -1843,19 +1852,41 @@ mod tests {
             .expect("cwd")
             .join("target")
             .join(format!(
-                "usbip-unbind-helper-{name}-{}-{}",
+                "usbip-unbind-helper-{name}-{}-{}-{}",
                 std::process::id(),
-                current_unix_ms()
+                current_unix_ms(),
+                HELPER_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create helper root");
         let helper = root.join("usbip");
-        std::fs::write(&helper, body).expect("write helper");
+        {
+            let mut file = std::fs::File::create(&helper).expect("create helper");
+            file.write_all(body.as_bytes()).expect("write helper");
+            file.sync_all().expect("sync helper");
+        }
         let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
         permissions.set_mode(0o755);
         std::fs::set_permissions(&helper, permissions).expect("chmod helper");
         helper
+    }
+
+    fn run_usbip_helper_once_retry_text_busy(
+        helper: &Path,
+        subcommand: UsbipSubcommand,
+        bus_id: &str,
+        deadline: Instant,
+    ) -> Result<(), ReconcileExecError> {
+        match run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline) {
+            Err(ReconcileExecError::BinaryMissing { detail, .. })
+                if detail.contains("Text file busy") =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+                run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline)
+            }
+            result => result,
+        }
     }
 
     #[test]
@@ -1958,6 +1989,18 @@ mod tests {
                 stderr: "write: Device or resource busy (EBUSY)".to_owned(),
             }
         ));
+        assert!(usbip_unbind_error_is_transient(
+            &ReconcileExecError::BinaryMissing {
+                which: "usbip".to_owned(),
+                detail: "Text file busy (os error 26)".to_owned(),
+            }
+        ));
+        assert!(!usbip_unbind_error_is_transient(
+            &ReconcileExecError::BinaryMissing {
+                which: "usbip".to_owned(),
+                detail: "No such file or directory (os error 2)".to_owned(),
+            }
+        ));
         assert!(!usbip_unbind_error_is_transient(
             &ReconcileExecError::NonZeroExit {
                 which: "usbip unbind".to_owned(),
@@ -1986,7 +2029,7 @@ exit 7
 "#,
         );
 
-        let err = run_usbip_driver_helper_once(
+        let err = run_usbip_helper_once_retry_text_busy(
             &helper,
             UsbipSubcommand::Unbind,
             "1-2",
@@ -2028,7 +2071,7 @@ exit 0
 "#,
         );
 
-        run_usbip_driver_helper_once(
+        run_usbip_helper_once_retry_text_busy(
             &helper,
             UsbipSubcommand::Bind,
             "1-2",

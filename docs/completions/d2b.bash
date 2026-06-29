@@ -31,6 +31,9 @@ _d2b() {
             d2b,build)
                 cmd="d2b__subcmd__build"
                 ;;
+            d2b,clipboard)
+                cmd="d2b__subcmd__clipboard"
+                ;;
             d2b,config)
                 cmd="d2b__subcmd__config"
                 ;;
@@ -145,6 +148,18 @@ _d2b() {
             d2b__subcmd__auth__subcmd__help,status)
                 cmd="d2b__subcmd__auth__subcmd__help__subcmd__status"
                 ;;
+            d2b__subcmd__clipboard,arm)
+                cmd="d2b__subcmd__clipboard__subcmd__arm"
+                ;;
+            d2b__subcmd__clipboard,help)
+                cmd="d2b__subcmd__clipboard__subcmd__help"
+                ;;
+            d2b__subcmd__clipboard__subcmd__help,arm)
+                cmd="d2b__subcmd__clipboard__subcmd__help__subcmd__arm"
+                ;;
+            d2b__subcmd__clipboard__subcmd__help,help)
+                cmd="d2b__subcmd__clipboard__subcmd__help__subcmd__help"
+                ;;
             d2b__subcmd__config,approve)
                 cmd="d2b__subcmd__config__subcmd__approve"
                 ;;
@@ -195,6 +210,9 @@ _d2b() {
                 ;;
             d2b__subcmd__help,build)
                 cmd="d2b__subcmd__help__subcmd__build"
+                ;;
+            d2b__subcmd__help,clipboard)
+                cmd="d2b__subcmd__help__subcmd__clipboard"
                 ;;
             d2b__subcmd__help,config)
                 cmd="d2b__subcmd__help__subcmd__config"
@@ -282,6 +300,9 @@ _d2b() {
                 ;;
             d2b__subcmd__help__subcmd__auth,status)
                 cmd="d2b__subcmd__help__subcmd__auth__subcmd__status"
+                ;;
+            d2b__subcmd__help__subcmd__clipboard,arm)
+                cmd="d2b__subcmd__help__subcmd__clipboard__subcmd__arm"
                 ;;
             d2b__subcmd__help__subcmd__config,approve)
                 cmd="d2b__subcmd__help__subcmd__config__subcmd__approve"
@@ -620,7 +641,7 @@ _d2b() {
 
     case "${cmd}" in
         d2b)
-            opts="-h -V --help --version list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
+            opts="-h -V --help --version list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -903,6 +924,76 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        d2b__subcmd__clipboard)
+            opts="-h --help arm help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__clipboard__subcmd__arm)
+            opts="-h --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__clipboard__subcmd__help)
+            opts="arm help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__clipboard__subcmd__help__subcmd__arm)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__clipboard__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         d2b__subcmd__config)
             opts="-h --help sync diff approve reject status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -1170,7 +1261,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__help)
-            opts="list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config help"
+            opts="list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1312,6 +1403,34 @@ _d2b() {
         d2b__subcmd__help__subcmd__build)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__clipboard)
+            opts="arm"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__clipboard__subcmd__arm)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

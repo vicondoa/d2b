@@ -191,6 +191,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Errors,
     ),
     row(
+        "clipboard",
+        "host clipboard",
+        "local-user-session",
+        &["d2b-launcher", "d2b-admin"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::No,
+        AuditMode::Errors,
+    ),
+    row(
         "realm",
         "realm command family",
         "global-or-scoped",

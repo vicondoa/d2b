@@ -14,9 +14,9 @@ deprecations ship one minor release before removal.
 
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
-  point `console` and `audio` surfaces at ADR 0041 and the provider capability
+  point `console` and `audio` surfaces at the provider capability
   matrix.
-- The host-side `d2b-wayland-filter` proxy is source-built from the checked-out
+- The host-side `d2b-wayland-proxy` proxy is source-built from the checked-out
   workspace even when other host tools use release prebuilts, so local eval
   gates do not depend on a matching release tarball for this policy binary.
 - The `with-entra-id` eval workflow now overrides GitHub inputs to the
@@ -32,27 +32,73 @@ deprecations ship one minor release before removal.
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
   naming; old names are unsupported and no compatibility aliases are provided.
 
+### Fixed
+
+- USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
+  spawn failures as retryable instead of reporting the helper as missing.
+
 ### Added
 
-- Added the initial `d2b-clipd` Rust crate foundation with picker NDJSON DTOs,
-  bounded framing, clipboard policy primitives, FD safety models, picker
-  supervision scaffolding, and fail-closed audit / droppable metrics queues.
-- `d2b-wayland-filter` now includes clipboard virtualization groundwork:
-  bridge socket configuration scaffolding, exact guest-client attribution
-  bookkeeping, v1 clipboard/DND policy helpers, and FD-handoff lifecycle tests.
-- `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
+- Added the `d2b-clipd` Rust crate with picker NDJSON DTOs, bounded framing,
+  clipboard policy primitives, FD safety models, picker supervision,
+  fail-closed audit / droppable metrics queues, host data-control integration,
+  and the clipboard fallback arm control socket.
+- Renamed the host-side Wayland package/binary to `d2b-wayland-proxy`.
+- Renamed the per-VM graphics options from `graphics.waylandFilter.*` to
+  `graphics.waylandProxy.*`; the old option path remains as a compatibility
+  alias for this release.
+- `d2b-wayland-proxy` now virtualizes the standard guest clipboard locally:
+  it advertises a synthetic `wl_data_device_manager`, never binds guest
+  `wl_data_*` objects into the host compositor clipboard namespace, routes
+  same-VM transfers inside the proxy, and keeps primary-selection, privileged
+  data-control, and DND denied.
+- `d2b-wayland-proxy` virtual clipboard now correctly sends `wl_data_source.cancelled`
+  to the previous source owner when a new selection supersedes it; `vm_name`
+  attribution is threaded through all four virtual clipboard handlers
+  (`VirtualDataDeviceManagerHandler`, `VirtualDataSourceHandler`,
+  `VirtualDataDeviceHandler`, `VirtualOfferHandler`) and logged at each
+  clipboard lifecycle event (source created/destroyed, MIME announced,
+  selection set, offer received); source-gone EOF paths fail closed with EOF.
+- `d2b-clipd` now has host/Niri integration with tolerant Niri JSON
   IPC models, bounded Unix-socket request/response helpers, focused-window
   best-effort attribution cache behavior, and fallback arming state-machine tests.
 - `d2b-clipd` now has a real desktop notification backend for bounded,
   content-free fallback-ready and failure notifications.
 - The flake now exports `packages.<system>.d2b-clipd` so host configurations can
   wire the clipboard authority user service without local package workarounds.
-- Added clipboard architecture Nix/docs/schema scaffolding: a default-off
-  `d2b.site.clipboard` module, user-service wiring for externally packaged
-  `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
-  input, bridge runtime path policy, eval assertions, and reference docs for the
-  authority split, picker protocol, and policy caps.
-- Staged the ADR 0041 console/audio contract surface: public
+- Added clipboard architecture Nix/docs/schema wiring: a default-off
+  `d2b.site.clipboard` module, user-service wiring for `d2b-clipd`, explicit
+  picker package/path configuration with no bundled GPL input, bridge runtime
+  path policy, eval assertions, and reference docs for the authority split,
+  picker protocol, and policy caps.
+- Added `d2b clipboard arm` CLI subcommand for the two-step fallback
+  paste arming workflow; it sends an arm request to the running `d2b-clipd`
+  control socket with bounded read/write deadlines, reports structured
+  `--json` failures, and treats picker launch/handshake failure as success
+  only when `d2b-clipd` arms the native paste fallback.
+- Added clipboard test gates: scaffold-detection test asserting `d2b-clipd`
+  uses no `thread::park()` stub; picker handshake integration test
+  (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
+  flake export of `d2b-clipd`, `Clipboard` subcommand existence in the CLI,
+  Wayland proxy synthetic-clipboard invariant, and no-regression checks against
+  reintroducing a substrate-gap marker.
+- `d2b-clipd` now implements the host-authority event loop:
+  connects to the host Wayland compositor via `ext-data-control-v1`
+  (preferring the stable extension, falling back to `zwlr-data-control-v1`
+  when only the WLR variant is advertised); subscribes Niri IPC events for
+  focused-window attribution via `$NIRI_SOCKET`; uses the Niri event-stream
+  cache for native clipboard events so the Wayland event loop does not block
+  on synchronous compositor IPC; materialises host copy
+  events with `FocusedWindowGuess` attribution; holds paste write-FDs open
+  until the picker resolves or a 30-second deadline fires; launches the
+  picker process over a `socketpair` using `CommandPickerSpawner`; falls
+  back to native-paste arming (no synthetic input) when no picker command is
+  configured; logs notification errors without exposing raw clipboard content.
+- `d2b-clipd` now writes selected payloads to Wayland transfer FDs from a
+  bounded helper task instead of blocking the daemon event loop, and bridge /
+  picker failures emit content-free, rate-limited warnings such as
+  `connect-failed`, `handoff-failed`, and picker-closed-before-selection.
+- Staged the console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,
   qemu-media, and ACA sandboxes, generated schemas, the provider

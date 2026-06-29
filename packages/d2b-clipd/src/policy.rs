@@ -37,7 +37,6 @@ pub enum ReasonCode {
     SourceMaterializeTimeout,
     MaterializationRateLimited,
     MemoryCapExceeded,
-    LoopSuppressed,
     AuditFailure,
 }
 
@@ -61,7 +60,6 @@ impl ReasonCode {
             Self::SourceMaterializeTimeout => "source_materialize_timeout",
             Self::MaterializationRateLimited => "materialization_rate_limited",
             Self::MemoryCapExceeded => "memory_cap_exceeded",
-            Self::LoopSuppressed => "loop_suppressed",
             Self::AuditFailure => "audit_failure",
         }
     }
@@ -88,7 +86,7 @@ pub fn has_secret_hint<'a>(mime_names: impl IntoIterator<Item = &'a str>) -> boo
         .any(|mime| SECRET_HINT_MIME_TYPES.contains(&mime.as_str()))
 }
 
-fn normalize_mime(mime: &str) -> String {
+pub fn normalize_mime(mime: &str) -> String {
     mime.trim()
         .split(';')
         .map(str::trim)
@@ -106,6 +104,8 @@ mod tests {
         assert!(is_mime_allowed("text/plain"));
         assert!(is_mime_allowed("Text/Plain ; Charset=UTF-8"));
         assert!(is_mime_allowed("image/png"));
+        assert!(!is_mime_allowed("image/png; exploit=1"));
+        assert!(!is_mime_allowed("text/plain; exploit=1"));
         assert!(!is_mime_allowed("application/octet-stream"));
         assert!(!is_mime_allowed("text/uri-list"));
     }

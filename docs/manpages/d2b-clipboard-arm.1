@@ -1,0 +1,21 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH d2b-clipboard-arm 1 1970-01-01 d2b "d2b CLI"
+.SH NAME
+arm \- Arm the fallback two\-step paste workflow (Mod+Shift+V → Ctrl+V)
+.SH SYNOPSIS
+\fBarm\fR [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Arm the fallback two\-step paste workflow (Mod+Shift+V → Ctrl+V).
+.PP
+Opens the d2b\-clip\-picker, waits for a selection, then arms d2b\-clipd to satisfy the next native paste request from the current focused window. Requires d2b\-clipd to be running.
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Emit a structured JSON envelope
+.TP
+\fB\-\-human\fR
+Emit a human\-readable status line
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

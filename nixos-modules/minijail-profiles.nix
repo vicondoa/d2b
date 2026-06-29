@@ -515,7 +515,7 @@ let
         # constant in d2b-priv-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
         # No real host compositor bind-mount: the GPU runner connects to
-        # the per-VM filter socket at /run/d2b-wlproxy/<vm>/wayland-0.
+        # the per-VM proxy socket at /run/d2b-wlproxy/<vm>/wayland-0.
         # The wayland-proxy profile holds the real compositor bind-mount.
         bindMounts = [ ];
         cgroupSubtree = "d2b.slice/${name}/gpu";
@@ -531,9 +531,9 @@ let
       };
     }
     // lib.optionalAttrs vm.graphics.enable {
-      # Wayland filter proxy role profile.
+      # Wayland proxy role profile.
       #
-      # Per ADR 0025: the host-jailed filter proxy sits between the crosvm
+      # Per ADR 0025: the host-jailed Wayland proxy sits between the crosvm
       # GPU sidecar and the real host compositor socket. It runs as a
       # dedicated `d2b-<vm>-wlproxy` principal with:
       #   - empty host capabilities (mandatory);
@@ -563,6 +563,9 @@ let
         writablePaths = [
           (mkWritablePath "/run/d2b-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
+        ] ++ lib.optionals cfg.site.clipboard.enable [
+          (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
+            "Connect to this VM's d2b-clipd clipboard bridge socket.")
         ];
         # The proxy connects directly to the real host compositor socket path.
         # Host activation grants this principal access to exactly that socket;
@@ -709,7 +712,10 @@ let
       seccompPolicyRef = "w1-wayland-proxy";
       writablePaths = [
         (mkWritablePath "/run/d2b-wlproxy/${name}"
-          "Create the per-VM qemu-media Wayland filter listen socket.")
+          "Create the per-VM qemu-media Wayland proxy listen socket.")
+      ] ++ lib.optionals cfg.site.clipboard.enable [
+        (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
+          "Connect to this VM's d2b-clipd clipboard bridge socket.")
       ];
       bindMounts = [ ];
       deviceBinds = [ ];
@@ -728,7 +734,7 @@ let
       readOnlyPaths = [ "/" ];
       writablePaths = [
         (mkWritablePath "/run/d2b/vms/${name}" "Create the QMP control socket without exposing media paths.")
-        (mkWritablePath "/run/d2b-wlproxy/${name}" "Connect to the per-VM Wayland filter proxy socket.")
+        (mkWritablePath "/run/d2b-wlproxy/${name}" "Connect to the per-VM Wayland proxy socket.")
         (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
       ];
       deviceBinds = [ "/dev/kvm" ];

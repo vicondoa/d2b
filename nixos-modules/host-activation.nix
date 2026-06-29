@@ -152,6 +152,7 @@ EOF
         (lib.optionals vm.audio.enable (runtimeAclUser "/run/d2b" "d2b-${name}-snd" "--x"))
         (lib.optionals vm.audio.enable (runtimeAclUser "/run/d2b/vms" "d2b-${name}-snd" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b" "d2b-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b" "d2b-${name}-wlproxy" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b/vms" "d2b-${name}-gpu" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b-gpu" "d2b-${name}-gpu" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b-wlproxy" "d2b-${name}-gpu" "--x"))
@@ -168,6 +169,7 @@ EOF
       in
       lib.concatLists [
         (runtimeAclUser "/run/d2b" qemuMediaPrincipal "--x")
+        (runtimeAclUser "/run/d2b" wlproxyPrincipal "--x")
         (runtimeAclUser "/run/d2b/vms" qemuMediaPrincipal "--x")
         (runtimeAclUser "/run/d2b-wlproxy" qemuMediaPrincipal "--x")
         (runtimeAclUser "/run/d2b-wlproxy" wlproxyPrincipal "--x")
@@ -753,7 +755,7 @@ in
                 ${pkgs.acl}/bin/setfacl -x "u:$uid" /run/d2b-video/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/d2b-video/${name} 2>/dev/null || true
               fi
-              # Per-VM Wayland filter proxy runtime dir.
+              # Per-VM Wayland proxy runtime dir.
               # wlproxy UID gets rwx (binds the listen socket);
               # all other UIDs get --x (traverse to connect-by-path).
               if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then

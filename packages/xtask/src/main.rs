@@ -510,36 +510,11 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .manual("d2b CLI")
         .render(&mut man_buffer)?;
     fs::write(&man_path, man_buffer)?;
-    let mut host_command = d2b::cli_command()
-        .find_subcommand_mut("host")
-        .expect("host subcommand exists")
-        .clone();
-    host_command.build();
-    let host_man_path = man_dir.join("d2b-host.1");
-    let mut host_man_buffer = Vec::new();
-    Man::new(host_command)
-        .title("d2b-host")
-        .section("1")
-        .date("1970-01-01")
-        .source("d2b".to_owned())
-        .manual("d2b CLI")
-        .render(&mut host_man_buffer)?;
-    fs::write(&host_man_path, host_man_buffer)?;
-    let mut shell_command = d2b::cli_command()
-        .find_subcommand_mut("shell")
-        .expect("shell subcommand exists")
-        .clone();
-    shell_command.build();
-    let shell_man_path = man_dir.join("d2b-shell.1");
-    let mut shell_man_buffer = Vec::new();
-    Man::new(shell_command)
-        .title("d2b-shell")
-        .section("1")
-        .date("1970-01-01")
-        .source("d2b".to_owned())
-        .manual("d2b CLI")
-        .render(&mut shell_man_buffer)?;
-    fs::write(&shell_man_path, shell_man_buffer)?;
+    let host_man_path = write_subcommand_manpage(&man_dir, &["host"], "d2b-host")?;
+    let shell_man_path = write_subcommand_manpage(&man_dir, &["shell"], "d2b-shell")?;
+    let clipboard_man_path = write_subcommand_manpage(&man_dir, &["clipboard"], "d2b-clipboard")?;
+    let clipboard_arm_man_path =
+        write_subcommand_manpage(&man_dir, &["clipboard", "arm"], "d2b-clipboard-arm")?;
 
     let bash_path = comp_dir.join("d2b.bash");
     let mut bash_command = d2b::cli_command();
@@ -565,10 +540,38 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         man_path,
         host_man_path,
         shell_man_path,
+        clipboard_man_path,
+        clipboard_arm_man_path,
         bash_path,
         zsh_path,
         fish_path,
     ])
+}
+
+fn write_subcommand_manpage(
+    man_dir: &Path,
+    path: &[&str],
+    title: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut command = d2b::cli_command();
+    for component in path {
+        command = command
+            .find_subcommand_mut(component)
+            .unwrap_or_else(|| panic!("{component} subcommand exists"))
+            .clone();
+    }
+    command.build();
+    let man_path = man_dir.join(format!("{title}.1"));
+    let mut man_buffer = Vec::new();
+    Man::new(command)
+        .title(title)
+        .section("1")
+        .date("1970-01-01")
+        .source("d2b".to_owned())
+        .manual("d2b CLI")
+        .render(&mut man_buffer)?;
+    fs::write(&man_path, man_buffer)?;
+    Ok(man_path)
 }
 
 fn patch_vm_exec_logs_bash_completion(

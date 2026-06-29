@@ -222,6 +222,7 @@
             "boot",
             "build",
             "capabilities",
+            "clipboard",
             "config",
             "console",
             "debug bundle",

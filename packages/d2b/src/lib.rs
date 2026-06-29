@@ -172,6 +172,8 @@ enum NativeCommand {
     /// (`guestConfigFile`): pull the operator's in-VM edits to a
     /// host-side staging file, diff them, and approve them.
     Config(ConfigArgs),
+    /// Clipboard authority operations (two-step fallback paste arming via d2b-clipd).
+    Clipboard(ClipboardArgs),
 }
 
 #[derive(Debug, Args)]
@@ -488,6 +490,35 @@ enum ShellAction {
     /// Kill a persistent shell session by name.
     Kill,
 }
+
+#[derive(Debug, Args)]
+struct ClipboardArgs {
+    #[command(subcommand)]
+    command: ClipboardCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ClipboardCommand {
+    /// Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V).
+    ///
+    /// Opens the d2b-clip-picker, waits for a selection, then arms d2b-clipd
+    /// to satisfy the next native paste request from the current focused window.
+    /// Requires d2b-clipd to be running.
+    #[command(alias = "picker")]
+    Arm(ClipboardArmArgs),
+}
+
+#[derive(Debug, Args)]
+struct ClipboardArmArgs {
+    /// Emit a structured JSON envelope.
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    /// Emit a human-readable status line.
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+const CLIPBOARD_ARM_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Subcommand)]
 enum OpCommand {
@@ -2307,6 +2338,11 @@ where
             return if is_host_usage { 3 } else { err.exit_code() };
         }
     };
+    if raw_args.get(1).and_then(|arg| arg.to_str()) == Some("clipboard")
+        && raw_args.get(2).and_then(|arg| arg.to_str()) == Some("picker")
+    {
+        print_stderr("d2b: `d2b clipboard picker` is deprecated; use `d2b clipboard arm`.\n");
+    }
 
     let context = match Context::from_env() {
         Ok(context) => context,
@@ -2438,16 +2474,140 @@ fn dispatch(
             ConfigCommand::Reject(args) => cmd_config_reject(args),
             ConfigCommand::Status(args) => cmd_config_status(args),
         },
+        NativeCommand::Clipboard(args) => match &args.command {
+            ClipboardCommand::Arm(args) => cmd_clipboard_arm(context, args),
+        },
+    }
+}
+
+// ============================================================
+// `d2b clipboard` — clipboard authority fallback arming
+// ============================================================
+
+fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+        clipboard_arm_failure(
+            args,
+            "XDG_RUNTIME_DIR is not set; cannot locate d2b-clipd control socket",
+        )
+    })?;
+    let socket_path = PathBuf::from(runtime).join("d2b-clipd/clipd.sock");
+    let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
+        clipboard_arm_failure(
+            args,
+            format!(
+                "failed to connect to d2b-clipd control socket {}: {error}",
+                socket_path.display()
+            ),
+        )
+    })?;
+    set_clipboard_arm_timeouts(&stream).map_err(|error| {
+        clipboard_arm_failure(
+            args,
+            format!("failed to set clipboard arm socket timeout: {error}"),
+        )
+    })?;
+    stream.write_all(b"{\"type\":\"arm\"}\n").map_err(|error| {
+        clipboard_arm_failure(args, format!("failed to request clipboard arm: {error}"))
+    })?;
+    let mut line = Vec::new();
+    stream.take(4096).read_to_end(&mut line).map_err(|error| {
+        clipboard_arm_failure(
+            args,
+            format!("failed to read clipboard arm response: {error}"),
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&line).map_err(|error| {
+        clipboard_arm_failure(args, format!("invalid d2b-clipd response: {error}"))
+    })?;
+    if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
+        if args.json {
+            print_stdout(&format!("{value}\n"));
+        } else {
+            let message = value
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("picker opened");
+            print_stdout(&format!("{message}\n"));
+        }
+        Ok(0)
+    } else {
+        let error = value
+            .get("error")
+            .and_then(|error| error.as_str())
+            .unwrap_or("d2b-clipd rejected clipboard arm request");
+        Err(clipboard_arm_failure(args, error))
+    }
+}
+
+fn set_clipboard_arm_timeouts(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    let timeout = Some(CLIPBOARD_ARM_CONTROL_TIMEOUT);
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
+    Ok(())
+}
+
+fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) -> CliFailure {
+    let message = message.into();
+    if args.json {
+        print_stdout(&format!(
+            "{}\n",
+            serde_json::json!({
+                "ok": false,
+                "error": message,
+            })
+        ));
+        CliFailure {
+            exit_code: 2,
+            rendered_stderr: Some(String::new()),
+            message,
+        }
+    } else {
+        CliFailure::new(2, message)
+    }
+}
+
+#[cfg(test)]
+mod clipboard_arm_tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn json_failure_emits_structured_stdout_and_suppresses_stderr() {
+        let args = ClipboardArmArgs {
+            json: true,
+            human: false,
+        };
+        let (failure, stdout, _stderr) =
+            with_test_output_capture(|| clipboard_arm_failure(&args, "daemon unavailable"));
+        assert_eq!(failure.exit_code, 2);
+        assert_eq!(failure.rendered_stderr.as_deref(), Some(""));
+        let value: Value = serde_json::from_slice(&stdout).expect("json failure stdout");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"], "daemon unavailable");
+    }
+
+    #[test]
+    fn clipboard_arm_sets_read_and_write_timeouts() {
+        let (left, _right) = UnixStream::pair().expect("socketpair");
+        set_clipboard_arm_timeouts(&left).expect("set timeouts");
+        assert_eq!(
+            left.read_timeout().expect("read timeout"),
+            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
+        );
+        assert_eq!(
+            left.write_timeout().expect("write timeout"),
+            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
+        );
     }
 }
 
 // ============================================================
 // `d2b config` — guest-editable config sync / review / approve
 // ============================================================
-//
-// The per-VM `guestConfigFile` is the guest-editable OS layer. An
-// operator edits it from inside the VM; these verbs move that edit
-// host-side under review:
 //
 //   sync    pull the in-VM edited file into a host-side staging copy
 //   diff    compare the staging copy against the live host-side file

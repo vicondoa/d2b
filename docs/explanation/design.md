@@ -81,7 +81,7 @@ flowchart TD
     subgraph host["HOST"]
         direction TD
         wayland["Wayland user (trusted UI principal)<br/>compositor + d2b CLI invocations"]
-        sidecars["d2b per-VM runners (semi-trusted)<br/>broker-spawned via d2b.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>wlproxy (per-VM uid, Wayland filter; holds real compositor socket)<br/>gpu (per-VM uid; connects to wlproxy filter socket, not compositor)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (d2b.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
+        sidecars["d2b per-VM runners (semi-trusted)<br/>broker-spawned via d2b.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>wlproxy (per-VM uid, Wayland proxy; holds real compositor socket)<br/>gpu (per-VM uid; connects to wlproxy proxy socket, not compositor)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (d2b.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
     end
     subgraph kvm["KVM boundary"]
         direction TD
@@ -93,7 +93,7 @@ flowchart TD
     end
 
     wayland -->|SO_PEERCRED at public.sock<br/>d2b group<br/>+ ssh via keysDir| sidecars
-    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wlproxy→compositor; gpu→wlproxy filter; pipewire-0)| boundary
+    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wlproxy→compositor; gpu→wlproxy; pipewire-0)| boundary
     boundary --> guest_desc
 ```
 
@@ -114,8 +114,8 @@ flowchart TD
           │   ┌──── d2b per-VM runners (semi-trusted, ──┐    │
           │   │      broker-spawned in v1.0 per ADR 0015)   │    │
           │   │   d2b.slice/<vm>/wlproxy (per-VM uid,   │    │
-          │   │       Wayland filter; holds real compositor  │    │
-          │   │       socket for graphics VMs with filter)   │    │
+          │   │       Wayland proxy; holds real compositor  │    │
+          │   │       socket for graphics VMs)              │    │
           │   │   d2b.slice/<vm>/gpu    (per-VM uid;     │    │
           │   │       connects to wlproxy, not compositor)   │    │
           │   │   d2b.slice/<vm>/video  (shares gpu uid) │    │
@@ -128,7 +128,7 @@ flowchart TD
           │   └──────────────────┬───────────────────────────┘   │
           │                      │ vsock / virtio-* / ACL'd       │
           │                      │ sockets (wlproxy→compositor;   │
-          │                      │  gpu→wlproxy filter; pipewire) │
+          │                      │  gpu→wlproxy; pipewire)       │
           ╞══════════════════════╪═══════════════════════════════ ╡
           │                      │ KVM boundary                   │
           │   ┌──────────────────▼────────────────────────────┐   │
@@ -549,17 +549,17 @@ by pidfd:
 - `wayland-proxy` — present when
   `d2b.vms.<vm>.graphics.enable = true`,
   `graphics.crossDomainTrusted = true`, and
-  `graphics.waylandFilter.enable = true`. Runs the
-  `d2b-wayland-filter` binary as `d2b-<vm>-wlproxy` (per-VM
+  `graphics.waylandProxy.enable = true`. Runs the
+  `d2b-wayland-proxy` binary as `d2b-<vm>-wlproxy` (per-VM
   uid). This is the **only** per-VM role that holds the real host
   compositor socket; it listens on
   `/run/d2b-wlproxy/<vm>/wayland-0` for the GPU sidecar and
-  enforces the filter policy before forwarding to the compositor.
+  enforces the proxy policy before forwarding to the compositor.
 - `gpu` / `gpu-render-node` — present when
   `d2b.vms.<vm>.graphics.enable = true`. Runs the patched crosvm
   GPU sidecar and gates Cloud Hypervisor startup on the GPU socket.
-  When the Wayland filter is active the GPU sidecar connects to
-  `/run/d2b-wlproxy/<vm>/wayland-0` (the filter socket), not to
+  When the Wayland proxy is active the GPU sidecar connects to
+  `/run/d2b-wlproxy/<vm>/wayland-0` (the proxy socket), not to
   the real host compositor socket directly.
 - `video` — present only when
   `d2b.vms.<vm>.graphics.videoSidecar = true`. Runs the patched

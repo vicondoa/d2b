@@ -1,4 +1,4 @@
-//! Host-side Wayland filter proxy for d2b graphics VMs.
+//! Host-side Wayland proxy for d2b graphics VMs.
 //!
 //! Startup sequence (fail-closed):
 //!   1. Parse CLI arguments.
@@ -14,28 +14,31 @@
 use std::{
     cell::RefCell,
     io,
-    os::{fd::OwnedFd, unix::net::UnixListener},
+    os::unix::net::UnixListener,
     path::PathBuf,
     rc::Rc,
-    thread,
     time::{Duration, Instant},
 };
 
 use clap::Parser;
-use d2b_wayland_filter::filter::{
-    FilterClientHandler, FilterStateHandler, build_state, install_client_handlers,
+use d2b_wayland_proxy::filter::{
+    FilterClientHandler, FilterStateHandler, VirtualClipboardState, build_state,
+    install_client_handlers,
 };
-use d2b_wayland_filter::{
+use d2b_wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
-    diag::DiagRateLimiter,
+    diag::{DiagRateLimiter, bounded_error_detail},
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
 };
 use env_logger::Env;
+use rustix::event::{PollFd, PollFlags, poll};
+
+const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Parser, Debug)]
-#[command(name = "d2b-wayland-filter")]
-#[command(about = "Host-side Wayland filter proxy for d2b graphics VMs")]
+#[command(name = "d2b-wayland-proxy")]
+#[command(about = "Host-side Wayland proxy for d2b graphics VMs")]
 struct Args {
     /// Path of the Unix socket to create and accept client connections on.
     #[arg(long)]
@@ -135,16 +138,16 @@ fn main() {
         .map(|s| parse_max_version(s))
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_else(|e| {
-            eprintln!("d2b-wayland-filter: error in --max-version: {e}");
+            eprintln!("d2b-wayland-proxy: error in --max-version: {e}");
             std::process::exit(1);
         });
 
     let dmabuf_allow = parse_dmabuf_filters(&args.dmabuf_allow).unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in --dmabuf-allow: {e}");
+        eprintln!("d2b-wayland-proxy: error in --dmabuf-allow: {e}");
         std::process::exit(1);
     });
     let dmabuf_deny = parse_dmabuf_filters(&args.dmabuf_deny).unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in --dmabuf-deny: {e}");
+        eprintln!("d2b-wayland-proxy: error in --dmabuf-deny: {e}");
         std::process::exit(1);
     });
 
@@ -159,7 +162,7 @@ fn main() {
         },
     )
     .unwrap_or_else(|e| {
-        eprintln!("d2b-wayland-filter: error in clipboard bridge configuration: {e}");
+        eprintln!("d2b-wayland-proxy: error in clipboard bridge configuration: {e}");
         std::process::exit(1);
     });
 
@@ -180,17 +183,17 @@ fn main() {
 
     // Emit advisory warnings to stderr so they appear in the journal.
     for w in &policy.warnings {
-        eprintln!("d2b-wayland-filter: warning: {}", w.message());
+        eprintln!("d2b-wayland-proxy: warning: {}", w.message());
     }
     if let Some(path) = &bridge_config.socket_path {
         log::info!(
-            "[d2b-wlproxy] vm={} clipboard-bridge={} status=scaffolded",
+            "[d2b-wlproxy] vm={} clipboard-bridge={} status=configured",
             args.vm_name,
             path.display()
         );
     } else {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=scaffolded",
+            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=configured",
             args.vm_name
         );
     }
@@ -201,7 +204,7 @@ fn main() {
         Ok(_) => {}
         Err(e) => {
             eprintln!(
-                "d2b-wayland-filter: failed to connect to upstream compositor `{}`: {e}",
+                "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
                 args.connect
             );
             std::process::exit(1);
@@ -216,7 +219,7 @@ fn main() {
         && let Err(e) = std::fs::remove_file(listen_path)
     {
         eprintln!(
-            "d2b-wayland-filter: failed to remove stale socket `{}`: {e}",
+            "d2b-wayland-proxy: failed to remove stale socket `{}`: {e}",
             listen_path.display()
         );
         std::process::exit(1);
@@ -226,7 +229,7 @@ fn main() {
         Ok(l) => l,
         Err(e) => {
             eprintln!(
-                "d2b-wayland-filter: failed to bind listen socket `{}`: {e}",
+                "d2b-wayland-proxy: failed to bind listen socket `{}`: {e}",
                 listen_path.display()
             );
             std::process::exit(1);
@@ -241,82 +244,150 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    accept_loop(listener, args.connect, policy);
+    accept_loop(listener, args.connect, policy, bridge_config);
 }
 
-fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
-    let vm = policy.vm_name.clone();
-    let mut next_client_id: u64 = 1;
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let client_id = next_client_id;
-                next_client_id += 1;
-                let upstream = upstream.clone();
-                let policy = policy.clone();
-                let vm = vm.clone();
-                let name = format!("d2b-wlproxy-{vm}-{client_id}");
-                let spawn = thread::Builder::new().name(name).spawn(move || {
-                    run_client(client_id, stream.into(), &upstream, policy);
-                });
-                if let Err(e) = spawn {
-                    log::warn!("[d2b-wlproxy] vm={vm} failed to spawn client thread: {e}");
-                }
-            }
-            Err(e) if is_recoverable_accept_error(&e) => {
-                log::warn!("[d2b-wlproxy] vm={vm} recoverable accept error: {e}");
-            }
-            Err(e) => {
-                eprintln!("d2b-wayland-filter: accept error: {e}");
-                std::process::exit(1);
-            }
-        }
+fn accept_loop(
+    listener: UnixListener,
+    upstream: String,
+    policy: FilterPolicy,
+    bridge_config: BridgeConfig,
+) {
+    if let Err(e) = listener.set_nonblocking(true) {
+        eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
+        std::process::exit(1);
     }
-}
 
-fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy) {
     let policy = Rc::new(policy);
     let vm = policy.vm_name.clone();
     let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
-
-    let state = match build_state(upstream) {
+    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(
+        vm.clone(),
+        diag.clone(),
+        bridge_config,
+    )));
+    let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("[d2b-wlproxy] vm={vm} client={client_id} upstream connect failed: {e}");
-            return;
+            eprintln!(
+                "d2b-wayland-proxy: failed to connect to upstream compositor `{upstream}`: {e}"
+            );
+            std::process::exit(1);
         }
     };
-    state.set_handler(FilterStateHandler::new(policy.clone(), diag.clone()));
-
-    let fd = Rc::new(fd);
-    let client = match state.add_client(&fd) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}");
-            return;
-        }
-    };
-    client.set_handler(FilterClientHandler::with_destructor(
-        vm.clone(),
-        state.create_destructor(),
+    state.set_handler(FilterStateHandler::new(
+        policy.clone(),
+        diag.clone(),
+        clipboard.clone(),
     ));
-    install_client_handlers(&client, policy, diag.clone());
 
+    let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
+    let mut listener_backoff_until: Option<Instant> = None;
     while state.is_not_destroyed() {
-        match state.dispatch(Some(Duration::from_millis(10))) {
+        let (listener_ready, _state_ready) = {
+            let now = Instant::now();
+            let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
+            if !listener_in_backoff {
+                listener_backoff_until = None;
+            }
+            let diag_timeout = Duration::from_secs(60).saturating_sub(last_diag_flush.elapsed());
+            let timeout = accept_poll_timeout_ms(diag_timeout, listener_backoff_until, now);
+            let mut poll_fds = [
+                PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
+                PollFd::new(state.poll_fd(), PollFlags::IN),
+            ];
+            match poll(&mut poll_fds, timeout) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => {
+                    log::warn!("[d2b-wlproxy] vm={vm} poll error: {error}");
+                    break;
+                }
+            }
+            (
+                !listener_in_backoff && poll_fds[0].revents().contains(PollFlags::IN),
+                !poll_fds[1].revents().is_empty(),
+            )
+        };
+
+        if listener_ready {
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(true) {
+                            let error = bounded_error_detail(error.to_string());
+                            diag.borrow_mut().warn(
+                                "client-accept",
+                                "client-nonblocking-failed",
+                                || {
+                                    format!(
+                                        "[d2b-wlproxy] vm={vm} event=client-accept reason=client-nonblocking-failed error={error}"
+                                    )
+                                },
+                            );
+                            continue;
+                        }
+                        let client_id = next_client_id;
+                        next_client_id += 1;
+                        let fd = Rc::new(stream.into());
+                        let client = match state.add_client(&fd) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                let error = bounded_error_detail(error_source_chain(&e));
+                                diag.borrow_mut().warn(
+                                    "client-accept",
+                                    "add-client-failed",
+                                    || {
+                                        format!(
+                                            "[d2b-wlproxy] vm={vm} event=client-accept reason=add-client-failed client={client_id} error={error}"
+                                        )
+                                    },
+                                );
+                                continue;
+                            }
+                        };
+                        client.set_handler(FilterClientHandler::with_destructor(
+                            vm.clone(),
+                            state.create_destructor(),
+                        ));
+                        install_client_handlers(
+                            &client,
+                            policy.clone(),
+                            diag.clone(),
+                            clipboard.clone(),
+                        );
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if is_recoverable_accept_error(&e) => {
+                        let error = bounded_error_detail(e.to_string());
+                        diag.borrow_mut().warn(
+                            "client-accept",
+                            "recoverable-accept-error",
+                            || {
+                                format!(
+                                    "[d2b-wlproxy] vm={vm} event=client-accept reason=recoverable-accept-error error={error}"
+                                )
+                            },
+                        );
+                        if is_resource_exhaustion_accept_error(&e) {
+                            listener_backoff_until = Some(Instant::now() + ACCEPT_RESOURCE_BACKOFF);
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("d2b-wayland-proxy: accept error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+
+        match state.dispatch(Some(Duration::from_secs(0))) {
             Ok(_) => {}
             Err(e) => {
-                // Log the full source chain, not just the top-level
-                // `StateError` message. A server-event dispatch failure renders
-                // as the generic "could not dispatch server events"; the
-                // `#[source]` `EndpointError`/`MessageError` underneath names the
-                // actual failing object/interface/event (e.g. `NoReceiver`, the
-                // destroy-vs-event race), which is what's needed to diagnose a
-                // window that vanishes from the host compositor while the guest
-                // keeps rendering.
                 log::warn!(
-                    "[d2b-wlproxy] vm={vm} client={client_id} dispatch error: {}",
+                    "[d2b-wlproxy] vm={vm} dispatch error: {}",
                     error_source_chain(&e)
                 );
                 break;
@@ -338,6 +409,40 @@ fn is_recoverable_accept_error(error: &io::Error) -> bool {
     }
 
     matches!(error.raw_os_error(), Some(libc::ECONNABORTED | libc::EINTR))
+        || is_resource_exhaustion_accept_error(error)
+}
+
+fn is_resource_exhaustion_accept_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM)
+    )
+}
+
+fn accept_backoff_active(backoff_until: Option<Instant>, now: Instant) -> bool {
+    backoff_until.is_some_and(|until| until > now)
+}
+
+fn listener_accept_poll_flags(in_backoff: bool) -> PollFlags {
+    if in_backoff {
+        PollFlags::empty()
+    } else {
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+    }
+}
+
+fn accept_poll_timeout_ms(
+    diag_timeout: Duration,
+    listener_backoff_until: Option<Instant>,
+    now: Instant,
+) -> i32 {
+    let backoff_timeout = listener_backoff_until
+        .map(|until| until.saturating_duration_since(now))
+        .unwrap_or(diag_timeout);
+    diag_timeout
+        .min(backoff_timeout)
+        .as_millis()
+        .min(i32::MAX as u128) as i32
 }
 
 /// Renders an error together with its full `source()` chain on one line, e.g.
@@ -369,6 +474,44 @@ mod tests {
     fn aborted_accept_is_recoverable() {
         let err = io::Error::from_raw_os_error(libc::ECONNABORTED);
         assert!(is_recoverable_accept_error(&err));
+    }
+
+    #[test]
+    fn fd_exhaustion_accept_errors_are_recoverable() {
+        for errno in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            let err = io::Error::from_raw_os_error(errno);
+            assert!(is_recoverable_accept_error(&err));
+            assert!(is_resource_exhaustion_accept_error(&err));
+        }
+    }
+
+    #[test]
+    fn accept_backoff_masks_listener_and_bounds_poll_timeout() {
+        let now = Instant::now();
+        let backoff_until = now + Duration::from_millis(50);
+        assert!(accept_backoff_active(Some(backoff_until), now));
+        assert!(listener_accept_poll_flags(true).is_empty());
+        assert_eq!(
+            listener_accept_poll_flags(false),
+            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+        );
+        assert_eq!(
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), now),
+            50
+        );
+    }
+
+    #[test]
+    fn expired_accept_backoff_restores_listener_interest() {
+        let now = Instant::now();
+        assert!(!accept_backoff_active(
+            Some(now - Duration::from_millis(1)),
+            now
+        ));
+        assert_eq!(
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), now),
+            0
+        );
     }
 
     #[test]

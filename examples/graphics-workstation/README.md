@@ -59,7 +59,7 @@ chain that spans the VM boundary:
    forwards it to the host-side filter socket at
    `/run/d2b-wlproxy/<vm>/wayland-0`. The GPU sidecar does NOT
    connect directly to the host compositor socket.
-4. **`d2b-wayland-filter`** (running as `d2b-<vm>-wlproxy`,
+4. **`d2b-wayland-proxy`** (running as `d2b-<vm>-wlproxy`,
    listening on `/run/d2b-wlproxy/<vm>/wayland-0`) — mediates
    between the GPU sidecar and the real host compositor. It hides
    high-risk Wayland globals (screen capture, virtual input, etc.),
@@ -301,7 +301,7 @@ Plasma + PipeWire + d2b closure and takes minutes.
   `d2b.site.waylandUser` either. See `examples/minimal/`.
 - Want a different Wayland compositor on the host? Swap
   `services.desktopManager.plasma6.enable = true` for your
-  compositor of choice; the host-side Wayland filter proxy connects to
+  compositor of choice; the host-side Wayland proxy connects to
   whatever socket the user named by `d2b.site.waylandUser` owns.
 
 ## Common gotchas

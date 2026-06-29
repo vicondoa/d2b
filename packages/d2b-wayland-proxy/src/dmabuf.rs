@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::CString,
     fs::File,
@@ -20,6 +21,8 @@ use wl_proxy::protocols::{
     },
     wayland::{wl_buffer::WlBuffer, wl_surface::WlSurface},
 };
+
+use crate::diag::DiagRateLimiter;
 
 pub const LINEAR_MODIFIER: u64 = 0;
 pub const INVALID_MODIFIER: u64 = 0x00ff_ffff_ffff_ffff;
@@ -200,11 +203,12 @@ fn parse_u64(s: &str) -> Option<u64> {
 
 pub struct DmabufHandler {
     filters: Arc<DmabufFilterList>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl DmabufHandler {
-    pub fn new(filters: Arc<DmabufFilterList>) -> Self {
-        Self { filters }
+    pub fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
+        Self { filters, diag }
     }
 }
 
@@ -233,7 +237,10 @@ impl ZwpLinuxDmabufV1Handler for DmabufHandler {
         slf: &Rc<ZwpLinuxDmabufV1>,
         id: &Rc<ZwpLinuxDmabufFeedbackV1>,
     ) {
-        id.set_handler(DmabufFeedbackHandler::new(self.filters.clone()));
+        id.set_handler(DmabufFeedbackHandler::new(
+            self.filters.clone(),
+            self.diag.clone(),
+        ));
         slf.send_get_default_feedback(id);
     }
 
@@ -243,7 +250,10 @@ impl ZwpLinuxDmabufV1Handler for DmabufHandler {
         id: &Rc<ZwpLinuxDmabufFeedbackV1>,
         surface: &Rc<WlSurface>,
     ) {
-        id.set_handler(DmabufFeedbackHandler::new(self.filters.clone()));
+        id.set_handler(DmabufFeedbackHandler::new(
+            self.filters.clone(),
+            self.diag.clone(),
+        ));
         slf.send_get_surface_feedback(id, surface);
     }
 
@@ -252,7 +262,10 @@ impl ZwpLinuxDmabufV1Handler for DmabufHandler {
         slf: &Rc<ZwpLinuxDmabufV1>,
         params_id: &Rc<ZwpLinuxBufferParamsV1>,
     ) {
-        params_id.set_handler(DmabufBufferParamsHandler::new(self.filters.clone()));
+        params_id.set_handler(DmabufBufferParamsHandler::new(
+            self.filters.clone(),
+            self.diag.clone(),
+        ));
         slf.send_create_params(params_id);
     }
 }
@@ -275,6 +288,7 @@ impl DmabufPlane {
 
 struct DmabufBufferParamsHandler {
     filters: Arc<DmabufFilterList>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
     planes: Vec<DmabufPlane>,
     invalid_plane_count: usize,
 }
@@ -289,9 +303,10 @@ enum DmabufCreateAction {
 }
 
 impl DmabufBufferParamsHandler {
-    fn new(filters: Arc<DmabufFilterList>) -> Self {
+    fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             filters,
+            diag,
             planes: Vec::new(),
             invalid_plane_count: 0,
         }
@@ -425,6 +440,7 @@ trait DmabufCreateSink {
 struct ProxyCreateSink<'a> {
     params: &'a Rc<ZwpLinuxBufferParamsV1>,
     buffer: Option<&'a Rc<WlBuffer>>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl DmabufCreateSink for ProxyCreateSink<'_> {
@@ -451,7 +467,11 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
         let Some(buffer) = self.buffer else {
-            log::warn!("dmabuf create_immed requested without a wl_buffer id");
+            self.diag
+                .borrow_mut()
+                .warn("dmabuf", "create-immed-missing-buffer", || {
+                    "dmabuf create_immed requested without a wl_buffer id".to_owned()
+                });
             self.params.send_failed();
             return;
         };
@@ -460,10 +480,14 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
     }
 
     fn failed(&mut self, format: u32, denied_count: usize, examples: &[String]) {
-        log::warn!(
-            "dmabuf buffer creation denied: format=0x{format:08x} denied_count={denied_count} examples=[{}]",
-            examples.join(", ")
-        );
+        let examples = examples.join(", ");
+        self.diag
+            .borrow_mut()
+            .warn("dmabuf", "buffer-denied", || {
+                format!(
+                    "dmabuf buffer creation denied: format=0x{format:08x} denied_count={denied_count} examples=[{examples}]"
+                )
+            });
         self.params.send_failed();
     }
 }
@@ -493,6 +517,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: None,
+            diag: self.diag.clone(),
         };
         self.handle_create_with_sink(&mut sink, width, height, format, flags);
     }
@@ -509,6 +534,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: Some(buffer_id),
+            diag: self.diag.clone(),
         };
         self.handle_create_immed_with_sink(&mut sink, width, height, format, flags);
     }
@@ -516,15 +542,17 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
 
 struct DmabufFeedbackHandler {
     filters: Arc<DmabufFilterList>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
     table: Option<Vec<u8>>,
     index_map: Option<Vec<Option<u16>>>,
     table_invalid: bool,
 }
 
 impl DmabufFeedbackHandler {
-    fn new(filters: Arc<DmabufFilterList>) -> Self {
+    fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             filters,
+            diag,
             table: None,
             index_map: None,
             table_invalid: false,
@@ -555,7 +583,11 @@ impl ZwpLinuxDmabufFeedbackV1Handler for DmabufFeedbackHandler {
                 Ok(read) => offset += read,
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(error) => {
-                    log::warn!("dmabuf feedback format table read failed: {error}");
+                    self.diag.borrow_mut().warn(
+                        "dmabuf-feedback",
+                        "format-table-read-failed",
+                        || format!("dmabuf feedback format table read failed: {error}"),
+                    );
                     self.table_invalid = true;
                     self.send_empty_format_table(slf);
                     return;
@@ -564,9 +596,15 @@ impl ZwpLinuxDmabufFeedbackV1Handler for DmabufFeedbackHandler {
         }
         if offset == table.len() {
             if !format_table_is_well_formed(&table) {
-                log::warn!(
-                    "dmabuf feedback format table has malformed size {}; filtering to empty",
-                    table.len()
+                let len = table.len();
+                self.diag.borrow_mut().warn(
+                    "dmabuf-feedback",
+                    "format-table-malformed",
+                    || {
+                        format!(
+                            "dmabuf feedback format table has malformed size {len}; filtering to empty"
+                        )
+                    },
                 );
                 self.table_invalid = true;
                 self.send_empty_format_table(slf);
@@ -574,10 +612,14 @@ impl ZwpLinuxDmabufFeedbackV1Handler for DmabufFeedbackHandler {
             }
             self.send_filtered_format_table(slf, table);
         } else {
-            log::warn!(
-                "dmabuf feedback format table short read: expected={} got={offset}",
-                table.len()
-            );
+            let expected = table.len();
+            self.diag
+                .borrow_mut()
+                .warn("dmabuf-feedback", "format-table-short-read", || {
+                    format!(
+                        "dmabuf feedback format table short read: expected={expected} got={offset}"
+                    )
+                });
             self.table_invalid = true;
             self.send_empty_format_table(slf);
         }
@@ -597,7 +639,11 @@ impl ZwpLinuxDmabufFeedbackV1Handler for DmabufFeedbackHandler {
             return;
         };
         let Ok(iter) = uapi::pod_iter::<u16, _>(indices) else {
-            log::warn!("dmabuf feedback tranche_formats malformed; filtering to empty");
+            self.diag
+                .borrow_mut()
+                .warn("dmabuf-feedback", "tranche-formats-malformed", || {
+                    "dmabuf feedback tranche_formats malformed; filtering to empty".to_owned()
+                });
             slf.send_tranche_formats(&[]);
             return;
         };
@@ -619,13 +665,24 @@ impl DmabufFeedbackHandler {
                 slf.send_format_table(&fd, 0);
             }
             Err(error) => {
-                log::warn!("dmabuf feedback empty format table creation failed: {error}");
+                self.diag
+                    .borrow_mut()
+                    .warn("dmabuf-feedback", "empty-table-create-failed", || {
+                        format!("dmabuf feedback empty format table creation failed: {error}")
+                    });
             }
         }
     }
 
     fn send_filtered_format_table(&mut self, slf: &Rc<ZwpLinuxDmabufFeedbackV1>, table: Vec<u8>) {
-        let (filtered, index_map) = filter_format_table(&table, &self.filters);
+        let (filtered, index_map, overflowed) = filter_format_table(&table, &self.filters);
+        if overflowed {
+            self.diag
+                .borrow_mut()
+                .warn("dmabuf-feedback", "filtered-table-overflow", || {
+                    "dmabuf feedback filtered table exceeds u16 index space".to_owned()
+                });
+        }
         match table_fd(&filtered) {
             Ok(fd) => {
                 let size = filtered.len() as u32;
@@ -635,7 +692,11 @@ impl DmabufFeedbackHandler {
                 self.index_map = Some(index_map);
             }
             Err(error) => {
-                log::warn!("dmabuf feedback filtered format table creation failed: {error}");
+                self.diag.borrow_mut().warn(
+                    "dmabuf-feedback",
+                    "filtered-table-create-failed",
+                    || format!("dmabuf feedback filtered format table creation failed: {error}"),
+                );
                 self.table_invalid = true;
                 self.send_empty_format_table(slf);
             }
@@ -643,9 +704,13 @@ impl DmabufFeedbackHandler {
     }
 }
 
-fn filter_format_table(table: &[u8], filters: &DmabufFilterList) -> (Vec<u8>, Vec<Option<u16>>) {
+fn filter_format_table(
+    table: &[u8],
+    filters: &DmabufFilterList,
+) -> (Vec<u8>, Vec<Option<u16>>, bool) {
     let mut filtered = Vec::<u8>::new();
     let mut index_map = Vec::<Option<u16>>::new();
+    let mut overflowed = false;
     for (index, entry) in table.chunks_exact(16).enumerate() {
         let Ok(format) = uapi::pod_read_init::<u32, _>(&entry[0..4]) else {
             index_map.push(None);
@@ -657,7 +722,8 @@ fn filter_format_table(table: &[u8], filters: &DmabufFilterList) -> (Vec<u8>, Ve
         };
         if filters.allowed(format, modifier) {
             let Ok(new_index) = u16::try_from(filtered.len() / 16) else {
-                log::warn!("dmabuf feedback filtered table exceeds u16 index space at {index}");
+                let _ = index;
+                overflowed = true;
                 index_map.push(None);
                 continue;
             };
@@ -667,7 +733,7 @@ fn filter_format_table(table: &[u8], filters: &DmabufFilterList) -> (Vec<u8>, Ve
             index_map.push(None);
         }
     }
-    (filtered, index_map)
+    (filtered, index_map, overflowed)
 }
 
 fn format_table_is_well_formed(table: &[u8]) -> bool {
@@ -771,7 +837,7 @@ mod tests {
                 modifier: Some(LINEAR_MODIFIER),
             }],
         ));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
         handler.planes.push(DmabufPlane {
             fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
             plane_idx: 0,
@@ -781,6 +847,10 @@ mod tests {
             modifier_lo: modifier as u32,
         });
         handler
+    }
+
+    fn diag() -> Rc<RefCell<DiagRateLimiter>> {
+        Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())))
     }
 
     #[test]
@@ -933,9 +1003,10 @@ mod tests {
         table.extend_from_slice(&0u32.to_ne_bytes());
         table.extend_from_slice(&allowed_modifier.to_ne_bytes());
 
-        let (filtered, index_map) = filter_format_table(&table, &filters);
+        let (filtered, index_map, overflowed) = filter_format_table(&table, &filters);
 
         assert_eq!(filtered.len(), 16);
+        assert!(!overflowed);
         assert_eq!(index_map, vec![None, Some(0)]);
         assert_eq!(filtered[0..4], format.to_ne_bytes());
         assert_eq!(filtered[8..16], allowed_modifier.to_ne_bytes());
@@ -984,7 +1055,7 @@ mod tests {
     fn invalid_plane_set_fails_create_without_unbounded_examples() {
         let format = 0x3432_5258u32;
         let filters = Arc::new(DmabufFilterList::new(&[], &[]));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
         handler.invalid_plane_count = 100;
 
         assert_eq!(

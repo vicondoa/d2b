@@ -10,7 +10,7 @@ owns clipboard authority; the picker is only a UI client.
 | Component | Authority |
 | --- | --- |
 | `d2b-clipd` | Host-session daemon that owns data-control access, Niri IPC, in-memory payloads, policy, picker supervision, metadata audit, metrics, and writes into Wayland transfer FDs. |
-| `d2b-wayland-filter` | Per-VM Wayland clipboard virtualization endpoint. It derives VM identity from the authenticated bridge session and lifecycle mapping, not from host-visible app-id labels. |
+| `d2b-wayland-proxy` | Per-VM Wayland clipboard virtualization endpoint. It derives VM identity from the authenticated bridge session and lifecycle mapping, not from host-visible app-id labels. |
 | `d2b-clip-picker` | Separate GPL UI-only picker. It receives display metadata over an inherited socketpair and sends only select/cancel decisions. |
 
 The picker is not a clipboard manager. It must not bind data-control globals,
@@ -58,13 +58,28 @@ between d2b components. Transfer FDs never go to the picker.
 
 `d2b-clipd` connects directly to `$NIRI_SOCKET` and speaks Niri JSON IPC. It
 does not shell out to `niri msg`. Focused-window data is labeling context only:
-host attribution is recorded as best-effort `focused_window_guess`.
+host attribution is recorded as best-effort `focused_window_guess`. Native
+clipboard events and explicit operator actions such as `d2b clipboard arm` use
+the maintained Niri event-stream cache so the daemon's Wayland event loop does
+not block on synchronous compositor IPC.
 
 Host cross-realm native paste requires a trusted no-patch Niri hook or future
 upstream-equivalent IPC event. Focus alone is not paste intent. When that hook is
 unavailable, operators can enable the explicit fallback: a d2b-owned keybind
-opens the picker, then the user performs a normal paste within a short timeout.
-D2b never compensates by using virtual-keyboard injection.
+opens the picker when one is configured, or directly arms the current
+d2b-owned selection when no picker is configured, then the user performs a
+normal paste within a short timeout. D2b never compensates by using
+virtual-keyboard injection.
+
+## Diagnostics
+
+Clipboard diagnostics are bounded metadata only; raw clipboard contents,
+previews, URLs, image bytes, and unbounded titles are never logged. Guest-driven
+proxy denials and bridge failures are rate-limited by VM, event, and reason.
+Relevant reasons include `connect-failed` and `handoff-failed` for the internal
+clipboard bridge, plus picker exits before selection completion. These warnings
+are operational signals only; clipboard transfer decisions and byte counts remain
+in the structured audit/metrics paths.
 
 ## Initial limitations
 

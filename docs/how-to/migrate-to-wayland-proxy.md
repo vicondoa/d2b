@@ -1,8 +1,8 @@
-# Migrate to the host-side Wayland filter proxy
+# Migrate to the host-side Wayland proxy
 
 This guide covers the changes you need to make when a graphics VM
 switches from the legacy in-guest-only proxy path to the host-side
-Wayland filter proxy.
+Wayland proxy.
 
 ## What changes
 
@@ -12,7 +12,7 @@ The old in-guest proxy service is replaced by `wl-cross-domain-proxy`.
 The new proxy only bridges the
 virtio-gpu cross-domain transport to the guest's Wayland socket; it
 does not perform security filtering or app-id rewriting.  Those
-responsibilities move to the host-side filter proxy, which runs as a
+responsibilities move to the host-side Wayland proxy, which runs as a
 separate broker-spawned process outside the guest.
 
 ### App-ids are rewritten on the host
@@ -43,11 +43,11 @@ Future work will add a validated Xwayland path.
 
 ### `crossDomainTrusted` is required for the proxy
 
-The host-side filter proxy activates only when
+The host-side Wayland proxy activates only when
 `graphics.crossDomainTrusted = true`.  The default is still false.
 The proxy path requires explicit opt-in because the cross-domain
 virtio-gpu channel carries all guest Wayland messages and must be
-trusted before the host filter can forward them.
+trusted before the host proxy can forward them.
 
 ## Step-by-step migration
 
@@ -72,17 +72,17 @@ d2b.vms.work.graphics.crossDomainTrusted = true;
 > inside such a VM could leverage the cross-domain channel to reach
 > the host compositor.
 
-### 3. Confirm the Wayland filter is enabled
+### 3. Confirm the Wayland proxy is enabled
 
-The Wayland filter is enabled by default for graphics VMs with
+The Wayland proxy is enabled by default for graphics VMs with
 `crossDomainTrusted = true`.  You can set it explicitly for clarity:
 
 ```nix
-d2b.vms.work.graphics.waylandFilter.enable = true;
+d2b.vms.work.graphics.waylandProxy.enable = true;
 ```
 
 Leave it enabled unless you intentionally want the GPU sidecar to use the
-unfiltered direct compositor socket path.
+direct compositor socket path.
 
 ### 4. Update niri window rules (niri users)
 
@@ -144,13 +144,13 @@ niri msg windows
 
 Every window from the VM should have `app_id` starting with
 `d2b.<vm>.`.  If the original app-id appears without the prefix,
-confirm `crossDomainTrusted = true` and that the filter proxy is
+confirm `crossDomainTrusted = true` and that the Wayland proxy is
 running (`d2b vm status <vm>`).
 
 ### Check the host compositor socket ownership
 
 After migration, the GPU runner should no longer hold a direct file
-descriptor to the host compositor socket.  The Wayland filter proxy
+descriptor to the host compositor socket.  The Wayland proxy
 should be the only VM-specific process with compositor socket access:
 
 ```bash
@@ -159,19 +159,19 @@ ls -la /proc/$(pgrep -f "crosvm.*work")/fd 2>/dev/null \
   | grep wayland
 
 # Confirm the proxy holds the compositor socket
-ls -la /proc/$(pgrep -f "d2b-wayland-filter.*work")/fd 2>/dev/null \
+ls -la /proc/$(pgrep -f "d2b-wayland-proxy.*work")/fd 2>/dev/null \
   | grep wayland
 ```
 
 ## Understanding the warning model
 
-The filter proxy's policy engine emits runtime advisory diagnostics when
+The Wayland proxy's policy engine emits runtime advisory diagnostics when
 an operator override changes a rule d2b considers required or
 high-risk.  These warnings do not block evaluation or builds; they appear
-in the `d2b-wayland-filter` journal stream when the VM starts.
+in the `d2b-wayland-proxy` journal stream when the VM starts.
 
 For a full list of warning conditions, see
-[`docs/reference/wayland-filter-warnings.md`](../reference/wayland-filter-warnings.md).
+[`docs/reference/wayland-proxy-warnings.md`](../reference/wayland-proxy-warnings.md).
 
 ## Rollback
 
@@ -179,21 +179,22 @@ If you encounter a regression and need to roll back before completing
 the migration:
 
 1. Set `graphics.crossDomainTrusted = false` and
-   `graphics.waylandFilter.enable = false`.
+   `graphics.waylandProxy.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `d2b vm stop <vm> --apply && d2b vm start <vm> --apply`.
 
-The VM will stop using the filtered cross-domain Wayland path until
+The VM will stop using the proxied cross-domain Wayland path until
 `crossDomainTrusted` is enabled again. Standard virtio-gpu display
-continues to work, but host-side app-id rewriting and filter policy no
+continues to work, but host-side app-id rewriting and proxy policy no
 longer apply.
 
 ## Known limitations at migration time
 
 - **Xwayland is not supported.** Set `graphics.xwayland.enable = false`.
   Setting it to true fails eval during the Wayland-only migration phase.
-- **Multi-output enumeration** works through the filter; verify with
+- **Multi-output enumeration** works through the proxy; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
-- **Clipboard and DnD** are forwarded for standard protocols
-  (`wl_data_device_manager`) by default; privileged clipboard-control
-  globals remain opt-in.
+- **Clipboard and DnD** are policy-owned by d2b. The standard clipboard
+  (`wl_data_device_manager`) is virtualized by `d2b-wayland-proxy`; primary
+  selection, privileged clipboard-control globals, and DnD are explicitly
+  denied by the proxy policy.

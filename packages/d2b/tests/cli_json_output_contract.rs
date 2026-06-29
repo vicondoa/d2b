@@ -215,12 +215,38 @@ fn assert_success(out: &Output, label: &str) {
 
 fn assert_matches_golden(out: &Output, golden_name: &str, label: &str) {
     assert_success(out, label);
-    let actual = String::from_utf8_lossy(&out.stdout);
-    let expected = normalized_runtime_golden(golden_name);
+    let actual = normalize_nix_store_hashes(&String::from_utf8_lossy(&out.stdout));
+    let expected = normalize_nix_store_hashes(&normalized_runtime_golden(golden_name));
     assert_eq!(
         actual, expected,
         "`d2b {label}` drifted from tests/golden/cli-output/{golden_name}"
     );
+}
+
+fn normalize_nix_store_hashes(value: &str) -> String {
+    const PREFIX: &str = "/nix/store/";
+
+    let mut normalized = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find(PREFIX) {
+        let (before, after_before) = rest.split_at(index);
+        normalized.push_str(before);
+        normalized.push_str(PREFIX);
+        let after_prefix = &after_before[PREFIX.len()..];
+        if after_prefix.len() >= 33
+            && after_prefix.as_bytes()[32] == b'-'
+            && after_prefix[..32]
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        {
+            normalized.push_str("STOREHASH");
+            rest = &after_prefix[32..];
+        } else {
+            rest = after_prefix;
+        }
+    }
+    normalized.push_str(rest);
+    normalized
 }
 
 fn normalized_runtime_golden(name: &str) -> String {

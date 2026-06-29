@@ -147,7 +147,7 @@ enforces this.
 Merging to `main` with a new version header in `CHANGELOG.md` triggers:
 1. Auto-creation of git tag `vX.Y.Z`
 2. Build of all host binaries (`d2bd`, `d2b`, `d2b-priv-broker`,
-   `d2b-wayland-filter`, `d2b-activation-helper`)
+   `d2b-wayland-proxy`, `d2b-activation-helper`)
 3. GitHub Release with changelog notes + binary tarballs + `SHA256SUMS`
 
 Consumers can fetch pre-built binaries from the release instead of

@@ -26,19 +26,19 @@ let
   vhostDeviceSound = import ../pkgs/vhost-device-sound { inherit pkgs; };
   spectrumCH = import ../pkgs/spectrum-ch { inherit pkgs; };
 
-  # d2b-wayland-filter: host-side Wayland filter proxy.
+  # d2b-wayland-proxy: host-side Wayland proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  d2bWaylandFilterSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-wayland-filter";
+  d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-wayland-proxy";
     version = "0.0.0";
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
       outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
     };
-    cargoBuildFlags = [ "--package" "d2b-wayland-filter" ];
+    cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -50,8 +50,8 @@ EOF
     '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-filter $out/bin/d2b-wayland-filter 2>/dev/null \
-        || install -Dm755 target/release/d2b-wayland-filter $out/bin/d2b-wayland-filter
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy 2>/dev/null \
+        || install -Dm755 target/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy
       runHook postInstall
     '';
   };
@@ -59,8 +59,8 @@ EOF
   # enough to build in the eval smoke fixtures. Keep it source-built even when
   # other host tools use release prebuilts so missing release assets cannot
   # break local validation.
-  d2bWaylandFilterPackage = d2bWaylandFilterSourcePackage;
-  d2bWaylandFilterBinary = "${d2bWaylandFilterPackage}/bin/d2b-wayland-filter";
+  d2bWaylandProxyPackage = d2bWaylandProxySourcePackage;
+  d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
@@ -542,8 +542,8 @@ EOF
       microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
-      # When the filter proxy is emitted, crosvm connects to the filter
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
+      # When the Wayland proxy is emitted, crosvm connects to the proxy
       # socket. Otherwise preserve the legacy display backend by connecting
       # directly to the real host compositor socket.
       waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
@@ -580,7 +580,7 @@ EOF
       microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
       waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
@@ -605,8 +605,8 @@ EOF
       ];
     };
 
-  # wayland-proxy runner: d2b-wayland-filter host-side filter proxy.
-  # Runs as d2b-<vm>-wlproxy, listens on the per-VM filter socket,
+  # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
+  # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
   # and connects upstream to the real host compositor socket. The broker
   # grants the wlproxy principal an ACL on exactly that socket.
   waylandProxyRunner = name: vm:
@@ -614,26 +614,27 @@ EOF
       vmName = name;
       filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
       upstreamSock = waylandHostSock;
+      bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
       titlePrefix = "[${vmName}] ";
-      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandFilter.denyGlobals;
-      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandFilter.allowGlobals;
+      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
+      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandProxy.allowGlobals;
       maxVersionArgs = lib.concatMap
         (nameVersion:
           let parts = lib.splitString "=" nameVersion;
           in [ "--max-version" nameVersion ])
-        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
-      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
-      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
+        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandProxy.maxVersions);
+      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandProxy.dmabufAllow;
+      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandProxy.dmabufDeny;
     in {
-      binaryPath = d2bWaylandFilterBinary;
+      binaryPath = d2bWaylandProxyBinary;
       env = [
         "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
         "WAYLAND_DISPLAY=${waylandDisplay}"
-      ] ++ lib.optionals vm.graphics.waylandFilter.debugLogging [
+      ] ++ lib.optionals vm.graphics.waylandProxy.debugLogging [
         "WL_PROXY_DEBUG=1"
         "WL_PROXY_PREFIX=d2b-${vmName}-wlproxy"
-      ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
+      ] ++ lib.optionals vm.graphics.waylandProxy.byteLogging [
         "WL_PROXY_HEXDUMP=1"
         "WL_PROXY_HEXDUMP_LIMIT=256"
       ];
@@ -644,6 +645,8 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
+      ] ++ lib.optionals config.d2b.site.clipboard.enable [
+        "--clipd-bridge-socket" bridgeSock
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
@@ -915,9 +918,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         (unixSocketExists (d2bLib.vmRunner config name).graphics.socket)
       ] ++ lib.optional vm.graphics.virglVideo
         (componentReady "graphics.virglVideo=true");
-      # Whether the host-jailed Wayland filter proxy is emitted for this VM.
-      # Requires graphics.enable, crossDomainTrusted, and waylandFilter.enable.
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      # Whether the host-jailed Wayland proxy is emitted for this VM.
+      # Requires graphics.enable, crossDomainTrusted, and waylandProxy.enable.
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
       # Resolved GPU node id: gpu-render-node when renderNodeOnly is true.
       graphicsNodeId = if vm.graphics.renderNodeOnly then "gpu-render-node" else "gpu";
       preVmmNodeIds =
@@ -1078,14 +1081,14 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")
         ++ lib.optional emitWaylandProxy
-          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
+          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
         ++ lib.optional vm.graphics.videoSidecar
           (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
-        # GPU connects to the filter socket, so wayland-proxy must be
+        # GPU connects to the proxy socket, so wayland-proxy must be
         # listening before the GPU starts. Emit only when the proxy is
         # present.
         ++ lib.optional emitWaylandProxy
-          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland filter proxy is listening on its socket.")
+          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland proxy is listening on its socket.")
       )
       ++ lib.optionals vm.audio.enable (
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
@@ -1133,8 +1136,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ];
       edges =
         if emitWaylandProxy then [
-          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
-          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland filter proxy instead of the host compositor socket.")
+          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
+          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland proxy instead of the host compositor socket.")
         ] else [
           (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
         ];

@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           cargo build --release --package d2bd --manifest-path packages/Cargo.toml
           cargo build --release --package d2b --manifest-path packages/Cargo.toml
-          cargo build --release --package d2b-wayland-filter --manifest-path packages/Cargo.toml
+          cargo build --release --package d2b-wayland-proxy --manifest-path packages/Cargo.toml
           cargo build --release --bin d2b-activation-helper --package d2b-host --manifest-path packages/Cargo.toml
           cargo build --release --package d2b-priv-broker --manifest-path packages/d2b-priv-broker/Cargo.toml
 
@@ -84,14 +84,14 @@ jobs:
           mkdir -p dist/bin
           cp packages/target/release/d2bd dist/bin/
           cp packages/target/release/d2b dist/bin/
-          cp packages/target/release/d2b-wayland-filter dist/bin/
+          cp packages/target/release/d2b-wayland-proxy dist/bin/
           cp packages/target/release/d2b-activation-helper dist/bin/
           cp packages/d2b-priv-broker/target/release/d2b-priv-broker dist/bin/
 
           for binary in \
             d2bd \
             d2b \
-            d2b-wayland-filter \
+            d2b-wayland-proxy \
             d2b-activation-helper \
             d2b-priv-broker
           do

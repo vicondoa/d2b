@@ -20,9 +20,10 @@ pub struct AuditEvent {
     pub timestamp_unix_ms: u64,
 }
 
-fn bounded_mime(mime_type: &str) -> String {
-    if crate::policy::is_mime_allowed(mime_type) {
-        return mime_type.to_owned();
+pub fn bounded_mime(mime_type: &str) -> String {
+    let normalized = crate::policy::normalize_mime(mime_type);
+    if crate::policy::is_mime_allowed(&normalized) {
+        return normalized;
     }
     let mut out = String::new();
     for ch in mime_type.chars() {
@@ -86,6 +87,14 @@ impl AuditQueue {
 
     pub fn len_for_realm(&self, realm: &str) -> usize {
         self.per_realm.get(realm).map_or(0, VecDeque::len)
+    }
+
+    pub fn drain_all(&mut self) -> Vec<AuditEvent> {
+        let mut events = Vec::new();
+        for queue in self.per_realm.values_mut() {
+            events.extend(queue.drain(..));
+        }
+        events
     }
 }
 
@@ -210,6 +219,14 @@ mod tests {
         let json = serde_json::to_string(&event).expect("json");
         assert!(json.contains("application/x-secret"));
         assert!(!json.contains(&"x".repeat(128)));
+    }
+
+    #[test]
+    fn audit_mime_preserves_rejected_parameters() {
+        let mut event = event("vm-a", "r1");
+        event.mime_type = "image/png; exploit=1".to_owned();
+        let json = serde_json::to_string(&event).expect("json");
+        assert!(json.contains("image/png; exploit=1"));
     }
 
     #[test]

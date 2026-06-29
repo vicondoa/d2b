@@ -1,21 +1,21 @@
-# `graphics.waylandFilter` warning catalog
+# `graphics.waylandProxy` warning catalog
 
 > **Reference** for the advisory runtime diagnostics the d2b
-> Wayland filter proxy emits when operator configuration deviates from
+> Wayland proxy emits when operator configuration deviates from
 > the secure baseline or touches a rule d2b classifies as required
 > or high-risk.
 
 > **Status:** live for
-> `d2b.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
+> `d2b.vms.<vm>.graphics.waylandProxy.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
 > The proxy emits these diagnostics at runtime in the
-> `d2b-wayland-filter` journal stream. They are not NixOS eval-time
+> `d2b-wayland-proxy` journal stream. They are not NixOS eval-time
 > `config.warnings`.
 
 Warnings are **advisory**: the NixOS configuration still evaluates and
 builds when a warning condition is met. The warning is emitted by the
-host-side filter process when the VM starts.
+host-side proxy process when the VM starts.
 
-Secure defaults emit **zero** `waylandFilter` warnings. A clean
+Secure defaults emit **zero** `waylandProxy` warnings. A clean
 configuration with no overrides produces no output from this catalog.
 
 The `W-*` names below are documentation anchors. The Rust policy engine
@@ -34,7 +34,7 @@ classifies as a required application-baseline global.
 **Example:**
 
 ```nix
-d2b.vms.work.graphics.waylandFilter.denyGlobals = [
+d2b.vms.work.graphics.waylandProxy.denyGlobals = [
   "wl_compositor"
 ];
 ```
@@ -122,13 +122,13 @@ d2b's baseline, and d2b should facilitate informed, documented
 exceptions rather than blocking them.
 
 The non-overridable invariants are the **enforcement mechanics** of the
-filter proxy itself: no raw-socket bypass, fail-closed binds for
+Wayland proxy itself: no raw-socket bypass, fail-closed binds for
 unadvertised globals, and minijail process isolation. Those cannot be
 changed through the option surface.
 
 ## Secure default: zero warnings
 
-A configuration using `waylandFilter.enable = true` with no custom
+A configuration using `waylandProxy.enable = true` with no custom
 `denyGlobals` or `allowGlobals` produces zero
-`waylandFilter` warnings. If you see unexpected warnings with a stock
+`waylandProxy` warnings. If you see unexpected warnings with a stock
 configuration, please report them.

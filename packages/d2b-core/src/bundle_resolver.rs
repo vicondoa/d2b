@@ -2405,7 +2405,7 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         // daemon-owned SpawnRunner path. The retired socket-activated
         // systemd-socket-proxyd shape is not a safe legacy fallback.
         ProcessRole::Usbip => return None,
-        // WaylandProxy must always carry the d2b-wayland-filter binary
+        // WaylandProxy must always carry the d2b-wayland-proxy binary
         // and closed argv from processes.json. No legacy fallback.
         ProcessRole::WaylandProxy => return None,
         ProcessRole::HostReconcile

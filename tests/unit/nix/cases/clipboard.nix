@@ -89,7 +89,7 @@ in
     expr = {
       restart = serviceConfig.Restart;
       noNewPrivileges = serviceConfig.NoNewPrivileges;
-      privateTmp = serviceConfig.PrivateTmp;
+      umask = serviceConfig.UMask;
       lockPersonality = serviceConfig.LockPersonality;
       restrictRealtime = serviceConfig.RestrictRealtime;
       restrictSuidSgid = serviceConfig.RestrictSUIDSGID;
@@ -97,7 +97,7 @@ in
     expected = {
       restart = "on-failure";
       noNewPrivileges = true;
-      privateTmp = true;
+      umask = "0000";
       lockPersonality = true;
       restrictRealtime = true;
       restrictSuidSgid = true;

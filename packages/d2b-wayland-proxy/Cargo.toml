@@ -1,16 +1,17 @@
 [package]
-name = "d2b-wayland-filter"
+name = "d2b-wayland-proxy"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
-description = "Host-side Wayland filter proxy for d2b graphics VMs"
+description = "Host-side Wayland proxy for d2b graphics VMs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
-nix = { version = "0.29", default-features = false, features = ["fs", "uio"] }
+nix = { version = "0.29", default-features = false, features = ["fs", "socket", "uio"] }
+rustix = { workspace = true, features = ["event"] }
 thiserror = "2"
 uapi = "0.2"
 wl-proxy = { version = "=0.1.2", git = "https://github.com/vicondoa/wl-proxy.git", rev = "072945b59fef21a2a8166460454280d543f48772", package = "wl-proxy", features = [

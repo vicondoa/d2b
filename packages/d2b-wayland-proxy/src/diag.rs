@@ -32,6 +32,7 @@ struct RateKey {
     label: String,
 }
 
+#[derive(Debug)]
 struct BucketState {
     count: u64,
     window_start: Instant,
@@ -40,8 +41,32 @@ struct BucketState {
 
 const WINDOW: Duration = Duration::from_secs(60);
 const MAX_PER_WINDOW: u64 = 5;
+const DIAG_ERROR_MAX_BYTES: usize = 256;
+
+pub fn bounded_error_detail(error: impl Into<String>) -> String {
+    let error = error
+        .into()
+        .chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\t' {
+                '?'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+    if error.len() <= DIAG_ERROR_MAX_BYTES {
+        return error;
+    }
+    let mut end = DIAG_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &error[..end])
+}
 
 /// Per-state rate limiter for filter diagnostics.
+#[derive(Debug)]
 pub struct DiagRateLimiter {
     vm: String,
     buckets: HashMap<RateKey, BucketState>,
@@ -93,6 +118,10 @@ impl DiagRateLimiter {
             bucket.suppressed += 1;
             false
         }
+    }
+
+    pub fn warn(&mut self, event: &'static str, label: &str, msg: impl FnOnce() -> String) -> bool {
+        self.emit(event, label, msg)
     }
 
     /// Log a bind-denial event (security boundary enforcement).
@@ -185,5 +214,24 @@ mod tests {
 
         let bucket = rl.buckets.values().next().expect("bucket exists");
         assert_eq!(bucket.suppressed, 0);
+    }
+
+    #[test]
+    fn bounded_error_detail_truncates_on_utf8_boundary() {
+        let detail = format!("{}{}", "a".repeat(DIAG_ERROR_MAX_BYTES - 1), "é".repeat(4));
+        let bounded = bounded_error_detail(detail);
+        assert!(bounded.len() <= DIAG_ERROR_MAX_BYTES + 3);
+        assert!(bounded.ends_with("..."));
+        assert!(std::str::from_utf8(bounded.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn bounded_error_detail_preserves_short_errors() {
+        assert_eq!(bounded_error_detail("short"), "short");
+    }
+
+    #[test]
+    fn bounded_error_detail_scrubs_control_characters() {
+        assert_eq!(bounded_error_detail("line1\nline2\r\0"), "line1?line2??");
     }
 }

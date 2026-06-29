@@ -132,6 +132,16 @@ in
       # assertion in `assertions.nix` is the sole supervisor-removal
       # error path; the friendly message text matches the original
       # mkRemovedOptionModule wording verbatim.
+      imports = [
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "enable" ] [ "graphics" "waylandProxy" "enable" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "debugLogging" ] [ "graphics" "waylandProxy" "debugLogging" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "byteLogging" ] [ "graphics" "waylandProxy" "byteLogging" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "denyGlobals" ] [ "graphics" "waylandProxy" "denyGlobals" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "allowGlobals" ] [ "graphics" "waylandProxy" "allowGlobals" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "maxVersions" ] [ "graphics" "waylandProxy" "maxVersions" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "dmabufAllow" ] [ "graphics" "waylandProxy" "dmabufAllow" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "dmabufDeny" ] [ "graphics" "waylandProxy" "dmabufDeny" ])
+      ];
       options = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -568,13 +578,13 @@ in
           '';
         };
 
-        graphics.waylandFilter.enable = lib.mkOption {
+        graphics.waylandProxy.enable = lib.mkOption {
           type = lib.types.bool;
           default = true;
           description = ''
-            Enable the host-jailed Wayland filter proxy between the crosvm
+            Enable the host-jailed Wayland proxy between the crosvm
             GPU sidecar and the real host compositor. When true (the default),
-            crosvm connects to the per-VM filter socket at
+            crosvm connects to the per-VM proxy socket at
             `/run/d2b-wlproxy/<vm>/wayland-0`; when false, the
             `wayland-proxy` DAG node is not emitted and the GPU runner uses
             the legacy direct compositor socket path. Has no effect unless
@@ -582,12 +592,12 @@ in
           '';
         };
 
-        graphics.waylandFilter.debugLogging = lib.mkOption {
+        graphics.waylandProxy.debugLogging = lib.mkOption {
           type = lib.types.bool;
           default = false;
           description = ''
             Enable verbose wl-proxy protocol tracing for this VM's host-side
-            Wayland filter runner. This sets `WL_PROXY_DEBUG=1` and a
+            Wayland proxy runner. This sets `WL_PROXY_DEBUG=1` and a
             VM-specific `WL_PROXY_PREFIX`, causing raw Wayland protocol
             messages to be emitted to the runner's stderr and therefore the
             broker/journald log stream.
@@ -598,12 +608,12 @@ in
           '';
         };
 
-        graphics.waylandFilter.byteLogging = lib.mkOption {
+        graphics.waylandProxy.byteLogging = lib.mkOption {
           type = lib.types.bool;
           default = false;
           description = ''
             Enable raw Wayland transport hexdump logging for this VM's
-            host-side Wayland filter runner. This sets `WL_PROXY_HEXDUMP=1`
+            host-side Wayland proxy runner. This sets `WL_PROXY_HEXDUMP=1`
             and logs bounded recv/send byte prefixes plus fd counts for
             short-lived debugging of protocol corruption.
 
@@ -612,45 +622,45 @@ in
           '';
         };
 
-        graphics.waylandFilter.denyGlobals = lib.mkOption {
+        graphics.waylandProxy.denyGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
           example = [ "wp_drm_lease_device_v1" ];
           description = ''
             Additional Wayland globals to deny beyond the secure defaults.
             Each entry is an interface name (e.g. `wp_drm_lease_device_v1`).
-            Repeated `--deny-global` arguments are passed to the filter proxy.
-            The filter proxy emits runtime advisory diagnostics if an entry
+            Repeated `--deny-global` arguments are passed to the Wayland proxy.
+            The proxy emits runtime advisory diagnostics if an entry
             shadows a d2b-required or high-risk rule.
           '';
         };
 
-        graphics.waylandFilter.allowGlobals = lib.mkOption {
+        graphics.waylandProxy.allowGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
           example = [ "zwp_linux_dmabuf_v1" ];
           description = ''
             Wayland globals to explicitly allow even if denied by the secure
-            defaults. Each entry is passed as `--allow-global` to the filter
-            proxy. The filter proxy emits runtime advisory diagnostics when
+            defaults. Each entry is passed as `--allow-global` to the Wayland
+            proxy. The proxy emits runtime advisory diagnostics when
             used; the operator is explicitly narrowing the security boundary.
           '';
         };
 
-        graphics.waylandFilter.maxVersions = lib.mkOption {
+        graphics.waylandProxy.maxVersions = lib.mkOption {
           type = lib.types.attrsOf lib.types.ints.positive;
           default = { };
           example = { xdg_wm_base = 3; };
           description = ''
             Maximum advertised Wayland protocol versions for specific globals.
             Each entry maps an interface name to a version cap and is passed
-            as `--max-version INTERFACE=VERSION` to the filter proxy. This is
+            as `--max-version INTERFACE=VERSION` to the Wayland proxy. This is
             a compatibility override; unlike allow/deny global overrides, it
             does not currently emit a runtime policy warning.
           '';
         };
 
-        graphics.waylandFilter.dmabufAllow = lib.mkOption {
+        graphics.waylandProxy.dmabufAllow = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
           example = [ "XR24:linear" "AR24:0x0100000000000001" ];
@@ -660,13 +670,13 @@ in
             `XR24`, a hexadecimal value, or a decimal value. `MODIFIER` may be
             `linear`, `invalid`, a hexadecimal value, or a decimal value.
 
-            These rules are applied by the host Wayland filter to legacy
+            These rules are applied by the host Wayland proxy to legacy
             `zwp_linux_dmabuf_v1.modifier` events and v4/v5 feedback tranche
             format tables. Allow rules override deny rules.
           '';
         };
 
-        graphics.waylandFilter.dmabufDeny = lib.mkOption {
+        graphics.waylandProxy.dmabufDeny = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
           example = [ "all:linear" ];

@@ -26,6 +26,7 @@ D2b does not include a default picker flake input. Install the separate
               # Or set clipd.package once the daemon package is wired.
               picker.package = d2b-clip-picker.packages.${pkgs.system}.default;
               policy.crossRealm.enable = true;
+              niri.fallback.enable = true;
             };
           };
         })
@@ -51,7 +52,7 @@ d2b.site.clipboard = {
 ```
 
 Bind `d2b.site.clipboard.niri.fallback.command` (default:
-`d2b clipboard picker`) in niri. The command opens the picker and arms the chosen
+`d2b clipboard arm`) in niri. The command opens the picker and arms the chosen
 entry for the currently focused target. The user then performs a normal paste
 within the configured timeout. D2b does not synthesize Ctrl+V and the picker does
 not write to the clipboard.

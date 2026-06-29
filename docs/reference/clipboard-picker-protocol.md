@@ -36,9 +36,48 @@ stable v1 daemon-received messages are rejected.
 
 ### `OpenRequest` clipd → picker
 
-Contains the selected protocol version, request id, destination metadata,
-requested MIME type, expiry, and filtered candidates. Clipboard payload bytes are
-not included.
+Contains the selected protocol version, `clipd_version`, request id,
+destination metadata, requested MIME type, expiry, and filtered candidates.
+Clipboard payload bytes are not included.
+
+```json
+{
+  "type": "open_request",
+  "selected_protocol_version": 1,
+  "clipd_version": "0.0.0-bootstrap",
+  "picker_version": "0.1.0",
+  "request_id": "opaque",
+  "destination": {
+    "realm": "Personal",
+    "realm_kind": "vm",
+    "application": "Firefox",
+    "app_id": "org.mozilla.firefox",
+    "title": null,
+    "workspace": "dev",
+    "output": "DP-1",
+    "attribution": "exact_client"
+  },
+  "requested_mime_type": "text/plain",
+  "expires_at_unix_ms": 1760000000000,
+  "placement_hints": null,
+  "candidates": [
+    {
+      "entry_id": "opaque-entry",
+      "source_realm": "Host",
+      "source_realm_kind": "host",
+      "source_app": "Text Editor",
+      "source_app_id": "org.gnome.TextEditor",
+      "source_attribution": "focused_window_guess",
+      "preview_text": null,
+      "content_type": "text/plain",
+      "timestamp_unix_ms": 1760000000000,
+      "thumbnail_png_base64": null,
+      "byte_count": 128,
+      "confirmation_required": false
+    }
+  ]
+}
+```
 
 ### `Select` picker → clipd
 

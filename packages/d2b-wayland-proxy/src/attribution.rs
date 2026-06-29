@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 const MAX_GUEST_METADATA_CHARS: usize = 256;
 
-/// Per-proxy client connection id assigned by `d2b-wayland-filter`.
+/// Per-proxy client connection id assigned by `d2b-wayland-proxy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GuestClientId(pub u64);
 

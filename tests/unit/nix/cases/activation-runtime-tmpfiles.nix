@@ -187,6 +187,7 @@ in
     expr = !x86 || lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/d2b-wlproxy 0750 root d2b -"
       "z /run/d2b-wlproxy 0750 root d2b -"
+      "a+ /run/d2b - - - - u:d2b-corp-vm-wlproxy:--x"
       "a+ /run/d2b-wlproxy - - - - u:d2b-corp-vm-gpu:--x"
       "a+ /run/d2b-wlproxy - - - - u:d2b-corp-vm-wlproxy:--x"
     ];
@@ -281,6 +282,7 @@ in
   "activation-runtime-tmpfiles/qemu-media-runtime-dirs" = {
     expr = lib.all (rule: builtins.elem rule qemuMediaTmpfiles) [
       "a+ /run/d2b - - - - u:d2b-media-qemu-media:--x"
+      "a+ /run/d2b - - - - u:d2b-media-wlproxy:--x"
       "a+ /run/d2b/vms - - - - u:d2b-media-qemu-media:--x"
       "a+ /run/d2b-wlproxy - - - - u:d2b-media-qemu-media:--x"
       "a+ /run/d2b-wlproxy - - - - u:d2b-media-wlproxy:--x"

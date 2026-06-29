@@ -178,7 +178,7 @@ serials, block paths, image paths, and registry paths.
   `qemuMedia.security.lockMemory = true` when the host must fail closed
   rather than risk swapping guest RAM.
 - Host window presentation for niri routes through the d2b Wayland
-  filter proxy and matches the proxy-rewritten app-id prefix
+  Wayland proxy and matches the proxy-rewritten app-id prefix
   `d2b.<vm>.`; set `d2b.vms.<vm>.ui.border.activeColor` for a
   fixed color. The legacy
   `d2b.vms.<vm>.qemuMedia.window.niriBorderColor` option remains a
