@@ -53,7 +53,7 @@ pub enum PolicyWarning {
     RequiredGlobalDenied { interface: String },
     AcceleratedRenderingDisabled { interface: String },
     HighRiskGlobalEnabled { interface: String },
-    ClipboardBoundaryBypassEnabled { interface: String },
+    ClipboardBoundaryOverrideIgnored { interface: String },
     AppIdPrefixNotVmPrefix { vm: String, prefix: String },
     TitlePrefixDisabled,
     UnclassifiedGlobalAllowed { interface: String },
@@ -74,9 +74,9 @@ impl PolicyWarning {
                 "waylandProxy: high-risk global `{interface}` is enabled; \
                  this global has elevated access to host compositor state"
             ),
-            Self::ClipboardBoundaryBypassEnabled { interface } => format!(
-                "waylandProxy: clipboard boundary global `{interface}` is enabled; \
-                 guest clipboard/DND objects may bypass d2b virtualization policy"
+            Self::ClipboardBoundaryOverrideIgnored { interface } => format!(
+                "waylandProxy: clipboard boundary global `{interface}` override ignored; \
+                 d2b enforces virtualized clipboard, primary-selection, and DND boundaries"
             ),
             Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
                 "waylandProxy: appIdPrefix is `{prefix}` rather than the default \
@@ -230,7 +230,7 @@ impl FilterPolicy {
             if entry.classification == Classification::ClipboardBoundary
                 && entry.action == GlobalAction::Allow
             {
-                warnings.push(PolicyWarning::ClipboardBoundaryBypassEnabled {
+                warnings.push(PolicyWarning::ClipboardBoundaryOverrideIgnored {
                     interface: iface.clone(),
                 });
             }
@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_clipboard_boundary_global_produces_warning() {
+    fn enable_clipboard_boundary_global_reports_ignored_override() {
         let p = FilterPolicy::build(PolicyInput {
             vm_name: "work".to_owned(),
             allow_globals: vec!["wl_data_device_manager".to_owned()],
@@ -647,7 +647,7 @@ mod tests {
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
-            PolicyWarning::ClipboardBoundaryBypassEnabled { interface }
+            PolicyWarning::ClipboardBoundaryOverrideIgnored { interface }
             if interface == "wl_data_device_manager"
         )));
     }

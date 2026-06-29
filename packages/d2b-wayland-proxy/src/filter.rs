@@ -53,7 +53,10 @@ use crate::{
         BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
         BridgeTransferMetadata,
     },
-    clipboard::{ClipboardMimePolicy, ClipboardRoute, MimeDecision},
+    clipboard::{
+        ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
+        global_disposition,
+    },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -613,14 +616,10 @@ impl FilterRegistryHandler {
                 synthetic_clipboard: true,
             },
         );
-        self.diag
-            .borrow_mut()
-            .warn("synthetic-clipboard", "advertised", || {
-                format!(
-                    "[d2b-wlproxy] vm={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
-                    self.policy.vm_name
-                )
-            });
+        log::info!(
+            "[d2b-wlproxy] vm={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
+            self.policy.vm_name
+        );
         Some(GlobalAdvertisement {
             name,
             interface,
@@ -655,7 +654,10 @@ impl FilterRegistryHandler {
             }
             return (synthetic, IncomingGlobalDecision::Hide);
         }
-        if iface_name == "wl_data_device_manager" {
+        if matches!(
+            global_disposition(iface_name),
+            ClipboardGlobalDisposition::VirtualizeLocally | ClipboardGlobalDisposition::DenyGlobal
+        ) {
             self.hidden_globals.insert(name);
             if self.policy.log_filtered_globals {
                 self.diag.borrow_mut().global_filtered(iface_name);
@@ -1358,6 +1360,23 @@ mod tests {
         assert_eq!(decision, IncomingGlobalDecision::Hide);
         assert!(handler.hidden_globals.contains(&11));
         assert!(!handler.advertised_globals.contains_key(&11));
+    }
+
+    #[test]
+    fn prepare_global_hides_clipboard_boundary_even_when_policy_allows_it() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let policy = Rc::new(FilterPolicy::build(crate::policy::PolicyInput {
+            vm_name: "work".to_owned(),
+            allow_globals: vec!["zwp_primary_selection_device_manager_v1".to_owned()],
+            ..Default::default()
+        }));
+        let mut handler = FilterRegistryHandler::new(policy, diag, clipboard());
+        let (_synthetic, decision) =
+            handler.prepare_global(13, ObjectInterface::ZwpPrimarySelectionDeviceManagerV1, 1);
+
+        assert_eq!(decision, IncomingGlobalDecision::Hide);
+        assert!(handler.hidden_globals.contains(&13));
+        assert!(!handler.advertised_globals.contains_key(&13));
     }
 
     #[test]

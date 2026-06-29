@@ -112,6 +112,25 @@ document in the host configuration why the global is safe for this VM.
 Consider filing an issue or PR to have d2b classify the global so the
 warning is resolved upstream.
 
+---
+
+### W-CLIPBOARD-BOUNDARY-OVERRIDE-IGNORED
+
+**Trigger:** `allowGlobals` includes a global that d2b classifies as a
+clipboard-boundary global.
+
+**Affected globals:** standard clipboard, primary-selection, privileged
+data-control, and drag-and-drop globals.
+
+**Why it exists:** These globals are owned by d2b's virtual clipboard
+architecture. Operator `allowGlobals` entries for them are reported as ignored
+rather than forwarded to the host compositor, so guest clipboard and DnD objects
+cannot bypass d2b policy.
+
+**How to override intentionally:** There is no passthrough override for these
+globals. Use the d2b clipboard architecture or disable the Wayland proxy for the
+VM while accepting the loss of d2b's cross-domain Wayland protections.
+
 ## Default-denied app protocols
 
 Some classified app protocols are denied by default without producing an

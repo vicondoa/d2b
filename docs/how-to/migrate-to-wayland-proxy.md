@@ -200,6 +200,4 @@ longer apply.
   selection, privileged clipboard-control globals, and DnD are explicitly
   denied by the proxy policy.
 - **Wayland text-input v3** (`zwp_text_input_manager_v3`) is denied by default.
-  This disables guest IME/text-input protocol features until the proxy can
-  validate seat-bound requests, but prevents apps from crashing on invalid
-  forwarded text-input requests.
+  Guest IME/text-input protocol features are disabled by default.
