@@ -33,7 +33,12 @@ impl PasteWriteFd {
         destination: FocusedWindowSnapshot,
         timeout: Duration,
     ) -> Self {
-        Self { fd, mime_type, destination, deadline: Instant::now() + timeout }
+        Self {
+            fd,
+            mime_type,
+            destination,
+            deadline: Instant::now() + timeout,
+        }
     }
 
     pub fn is_expired(&self, now: Instant) -> bool {
@@ -143,8 +148,12 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             .cache_mut()
             .focused_window()
             .unwrap_or_default();
-        self.pending_paste =
-            Some(PasteWriteFd::new(write_fd, mime_type, dest.clone(), self.paste_fd_timeout));
+        self.pending_paste = Some(PasteWriteFd::new(
+            write_fd,
+            mime_type,
+            dest.clone(),
+            self.paste_fd_timeout,
+        ));
         Ok(dest)
     }
 
@@ -180,7 +189,10 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     /// Check whether the pending paste fd has expired and close it if so.
     /// Returns the expired `PasteWriteFd` so the caller can emit an event.
     pub fn check_paste_timeout(&mut self, now: Instant) -> Option<PasteWriteFd> {
-        let expired = self.pending_paste.as_ref().map_or(false, |p| p.is_expired(now));
+        let expired = self
+            .pending_paste
+            .as_ref()
+            .is_some_and(|p| p.is_expired(now));
         if expired {
             let paste = self.pending_paste.take().unwrap();
             log::debug!("d2b-clipd: paste fd timed out for mime={}", paste.mime_type);
@@ -208,7 +220,9 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 
     /// Attribution quality of the current selection.
     pub fn current_attribution_quality(&self) -> Option<AttributionQuality> {
-        self.current_selection.as_ref().map(|s| s.attribution.quality)
+        self.current_selection
+            .as_ref()
+            .map(|s| s.attribution.quality)
     }
 }
 
@@ -288,7 +302,8 @@ mod tests {
         let (a, _ar) = UnixStream::pair().expect("pair");
         let (b, _br) = UnixStream::pair().expect("pair");
 
-        hc.accept_paste_fd(a.into(), "text/plain".to_owned()).expect("first");
+        hc.accept_paste_fd(a.into(), "text/plain".to_owned())
+            .expect("first");
         let err = hc
             .accept_paste_fd(b.into(), "text/html".to_owned())
             .expect_err("second rejected");
@@ -304,7 +319,8 @@ mod tests {
         }));
         let (write_sock, mut read_sock) = UnixStream::pair().expect("pair");
         let fd: OwnedFd = write_sock.into();
-        hc.accept_paste_fd(fd, "text/plain".to_owned()).expect("accept");
+        hc.accept_paste_fd(fd, "text/plain".to_owned())
+            .expect("accept");
 
         let mut notifier = RecordingNotifier::default();
         hc.write_paste_data(b"hello", &mut notifier).expect("write");

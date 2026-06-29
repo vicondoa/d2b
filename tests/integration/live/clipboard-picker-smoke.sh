@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/clipboard-picker-smoke.sh
+# tests/integration/live/clipboard-picker-smoke.sh
 #
 # Layer-2 smoke test: prove the d2b-clip-picker binary does a valid ADR 0042
 # protocol handshake (client_hello) on a socketpair IPC channel.
 #
 # Usage:
-#   bash tests/clipboard-picker-smoke.sh
+#   bash tests/integration/live/clipboard-picker-smoke.sh
 #
 # Prerequisites:
 #   - D2B_CLIP_PICKER: absolute path to the compiled d2b-clip-picker binary.

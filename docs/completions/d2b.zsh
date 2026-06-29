@@ -1205,6 +1205,56 @@ esac
     ;;
 esac
 ;;
+(clipboard)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__clipboard_commands" \
+"*::: :->clipboard" \
+&& ret=0
+
+    case $state in
+    (clipboard)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-clipboard-command-$line[1]:"
+        case $line[1] in
+            (arm)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_d2b__subcmd__clipboard__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-clipboard-help-command-$line[1]:"
+        case $line[1] in
+            (arm)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_d2b__subcmd__help_commands" \
@@ -1617,6 +1667,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(clipboard)
+_arguments "${_arguments_options[@]}" : \
+":: :_d2b__subcmd__help__subcmd__clipboard_commands" \
+"*::: :->clipboard" \
+&& ret=0
+
+    case $state in
+    (clipboard)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-help-clipboard-command-$line[1]:"
+        case $line[1] in
+            (arm)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1661,6 +1731,7 @@ _d2b_commands() {
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
 'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
+'clipboard:Clipboard authority operations (two-step fallback paste arming via d2b-clipd)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b commands' commands "$@"
@@ -1777,6 +1848,37 @@ _d2b__subcmd__boot_commands() {
 _d2b__subcmd__build_commands() {
     local commands; commands=()
     _describe -t commands 'd2b build commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__clipboard_commands] )) ||
+_d2b__subcmd__clipboard_commands() {
+    local commands; commands=(
+'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'd2b clipboard commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__clipboard__subcmd__arm_commands] )) ||
+_d2b__subcmd__clipboard__subcmd__arm_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b clipboard arm commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__clipboard__subcmd__help_commands] )) ||
+_d2b__subcmd__clipboard__subcmd__help_commands() {
+    local commands; commands=(
+'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'd2b clipboard help commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__clipboard__subcmd__help__subcmd__arm_commands] )) ||
+_d2b__subcmd__clipboard__subcmd__help__subcmd__arm_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b clipboard help arm commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__clipboard__subcmd__help__subcmd__help_commands] )) ||
+_d2b__subcmd__clipboard__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b clipboard help help commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__config_commands] )) ||
 _d2b__subcmd__config_commands() {
@@ -1908,6 +2010,7 @@ _d2b__subcmd__help_commands() {
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
 'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
+'clipboard:Clipboard authority operations (two-step fallback paste arming via d2b-clipd)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b help commands' commands "$@"
@@ -1968,6 +2071,18 @@ _d2b__subcmd__help__subcmd__boot_commands() {
 _d2b__subcmd__help__subcmd__build_commands() {
     local commands; commands=()
     _describe -t commands 'd2b help build commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__clipboard_commands] )) ||
+_d2b__subcmd__help__subcmd__clipboard_commands() {
+    local commands; commands=(
+'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+    )
+    _describe -t commands 'd2b help clipboard commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__clipboard__subcmd__arm_commands] )) ||
+_d2b__subcmd__help__subcmd__clipboard__subcmd__arm_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help clipboard arm commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__help__subcmd__config_commands] )) ||
 _d2b__subcmd__help__subcmd__config_commands() {

@@ -2474,10 +2474,7 @@ fn dispatch(
 // `d2b clipboard` — clipboard authority fallback arming
 // ============================================================
 
-fn cmd_clipboard_arm(
-    _context: &Context,
-    args: &ClipboardArmArgs,
-) -> Result<i32, CliFailure> {
+fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
 
@@ -2503,7 +2500,9 @@ fn cmd_clipboard_arm(
     let mut line = String::new();
     BufReader::new(stream)
         .read_line(&mut line)
-        .map_err(|error| CliFailure::new(2, format!("failed to read clipboard arm response: {error}")))?;
+        .map_err(|error| {
+            CliFailure::new(2, format!("failed to read clipboard arm response: {error}"))
+        })?;
     let value: serde_json::Value = serde_json::from_str(&line)
         .map_err(|error| CliFailure::new(2, format!("invalid d2b-clipd response: {error}")))?;
     if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {

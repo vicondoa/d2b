@@ -159,7 +159,7 @@ ls -la /proc/$(pgrep -f "crosvm.*work")/fd 2>/dev/null \
   | grep wayland
 
 # Confirm the proxy holds the compositor socket
-ls -la /proc/$(pgrep -f "d2b-wayland-filter.*work")/fd 2>/dev/null \
+ls -la /proc/$(pgrep -f "d2b-wayland-proxy.*work")/fd 2>/dev/null \
   | grep wayland
 ```
 
@@ -168,7 +168,7 @@ ls -la /proc/$(pgrep -f "d2b-wayland-filter.*work")/fd 2>/dev/null \
 The filter proxy's policy engine emits runtime advisory diagnostics when
 an operator override changes a rule d2b considers required or
 high-risk.  These warnings do not block evaluation or builds; they appear
-in the `d2b-wayland-filter` journal stream when the VM starts.
+in the `d2b-wayland-proxy` journal stream when the VM starts.
 
 For a full list of warning conditions, see
 [`docs/reference/wayland-filter-warnings.md`](../reference/wayland-filter-warnings.md).

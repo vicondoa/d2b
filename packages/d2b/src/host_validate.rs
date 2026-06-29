@@ -180,7 +180,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     WaveSpec {
         wave: "p0Cb",
         summary: "Clipboard authority (d2b-clipd + picker protocol handshake smoke).",
-        validators: &["clipboard-picker-smoke.sh"],
+        validators: &["integration/live/clipboard-picker-smoke.sh"],
     },
 ];
 

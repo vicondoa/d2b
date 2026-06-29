@@ -2106,7 +2106,7 @@ proxy roles connect to the host compositor through local sockets and
 local ACL/minijail policy. In today's crosvm+Cloud Hypervisor path,
 guest Wayland is carried by `wl-cross-domain-proxy` over the
 virtio-gpu/crosvm cross-domain transport, with the host-jailed
-`d2b-wayland-filter` mediating the real compositor socket.
+`d2b-wayland-proxy` mediating the real compositor socket.
 
 Display/window forwarding is a P0 provider-abstraction surface, not a late
 add-on. The first two display providers are:

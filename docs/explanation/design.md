@@ -550,7 +550,7 @@ by pidfd:
   `d2b.vms.<vm>.graphics.enable = true`,
   `graphics.crossDomainTrusted = true`, and
   `graphics.waylandFilter.enable = true`. Runs the
-  `d2b-wayland-filter` binary as `d2b-<vm>-wlproxy` (per-VM
+  `d2b-wayland-proxy` binary as `d2b-<vm>-wlproxy` (per-VM
   uid). This is the **only** per-VM role that holds the real host
   compositor socket; it listens on
   `/run/d2b-wlproxy/<vm>/wayland-0` for the GPU sidecar and

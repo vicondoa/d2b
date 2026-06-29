@@ -27,11 +27,11 @@ use wl_proxy::{
             },
         },
         wayland::{
+            wl_buffer::WlBuffer,
             wl_data_device::{WlDataDevice, WlDataDeviceHandler},
             wl_data_device_manager::{WlDataDeviceManager, WlDataDeviceManagerHandler},
             wl_data_offer::{WlDataOffer, WlDataOfferHandler},
             wl_data_source::{WlDataSource, WlDataSourceHandler},
-            wl_buffer::WlBuffer,
             wl_display::{WlDisplay, WlDisplayHandler},
             wl_registry::{WlRegistry, WlRegistryHandler},
         },
@@ -177,17 +177,13 @@ impl VirtualClipboardState {
     fn remove_source(&mut self, source: &Rc<WlDataSource>) -> bool {
         let id = source.unique_id();
         self.sources.remove(&id);
-        if self
-            .selection
-            .as_ref()
-            .is_some_and(|selected| {
-                selected
-                    .borrow()
-                    .source
-                    .upgrade()
-                    .is_some_and(|s| s.unique_id() == id)
-            })
-        {
+        if self.selection.as_ref().is_some_and(|selected| {
+            selected
+                .borrow()
+                .source
+                .upgrade()
+                .is_some_and(|s| s.unique_id() == id)
+        }) {
             self.selection = None;
             true
         } else {
@@ -196,14 +192,14 @@ impl VirtualClipboardState {
     }
 
     fn set_selection(&mut self, source: Option<&Rc<WlDataSource>>) -> Option<Rc<WlDataSource>> {
-        let old_strong = self.selection.as_ref()
+        let old_strong = self
+            .selection
+            .as_ref()
             .and_then(|vs| vs.borrow().source.upgrade());
         self.selection = source.and_then(|source| self.sources.get(&source.unique_id()).cloned());
         // Return the old source only when it is being superseded by a different source
         // (or cleared), so the caller can send wl_data_source.cancelled.
-        old_strong.filter(|old| {
-            source.map_or(true, |new| old.unique_id() != new.unique_id())
-        })
+        old_strong.filter(|old| source.is_none_or(|new| old.unique_id() != new.unique_id()))
     }
 
     fn receive_offer(&mut self, offer: &Rc<WlDataOffer>, mime_type: &str, fd: &Rc<OwnedFd>) {
@@ -490,11 +486,7 @@ struct VirtualDataDeviceManagerHandler {
 }
 
 impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
-    fn handle_create_data_source(
-        &mut self,
-        _slf: &Rc<WlDataDeviceManager>,
-        id: &Rc<WlDataSource>,
-    ) {
+    fn handle_create_data_source(&mut self, _slf: &Rc<WlDataDeviceManager>, id: &Rc<WlDataSource>) {
         id.set_forward_to_server(false);
         id.set_handler(VirtualDataSourceHandler {
             clipboard: self.clipboard.clone(),

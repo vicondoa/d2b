@@ -113,7 +113,7 @@ required; the `userNamespace` field is absent in the minijail profile.
 This ADR covers the role contract, identity, isolation, and process
 lifecycle. The following are deferred to Wave 2:
 
-- Lane A: `d2b-wayland-filter` binary crate; filtering policy;
+- Lane A: `d2b-wayland-proxy` binary crate; filtering policy;
   app-id and title rewriting; a future filtering-policy ADR.
 - Lane C: `processes-json.nix` and `host-activation.nix` integration —
   removing the real compositor socket from GPU runner bind-mounts,

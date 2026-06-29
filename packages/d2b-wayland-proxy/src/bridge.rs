@@ -5,8 +5,9 @@
 //! between d2b components once the protocol is implemented.
 
 use std::{
+    io::IoSlice,
     os::{
-        fd::OwnedFd,
+        fd::{AsRawFd, OwnedFd},
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::{Path, PathBuf},
@@ -222,24 +223,45 @@ impl LocalTransferFd {
         drop(self.fd.take());
         status
     }
+
+    fn as_raw_fd(&self) -> Option<i32> {
+        self.fd.as_ref().map(AsRawFd::as_raw_fd)
+    }
 }
 
-/// Placeholder for the future FD-bearing bridge transport. It establishes the
-/// shape tests can compile against without implementing SCM_RIGHTS yet.
 pub trait BridgeHandoff {
     fn handoff_transfer_fd(&mut self, fd: LocalTransferFd) -> HandoffStatus;
 }
 
 impl BridgeHandoff for UnixStream {
-    fn handoff_transfer_fd(&mut self, fd: LocalTransferFd) -> HandoffStatus {
-        fd.close_after_handoff(HandoffStatus::Failed)
+    fn handoff_transfer_fd(&mut self, local_fd: LocalTransferFd) -> HandoffStatus {
+        let Some(raw_fd) = local_fd.as_raw_fd() else {
+            return local_fd.close_after_handoff(HandoffStatus::Failed);
+        };
+        let iov = [IoSlice::new(b"F")];
+        let fds = [raw_fd];
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
+        let status = match nix::sys::socket::sendmsg::<()>(
+            self.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            None,
+        ) {
+            Ok(_) => HandoffStatus::Delivered,
+            Err(error) => {
+                log::debug!("d2b-wayland-proxy: bridge fd handoff failed: {error}");
+                HandoffStatus::Failed
+            }
+        };
+        local_fd.close_after_handoff(status)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{IoSliceMut, Read};
 
     fn assert_peer_observes_local_close(status: HandoffStatus) {
         let (local, mut peer) = UnixStream::pair().expect("socket pair");
@@ -359,5 +381,38 @@ mod tests {
     #[test]
     fn failed_handoff_closes_local_fd_copy() {
         assert_peer_observes_local_close(HandoffStatus::Failed);
+    }
+
+    #[test]
+    fn bridge_handoff_sends_fd_with_scm_rights() {
+        let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
+        let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
+        let local = LocalTransferFd::new(local.into());
+
+        assert_eq!(bridge.handoff_transfer_fd(local), HandoffStatus::Delivered);
+
+        let mut byte = [0_u8; 1];
+        let mut iov = [IoSliceMut::new(&mut byte)];
+        let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+        let msg = nix::sys::socket::recvmsg::<()>(
+            peer.as_raw_fd(),
+            &mut iov,
+            Some(&mut cmsg_space),
+            nix::sys::socket::MsgFlags::empty(),
+        )
+        .expect("recvmsg");
+        assert_eq!(msg.bytes, 1);
+        let mut saw_fd = false;
+        for cmsg in msg.cmsgs().expect("cmsgs") {
+            if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
+                saw_fd = !fds.is_empty();
+                for fd in fds {
+                    let _ = nix::unistd::close(fd);
+                }
+            }
+        }
+        assert!(saw_fd, "bridge handoff must carry one SCM_RIGHTS fd");
+        let mut buf = [0_u8; 1];
+        assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
     }
 }

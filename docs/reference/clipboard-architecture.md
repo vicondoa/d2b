@@ -10,7 +10,7 @@ owns clipboard authority; the picker is only a UI client.
 | Component | Authority |
 | --- | --- |
 | `d2b-clipd` | Host-session daemon that owns data-control access, Niri IPC, in-memory payloads, policy, picker supervision, metadata audit, metrics, and writes into Wayland transfer FDs. |
-| `d2b-wayland-filter` | Per-VM Wayland clipboard virtualization endpoint. It derives VM identity from the authenticated bridge session and lifecycle mapping, not from host-visible app-id labels. |
+| `d2b-wayland-proxy` | Per-VM Wayland clipboard virtualization endpoint. It derives VM identity from the authenticated bridge session and lifecycle mapping, not from host-visible app-id labels. |
 | `d2b-clip-picker` | Separate GPL UI-only picker. It receives display metadata over an inherited socketpair and sends only select/cancel decisions. |
 
 The picker is not a clipboard manager. It must not bind data-control globals,

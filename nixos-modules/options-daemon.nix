@@ -88,7 +88,7 @@ let
     };
     p0Cb = {
       implementedDescription = "d2b-clipd clipboard authority foundation + picker protocol IPC (ADR 0042)";
-      validatedDescription = "Validated via tests/clipboard-picker-smoke.sh with real d2b-clip-picker binary";
+      validatedDescription = "Validated via tests/integration/live/clipboard-picker-smoke.sh with real d2b-clip-picker binary";
       implementedDefault = false;
     };
   };

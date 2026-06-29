@@ -257,7 +257,9 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
     let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("d2b-wayland-proxy: failed to connect to upstream compositor `{upstream}`: {e}");
+            eprintln!(
+                "d2b-wayland-proxy: failed to connect to upstream compositor `{upstream}`: {e}"
+            );
             std::process::exit(1);
         }
     };
@@ -288,12 +290,7 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
                     vm.clone(),
                     state.create_destructor(),
                 ));
-                install_client_handlers(
-                    &client,
-                    policy.clone(),
-                    diag.clone(),
-                    clipboard.clone(),
-                );
+                install_client_handlers(&client, policy.clone(), diag.clone(), clipboard.clone());
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) if is_recoverable_accept_error(&e) => {
@@ -308,7 +305,10 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
         match state.dispatch(Some(Duration::from_millis(10))) {
             Ok(_) => {}
             Err(e) => {
-                log::warn!("[d2b-wlproxy] vm={vm} dispatch error: {}", error_source_chain(&e));
+                log::warn!(
+                    "[d2b-wlproxy] vm={vm} dispatch error: {}",
+                    error_source_chain(&e)
+                );
                 break;
             }
         }

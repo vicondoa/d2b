@@ -1,7 +1,7 @@
 //! Lane A spike: wl-proxy integration feasibility under `unsafe_code = forbid`.
 //!
 //! This module demonstrates the patterns required for the host-side
-//! d2b-wayland-filter binary (Lane C) without implementing the full
+//! d2b-wayland-proxy binary (Lane C) without implementing the full
 //! production proxy. It is compile-only evidence: the patterns here compile
 //! under `#![forbid(unsafe_code)]` even though `wl-proxy` uses unsafe
 //! internally (in its `uapi`/fd-passing layer). The forbid attribute applies

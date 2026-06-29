@@ -59,7 +59,7 @@ chain that spans the VM boundary:
    forwards it to the host-side filter socket at
    `/run/d2b-wlproxy/<vm>/wayland-0`. The GPU sidecar does NOT
    connect directly to the host compositor socket.
-4. **`d2b-wayland-filter`** (running as `d2b-<vm>-wlproxy`,
+4. **`d2b-wayland-proxy`** (running as `d2b-<vm>-wlproxy`,
    listening on `/run/d2b-wlproxy/<vm>/wayland-0`) — mediates
    between the GPU sidecar and the real host compositor. It hides
    high-risk Wayland globals (screen capture, virtual input, etc.),

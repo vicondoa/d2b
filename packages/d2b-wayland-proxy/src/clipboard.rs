@@ -178,5 +178,4 @@ mod tests {
             MimeDecision::Deny
         );
     }
-
 }

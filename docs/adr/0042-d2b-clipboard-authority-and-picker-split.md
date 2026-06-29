@@ -10,7 +10,7 @@
 ## Context
 
 D2b graphics VMs already route host-visible Wayland traffic through the
-broker-spawned `d2b-wayland-filter` role. That role is the trusted boundary
+broker-spawned `d2b-wayland-proxy` role. That role is the trusted boundary
 between untrusted guest Wayland clients and the host compositor: it owns global
 filtering, app-id/title rewriting, and the only per-VM access to the host
 compositor socket.
@@ -73,7 +73,7 @@ D2b adds `d2b-clipd` as the host-session clipboard daemon. It owns:
 - picker launch and supervision;
 - writes into the already-open Wayland transfer FD after policy recheck.
 
-`d2b-wayland-filter` becomes the trusted VM clipboard virtualization endpoint.
+`d2b-wayland-proxy` becomes the trusted VM clipboard virtualization endpoint.
 It must not forward guest `wl_data_device_manager`, `wl_data_device`,
 `wl_data_source`, or `wl_data_offer` directly into the host compositor clipboard
 namespace. It also continues to deny privileged guest clipboard-manager globals
@@ -252,7 +252,7 @@ that frame closed after closing any FDs that were partially received in the
 returned control buffer. Setting close-on-exec after receipt is not sufficient
 because a concurrent picker spawn could inherit the descriptor in the race
 window. Transfer FDs are never inherited by the picker.
-After a successful SCM_RIGHTS handoff, `d2b-wayland-filter` closes its local copy
+After a successful SCM_RIGHTS handoff, `d2b-wayland-proxy` closes its local copy
 of the transfer FD immediately. On handoff failure it also closes the local FD
 while cancelling or closing the relevant Wayland source or offer.
 

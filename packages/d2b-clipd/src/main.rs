@@ -24,9 +24,7 @@ use d2b_clipd::niri::{
     NiriRequest,
 };
 use d2b_clipd::notifications::{DesktopNotifier, Notifier, emit_fallback_ready};
-use d2b_clipd::picker::{
-    CommandPickerSpawner, PickerCommand, PickerState, PickerSupervisor,
-};
+use d2b_clipd::picker::{CommandPickerSpawner, PickerCommand, PickerState, PickerSupervisor};
 use d2b_clipd::policy::ReasonCode;
 use d2b_clipd::protocol::{
     AttributionQuality, ClientHello, DaemonToPickerMessage, DestinationMetadata, OpenRequest,
@@ -114,7 +112,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
 
     // ── Fallback state machine ───────────────────────────────────────────────
     let mut fallback = FallbackArming::default();
-    let mut notifier = DesktopNotifier::default();
+    let mut notifier = DesktopNotifier;
 
     // ── Control socket ───────────────────────────────────────────────────────
     let control_socket = control_socket_path()?;
@@ -136,85 +134,90 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         return Ok(());
     }
 
-    event_loop(
-        &listener,
-        &mut data_control,
+    let mut event_loop = EventLoop {
+        listener: &listener,
+        data_control: &mut data_control,
         niri_rx,
-        &mut host_clipboard,
-        &mut supervisor,
+        host_clipboard: &mut host_clipboard,
+        supervisor: &mut supervisor,
         picker_command,
-        &mut fallback,
-        &mut notifier,
-    )
+        fallback: &mut fallback,
+        notifier: &mut notifier,
+    };
+    event_loop.run()
 }
 
 // ─── Event loop ───────────────────────────────────────────────────────────────
 
-fn event_loop(
-    listener: &UnixListener,
-    data_control: &mut DataControlClient,
+struct EventLoop<'a> {
+    listener: &'a UnixListener,
+    data_control: &'a mut DataControlClient,
     niri_rx: mpsc::Receiver<NiriMessage>,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
+    supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: Option<PickerCommand>,
-    fallback: &mut FallbackArming,
-    notifier: &mut DesktopNotifier,
-) -> Result<(), String> {
-    loop {
-        // Flush pending Wayland requests before polling.
-        data_control.flush().ok();
+    fallback: &'a mut FallbackArming,
+    notifier: &'a mut DesktopNotifier,
+}
 
-        // ── Wayland events ────────────────────────────────────────────────
-        data_control.prepare_and_read().ok();
-        let wl_events = data_control.dispatch_pending().unwrap_or_else(|e| {
-            log::error!("d2b-clipd: wayland dispatch: {e}");
-            vec![]
-        });
-        for event in wl_events {
-            handle_wayland_event(
-                event,
-                host_clipboard,
-                notifier,
-                fallback,
-                supervisor,
-                &picker_command,
-            );
-        }
-
-        // ── Control socket accepts ────────────────────────────────────────
+impl EventLoop<'_> {
+    fn run(&mut self) -> Result<(), String> {
         loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let _ = handle_control_connection(
-                        stream,
-                        supervisor,
-                        &picker_command,
-                        host_clipboard,
-                        fallback,
-                        notifier,
-                    );
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(format!("control accept failed: {error}")),
+            // Flush pending Wayland requests before polling.
+            self.data_control.flush().ok();
+
+            // ── Wayland events ────────────────────────────────────────────────
+            self.data_control.prepare_and_read().ok();
+            let wl_events = self.data_control.dispatch_pending().unwrap_or_else(|e| {
+                log::error!("d2b-clipd: wayland dispatch: {e}");
+                vec![]
+            });
+            for event in wl_events {
+                handle_wayland_event(
+                    event,
+                    self.host_clipboard,
+                    self.notifier,
+                    self.fallback,
+                    self.supervisor,
+                    &self.picker_command,
+                );
             }
-        }
 
-        // ── Niri event channel (mpsc, drained each iteration) ─────────────
-        drain_niri_channel(&niri_rx, host_clipboard, fallback);
+            // ── Control socket accepts ────────────────────────────────────────
+            loop {
+                match self.listener.accept() {
+                    Ok((stream, _)) => {
+                        let _ = handle_control_connection(
+                            stream,
+                            self.supervisor,
+                            &self.picker_command,
+                            self.host_clipboard,
+                            self.fallback,
+                            self.notifier,
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => return Err(format!("control accept failed: {error}")),
+                }
+            }
 
-        // ── Periodic timeout checks ───────────────────────────────────────
-        let now = Instant::now();
-        if let Some(expired) = host_clipboard.check_paste_timeout(now) {
-            log::debug!("d2b-clipd: paste fd timed out (mime={})", expired.mime_type);
-            expired.close_with_reason(ReasonCode::FdWriteTimeout);
+            // ── Niri event channel (mpsc, drained each iteration) ─────────────
+            drain_niri_channel(&self.niri_rx, self.host_clipboard, self.fallback);
+
+            // ── Periodic timeout checks ───────────────────────────────────────
+            let now = Instant::now();
+            if let Some(expired) = self.host_clipboard.check_paste_timeout(now) {
+                log::debug!("d2b-clipd: paste fd timed out (mime={})", expired.mime_type);
+                expired.close_with_reason(ReasonCode::FdWriteTimeout);
+            }
+            if let Some(_reason) = self.supervisor.reap_expired(now) {
+                let _ = self.fallback.cancel_picker();
+            }
+            if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
+                log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        if let Some(_reason) = supervisor.reap_expired(now) {
-            let _ = fallback.cancel_picker();
-        }
-        if let FallbackTransition::Cleared(r) = fallback.on_timeout(now) {
-            log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
-        }
-        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -229,7 +232,11 @@ fn handle_wayland_event(
     picker_command: &Option<PickerCommand>,
 ) {
     match event {
-        HostClipboardEvent::SelectionChanged { offer, allowed_mimes, has_secret } => {
+        HostClipboardEvent::SelectionChanged {
+            offer,
+            allowed_mimes,
+            has_secret,
+        } => {
             // A new native selection supersedes any armed fallback.
             let _ = fallback.on_native_selection_changed();
             host_clipboard.on_host_selection_changed(offer, allowed_mimes, has_secret);
@@ -237,7 +244,11 @@ fn handle_wayland_event(
         HostClipboardEvent::SelectionCleared => {
             host_clipboard.on_host_selection_cleared();
         }
-        HostClipboardEvent::SourceSendRequest { source_id: _, mime_type, fd } => {
+        HostClipboardEvent::SourceSendRequest {
+            source_id: _,
+            mime_type,
+            fd,
+        } => {
             // Host application requesting paste data.  Hold the write FD.
             match host_clipboard.accept_paste_fd(fd, mime_type.clone()) {
                 Ok(dest) => {
@@ -246,7 +257,11 @@ fn handle_wayland_event(
                         dest.app_id
                     );
                     open_picker_or_arm_fallback(
-                        fallback, dest, notifier, supervisor, picker_command,
+                        fallback,
+                        dest,
+                        notifier,
+                        supervisor,
+                        picker_command,
                     );
                 }
                 Err(reason) => {
@@ -275,16 +290,22 @@ fn handle_control_connection(
     notifier: &mut DesktopNotifier,
 ) -> Result<(), String> {
     let response = match read_control_command(&stream) {
-        Ok(ControlCommand::Arm) => {
-            handle_arm(supervisor, picker_command, host_clipboard, fallback, notifier)
-        }
+        Ok(ControlCommand::Arm) => handle_arm(
+            supervisor,
+            picker_command,
+            host_clipboard,
+            fallback,
+            notifier,
+        ),
         Err(error) => Err(error),
     };
     let body = match response {
         Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
         Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
     };
-    stream.write_all(body.as_bytes()).map_err(|e| format!("write control response: {e}"))
+    stream
+        .write_all(body.as_bytes())
+        .map_err(|e| format!("write control response: {e}"))
 }
 
 /// `d2b clipboard picker` sends `{"type":"arm"}` to this socket.
@@ -317,11 +338,10 @@ fn handle_arm(
     ) {
         Ok(socket) => {
             // Drive picker handshake: read ClientHello, send OpenRequest.
-            let picker_version =
-                picker_handshake(socket, &request_id, &dest).unwrap_or_else(|e| {
-                    log::warn!("d2b-clipd: picker handshake failed: {e}");
-                    "unknown".to_owned()
-                });
+            let picker_version = picker_handshake(socket, &request_id, &dest).unwrap_or_else(|e| {
+                log::warn!("d2b-clipd: picker handshake failed: {e}");
+                "unknown".to_owned()
+            });
             log::debug!("d2b-clipd: picker opened (version={picker_version})");
             Ok("picker opened".to_owned())
         }
@@ -341,15 +361,17 @@ fn picker_handshake(
     request_id: &str,
     dest: &FocusedWindowSnapshot,
 ) -> Result<String, String> {
-    let mut reader =
-        BufReader::new(socket.try_clone().map_err(|e| format!("clone socket: {e}"))?);
+    let mut reader = BufReader::new(
+        socket
+            .try_clone()
+            .map_err(|e| format!("clone socket: {e}"))?,
+    );
     let mut hello_buf = Vec::new();
     reader
         .read_until(b'\n', &mut hello_buf)
         .map_err(|e| format!("read hello: {e}"))?;
-    let hello: PickerToDaemonMessage =
-        decode_frame(&hello_buf, PICKER_TO_DAEMON_MAX_FRAME_BYTES)
-            .map_err(|e| format!("decode hello: {e}"))?;
+    let hello: PickerToDaemonMessage = decode_frame(&hello_buf, PICKER_TO_DAEMON_MAX_FRAME_BYTES)
+        .map_err(|e| format!("decode hello: {e}"))?;
     let picker_version = match hello {
         PickerToDaemonMessage::ClientHello(ClientHello { picker_version, .. }) => picker_version,
         _ => return Err("first frame was not client_hello".to_owned()),
@@ -428,8 +450,7 @@ fn arm_native_fallback(
         let _ = fallback.capture_target_before_picker(dest.clone());
     }
     let entry_id = format!("host-{}", unix_millis());
-    let transition =
-        fallback.arm_selected_entry(entry_id, Instant::now(), Duration::from_secs(30));
+    let transition = fallback.arm_selected_entry(entry_id, Instant::now(), Duration::from_secs(30));
     if matches!(transition, FallbackTransition::Armed) {
         let label = dest
             .app_id
@@ -467,15 +488,14 @@ fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
             };
 
             // Send EventStream request and read the initial OK acknowledgement.
-            let _: serde_json::Value =
-                match client.request(&NiriRequest::EventStream) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log::warn!("d2b-clipd: niri EventStream: {e}");
-                        let _ = tx.send(NiriMessage::Disconnected);
-                        return;
-                    }
-                };
+            let _: serde_json::Value = match client.request(&NiriRequest::EventStream) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("d2b-clipd: niri EventStream: {e}");
+                    let _ = tx.send(NiriMessage::Disconnected);
+                    return;
+                }
+            };
 
             // Stream events continuously.
             loop {
@@ -575,10 +595,14 @@ enum ControlCommand {
 
 fn read_control_command(stream: &UnixStream) -> Result<ControlCommand, String> {
     let mut reader = BufReader::new(
-        stream.try_clone().map_err(|e| format!("clone control stream: {e}"))?,
+        stream
+            .try_clone()
+            .map_err(|e| format!("clone control stream: {e}"))?,
     );
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| format!("read control command: {e}"))?;
+    reader
+        .read_line(&mut line)
+        .map_err(|e| format!("read control command: {e}"))?;
     let value: serde_json::Value =
         serde_json::from_str(&line).map_err(|e| format!("invalid control JSON: {e}"))?;
     match value.get("type").and_then(|v| v.as_str()) {
@@ -616,12 +640,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match arg.as_str() {
             "--config" => {
                 config = Some(PathBuf::from(
-                    iter.next().ok_or_else(|| "--config requires a path".to_owned())?,
+                    iter.next()
+                        .ok_or_else(|| "--config requires a path".to_owned())?,
                 ));
             }
             "--picker" => {
                 picker = Some(PathBuf::from(
-                    iter.next().ok_or_else(|| "--picker requires a path".to_owned())?,
+                    iter.next()
+                        .ok_or_else(|| "--picker requires a path".to_owned())?,
                 ));
             }
             "--bridge-root" => {
@@ -639,11 +665,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--check-config" => check_config = true,
             "--oneshot" => oneshot = true,
             "--help" | "-h" => {
-                return Err(
-                    "usage: d2b-clipd --config <path> --bridge-root <path> \
+                return Err("usage: d2b-clipd --config <path> --bridge-root <path> \
                      [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"
-                        .to_owned(),
-                );
+                    .to_owned());
             }
             other => return Err(format!("unknown argument: {other}")),
         }

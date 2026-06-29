@@ -8,7 +8,7 @@
 > **Status:** live for
 > `d2b.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
 > The proxy emits these diagnostics at runtime in the
-> `d2b-wayland-filter` journal stream. They are not NixOS eval-time
+> `d2b-wayland-proxy` journal stream. They are not NixOS eval-time
 > `config.warnings`.
 
 Warnings are **advisory**: the NixOS configuration still evaluates and

@@ -16,7 +16,7 @@ deprecations ship one minor release before removal.
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
   point `console` and `audio` surfaces at ADR 0041 and the provider capability
   matrix.
-- The host-side `d2b-wayland-filter` proxy is source-built from the checked-out
+- The host-side `d2b-wayland-proxy` proxy is source-built from the checked-out
   workspace even when other host tools use release prebuilts, so local eval
   gates do not depend on a matching release tarball for this policy binary.
 - The `with-entra-id` eval workflow now overrides GitHub inputs to the
@@ -34,42 +34,48 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Added the initial `d2b-clipd` Rust crate foundation with picker NDJSON DTOs,
-  bounded framing, clipboard policy primitives, FD safety models, picker
-  supervision scaffolding, and fail-closed audit / droppable metrics queues.
-- `d2b-wayland-filter` now includes clipboard virtualization groundwork:
-  bridge socket configuration scaffolding, exact guest-client attribution
-  bookkeeping, v1 clipboard/DND policy helpers, and FD-handoff lifecycle tests.
-- `d2b-wayland-filter` virtual clipboard now correctly sends `wl_data_source.cancelled`
+- Added the `d2b-clipd` Rust crate with picker NDJSON DTOs, bounded framing,
+  clipboard policy primitives, FD safety models, picker supervision,
+  fail-closed audit / droppable metrics queues, host data-control integration,
+  and the ADR 0042 fallback arm control socket.
+- Renamed the host-side Wayland package/binary to `d2b-wayland-proxy`.
+- `d2b-wayland-proxy` now virtualizes the standard guest clipboard locally:
+  it advertises a synthetic `wl_data_device_manager`, never binds guest
+  `wl_data_*` objects into the host compositor clipboard namespace, routes
+  same-VM transfers inside the proxy, and keeps primary-selection, privileged
+  data-control, and DND denied.
+- `d2b-wayland-proxy` virtual clipboard now correctly sends `wl_data_source.cancelled`
   to the previous source owner when a new selection supersedes it; `vm_name`
   attribution is threaded through all four virtual clipboard handlers
   (`VirtualDataDeviceManagerHandler`, `VirtualDataSourceHandler`,
   `VirtualDataDeviceHandler`, `VirtualOfferHandler`) and logged at each
   clipboard lifecycle event (source created/destroyed, MIME announced,
-  selection set, offer received); source-gone EOF path is explicitly logged
-  with a bridge-handoff TODO marker.
-- `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
+  selection set, offer received); source-gone EOF paths fail closed with EOF.
+- `d2b-clipd` now has host/Niri integration with tolerant Niri JSON
   IPC models, bounded Unix-socket request/response helpers, focused-window
   best-effort attribution cache behavior, and fallback arming state-machine tests.
 - `d2b-clipd` now has a real desktop notification backend for bounded,
   content-free fallback-ready and failure notifications.
 - The flake now exports `packages.<system>.d2b-clipd` so host configurations can
   wire the clipboard authority user service without local package workarounds.
-- Added clipboard architecture Nix/docs/schema scaffolding: a default-off
-  `d2b.site.clipboard` module, user-service wiring for externally packaged
-  `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
-  input, bridge runtime path policy, eval assertions, and reference docs for the
-  authority split, picker protocol, and policy caps.
-- Added `d2b clipboard arm` CLI subcommand stub for the ADR 0042 two-step fallback
-  paste arming workflow; returns a typed error when `d2b-clipd` is not running.
+- Added clipboard architecture Nix/docs/schema wiring: a default-off
+  `d2b.site.clipboard` module, user-service wiring for `d2b-clipd`, explicit
+  picker package/path configuration with no bundled GPL input, bridge runtime
+  path policy, eval assertions, and reference docs for the authority split,
+  picker protocol, and policy caps.
+- Added `d2b clipboard arm` CLI subcommand for the ADR 0042 two-step fallback
+  paste arming workflow; it sends an arm request to the running `d2b-clipd`
+  control socket and surfaces typed failures when the daemon is unavailable.
 - Added ADR 0042 test gates: scaffold-detection test asserting `d2b-clipd`
   uses no `thread::park()` stub; picker handshake integration test
   (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
   flake export of `d2b-clipd`, `Clipboard` subcommand existence in the CLI,
-  Wayland filter synthetic-clipboard invariant, and substrate-gap contract;
-  `clipboard-picker-smoke.sh` Layer-2 script for `d2b host validate --wave p0Cb`.
+  Wayland proxy synthetic-clipboard invariant, and no-regression checks against
+  reintroducing a substrate-gap marker;
+  `tests/integration/live/clipboard-picker-smoke.sh` Layer-2 script for
+  `d2b host validate --wave p0Cb`.
 - Added `p0Cb` readiness wave to `WAVE_CATALOG` and `readinessWaveSpecs`
-  covering the clipboard authority foundation smoke validation.
+  covering clipboard authority smoke validation.
 - `d2b-clipd` now implements the full ADR 0042 host-authority event loop:
   connects to the host Wayland compositor via `ext-data-control-v1`
   (preferring the stable extension, falling back to `zwlr-data-control-v1`

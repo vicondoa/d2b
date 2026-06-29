@@ -178,13 +178,19 @@ impl WlState {
     fn try_create_device(&mut self, qh: &QueueHandle<Self>) {
         let Some(seat) = &self.seat else { return };
         match &self.manager_state {
-            DataControlManagerState::Ext { manager, device: None } => {
+            DataControlManagerState::Ext {
+                manager,
+                device: None,
+            } => {
                 let dev = manager.get_data_device(seat, qh, ());
                 if let DataControlManagerState::Ext { device, .. } = &mut self.manager_state {
                     *device = Some(dev);
                 }
             }
-            DataControlManagerState::Zwlr { manager, device: None } => {
+            DataControlManagerState::Zwlr {
+                manager,
+                device: None,
+            } => {
                 let dev = manager.get_data_device(seat, qh, ());
                 if let DataControlManagerState::Zwlr { device, .. } = &mut self.manager_state {
                     *device = Some(dev);
@@ -255,14 +261,19 @@ impl WlState {
 
         let all_mimes: Vec<String> = pending.mimes.clone();
         let has_secret = has_secret_hint(all_mimes.iter().map(String::as_str));
-        let allowed_mimes: Vec<String> =
-            pending.mimes.into_iter().filter(|m| is_mime_allowed(m)).collect();
+        let allowed_mimes: Vec<String> = pending
+            .mimes
+            .into_iter()
+            .filter(|m| is_mime_allowed(m))
+            .collect();
 
         // Emit the event regardless so the host clipboard can track attribution
         // and clear stale state.  offer is None when no allowed MIME types exist
         // (content unpasteable) or when the live proxy is unavailable.
         let offer = if allowed_mimes.is_empty() {
-            if let Some(o) = live { o.destroy(); }
+            if let Some(o) = live {
+                o.destroy();
+            }
             None
         } else {
             live
@@ -286,32 +297,46 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WlState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let wl_registry::Event::Global { name, interface, version } = event else {
+        let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        else {
             return;
         };
         match interface.as_str() {
             "wl_seat" if state.seat.is_none() => {
-                let seat =
-                    registry.bind::<wl_seat::WlSeat, _, _>(name, 1_u32.min(version), qh, ());
+                let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, 1_u32.min(version), qh, ());
                 state.seat = Some(seat);
                 state.try_create_device(qh);
             }
             "ext_data_control_manager_v1" if state.manager_state.is_probing() => {
-                let manager = registry.bind::<
-                    ext_data_control_manager_v1::ExtDataControlManagerV1,
-                    _,
-                    _,
-                >(name, 1_u32.min(version), qh, ());
-                state.manager_state = DataControlManagerState::Ext { manager, device: None };
+                let manager = registry
+                    .bind::<ext_data_control_manager_v1::ExtDataControlManagerV1, _, _>(
+                        name,
+                        1_u32.min(version),
+                        qh,
+                        (),
+                    );
+                state.manager_state = DataControlManagerState::Ext {
+                    manager,
+                    device: None,
+                };
                 state.try_create_device(qh);
             }
             "zwlr_data_control_manager_v1" if state.manager_state.is_probing() => {
-                let manager = registry.bind::<
-                    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-                    _,
-                    _,
-                >(name, 1_u32.min(version), qh, ());
-                state.manager_state = DataControlManagerState::Zwlr { manager, device: None };
+                let manager = registry
+                    .bind::<zwlr_data_control_manager_v1::ZwlrDataControlManagerV1, _, _>(
+                        name,
+                        1_u32.min(version),
+                        qh,
+                        (),
+                    );
+                state.manager_state = DataControlManagerState::Zwlr {
+                    manager,
+                    device: None,
+                };
                 state.try_create_device(qh);
             }
             _ => {}
@@ -386,7 +411,9 @@ impl Dispatch<ext_data_control_source_v1::ExtDataControlSourceV1, u64> for WlSta
                 });
             }
             Event::Cancelled => {
-                state.events.push(HostClipboardEvent::SourceCancelled { source_id });
+                state
+                    .events
+                    .push(HostClipboardEvent::SourceCancelled { source_id });
             }
             _ => {}
         }
@@ -456,7 +483,9 @@ impl Dispatch<zwlr_data_control_source_v1::ZwlrDataControlSourceV1, u64> for WlS
                 });
             }
             Event::Cancelled => {
-                state.events.push(HostClipboardEvent::SourceCancelled { source_id });
+                state
+                    .events
+                    .push(HostClipboardEvent::SourceCancelled { source_id });
             }
             _ => {}
         }
@@ -479,7 +508,9 @@ pub enum DataControlError {
     Connect(String),
     #[error("Wayland protocol error: {0}")]
     Protocol(String),
-    #[error("no data-control protocol available (tried ext_data_control_manager_v1 and zwlr_data_control_manager_v1)")]
+    #[error(
+        "no data-control protocol available (tried ext_data_control_manager_v1 and zwlr_data_control_manager_v1)"
+    )]
     ProtocolUnavailable,
 }
 
@@ -488,8 +519,8 @@ impl DataControlClient {
     /// `$WAYLAND_SOCKET`.  Performs an initial roundtrip to discover globals
     /// and a second roundtrip to finish device creation.
     pub fn connect() -> Result<Self, DataControlError> {
-        let conn = Connection::connect_to_env()
-            .map_err(|e| DataControlError::Connect(e.to_string()))?;
+        let conn =
+            Connection::connect_to_env().map_err(|e| DataControlError::Connect(e.to_string()))?;
         let mut event_queue: EventQueue<WlState> = conn.new_event_queue();
         let mut state = WlState::new();
         let qh = event_queue.handle();
@@ -520,7 +551,11 @@ impl DataControlClient {
             state.manager_state.protocol_name()
         );
 
-        Ok(Self { conn, event_queue, state })
+        Ok(Self {
+            conn,
+            event_queue,
+            state,
+        })
     }
 
     /// Create a new data-control source that offers the given MIME types.
@@ -553,12 +588,19 @@ impl DataControlClient {
     /// VM clipboard to host).
     pub fn set_selection(&self, source: &DataControlSource) -> Result<(), DataControlError> {
         match (&self.state.manager_state, source) {
-            (DataControlManagerState::Ext { device: Some(dev), .. }, DataControlSource::Ext(s)) => {
+            (
+                DataControlManagerState::Ext {
+                    device: Some(dev), ..
+                },
+                DataControlSource::Ext(s),
+            ) => {
                 dev.set_selection(Some(s));
                 Ok(())
             }
             (
-                DataControlManagerState::Zwlr { device: Some(dev), .. },
+                DataControlManagerState::Zwlr {
+                    device: Some(dev), ..
+                },
                 DataControlSource::Zwlr(s),
             ) => {
                 dev.set_selection(Some(s));
@@ -570,7 +612,9 @@ impl DataControlClient {
 
     /// Flush outgoing requests to the compositor.
     pub fn flush(&self) -> Result<(), DataControlError> {
-        self.conn.flush().map_err(|e| DataControlError::Protocol(e.to_string()))
+        self.conn
+            .flush()
+            .map_err(|e| DataControlError::Protocol(e.to_string()))
     }
 
     /// Dispatch pending events and return any `HostClipboardEvent`s collected.
@@ -637,10 +681,17 @@ mod tests {
         // Filtering happens in finalize_selection.
         let all: Vec<String> = pending.mimes.clone();
         let has_secret = has_secret_hint(all.iter().map(String::as_str));
-        let allowed: Vec<String> =
-            pending.mimes.into_iter().filter(|m| is_mime_allowed(m)).collect();
+        let allowed: Vec<String> = pending
+            .mimes
+            .into_iter()
+            .filter(|m| is_mime_allowed(m))
+            .collect();
         assert!(has_secret, "password hint must be detected");
-        assert_eq!(allowed, ["text/plain", "text/html"], "only allowlisted mimes");
+        assert_eq!(
+            allowed,
+            ["text/plain", "text/html"],
+            "only allowlisted mimes"
+        );
     }
 
     #[test]
@@ -648,7 +699,10 @@ mod tests {
         let mut state = WlState::new();
         state.on_selection_ext(None);
         assert!(
-            matches!(state.events.as_slice(), [HostClipboardEvent::SelectionCleared]),
+            matches!(
+                state.events.as_slice(),
+                [HostClipboardEvent::SelectionCleared]
+            ),
             "expected SelectionCleared"
         );
     }
@@ -656,7 +710,12 @@ mod tests {
     #[test]
     fn offer_with_no_allowed_mimes_still_emits_selection_changed() {
         let mut state = WlState::new();
-        state.pending.insert(7, PendingOffer { mimes: vec!["application/octet-stream".to_owned()] });
+        state.pending.insert(
+            7,
+            PendingOffer {
+                mimes: vec!["application/octet-stream".to_owned()],
+            },
+        );
         state.finalize_selection(7);
         // A SelectionChanged is emitted (attribution tracking) but offer is None
         // (the content cannot be pasted since all MIME types are policy-denied).

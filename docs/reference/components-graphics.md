@@ -20,7 +20,7 @@ Display capability boundaries are documented in
 When `graphics.crossDomainTrusted = true` and
 `graphics.waylandFilter.enable = true`, the guest-side
 `wl-cross-domain-proxy` bridges the virtio-gpu cross-domain transport to
-the guest socket, while the host-side `d2b-wayland-filter` runs as a
+the guest socket, while the host-side `d2b-wayland-proxy` runs as a
 broker-spawned `wayland-proxy` role and mediates access to the real host
 compositor. `d2bd` supervises the daemon-owned process DAG and asks
 `d2b-priv-broker` to spawn the wayland proxy, GPU sidecar
@@ -34,7 +34,7 @@ runners. The GPU sidecar runs as the dedicated per-VM
 |---|---|---|---|
 | `d2b.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
-| `d2b.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
+| `d2b.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-proxy` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
 | `d2b.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
 | `d2b.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side filter runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
 | `d2b.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
