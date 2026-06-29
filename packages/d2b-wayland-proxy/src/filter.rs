@@ -13,7 +13,9 @@ use std::{
     collections::{HashMap, HashSet},
     os::fd::OwnedFd,
     os::unix::net::UnixStream,
+    path::PathBuf,
     rc::{Rc, Weak},
+    time::Instant,
 };
 use wl_proxy::{
     client::{Client, ClientHandler},
@@ -46,7 +48,7 @@ use wl_proxy::{
 };
 
 use crate::{
-    bridge::BridgeHandoff,
+    bridge::{BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine},
     clipboard::{ClipboardMimePolicy, ClipboardRoute, MimeDecision},
     diag::{DiagRateLimiter, DropReason},
     dmabuf::DmabufHandler,
@@ -130,7 +132,10 @@ impl WlDisplayHandler for FilterDisplayHandler {
 #[derive(Debug)]
 pub struct VirtualClipboardState {
     vm_name: String,
+    bridge_path: Option<PathBuf>,
     bridge: Option<UnixStream>,
+    bridge_reconnect: BridgeReconnectMachine,
+    next_bridge_retry: Option<Instant>,
     mime_policy: ClipboardMimePolicy,
     devices: Vec<Weak<WlDataDevice>>,
     sources: HashMap<u64, Rc<RefCell<VirtualSource>>>,
@@ -150,10 +155,13 @@ struct VirtualOffer {
 }
 
 impl VirtualClipboardState {
-    pub fn new(vm_name: String, bridge: Option<UnixStream>) -> Self {
+    pub fn new(vm_name: String, bridge_config: BridgeConfig) -> Self {
         Self {
             vm_name,
-            bridge,
+            bridge_path: bridge_config.socket_path.clone(),
+            bridge: None,
+            bridge_reconnect: BridgeReconnectMachine::new(&bridge_config),
+            next_bridge_retry: None,
             mime_policy: ClipboardMimePolicy::v1_defaults(),
             devices: Vec::new(),
             sources: HashMap::new(),
@@ -232,8 +240,10 @@ impl VirtualClipboardState {
         match self.mime_policy.decide(self.route(), mime_type) {
             MimeDecision::PreserveSameVmRichMime => source.send_send(mime_type, fd),
             MimeDecision::MaterializeViaBridge => {
-                if let Some(bridge) = &mut self.bridge {
-                    let _ = bridge.handoff_transfer_fd(fd);
+                if let Some(bridge) = self.ensure_bridge_connected()
+                    && bridge.handoff_transfer_fd(fd) == crate::bridge::HandoffStatus::Failed
+                {
+                    self.mark_bridge_disconnected();
                 }
             }
             MimeDecision::Deny => {}
@@ -245,10 +255,60 @@ impl VirtualClipboardState {
     }
 
     fn route(&self) -> ClipboardRoute {
-        if self.bridge.is_some() {
+        if self.bridge_path.is_some() {
             ClipboardRoute::HostOrCrossRealm
         } else {
             ClipboardRoute::SameVm
+        }
+    }
+
+    fn ensure_bridge_connected(&mut self) -> Option<&mut UnixStream> {
+        if self.bridge.is_some() {
+            return self.bridge.as_mut();
+        }
+        let path = self.bridge_path.clone()?;
+        let now = Instant::now();
+        match self.bridge_reconnect.state() {
+            BridgeConnectionState::Disabled => return None,
+            BridgeConnectionState::Connected => self.bridge_reconnect.disconnected(),
+            BridgeConnectionState::Backoff { .. } => {
+                if self.next_bridge_retry.is_some_and(|retry| retry > now) {
+                    return None;
+                }
+                self.bridge_reconnect.retry_due();
+            }
+            BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
+            BridgeConnectionState::Connecting { .. } => {}
+        }
+        match UnixStream::connect(&path) {
+            Ok(stream) => {
+                self.bridge_reconnect.connect_succeeded();
+                self.next_bridge_retry = None;
+                self.bridge = Some(stream);
+            }
+            Err(error) => {
+                log::debug!(
+                    "[d2b-wlproxy] vm={} clipboard bridge connect failed at {}: {}",
+                    self.vm_name,
+                    path.display(),
+                    error
+                );
+                self.bridge_reconnect.connect_failed();
+                self.schedule_bridge_retry();
+            }
+        }
+        self.bridge.as_mut()
+    }
+
+    fn mark_bridge_disconnected(&mut self) {
+        self.bridge.take();
+        self.bridge_reconnect.disconnected();
+        self.schedule_bridge_retry();
+    }
+
+    fn schedule_bridge_retry(&mut self) {
+        if let BridgeConnectionState::Backoff { delay, .. } = self.bridge_reconnect.state() {
+            self.next_bridge_retry = Some(Instant::now() + delay);
         }
     }
 }
@@ -855,7 +915,7 @@ mod tests {
     fn clipboard() -> Rc<RefCell<VirtualClipboardState>> {
         Rc::new(RefCell::new(VirtualClipboardState::new(
             "work".to_owned(),
-            None,
+            BridgeConfig::disabled(),
         )))
     }
 

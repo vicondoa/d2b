@@ -259,19 +259,10 @@ fn accept_loop(
     let policy = Rc::new(policy);
     let vm = policy.vm_name.clone();
     let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
-    let bridge = bridge_config.socket_path.as_ref().and_then(|path| {
-        match std::os::unix::net::UnixStream::connect(path) {
-            Ok(stream) => Some(stream),
-            Err(error) => {
-                log::warn!(
-                    "[d2b-wlproxy] vm={vm} clipboard bridge unavailable at {}: {error}",
-                    path.display()
-                );
-                None
-            }
-        }
-    });
-    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(vm.clone(), bridge)));
+    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(
+        vm.clone(),
+        bridge_config,
+    )));
     let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {
