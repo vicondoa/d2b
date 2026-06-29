@@ -326,7 +326,7 @@ in
         };
         command = lib.mkOption {
           type = lib.types.str;
-          default = "d2b clipboard picker";
+          default = "d2b clipboard arm";
           description = "Command operators bind in niri for the explicit fallback action.";
         };
         notification = lib.mkOption {
@@ -494,10 +494,10 @@ in
         ExecStart = "${clipdExec} ${serviceArgs}";
         Restart = "on-failure";
         RestartSec = "2s";
+        UMask = "0000";
         RuntimeDirectory = "d2b-clipd";
         RuntimeDirectoryMode = "0700";
         NoNewPrivileges = true;
-        PrivateTmp = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         RestrictRealtime = true;

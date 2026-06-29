@@ -258,7 +258,14 @@ impl BridgeHandoff for UnixStream {
             nix::sys::socket::MsgFlags::MSG_NOSIGNAL | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
             None,
         ) {
-            Ok(_) => HandoffStatus::Delivered,
+            Ok(n) if n == frame.len() => HandoffStatus::Delivered,
+            Ok(n) => {
+                log::debug!(
+                    "d2b-wayland-proxy: bridge fd handoff short write: {n}/{}",
+                    frame.len()
+                );
+                HandoffStatus::Failed
+            }
             Err(error) => {
                 log::debug!("d2b-wayland-proxy: bridge fd handoff failed: {error}");
                 HandoffStatus::Failed

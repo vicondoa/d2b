@@ -97,11 +97,28 @@ pub fn emit_user_visible_failure<N: Notifier>(
     source_realm: &str,
     destination_realm: &str,
 ) {
+    if !is_user_visible_failure(reason) {
+        return;
+    }
     notifier.notify(user_visible_failure(
         reason,
         source_realm,
         destination_realm,
     ));
+}
+
+fn is_user_visible_failure(reason: ReasonCode) -> bool {
+    matches!(
+        reason,
+        ReasonCode::PickerNotConfigured
+            | ReasonCode::PickerCrashed
+            | ReasonCode::PickerTimeout
+            | ReasonCode::SourceMaterializeTimeout
+            | ReasonCode::FdWriteTimeout
+            | ReasonCode::BridgeUnavailable
+            | ReasonCode::MemoryCapExceeded
+            | ReasonCode::AuditFailure
+    )
 }
 
 pub fn sanitize_notification_text(input: &str, max_chars: usize) -> String {
@@ -149,7 +166,14 @@ mod tests {
     fn failure_notification_is_emitted_through_notifier() {
         let mut notifier = RecordingNotifier::default();
         emit_user_visible_failure(&mut notifier, ReasonCode::PolicyDenied, "Host", "Personal");
+        assert_eq!(notifier.notifications.len(), 0);
+        emit_user_visible_failure(
+            &mut notifier,
+            ReasonCode::PickerNotConfigured,
+            "Host",
+            "Personal",
+        );
         assert_eq!(notifier.notifications.len(), 1);
-        assert!(notifier.notifications[0].body.contains("policy denied"));
+        assert!(notifier.notifications[0].body.contains("not configured"));
     }
 }

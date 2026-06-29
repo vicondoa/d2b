@@ -132,6 +132,16 @@ in
       # assertion in `assertions.nix` is the sole supervisor-removal
       # error path; the friendly message text matches the original
       # mkRemovedOptionModule wording verbatim.
+      imports = [
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "enable" ] [ "graphics" "waylandProxy" "enable" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "debugLogging" ] [ "graphics" "waylandProxy" "debugLogging" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "byteLogging" ] [ "graphics" "waylandProxy" "byteLogging" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "denyGlobals" ] [ "graphics" "waylandProxy" "denyGlobals" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "allowGlobals" ] [ "graphics" "waylandProxy" "allowGlobals" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "maxVersions" ] [ "graphics" "waylandProxy" "maxVersions" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "dmabufAllow" ] [ "graphics" "waylandProxy" "dmabufAllow" ])
+        (lib.mkAliasOptionModule [ "graphics" "waylandFilter" "dmabufDeny" ] [ "graphics" "waylandProxy" "dmabufDeny" ])
+      ];
       options = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -676,47 +686,6 @@ in
             feedback v4/v5 available while hiding known-bad modifiers from
             guests.
           '';
-        };
-
-        graphics.waylandFilter.enable = lib.mkOption {
-          type = lib.types.bool;
-          default = config.graphics.waylandProxy.enable;
-          description = "Deprecated alias for `graphics.waylandProxy.enable`.";
-        };
-        graphics.waylandFilter.debugLogging = lib.mkOption {
-          type = lib.types.bool;
-          default = config.graphics.waylandProxy.debugLogging;
-          description = "Deprecated alias for `graphics.waylandProxy.debugLogging`.";
-        };
-        graphics.waylandFilter.byteLogging = lib.mkOption {
-          type = lib.types.bool;
-          default = config.graphics.waylandProxy.byteLogging;
-          description = "Deprecated alias for `graphics.waylandProxy.byteLogging`.";
-        };
-        graphics.waylandFilter.denyGlobals = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = config.graphics.waylandProxy.denyGlobals;
-          description = "Deprecated alias for `graphics.waylandProxy.denyGlobals`.";
-        };
-        graphics.waylandFilter.allowGlobals = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = config.graphics.waylandProxy.allowGlobals;
-          description = "Deprecated alias for `graphics.waylandProxy.allowGlobals`.";
-        };
-        graphics.waylandFilter.maxVersions = lib.mkOption {
-          type = lib.types.attrsOf lib.types.ints.positive;
-          default = config.graphics.waylandProxy.maxVersions;
-          description = "Deprecated alias for `graphics.waylandProxy.maxVersions`.";
-        };
-        graphics.waylandFilter.dmabufAllow = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = config.graphics.waylandProxy.dmabufAllow;
-          description = "Deprecated alias for `graphics.waylandProxy.dmabufAllow`.";
-        };
-        graphics.waylandFilter.dmabufDeny = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = config.graphics.waylandProxy.dmabufDeny;
-          description = "Deprecated alias for `graphics.waylandProxy.dmabufDeny`.";
         };
 
         graphics.niriBorderColor = lib.mkOption {

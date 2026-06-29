@@ -168,6 +168,10 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         self.active.as_ref().map(|active| active.deadline)
     }
 
+    pub fn active_socket(&self) -> Option<&UnixStream> {
+        self.active.as_ref().map(|active| &active.parent_socket)
+    }
+
     pub fn launch(
         &mut self,
         request_id: String,

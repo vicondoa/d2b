@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::Permissions;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -224,7 +223,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
 
 struct EventLoop<'a> {
     listener: &'a UnixListener,
-    control_streams: Vec<UnixStream>,
+    control_streams: Vec<ControlStream>,
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
     data_control: &'a mut DataControlClient,
@@ -246,6 +245,7 @@ impl EventLoop<'_> {
             let (
                 wayland_ready,
                 control_ready,
+                picker_ready,
                 control_stream_ready,
                 bridge_listener_ready,
                 bridge_stream_ready,
@@ -260,9 +260,15 @@ impl EventLoop<'_> {
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
                     ),
                 ];
+                if let Some(socket) = self.supervisor.active_socket() {
+                    poll_fds.push(PollFd::new(
+                        socket,
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ));
+                }
                 for stream in &self.control_streams {
                     poll_fds.push(PollFd::new(
-                        stream,
+                        &stream.stream,
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
                     ));
                 }
@@ -283,9 +289,14 @@ impl EventLoop<'_> {
                     Err(rustix::io::Errno::INTR) => continue,
                     Err(error) => return Err(format!("poll failed: {error}")),
                 }
-                let bridge_listener_offset = 2 + self.control_streams.len();
+                let control_offset = 2 + usize::from(self.supervisor.active_socket().is_some());
+                let bridge_listener_offset = control_offset + self.control_streams.len();
                 let bridge_stream_offset = bridge_listener_offset + self.bridge_listeners.len();
-                let control_stream_ready = poll_fds[2..bridge_listener_offset]
+                let picker_ready = self.supervisor.active_socket().is_some()
+                    && poll_fds[2]
+                        .revents()
+                        .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP);
+                let control_stream_ready = poll_fds[control_offset..bridge_listener_offset]
                     .iter()
                     .enumerate()
                     .filter_map(|(index, fd)| {
@@ -313,11 +324,14 @@ impl EventLoop<'_> {
                         .revents()
                         .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
                     poll_fds[1].revents().contains(PollFlags::IN),
+                    picker_ready,
                     control_stream_ready,
                     bridge_listener_ready,
                     bridge_stream_ready,
                 )
             };
+
+            drain_niri_channel(&self.niri_rx, self.host_clipboard, self.fallback);
 
             // ── Wayland events ────────────────────────────────────────────────
             if wayland_ready {
@@ -350,7 +364,10 @@ impl EventLoop<'_> {
                                 );
                                 continue;
                             }
-                            self.control_streams.push(stream);
+                            self.control_streams.push(ControlStream {
+                                stream,
+                                read_buffer: Vec::new(),
+                            });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(error) => return Err(format!("control accept failed: {error}")),
@@ -360,15 +377,18 @@ impl EventLoop<'_> {
 
             for index in control_stream_ready.into_iter().rev() {
                 if index < self.control_streams.len() {
-                    let stream = self.control_streams.swap_remove(index);
-                    let _ = handle_control_connection(
-                        stream,
+                    let mut stream = self.control_streams.swap_remove(index);
+                    match handle_control_stream(
+                        &mut stream,
                         self.supervisor,
                         &self.picker_command,
                         self.host_clipboard,
                         self.fallback,
                         self.notifier,
-                    );
+                    ) {
+                        ControlStreamStatus::Done => {}
+                        ControlStreamStatus::Incomplete => self.control_streams.push(stream),
+                    }
                 }
             }
 
@@ -380,41 +400,46 @@ impl EventLoop<'_> {
 
             for index in bridge_stream_ready.into_iter().rev() {
                 if index < self.bridge_streams.len() {
-                    let stream = self.bridge_streams.swap_remove(index);
-                    handle_bridge_stream(
-                        stream,
+                    let mut stream = self.bridge_streams.swap_remove(index);
+                    match handle_bridge_stream(
+                        &mut stream,
                         self.host_clipboard,
                         self.notifier,
                         self.fallback,
                         self.supervisor,
                         &self.picker_command,
                         self.audit_queue,
-                    );
+                    ) {
+                        BridgeStreamStatus::Done => {}
+                        BridgeStreamStatus::Incomplete => self.bridge_streams.push(stream),
+                    }
                 }
             }
 
             // ── Picker responses ──────────────────────────────────────────────
-            match self
-                .supervisor
-                .poll_active(PICKER_TO_DAEMON_MAX_FRAME_BYTES)
-            {
-                Ok(PickerPoll::Message(message)) => handle_picker_message(
-                    message,
-                    self.data_control,
-                    self.host_clipboard,
-                    self.notifier,
-                    self.fallback,
-                    self.supervisor,
-                ),
-                Ok(PickerPoll::Closed) => {
-                    let _ = self.fallback.cancel_picker();
-                    let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
-                }
-                Ok(PickerPoll::Incomplete) => {}
-                Err(error) => {
-                    log::warn!("d2b-clipd: picker frame failed: {error}");
-                    let _ = self.fallback.cancel_picker();
-                    let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
+            if picker_ready {
+                match self
+                    .supervisor
+                    .poll_active(PICKER_TO_DAEMON_MAX_FRAME_BYTES)
+                {
+                    Ok(PickerPoll::Message(message)) => handle_picker_message(
+                        message,
+                        self.data_control,
+                        self.host_clipboard,
+                        self.notifier,
+                        self.fallback,
+                        self.supervisor,
+                    ),
+                    Ok(PickerPoll::Closed) => {
+                        let _ = self.fallback.cancel_picker();
+                        let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
+                    }
+                    Ok(PickerPoll::Incomplete) => {}
+                    Err(error) => {
+                        log::warn!("d2b-clipd: picker frame failed: {error}");
+                        let _ = self.fallback.cancel_picker();
+                        let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
+                    }
                 }
             }
 
@@ -475,6 +500,8 @@ struct BridgeListener {
 struct BridgeStream {
     vm_name: String,
     stream: UnixStream,
+    read_buffer: Vec<u8>,
+    received_fds: Vec<OwnedFd>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -507,8 +534,6 @@ fn install_bridge_listeners(
             .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
-        std::fs::set_permissions(parent, Permissions::from_mode(0o700))
-            .map_err(|e| format!("chmod bridge socket dir {}: {e}", parent.display()))?;
         if path.exists() {
             let meta = std::fs::symlink_metadata(&path)
                 .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
@@ -569,6 +594,8 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
                 streams.push(BridgeStream {
                     vm_name: bridge.vm_name.clone(),
                     stream,
+                    read_buffer: Vec::new(),
+                    received_fds: Vec::new(),
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -583,16 +610,21 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
     }
 }
 
+enum BridgeStreamStatus {
+    Done,
+    Incomplete,
+}
+
 fn handle_bridge_stream(
-    bridge: BridgeStream,
+    bridge: &mut BridgeStream,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
     audit_queue: &mut AuditQueue,
-) {
-    match recv_bridge_frame(&bridge.vm_name, &bridge.stream) {
+) -> BridgeStreamStatus {
+    match recv_bridge_frame(bridge) {
         Ok(request) => handle_bridge_paste_request(
             request,
             host_clipboard,
@@ -602,13 +634,16 @@ fn handle_bridge_stream(
             picker_command,
             audit_queue,
         ),
+        Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
         Err(error) => {
             log::warn!(
-                "d2b-clipd: bridge frame failed for vm={}: {error}",
-                bridge.vm_name
+                "d2b-clipd: bridge frame failed for vm={}: {}",
+                bridge.vm_name,
+                error.message()
             );
         }
     }
+    BridgeStreamStatus::Done
 }
 
 fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> Result<(), String> {
@@ -625,36 +660,79 @@ fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> Result<(), St
     }
 }
 
-fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePasteRequest, String> {
-    let mut buf = [0_u8; 4096];
-    let mut iov = [std::io::IoSliceMut::new(&mut buf)];
-    let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(1))];
-    let mut control = rustix::net::RecvAncillaryBuffer::new(&mut cmsg_space);
-    let msg = rustix::net::recvmsg(
-        stream,
-        &mut iov,
-        &mut control,
-        rustix::net::RecvFlags::DONTWAIT | rustix::net::RecvFlags::CMSG_CLOEXEC,
-    )
-    .map_err(|e| e.to_string())?;
-    let bytes = msg.bytes;
-    let mut received_fds = Vec::new();
-    for cmsg in control.drain() {
-        if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
-            received_fds.extend(fds);
+#[derive(Debug)]
+enum BridgeReadError {
+    Incomplete,
+    Invalid(String),
+}
+
+impl BridgeReadError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Incomplete => "incomplete bridge frame",
+            Self::Invalid(message) => message,
         }
     }
-    if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
-        drop(received_fds);
-        return Err("bridge control message truncated".to_owned());
-    }
-    let frame: BridgeFrame = match serde_json::from_slice(&buf[..bytes]) {
-        Ok(frame) => frame,
-        Err(error) => {
-            drop(received_fds);
-            return Err(error.to_string());
+}
+
+fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
+    loop {
+        let mut buf = [0_u8; 4096];
+        let mut iov = [std::io::IoSliceMut::new(&mut buf)];
+        let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+        let mut control = rustix::net::RecvAncillaryBuffer::new(&mut cmsg_space);
+        let msg = match rustix::net::recvmsg(
+            &stream.stream,
+            &mut iov,
+            &mut control,
+            rustix::net::RecvFlags::DONTWAIT | rustix::net::RecvFlags::CMSG_CLOEXEC,
+        ) {
+            Ok(msg) => msg,
+            Err(rustix::io::Errno::AGAIN) => {
+                return if stream.read_buffer.contains(&b'\n') {
+                    parse_bridge_frame(stream)
+                } else {
+                    Err(BridgeReadError::Incomplete)
+                };
+            }
+            Err(error) => return Err(BridgeReadError::Invalid(error.to_string())),
+        };
+        if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
+            return Err(BridgeReadError::Invalid(
+                "bridge control message truncated".to_owned(),
+            ));
         }
-    };
+        if msg.bytes == 0 {
+            return Err(BridgeReadError::Invalid(
+                "bridge stream closed before complete frame".to_owned(),
+            ));
+        }
+        stream.read_buffer.extend_from_slice(&buf[..msg.bytes]);
+        for cmsg in control.drain() {
+            if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
+                stream.received_fds.extend(fds);
+            }
+        }
+        if stream.read_buffer.len() > 4096 {
+            return Err(BridgeReadError::Invalid(
+                "bridge frame too large".to_owned(),
+            ));
+        }
+        if stream.read_buffer.contains(&b'\n') {
+            return parse_bridge_frame(stream);
+        }
+    }
+}
+
+fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
+    let newline = stream
+        .read_buffer
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or(BridgeReadError::Incomplete)?;
+    let frame_bytes = stream.read_buffer.drain(..=newline).collect::<Vec<_>>();
+    let frame: BridgeFrame = serde_json::from_slice(&frame_bytes)
+        .map_err(|e| BridgeReadError::Invalid(e.to_string()))?;
     match frame {
         BridgeFrame::VmPasteRequest {
             vm_name,
@@ -662,23 +740,28 @@ fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePas
             source_id,
             source_attribution,
         } => {
-            let Some(fd) = received_fds.pop() else {
-                return Err("bridge frame did not include transfer fd".to_owned());
-            };
-            drop(received_fds);
-            if vm_name != expected_vm {
-                drop(fd);
-                return Err(format!(
-                    "bridge vm mismatch: expected {expected_vm}, got {vm_name}"
+            if stream.received_fds.is_empty() {
+                return Err(BridgeReadError::Invalid(
+                    "bridge frame did not include transfer fd".to_owned(),
                 ));
+            };
+            let fd = stream.received_fds.remove(0);
+            if vm_name != stream.vm_name {
+                drop(fd);
+                return Err(BridgeReadError::Invalid(format!(
+                    "bridge vm mismatch: expected {}, got {vm_name}",
+                    stream.vm_name
+                )));
             }
             if source_attribution != BridgeAttribution::ExactClient {
                 drop(fd);
-                return Err("bridge frame did not carry exact attribution".to_owned());
+                return Err(BridgeReadError::Invalid(
+                    "bridge frame did not carry exact attribution".to_owned(),
+                ));
             }
             log::debug!(
                 "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
-                bounded_label(&vm_name),
+                bounded_label(&stream.vm_name),
                 source_id,
                 bounded_mime(&mime_type)
             );
@@ -867,31 +950,99 @@ fn handle_wayland_event(
 
 // ─── Control socket handler ───────────────────────────────────────────────────
 
-fn handle_control_connection(
-    mut stream: UnixStream,
+struct ControlStream {
+    stream: UnixStream,
+    read_buffer: Vec<u8>,
+}
+
+enum ControlStreamStatus {
+    Done,
+    Incomplete,
+}
+
+fn handle_control_stream(
+    control: &mut ControlStream,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     fallback: &mut FallbackArming,
     notifier: &mut DesktopNotifier,
-) -> Result<(), String> {
-    let response = match read_control_command(&stream) {
-        Ok(ControlCommand::Arm) => handle_arm(
-            supervisor,
-            picker_command,
-            host_clipboard,
-            fallback,
-            notifier,
-        ),
-        Err(error) => Err(error),
-    };
-    let body = match response {
-        Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
-        Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
-    };
-    stream
-        .write_all(body.as_bytes())
-        .map_err(|e| format!("write control response: {e}"))
+) -> ControlStreamStatus {
+    match read_control_command_from_stream(control) {
+        Ok(ControlCommand::Arm) => {
+            let response = handle_arm(
+                supervisor,
+                picker_command,
+                host_clipboard,
+                fallback,
+                notifier,
+            );
+            let body = match response {
+                Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
+                Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
+            };
+            if let Err(error) = control.stream.write_all(body.as_bytes()) {
+                log::warn!("d2b-clipd: write control response failed: {error}");
+            }
+            ControlStreamStatus::Done
+        }
+        Err(ControlReadError::Incomplete) => ControlStreamStatus::Incomplete,
+        Err(ControlReadError::Invalid(error)) => {
+            let body = format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&error));
+            if let Err(error) = control.stream.write_all(body.as_bytes()) {
+                log::warn!("d2b-clipd: write control error response failed: {error}");
+            }
+            ControlStreamStatus::Done
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ControlReadError {
+    Incomplete,
+    Invalid(String),
+}
+
+fn read_control_command_from_stream(
+    control: &mut ControlStream,
+) -> Result<ControlCommand, ControlReadError> {
+    loop {
+        let mut buf = [0_u8; 256];
+        match control.stream.read(&mut buf) {
+            Ok(0) if control.read_buffer.is_empty() => {
+                return Err(ControlReadError::Invalid(
+                    "peer closed before newline".to_owned(),
+                ));
+            }
+            Ok(0) => {
+                return Err(ControlReadError::Invalid(
+                    "peer closed with incomplete control frame".to_owned(),
+                ));
+            }
+            Ok(n) => {
+                control.read_buffer.extend_from_slice(&buf[..n]);
+                if control.read_buffer.len() > CONTROL_MAX_FRAME_BYTES {
+                    return Err(ControlReadError::Invalid(format!(
+                        "frame exceeds {CONTROL_MAX_FRAME_BYTES} bytes"
+                    )));
+                }
+                if let Some(newline) = control.read_buffer.iter().position(|byte| *byte == b'\n') {
+                    let frame = control.read_buffer.drain(..=newline).collect::<Vec<_>>();
+                    return match serde_json::from_slice::<ControlFrame>(&frame)
+                        .map_err(|e| format!("invalid control JSON: {e}"))
+                    {
+                        Ok(ControlFrame::Arm) => Ok(ControlCommand::Arm),
+                        Err(error) => Err(ControlReadError::Invalid(error)),
+                    };
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(ControlReadError::Incomplete);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(ControlReadError::Invalid(error.to_string())),
+        }
+    }
 }
 
 fn handle_picker_message(
@@ -1413,6 +1564,8 @@ fn install_control_socket_parent(socket: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("control socket has no parent: {}", socket.display()))?;
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("create control socket dir {}: {e}", parent.display()))?;
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("chmod control socket dir {}: {e}", parent.display()))?;
     let _ = std::fs::remove_file(socket);
     Ok(())
 }
@@ -1426,45 +1579,6 @@ enum ControlCommand {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ControlFrame {
     Arm,
-}
-
-fn read_control_command(stream: &UnixStream) -> Result<ControlCommand, String> {
-    let line = read_bounded_line_no_wait(stream, CONTROL_MAX_FRAME_BYTES)?;
-    match serde_json::from_slice::<ControlFrame>(&line)
-        .map_err(|e| format!("invalid control JSON: {e}"))?
-    {
-        ControlFrame::Arm => Ok(ControlCommand::Arm),
-    }
-}
-
-fn read_bounded_line_no_wait(
-    stream: &UnixStream,
-    max_frame_bytes: usize,
-) -> Result<Vec<u8>, String> {
-    let mut stream = stream
-        .try_clone()
-        .map_err(|e| format!("clone stream: {e}"))?;
-    let mut out = Vec::new();
-    loop {
-        let mut byte = [0_u8; 1];
-        match stream.read(&mut byte) {
-            Ok(0) => return Err("peer closed before newline".to_owned()),
-            Ok(_) => {
-                out.push(byte[0]);
-                if out.len() > max_frame_bytes {
-                    return Err(format!("frame exceeds {max_frame_bytes} bytes"));
-                }
-                if byte[0] == b'\n' {
-                    return Ok(out);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Err("incomplete control frame".to_owned());
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.to_string()),
-        }
-    }
 }
 
 fn read_bounded_line(
@@ -1648,8 +1762,14 @@ mod tests {
     fn control_command_rejects_malformed_json() {
         let (mut writer, reader) = UnixStream::pair().expect("pair");
         writer.write_all(b"{not-json}\n").expect("write");
-        let err = read_control_command(&reader).expect_err("malformed");
-        assert!(err.contains("invalid control JSON"));
+        let mut control = ControlStream {
+            stream: reader,
+            read_buffer: Vec::new(),
+        };
+        let err = read_control_command_from_stream(&mut control).expect_err("malformed");
+        assert!(
+            matches!(err, ControlReadError::Invalid(message) if message.contains("invalid control JSON"))
+        );
     }
 
     #[test]
@@ -1698,7 +1818,13 @@ mod tests {
         .expect("sendmsg");
         drop(write_fd);
 
-        let request = recv_bridge_frame("work", &receiver).expect("bridge frame");
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: Vec::new(),
+        };
+        let request = recv_bridge_frame(&mut stream).expect("bridge frame");
         assert_eq!(request.vm_name, "work");
         assert_eq!(request.mime_type, "text/plain");
         assert_eq!(request.source_id, 7);
@@ -1726,8 +1852,17 @@ mod tests {
         .expect("sendmsg");
         drop(write_fd);
 
-        let err = recv_bridge_frame("work", &receiver).expect_err("non-exact attribution");
-        assert!(err.contains("unknown variant") || err.contains("exact attribution"));
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: Vec::new(),
+        };
+        let err = recv_bridge_frame(&mut stream).expect_err("non-exact attribution");
+        assert!(
+            err.message().contains("unknown variant")
+                || err.message().contains("exact attribution")
+        );
         drop(read_fd);
     }
 }

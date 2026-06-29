@@ -135,9 +135,9 @@ lifecycle. The following are deferred to Wave 2:
 
 ### Negative / trade-offs
 
-- One additional process per graphics VM when `waylandFilter.enable = true`.
+- One additional process per graphics VM when `waylandProxy.enable = true`.
 - The `d2b-<vm>-wlproxy` user/group are declared for all
-  `graphics.enable` VMs regardless of `waylandFilter.enable`. The user
+  `graphics.enable` VMs regardless of `waylandProxy.enable`. The user
   is harmless when unused; this is consistent with how `d2b-<vm>-gpu`
   is declared for all graphics VMs including non-crossDomainTrusted ones.
 
