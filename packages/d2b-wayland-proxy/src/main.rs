@@ -291,11 +291,15 @@ fn accept_loop(
     let mut last_diag_flush = Instant::now();
     while state.is_not_destroyed() {
         let (listener_ready, _state_ready) = {
+            let timeout = Duration::from_secs(60)
+                .saturating_sub(last_diag_flush.elapsed())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
             let mut poll_fds = [
                 PollFd::new(&listener, PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
-            match poll(&mut poll_fds, 250) {
+            match poll(&mut poll_fds, timeout) {
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(error) => {

@@ -173,7 +173,7 @@ impl VirtualClipboardState {
 
     fn add_source_mime(&mut self, source: &Rc<WlDataSource>, mime: &str) {
         if matches!(
-            self.mime_policy.decide(ClipboardRoute::SameVm, mime),
+            self.mime_policy.decide(self.route(), mime),
             MimeDecision::Deny
         ) {
             return;
@@ -229,7 +229,7 @@ impl VirtualClipboardState {
             );
             return;
         };
-        match self.mime_policy.decide(ClipboardRoute::SameVm, mime_type) {
+        match self.mime_policy.decide(self.route(), mime_type) {
             MimeDecision::PreserveSameVmRichMime => source.send_send(mime_type, fd),
             MimeDecision::MaterializeViaBridge => {
                 if let Some(bridge) = &mut self.bridge {
@@ -242,6 +242,14 @@ impl VirtualClipboardState {
 
     fn remove_offer(&mut self, offer: &Rc<WlDataOffer>) {
         self.offers.remove(&offer.unique_id());
+    }
+
+    fn route(&self) -> ClipboardRoute {
+        if self.bridge.is_some() {
+            ClipboardRoute::HostOrCrossRealm
+        } else {
+            ClipboardRoute::SameVm
+        }
     }
 }
 

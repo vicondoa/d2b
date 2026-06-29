@@ -171,7 +171,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             .as_deref()
             .or(paste.destination.title.as_deref())
             .unwrap_or("host application");
-        match write_all_nonblocking(&paste.fd, data) {
+        match write_all_nonblocking(&paste.fd, data, paste.deadline) {
             Ok(()) => {
                 log::debug!("d2b-clipd: paste write complete");
                 drop(paste.fd);
@@ -235,7 +235,8 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 /// (the Wayland compositor pipe write end should be set by us after receipt).
 ///
 /// Returns `Ok(())` on success, `Err(String)` on any error.
-fn write_all_nonblocking(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
+fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], deadline: Instant) -> Result<(), String> {
+    use rustix::event::{PollFd, PollFlags, poll};
     use std::os::fd::AsFd;
 
     let _ = rustix::io::ioctl_fionbio(fd.as_fd(), true);
@@ -246,7 +247,29 @@ fn write_all_nonblocking(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
             Ok(0) => return Err("short write to closed fd".to_owned()),
             Ok(written) => remaining = &remaining[written..],
             Err(rustix::io::Errno::INTR) => {}
-            Err(rustix::io::Errno::AGAIN) => return Err("write would block".to_owned()),
+            Err(rustix::io::Errno::AGAIN) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err("write timed out".to_owned());
+                }
+                let timeout = deadline
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .min(i32::MAX as u128) as i32;
+                let mut fds = [PollFd::new(
+                    fd,
+                    PollFlags::OUT | PollFlags::ERR | PollFlags::HUP,
+                )];
+                match poll(&mut fds, timeout) {
+                    Ok(0) => return Err("write timed out".to_owned()),
+                    Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
+                        return Err("write fd closed".to_owned());
+                    }
+                    Ok(_) => {}
+                    Err(rustix::io::Errno::INTR) => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
             Err(error) => return Err(error.to_string()),
         }
     }
