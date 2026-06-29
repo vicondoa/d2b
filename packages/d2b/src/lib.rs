@@ -2475,7 +2475,7 @@ fn dispatch(
 // ============================================================
 
 fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
@@ -2497,13 +2497,11 @@ fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32,
     stream
         .write_all(b"{\"type\":\"arm\"}\n")
         .map_err(|error| CliFailure::new(2, format!("failed to request clipboard arm: {error}")))?;
-    let mut line = String::new();
-    BufReader::new(stream)
-        .read_line(&mut line)
-        .map_err(|error| {
-            CliFailure::new(2, format!("failed to read clipboard arm response: {error}"))
-        })?;
-    let value: serde_json::Value = serde_json::from_str(&line)
+    let mut line = Vec::new();
+    stream.take(4096).read_to_end(&mut line).map_err(|error| {
+        CliFailure::new(2, format!("failed to read clipboard arm response: {error}"))
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&line)
         .map_err(|error| CliFailure::new(2, format!("invalid d2b-clipd response: {error}")))?;
     if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
         if args.json {

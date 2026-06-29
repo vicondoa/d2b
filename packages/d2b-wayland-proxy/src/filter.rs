@@ -1,4 +1,4 @@
-//! wl-proxy handler implementations for the Wayland filter proxy.
+//! wl-proxy handler implementations for the Wayland proxy.
 //!
 //! Handler chain:
 //!   FilterStateHandler

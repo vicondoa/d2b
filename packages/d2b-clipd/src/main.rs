@@ -32,14 +32,16 @@ use d2b_clipd::picker::{
 };
 use d2b_clipd::policy::ReasonCode;
 use d2b_clipd::protocol::{
-    AttributionQuality, ClientHello, DaemonToPickerMessage, DestinationMetadata, OpenRequest,
-    PickerToDaemonMessage, RealmKind,
+    AttributionQuality, Candidate, ClientHello, DaemonToPickerMessage, DestinationMetadata,
+    OpenRequest, PickerToDaemonMessage, RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, HostClipboardEvent};
 use serde::Deserialize;
 
 const CONTROL_MAX_FRAME_BYTES: usize = 1024;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
+const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -217,6 +219,7 @@ impl EventLoop<'_> {
             {
                 Ok(PickerPoll::Message(message)) => handle_picker_message(
                     message,
+                    self.data_control,
                     self.host_clipboard,
                     self.notifier,
                     self.fallback,
@@ -295,6 +298,7 @@ fn handle_wayland_event(
                     open_picker_or_arm_fallback(
                         fallback,
                         dest,
+                        host_clipboard,
                         notifier,
                         supervisor,
                         picker_command,
@@ -346,6 +350,7 @@ fn handle_control_connection(
 
 fn handle_picker_message(
     message: PickerToDaemonMessage,
+    data_control: &mut DataControlClient,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
@@ -357,14 +362,21 @@ fn handle_picker_message(
                 "d2b-clipd: picker selected entry for request {}",
                 select.request_id
             );
-            if let Some(paste) = host_clipboard.take_pending_paste() {
-                paste.close_with_reason(ReasonCode::PolicyDenied);
-                d2b_clipd::notifications::emit_user_visible_failure(
-                    notifier,
-                    ReasonCode::PolicyDenied,
-                    "clipboard",
-                    "host",
-                );
+            match materialize_selected_entry(host_clipboard, data_control, &select.entry_id)
+                .and_then(|bytes| host_clipboard.write_paste_data(&bytes, notifier))
+            {
+                Ok(()) => {}
+                Err(reason) => {
+                    if let Some(paste) = host_clipboard.take_pending_paste() {
+                        paste.close_with_reason(reason);
+                    }
+                    d2b_clipd::notifications::emit_user_visible_failure(
+                        notifier,
+                        reason,
+                        "clipboard",
+                        "host",
+                    );
+                }
             }
             let _ = fallback.arm_selected_entry(
                 select.entry_id,
@@ -383,6 +395,70 @@ fn handle_picker_message(
         }
         PickerToDaemonMessage::ClientHello(_) => {
             log::debug!("d2b-clipd: ignored duplicate picker client_hello");
+        }
+    }
+}
+
+fn materialize_selected_entry(
+    host_clipboard: &HostClipboard<NiriQueryProvider>,
+    data_control: &mut DataControlClient,
+    entry_id: &str,
+) -> Result<Vec<u8>, ReasonCode> {
+    if entry_id != CURRENT_HOST_ENTRY_ID {
+        return Err(ReasonCode::PolicyDenied);
+    }
+    let selection = host_clipboard
+        .current_selection()
+        .ok_or(ReasonCode::RequestExpired)?;
+    let offer = selection.offer.as_ref().ok_or(ReasonCode::PolicyDenied)?;
+    let requested_mime = host_clipboard
+        .pending_paste()
+        .map(|paste| paste.mime_type.as_str())
+        .ok_or(ReasonCode::IntentMissing)?;
+    if !selection
+        .allowed_mimes
+        .iter()
+        .any(|mime| mime == requested_mime)
+    {
+        return Err(ReasonCode::MimeRejected);
+    }
+    let (read_fd, write_fd) = rustix::pipe::pipe().map_err(|_| ReasonCode::FdClosed)?;
+    offer.receive(requested_mime.to_owned(), &write_fd);
+    data_control
+        .flush()
+        .map_err(|_| ReasonCode::BridgeUnavailable)?;
+    drop(write_fd);
+    read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT)
+}
+
+fn read_fd_to_vec(
+    fd: std::os::fd::OwnedFd,
+    max_bytes: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, ReasonCode> {
+    use std::os::fd::AsFd;
+
+    rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|_| ReasonCode::FdClosed)?;
+    let deadline = Instant::now() + timeout;
+    let mut out = Vec::new();
+    loop {
+        let mut buf = [0_u8; 4096];
+        match rustix::io::read(&fd, &mut buf) {
+            Ok(0) => return Ok(out),
+            Ok(n) => {
+                if out.len().saturating_add(n) > max_bytes {
+                    return Err(ReasonCode::MemoryCapExceeded);
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::AGAIN) => {
+                if Instant::now() >= deadline {
+                    return Err(ReasonCode::SourceMaterializeTimeout);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => return Err(ReasonCode::FdClosed),
         }
     }
 }
@@ -417,7 +493,8 @@ fn handle_arm(
     ) {
         Ok(socket) => {
             // Drive picker handshake: read ClientHello, send OpenRequest.
-            match picker_handshake(socket, &request_id, &dest) {
+            let candidates = picker_candidates(host_clipboard);
+            match picker_handshake(socket, &request_id, &dest, candidates) {
                 Ok(picker_version) => {
                     log::debug!("d2b-clipd: picker opened (version={picker_version})");
                     Ok("picker opened".to_owned())
@@ -445,6 +522,7 @@ fn picker_handshake(
     socket: &UnixStream,
     request_id: &str,
     dest: &FocusedWindowSnapshot,
+    candidates: Vec<Candidate>,
 ) -> Result<String, String> {
     let hello_buf = read_bounded_line(
         socket,
@@ -477,7 +555,7 @@ fn picker_handshake(
         requested_mime_type: "text/plain".to_owned(),
         expires_at_unix_ms: unix_millis().saturating_add(30_000),
         placement_hints: None,
-        candidates: Vec::new(),
+        candidates,
     }));
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
         .map_err(|e| format!("encode open_request: {e}"))?;
@@ -490,11 +568,57 @@ fn picker_handshake(
     Ok(picker_version)
 }
 
+fn picker_candidates(host_clipboard: &HostClipboard<NiriQueryProvider>) -> Vec<Candidate> {
+    let Some(selection) = host_clipboard.current_selection() else {
+        return Vec::new();
+    };
+    if selection.offer.is_none() || selection.allowed_mimes.is_empty() {
+        return Vec::new();
+    }
+    let window = selection.attribution.window.as_ref();
+    vec![Candidate {
+        entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
+        source_realm: "Host".to_owned(),
+        source_realm_kind: RealmKind::Host,
+        source_app: window
+            .and_then(|window| window.title.clone())
+            .or_else(|| Some("Host clipboard".to_owned())),
+        source_app_id: window.and_then(|window| window.app_id.clone()),
+        source_attribution: protocol_attribution(selection.attribution.quality),
+        preview_text: None,
+        content_type: selection
+            .allowed_mimes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "text/plain".to_owned()),
+        timestamp_unix_ms: unix_millis(),
+        thumbnail_png_base64: None,
+        byte_count: None,
+        confirmation_required: false,
+    }]
+}
+
+fn protocol_attribution(quality: d2b_clipd::policy::AttributionQuality) -> AttributionQuality {
+    match quality {
+        d2b_clipd::policy::AttributionQuality::ExactClient => AttributionQuality::ExactClient,
+        d2b_clipd::policy::AttributionQuality::FocusedWindowGuess => {
+            AttributionQuality::FocusedWindowGuess
+        }
+        d2b_clipd::policy::AttributionQuality::CacheStaleFocusedWindowGuess => {
+            AttributionQuality::CacheStaleFocusedWindowGuess
+        }
+        d2b_clipd::policy::AttributionQuality::BrokerInjectedDebug => {
+            AttributionQuality::BrokerInjectedDebug
+        }
+    }
+}
+
 // ─── Picker / fallback helpers ────────────────────────────────────────────────
 
 fn open_picker_or_arm_fallback(
     fallback: &mut FallbackArming,
     dest: FocusedWindowSnapshot,
+    host_clipboard: &HostClipboard<NiriQueryProvider>,
     notifier: &mut impl Notifier,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
@@ -511,7 +635,8 @@ fn open_picker_or_arm_fallback(
             Duration::from_secs(30),
         ) {
             Ok(socket) => {
-                if let Err(error) = picker_handshake(socket, &request_id, &dest) {
+                let candidates = picker_candidates(host_clipboard);
+                if let Err(error) = picker_handshake(socket, &request_id, &dest, candidates) {
                     log::warn!("d2b-clipd: picker handshake failed: {error}");
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
@@ -860,5 +985,23 @@ mod tests {
     fn rejects_unknown_args() {
         let err = parse_args(["--wat".to_owned()]).expect_err("unknown");
         assert!(err.contains("unknown argument"));
+    }
+
+    #[test]
+    fn control_command_rejects_malformed_json() {
+        let (mut writer, reader) = UnixStream::pair().expect("pair");
+        writer.write_all(b"{not-json}\n").expect("write");
+        let err = read_control_command(&reader).expect_err("malformed");
+        assert!(err.contains("invalid control JSON"));
+    }
+
+    #[test]
+    fn bounded_line_rejects_overlong_control_frame() {
+        let (mut writer, reader) = UnixStream::pair().expect("pair");
+        let bytes = vec![b'a'; CONTROL_MAX_FRAME_BYTES + 1];
+        writer.write_all(&bytes).expect("write");
+        let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_secs(1))
+            .expect_err("overlong");
+        assert!(err.contains("frame exceeds"));
     }
 }

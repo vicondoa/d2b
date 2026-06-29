@@ -43,7 +43,7 @@ Future work will add a validated Xwayland path.
 
 ### `crossDomainTrusted` is required for the proxy
 
-The host-side filter proxy activates only when
+The host-side Wayland proxy activates only when
 `graphics.crossDomainTrusted = true`.  The default is still false.
 The proxy path requires explicit opt-in because the cross-domain
 virtio-gpu channel carries all guest Wayland messages and must be

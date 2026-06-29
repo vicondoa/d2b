@@ -1,4 +1,4 @@
-//! Host-side Wayland filter proxy for d2b graphics VMs.
+//! Host-side Wayland proxy for d2b graphics VMs.
 //!
 //! Startup sequence (fail-closed):
 //!   1. Parse CLI arguments.
