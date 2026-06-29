@@ -32,6 +32,11 @@ deprecations ship one minor release before removal.
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
   naming; old names are unsupported and no compatibility aliases are provided.
 
+### Fixed
+
+- USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
+  spawn failures as retryable instead of reporting the helper as missing.
+
 ### Added
 
 - Added the `d2b-clipd` Rust crate with picker NDJSON DTOs, bounded framing,

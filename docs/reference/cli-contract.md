@@ -155,7 +155,7 @@ paste action before the short `d2b-clipd` fallback deadline expires.
 | `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
 | `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
 
-The CLI connects to `$XDG_RUNTIME_DIR/d2b/clipd.sock`, sends one bounded
+The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
 arm request, and applies five-second read and write deadlines to the
 control socket so a wedged `d2b-clipd` cannot hang the terminal. The
 daemon owns all clipboard state and transfer FDs; this command only asks

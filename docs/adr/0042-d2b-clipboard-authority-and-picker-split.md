@@ -210,7 +210,7 @@ pass its package or binary path to the d2b Nix module.
 
 The picker protocol uses newline-delimited JSON over a per-request anonymous
 AF_UNIX `socketpair()` inherited by the spawned picker. This intentionally
-replaces the earlier named `$XDG_RUNTIME_DIR/d2b/clipd.sock` idea: because
+keeps picker traffic off the named `d2b-clipd` control socket: because
 `d2b-clipd` is the picker parent, socketpair authenticity is stronger than a
 same-UID pathname socket. No picker launch token is needed on the socketpair
 path. If a future side-channel nonce is introduced,

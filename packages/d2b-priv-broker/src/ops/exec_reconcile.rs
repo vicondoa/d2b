@@ -1241,6 +1241,10 @@ fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
                 || detail.contains("interrupted")
                 || detail.contains("eintr")
         }
+        ReconcileExecError::BinaryMissing { detail, .. } => {
+            let detail = detail.to_ascii_lowercase();
+            detail.contains("text file busy") || detail.contains("etxtbsy")
+        }
         _ => false,
     }
 }
@@ -1982,6 +1986,18 @@ mod tests {
                 which: "usbip unbind".to_owned(),
                 exit_code: 1,
                 stderr: "write: Device or resource busy (EBUSY)".to_owned(),
+            }
+        ));
+        assert!(usbip_unbind_error_is_transient(
+            &ReconcileExecError::BinaryMissing {
+                which: "usbip".to_owned(),
+                detail: "Text file busy (os error 26)".to_owned(),
+            }
+        ));
+        assert!(!usbip_unbind_error_is_transient(
+            &ReconcileExecError::BinaryMissing {
+                which: "usbip".to_owned(),
+                detail: "No such file or directory (os error 2)".to_owned(),
             }
         ));
         assert!(!usbip_unbind_error_is_transient(
