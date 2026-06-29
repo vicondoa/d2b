@@ -647,8 +647,8 @@ in
             Clipboard-boundary globals (standard clipboard, primary selection,
             privileged data-control, and DnD) are owned by d2b's virtual
             clipboard architecture and cannot be passed through; listing them
-            here is ignored by the proxy and emits
-            `W-CLIPBOARD-BOUNDARY-OVERRIDE-IGNORED`.
+            here is ignored by the proxy and emits a runtime advisory
+            diagnostic.
           '';
         };
 

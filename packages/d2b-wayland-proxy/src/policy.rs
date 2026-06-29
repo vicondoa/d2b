@@ -205,7 +205,7 @@ impl FilterPolicy {
         let mut warnings: Vec<PolicyWarning> = Vec::new();
 
         // Check required baseline globals.
-        for (iface, entry) in &entries {
+        for (iface, entry) in &mut entries {
             if entry.classification == Classification::RequiredBaseline
                 && entry.action == GlobalAction::Deny
             {
@@ -233,6 +233,7 @@ impl FilterPolicy {
                 warnings.push(PolicyWarning::ClipboardBoundaryOverrideIgnored {
                     interface: iface.clone(),
                 });
+                entry.action = GlobalAction::Deny;
             }
             if entry.classification == Classification::Unclassified
                 && entry.action == GlobalAction::Allow
@@ -641,16 +642,37 @@ mod tests {
 
     #[test]
     fn enable_clipboard_boundary_global_reports_ignored_override() {
+        let boundary_globals = [
+            "wl_data_device_manager",
+            "ext_data_control_manager_v1",
+            "zwlr_data_control_manager_v1",
+            "zwp_primary_selection_device_manager_v1",
+            "wp_primary_selection_device_manager_v1",
+            "gtk_primary_selection_device_manager",
+            "xdg_toplevel_drag_manager_v1",
+        ];
         let p = FilterPolicy::build(PolicyInput {
             vm_name: "work".to_owned(),
-            allow_globals: vec!["wl_data_device_manager".to_owned()],
+            allow_globals: boundary_globals
+                .iter()
+                .map(|iface| (*iface).to_owned())
+                .collect(),
             ..Default::default()
         });
-        assert!(p.warnings.iter().any(|w| matches!(
-            w,
-            PolicyWarning::ClipboardBoundaryOverrideIgnored { interface }
-            if interface == "wl_data_device_manager"
-        )));
+        for iface in boundary_globals {
+            assert!(
+                p.warnings.iter().any(|w| matches!(
+                    w,
+                    PolicyWarning::ClipboardBoundaryOverrideIgnored { interface }
+                    if interface == iface
+                )),
+                "missing ignored-override warning for {iface}"
+            );
+            assert!(
+                !p.is_allowed(iface),
+                "clipboard-boundary allow override must be ignored for {iface}"
+            );
+        }
     }
 
     #[test]

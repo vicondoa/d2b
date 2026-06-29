@@ -114,7 +114,7 @@ warning is resolved upstream.
 
 ---
 
-### W-CLIPBOARD-BOUNDARY-OVERRIDE-IGNORED
+### W-ALLOW-CLIPBOARD-BOUNDARY
 
 **Trigger:** `allowGlobals` includes a global that d2b classifies as a
 clipboard-boundary global.
