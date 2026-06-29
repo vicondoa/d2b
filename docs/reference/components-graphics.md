@@ -44,7 +44,7 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `d2b.vms.<vm>.graphics.waylandFilter.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
 | `d2b.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
-The filter's built-in policy exposes the compositor's
+The proxy's built-in policy exposes the compositor's
 `zwp_linux_dmabuf_v1` version by default so Mesa can use dmabuf feedback
 for accelerated Wayland EGL. Use `waylandFilter.maxVersions` only as a
 short-lived diagnostic override when isolating driver/proxy regressions.

@@ -213,6 +213,7 @@ impl EventLoop<'_> {
             for event in wl_events {
                 handle_wayland_event(
                     event,
+                    self.data_control,
                     self.host_clipboard,
                     self.notifier,
                     self.fallback,
@@ -297,6 +298,7 @@ impl EventLoop<'_> {
 
 fn handle_wayland_event(
     event: HostClipboardEvent,
+    data_control: &mut DataControlClient,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
@@ -329,14 +331,16 @@ fn handle_wayland_event(
                         bounded_mime(&mime_type),
                         bounded_label(dest.app_id.as_deref().unwrap_or("unknown"))
                     );
-                    open_picker_or_arm_fallback(
-                        fallback,
-                        dest,
-                        host_clipboard,
-                        notifier,
-                        supervisor,
-                        picker_command,
-                    );
+                    if !fulfill_armed_fallback(fallback, host_clipboard, data_control, notifier) {
+                        open_picker_or_arm_fallback(
+                            fallback,
+                            dest,
+                            host_clipboard,
+                            notifier,
+                            supervisor,
+                            picker_command,
+                        );
+                    }
                 }
                 Err(reason) => {
                     // fd already dropped; requester will see EOF.
@@ -396,28 +400,41 @@ fn handle_picker_message(
                 "d2b-clipd: picker selected entry for request {}",
                 select.request_id
             );
-            match materialize_selected_entry(host_clipboard, data_control, &select.entry_id)
-                .and_then(|bytes| host_clipboard.write_paste_data(&bytes, notifier))
-            {
-                Ok(()) => {}
-                Err(reason) => {
-                    if let Some(paste) = host_clipboard.take_pending_paste() {
-                        paste.close_with_reason(reason);
+            if host_clipboard.pending_paste().is_some() {
+                match materialize_selected_entry(host_clipboard, data_control, &select.entry_id)
+                    .and_then(|bytes| host_clipboard.write_paste_data(&bytes, notifier))
+                {
+                    Ok(()) => {
+                        let _ = fallback.cancel_picker();
+                        let _ = supervisor.cancel_active(ReasonCode::Allowed);
                     }
-                    d2b_clipd::notifications::emit_user_visible_failure(
-                        notifier,
-                        reason,
-                        "clipboard",
-                        "host",
-                    );
+                    Err(reason) => {
+                        if let Some(paste) = host_clipboard.take_pending_paste() {
+                            paste.close_with_reason(reason);
+                        }
+                        d2b_clipd::notifications::emit_user_visible_failure(
+                            notifier,
+                            reason,
+                            "clipboard",
+                            "host",
+                        );
+                        let _ = fallback.cancel_picker();
+                        let _ = supervisor.cancel_active(reason);
+                    }
                 }
+                return;
             }
-            let _ = fallback.arm_selected_entry(
+
+            let transition = fallback.arm_selected_entry(
                 select.entry_id,
                 Instant::now(),
                 Duration::from_secs(30),
             );
-            let _ = supervisor.cancel_active(ReasonCode::Allowed);
+            if matches!(transition, FallbackTransition::Armed) {
+                let _ = supervisor.cancel_active(ReasonCode::Allowed);
+            } else {
+                let _ = supervisor.cancel_active(ReasonCode::PolicyDenied);
+            }
         }
         PickerToDaemonMessage::Cancel(cancel) => {
             log::debug!("d2b-clipd: picker cancelled request {}", cancel.request_id);
@@ -429,6 +446,47 @@ fn handle_picker_message(
         }
         PickerToDaemonMessage::ClientHello(_) => {
             log::debug!("d2b-clipd: ignored duplicate picker client_hello");
+        }
+    }
+}
+
+fn fulfill_armed_fallback(
+    fallback: &mut FallbackArming,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    data_control: &mut DataControlClient,
+    notifier: &mut DesktopNotifier,
+) -> bool {
+    let FallbackState::Armed {
+        entry_id,
+        expires_at,
+        ..
+    } = fallback.state().clone()
+    else {
+        return false;
+    };
+    if Instant::now() >= expires_at {
+        let _ = fallback.on_timeout(Instant::now());
+        return false;
+    }
+    let result = materialize_selected_entry(host_clipboard, data_control, &entry_id)
+        .and_then(|bytes| host_clipboard.write_paste_data(&bytes, notifier));
+    match result {
+        Ok(()) => {
+            let _ = fallback.cancel_picker();
+            true
+        }
+        Err(reason) => {
+            if let Some(paste) = host_clipboard.take_pending_paste() {
+                paste.close_with_reason(reason);
+            }
+            d2b_clipd::notifications::emit_user_visible_failure(
+                notifier,
+                reason,
+                "clipboard",
+                "host",
+            );
+            let _ = fallback.cancel_picker();
+            true
         }
     }
 }
@@ -698,8 +756,11 @@ fn arm_native_fallback(
     if matches!(fallback.state(), FallbackState::Idle) {
         let _ = fallback.capture_target_before_picker(dest.clone());
     }
-    let entry_id = format!("host-{}", unix_millis());
-    let transition = fallback.arm_selected_entry(entry_id, Instant::now(), Duration::from_secs(30));
+    let transition = fallback.arm_selected_entry(
+        CURRENT_HOST_ENTRY_ID.to_owned(),
+        Instant::now(),
+        Duration::from_secs(30),
+    );
     if matches!(transition, FallbackTransition::Armed) {
         let label = dest
             .app_id

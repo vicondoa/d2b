@@ -93,7 +93,7 @@ flowchart TD
     end
 
     wayland -->|SO_PEERCRED at public.sock<br/>d2b group<br/>+ ssh via keysDir| sidecars
-    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wlproxy→compositor; gpu→wlproxy filter; pipewire-0)| boundary
+    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wlproxy→compositor; gpu→wlproxy; pipewire-0)| boundary
     boundary --> guest_desc
 ```
 
@@ -115,7 +115,7 @@ flowchart TD
           │   │      broker-spawned in v1.0 per ADR 0015)   │    │
           │   │   d2b.slice/<vm>/wlproxy (per-VM uid,   │    │
           │   │       Wayland proxy; holds real compositor  │    │
-          │   │       socket for graphics VMs with filter)   │    │
+          │   │       socket for graphics VMs)              │    │
           │   │   d2b.slice/<vm>/gpu    (per-VM uid;     │    │
           │   │       connects to wlproxy, not compositor)   │    │
           │   │   d2b.slice/<vm>/video  (shares gpu uid) │    │
@@ -128,7 +128,7 @@ flowchart TD
           │   └──────────────────┬───────────────────────────┘   │
           │                      │ vsock / virtio-* / ACL'd       │
           │                      │ sockets (wlproxy→compositor;   │
-          │                      │  gpu→wlproxy filter; pipewire) │
+          │                      │  gpu→wlproxy; pipewire)       │
           ╞══════════════════════╪═══════════════════════════════ ╡
           │                      │ KVM boundary                   │
           │   ┌──────────────────▼────────────────────────────┐   │
@@ -554,7 +554,7 @@ by pidfd:
   uid). This is the **only** per-VM role that holds the real host
   compositor socket; it listens on
   `/run/d2b-wlproxy/<vm>/wayland-0` for the GPU sidecar and
-  enforces the filter policy before forwarding to the compositor.
+  enforces the proxy policy before forwarding to the compositor.
 - `gpu` / `gpu-render-node` — present when
   `d2b.vms.<vm>.graphics.enable = true`. Runs the patched crosvm
   GPU sidecar and gates Cloud Hypervisor startup on the GPU socket.

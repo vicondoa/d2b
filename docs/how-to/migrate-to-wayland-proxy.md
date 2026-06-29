@@ -82,7 +82,7 @@ d2b.vms.work.graphics.waylandFilter.enable = true;
 ```
 
 Leave it enabled unless you intentionally want the GPU sidecar to use the
-unfiltered direct compositor socket path.
+direct compositor socket path.
 
 ### 4. Update niri window rules (niri users)
 
@@ -183,16 +183,16 @@ the migration:
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `d2b vm stop <vm> --apply && d2b vm start <vm> --apply`.
 
-The VM will stop using the filtered cross-domain Wayland path until
+The VM will stop using the proxied cross-domain Wayland path until
 `crossDomainTrusted` is enabled again. Standard virtio-gpu display
-continues to work, but host-side app-id rewriting and filter policy no
+continues to work, but host-side app-id rewriting and proxy policy no
 longer apply.
 
 ## Known limitations at migration time
 
 - **Xwayland is not supported.** Set `graphics.xwayland.enable = false`.
   Setting it to true fails eval during the Wayland-only migration phase.
-- **Multi-output enumeration** works through the filter; verify with
+- **Multi-output enumeration** works through the proxy; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
 - **Clipboard and DnD** are policy-owned by d2b. The standard clipboard
   (`wl_data_device_manager`) is virtualized by `d2b-wayland-proxy`; primary

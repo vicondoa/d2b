@@ -10,7 +10,7 @@ use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use crate::niri::{FocusedWindowSnapshot, HostClipboardAttributor, HostSelectionAttribution};
-use crate::notifications::{self, Notifier};
+use crate::notifications::Notifier;
 use crate::policy::{AttributionQuality, ReasonCode};
 use crate::wayland::DataControlOffer;
 
@@ -175,7 +175,8 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             Ok(()) => {
                 log::debug!("d2b-clipd: paste write complete");
                 drop(paste.fd);
-                notifications::emit_fallback_ready(notifier, label);
+                let _ = notifier;
+                let _ = label;
                 Ok(())
             }
             Err(e) => {
@@ -337,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn write_paste_data_closes_fd_and_emits_notification() {
+    fn write_paste_data_closes_fd_without_fallback_notification() {
         let mut hc = make_host_clipboard(Some(NiriWindow {
             id: Some(1),
             app_id: Some("org.gnome.TextEditor".to_owned()),
@@ -350,7 +351,10 @@ mod tests {
 
         let mut notifier = RecordingNotifier::default();
         hc.write_paste_data(b"hello", &mut notifier).expect("write");
-        assert_eq!(notifier.notifications.len(), 1);
+        assert!(
+            notifier.notifications.is_empty(),
+            "direct paste completion must not emit fallback-ready notifications"
+        );
 
         // Read end should have received the data.
         use std::io::Read;
