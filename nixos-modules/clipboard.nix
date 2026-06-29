@@ -29,13 +29,27 @@ let
     || (cfg.policy.crossRealm.enable && (cfg.modes.hostCrossRealmPicker || cfg.modes.vmCrossRealmPicker));
 
   niriProgramEnabled = config.programs.niri.enable or false;
-  bridgeVms = lib.attrNames (lib.filterAttrs (_name: vm:
-    vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
-  ) config.d2b.vms);
+  bridgeVmSet =
+    (lib.filterAttrs (_name: vm:
+      vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
+    ) (d2bLib.normalNixosVms config.d2b.vms))
+    // (d2bLib.qemuMediaVms config.d2b.vms);
+  bridgeVms = lib.attrNames bridgeVmSet;
   bridgePeers = map (vm: {
     vmName = vm;
     expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
   }) bridgeVms;
+  clipdBridgeRootTmpfiles =
+    lib.optionals (cfg.enable && bridgeVms != [ ]) (
+      [
+        "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+      ]
+      ++ lib.concatMap (vm: [
+        "d ${cfg.runtime.bridgeRoot}/${toString (config.users.users.${site.waylandUser}.uid)}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "z ${cfg.runtime.bridgeRoot}/${toString (config.users.users.${site.waylandUser}.uid)}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+      ]) bridgeVms
+    );
 
   configJson = builtins.toJSON {
     version = 1;
@@ -478,6 +492,8 @@ in
       text = configJson;
       mode = "0644";
     };
+
+    systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
 
     systemd.user.services.d2b-clipd = {
       description = "d2b clipboard authority daemon";

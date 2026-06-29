@@ -131,7 +131,7 @@ in
       Graphics rules match app-ids that carry the `d2b.<vm>.`
       prefix, which the host-side Wayland proxy writes onto
       every surface from that VM.  qemu-media also routes QEMU's host
-      window through the same filter proxy, so its app-id carries the
+      window through the same Wayland proxy, so its app-id carries the
       `d2b.<vm>.` prefix too. Each rule applies a configurable
       border color; the default color is derived deterministically from
       the VM name so every VM gets a stable, distinct color without

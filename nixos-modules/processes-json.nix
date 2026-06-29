@@ -543,7 +543,7 @@ EOF
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
       emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
-      # When the filter proxy is emitted, crosvm connects to the filter
+      # When the Wayland proxy is emitted, crosvm connects to the proxy
       # socket. Otherwise preserve the legacy display backend by connecting
       # directly to the real host compositor socket.
       waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
@@ -606,7 +606,7 @@ EOF
     };
 
   # wayland-proxy runner: d2b-wayland-proxy host-side proxy.
-  # Runs as d2b-<vm>-wlproxy, listens on the per-VM filter socket,
+  # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
   # and connects upstream to the real host compositor socket. The broker
   # grants the wlproxy principal an ACL on exactly that socket.
   waylandProxyRunner = name: vm:
@@ -1083,7 +1083,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
         ++ lib.optional vm.graphics.videoSidecar
           (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
-        # GPU connects to the filter socket, so wayland-proxy must be
+        # GPU connects to the proxy socket, so wayland-proxy must be
         # listening before the GPU starts. Emit only when the proxy is
         # present.
         ++ lib.optional emitWaylandProxy

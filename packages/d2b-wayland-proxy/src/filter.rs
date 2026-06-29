@@ -259,7 +259,11 @@ impl VirtualClipboardState {
     }
 
     fn route(&self) -> ClipboardRoute {
-        ClipboardRoute::SameVm
+        if self.bridge_path.is_some() {
+            ClipboardRoute::HostOrCrossRealm
+        } else {
+            ClipboardRoute::SameVm
+        }
     }
 
     fn ensure_bridge_connected(&mut self) -> Option<&mut UnixStream> {

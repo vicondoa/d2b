@@ -217,6 +217,9 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         let Some(active) = self.active.as_mut() else {
             return Ok(PickerPoll::Incomplete);
         };
+        if active.read_buffer.contains(&b'\n') {
+            return Self::decode_next_picker_frame(active, max_frame_bytes);
+        }
         loop {
             let mut buf = [0_u8; 512];
             match active.parent_socket.read(&mut buf) {
@@ -228,6 +231,18 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                 }
                 Ok(n) => {
                     active.read_buffer.extend_from_slice(&buf[..n]);
+                    if let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n')
+                    {
+                        if newline + 1 > max_frame_bytes {
+                            return Err(PickerError::Frame(
+                                FramingError::FrameTooLong {
+                                    max: max_frame_bytes,
+                                }
+                                .to_string(),
+                            ));
+                        }
+                        break;
+                    }
                     if active.read_buffer.len() > max_frame_bytes {
                         return Err(PickerError::Frame(
                             FramingError::FrameTooLong {
@@ -236,9 +251,6 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                             .to_string(),
                         ));
                     }
-                    if active.read_buffer.contains(&b'\n') {
-                        break;
-                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -246,13 +258,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             }
         }
 
-        let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n') else {
-            return Ok(PickerPoll::Incomplete);
-        };
-        let frame = active.read_buffer.drain(..=newline).collect::<Vec<_>>();
-        let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)
-            .map_err(|err| PickerError::Frame(err.to_string()))?;
-        Ok(PickerPoll::Message(message))
+        Self::decode_next_picker_frame(active, max_frame_bytes)
     }
 
     pub fn cancel_active(&mut self, reason: ReasonCode) -> Option<ReasonCode> {
@@ -260,6 +266,27 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         active.process.terminate();
         active.process.reap();
         Some(reason)
+    }
+
+    fn decode_next_picker_frame<P: PickerProcess>(
+        active: &mut ActivePicker<P>,
+        max_frame_bytes: usize,
+    ) -> Result<PickerPoll, PickerError> {
+        let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n') else {
+            return Ok(PickerPoll::Incomplete);
+        };
+        if newline + 1 > max_frame_bytes {
+            return Err(PickerError::Frame(
+                FramingError::FrameTooLong {
+                    max: max_frame_bytes,
+                }
+                .to_string(),
+            ));
+        }
+        let frame = active.read_buffer.drain(..=newline).collect::<Vec<_>>();
+        let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)
+            .map_err(|err| PickerError::Frame(err.to_string()))?;
+        Ok(PickerPoll::Message(message))
     }
 
     pub fn reap_expired(&mut self, now: Instant) -> Option<ReasonCode> {
@@ -495,5 +522,57 @@ mod tests {
                 .iter()
                 .any(|arg| arg.to_string_lossy().contains("token"))
         );
+    }
+
+    #[test]
+    fn buffered_complete_frame_is_decoded_before_eof() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let process = FakeProcess { pid: 7, events };
+        let (parent_socket, child_socket) = UnixStream::pair().expect("pair");
+        parent_socket.set_nonblocking(true).expect("nonblocking");
+        let mut supervisor = PickerSupervisor::<FakeSpawner> {
+            spawner: FakeSpawner::default(),
+            active: Some(ActivePicker {
+                request_id: "req".to_owned(),
+                deadline: Instant::now() + Duration::from_secs(30),
+                process,
+                parent_socket,
+                read_buffer: b"{\"type\":\"cancel\",\"selected_protocol_version\":1,\"request_id\":\"req\"}\n"
+                    .to_vec(),
+            }),
+        };
+        drop(child_socket);
+        assert!(matches!(
+            supervisor.poll_active(4096).expect("frame"),
+            PickerPoll::Message(PickerToDaemonMessage::Cancel(_))
+        ));
+    }
+
+    #[test]
+    fn frame_length_uses_first_newline_not_total_buffer() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let process = FakeProcess { pid: 7, events };
+        let (parent_socket, _child_socket) = UnixStream::pair().expect("pair");
+        parent_socket.set_nonblocking(true).expect("nonblocking");
+        let mut buffer =
+            b"{\"type\":\"cancel\",\"selected_protocol_version\":1,\"request_id\":\"req\"}\n"
+                .to_vec();
+        buffer.extend(vec![b'x'; 5000]);
+        let mut supervisor = PickerSupervisor::<FakeSpawner> {
+            spawner: FakeSpawner::default(),
+            active: Some(ActivePicker {
+                request_id: "req".to_owned(),
+                deadline: Instant::now() + Duration::from_secs(30),
+                process,
+                parent_socket,
+                read_buffer: buffer,
+            }),
+        };
+        assert!(matches!(
+            supervisor
+                .poll_active(4096)
+                .expect("first frame remains valid"),
+            PickerPoll::Message(PickerToDaemonMessage::Cancel(_))
+        ));
     }
 }

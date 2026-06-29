@@ -155,7 +155,7 @@ identity (and thus whether in-guest Wayland-EGL binds virgl rather than
 llvmpipe) has not yet been confirmed on a live VM with the current proxy
 chain. The host-side `d2b-wayland-proxy` passes `linux_dmabuf_v1` by
 default (not denied in the secure preset) so the host compositor's dmabuf
-globals are available at the filter socket. The open question is whether
+globals are available at the proxy socket. The open question is whether
 the guest cross-domain proxy correctly presents the virtio-gpu device
 identity to the in-guest EGL platform.
 
@@ -244,9 +244,9 @@ host switch for the new VM to get its lease.
 ## GPU/audio sidecars hardcode host `wayland-0`; breaks non-wayland-0 compositors
 
 > **Superseded (GPU sidecar).** The GPU sidecar no longer connects to the
-> host compositor socket directly. It connects to the per-VM filter socket
+> host compositor socket directly. It connects to the per-VM proxy socket
 > at `/run/d2b-wlproxy/<vm>/wayland-0`, which is the
-> `d2b-wayland-proxy` proxy. The filter proxy reads the actual
+> `d2b-wayland-proxy` proxy. The Wayland proxy reads the actual
 > compositor socket from the broker-emitted process bundle (derived from
 > `d2b.site.waylandDisplay`), so the hardcoded `wayland-0` path is no
 > longer in the GPU runner's argv or environment. The `wayland-0`

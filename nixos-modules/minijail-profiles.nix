@@ -515,7 +515,7 @@ let
         # constant in d2b-priv-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
         # No real host compositor bind-mount: the GPU runner connects to
-        # the per-VM filter socket at /run/d2b-wlproxy/<vm>/wayland-0.
+        # the per-VM proxy socket at /run/d2b-wlproxy/<vm>/wayland-0.
         # The wayland-proxy profile holds the real compositor bind-mount.
         bindMounts = [ ];
         cgroupSubtree = "d2b.slice/${name}/gpu";
@@ -533,7 +533,7 @@ let
     // lib.optionalAttrs vm.graphics.enable {
       # Wayland proxy role profile.
       #
-      # Per ADR 0025: the host-jailed filter proxy sits between the crosvm
+      # Per ADR 0025: the host-jailed Wayland proxy sits between the crosvm
       # GPU sidecar and the real host compositor socket. It runs as a
       # dedicated `d2b-<vm>-wlproxy` principal with:
       #   - empty host capabilities (mandatory);

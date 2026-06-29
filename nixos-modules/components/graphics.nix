@@ -527,7 +527,7 @@ in
     # does NOT implement CSD (https://codeberg.org/dnkl/foot/wiki/Frequently-asked-questions).
     # It relies on xdg-decoration for SSD from the compositor.
     # Inside the guest, foot's xdg-decoration request transits the
-    # virtio-gpu cross-domain channel to the host-side filter proxy
+    # virtio-gpu cross-domain channel to the host-side Wayland proxy
     # and on to the host compositor, but Plasma's response (SSD-mode)
     # doesn't reach foot via that path in a usable way. Result: a
     # chromeless terminal pops up on every boot with no title bar,

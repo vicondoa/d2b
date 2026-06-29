@@ -401,15 +401,16 @@ impl EventLoop<'_> {
             for index in bridge_stream_ready.into_iter().rev() {
                 if index < self.bridge_streams.len() {
                     let mut stream = self.bridge_streams.swap_remove(index);
-                    match handle_bridge_stream(
-                        &mut stream,
-                        self.host_clipboard,
-                        self.notifier,
-                        self.fallback,
-                        self.supervisor,
-                        &self.picker_command,
-                        self.audit_queue,
-                    ) {
+                    let mut context = BridgeHandlerContext {
+                        host_clipboard: self.host_clipboard,
+                        notifier: self.notifier,
+                        data_control: self.data_control,
+                        fallback: self.fallback,
+                        supervisor: self.supervisor,
+                        picker_command: &self.picker_command,
+                        audit_queue: self.audit_queue,
+                    };
+                    match handle_bridge_stream(&mut stream, &mut context) {
                         BridgeStreamStatus::Done => {}
                         BridgeStreamStatus::Incomplete => self.bridge_streams.push(stream),
                     }
@@ -615,25 +616,22 @@ enum BridgeStreamStatus {
     Incomplete,
 }
 
+struct BridgeHandlerContext<'a> {
+    host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
+    notifier: &'a mut DesktopNotifier,
+    data_control: &'a mut DataControlClient,
+    fallback: &'a mut FallbackArming,
+    supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &'a Option<PickerCommand>,
+    audit_queue: &'a mut AuditQueue,
+}
+
 fn handle_bridge_stream(
     bridge: &mut BridgeStream,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    notifier: &mut DesktopNotifier,
-    fallback: &mut FallbackArming,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    audit_queue: &mut AuditQueue,
+    context: &mut BridgeHandlerContext<'_>,
 ) -> BridgeStreamStatus {
     match recv_bridge_frame(bridge) {
-        Ok(request) => handle_bridge_paste_request(
-            request,
-            host_clipboard,
-            notifier,
-            fallback,
-            supervisor,
-            picker_command,
-            audit_queue,
-        ),
+        Ok(request) => handle_bridge_paste_request(request, context),
         Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
         Err(error) => {
             log::warn!(
@@ -702,6 +700,11 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
             if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
                 stream.received_fds.extend(fds);
             }
+        }
+        if stream.received_fds.len() > 1 {
+            return Err(BridgeReadError::Invalid(
+                "bridge frame carried too many transfer fds".to_owned(),
+            ));
         }
         if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
             return Err(BridgeReadError::Invalid(
@@ -778,12 +781,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, B
 
 fn handle_bridge_paste_request(
     request: BridgePasteRequest,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    notifier: &mut DesktopNotifier,
-    fallback: &mut FallbackArming,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    audit_queue: &mut AuditQueue,
+    context: &mut BridgeHandlerContext<'_>,
 ) {
     let BridgePasteRequest {
         vm_name,
@@ -795,12 +793,12 @@ fn handle_bridge_paste_request(
     if !is_mime_allowed(&mime_type) {
         drop(fd);
         d2b_clipd::notifications::emit_user_visible_failure(
-            notifier,
+            context.notifier,
             ReasonCode::MimeRejected,
             "host",
             &vm_name,
         );
-        let _ = audit_queue.enqueue_fail_closed(AuditEvent {
+        let _ = context.audit_queue.enqueue_fail_closed(AuditEvent {
             request_id,
             source_realm: "host".to_owned(),
             destination_realm: vm_name,
@@ -820,7 +818,7 @@ fn handle_bridge_paste_request(
         workspace_id: None,
         output_label: None,
     };
-    if let Err(reason) = audit_queue.enqueue_fail_closed(AuditEvent {
+    if let Err(reason) = context.audit_queue.enqueue_fail_closed(AuditEvent {
         request_id: request_id.clone(),
         source_realm: "host".to_owned(),
         destination_realm: vm_name.clone(),
@@ -839,49 +837,34 @@ fn handle_bridge_paste_request(
         );
         return;
     }
-    match host_clipboard.accept_paste_fd_for_destination(fd, mime_type, dest.clone()) {
-        Ok(dest) if picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle) => {
-            let _ = fallback.capture_target_before_picker(dest.clone());
-            let ambient: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
-            match supervisor.launch(
-                request_id.clone(),
-                picker_command.clone(),
-                &ambient,
-                Duration::from_secs(30),
+    match context
+        .host_clipboard
+        .accept_paste_fd_for_destination(fd, mime_type, dest.clone())
+    {
+        Ok(dest) => {
+            if !fulfill_armed_fallback(
+                context.fallback,
+                context.host_clipboard,
+                context.data_control,
+                context.notifier,
             ) {
-                Ok(socket) => {
-                    let candidates = picker_candidates(host_clipboard);
-                    if let Err(error) = picker_handshake(socket, &request_id, &dest, candidates) {
-                        log::warn!("d2b-clipd: bridge picker handshake failed: {error}");
-                        if let Some(paste) = host_clipboard.take_pending_paste() {
-                            paste.close_with_reason(ReasonCode::PickerCrashed);
-                        }
-                        let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
-                        let _ = fallback.cancel_picker();
-                    }
-                }
-                Err(error) => {
-                    log::warn!("d2b-clipd: bridge picker launch failed: {error}");
-                    if let Some(paste) = host_clipboard.take_pending_paste() {
-                        paste.close_with_reason(ReasonCode::PickerNotConfigured);
-                    }
-                    let _ = fallback.cancel_picker();
-                }
+                open_picker_or_arm_fallback(
+                    context.fallback,
+                    dest,
+                    context.host_clipboard,
+                    context.notifier,
+                    context.supervisor,
+                    context.picker_command,
+                );
             }
         }
-        Ok(_) => {
-            if let Some(paste) = host_clipboard.take_pending_paste() {
-                paste.close_with_reason(ReasonCode::PickerNotConfigured);
-            }
+        Err(reason) => {
             d2b_clipd::notifications::emit_user_visible_failure(
-                notifier,
-                ReasonCode::PickerNotConfigured,
+                context.notifier,
+                reason,
                 "host",
                 &vm_name,
             );
-        }
-        Err(reason) => {
-            d2b_clipd::notifications::emit_user_visible_failure(notifier, reason, "host", &vm_name);
         }
     }
 }
@@ -988,6 +971,7 @@ fn handle_control_stream(
             ControlStreamStatus::Done
         }
         Err(ControlReadError::Incomplete) => ControlStreamStatus::Incomplete,
+        Err(ControlReadError::Closed) => ControlStreamStatus::Done,
         Err(ControlReadError::Invalid(error)) => {
             let body = format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&error));
             if let Err(error) = control.stream.write_all(body.as_bytes()) {
@@ -1000,6 +984,7 @@ fn handle_control_stream(
 
 #[derive(Debug)]
 enum ControlReadError {
+    Closed,
     Incomplete,
     Invalid(String),
 }
@@ -1011,9 +996,7 @@ fn read_control_command_from_stream(
         let mut buf = [0_u8; 256];
         match control.stream.read(&mut buf) {
             Ok(0) if control.read_buffer.is_empty() => {
-                return Err(ControlReadError::Invalid(
-                    "peer closed before newline".to_owned(),
-                ));
+                return Err(ControlReadError::Closed);
             }
             Ok(0) => {
                 return Err(ControlReadError::Invalid(
