@@ -70,6 +70,16 @@ deprecations ship one minor release before removal.
   `clipboard-picker-smoke.sh` Layer-2 script for `d2b host validate --wave p0Cb`.
 - Added `p0Cb` readiness wave to `WAVE_CATALOG` and `readinessWaveSpecs`
   covering the clipboard authority foundation smoke validation.
+- `d2b-clipd` now implements the full ADR 0042 host-authority event loop:
+  connects to the host Wayland compositor via `ext-data-control-v1`
+  (preferring the stable extension, falling back to `zwlr-data-control-v1`
+  when only the WLR variant is advertised); subscribes Niri IPC events for
+  focused-window attribution via `$NIRI_SOCKET`; materialises host copy
+  events with `FocusedWindowGuess` attribution; holds paste write-FDs open
+  until the picker resolves or a 30-second deadline fires; launches the
+  picker process over a `socketpair` using `CommandPickerSpawner`; falls
+  back to native-paste arming (no synthetic input) when no picker command is
+  configured; logs notification errors without exposing raw clipboard content.
 - Staged the ADR 0041 console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,

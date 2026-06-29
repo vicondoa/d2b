@@ -52,7 +52,8 @@ impl PasteWriteFd {
 /// The current clipboard selection observed from the host compositor.
 #[derive(Debug)]
 pub struct HostSelection {
-    pub offer: DataControlOffer,
+    /// The Wayland offer proxy; `None` when all MIME types were denied by policy.
+    pub offer: Option<DataControlOffer>,
     pub allowed_mimes: Vec<String>,
     pub has_secret: bool,
     pub attribution: HostSelectionAttribution,
@@ -90,7 +91,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     /// Queries Niri for the current focused window to attach attribution.
     pub fn on_host_selection_changed(
         &mut self,
-        offer: DataControlOffer,
+        offer: Option<DataControlOffer>,
         allowed_mimes: Vec<String>,
         has_secret: bool,
     ) {
