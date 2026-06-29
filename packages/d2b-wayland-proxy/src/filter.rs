@@ -135,6 +135,7 @@ impl WlDisplayHandler for FilterDisplayHandler {
 #[derive(Debug)]
 pub struct VirtualClipboardState {
     vm_name: String,
+    diag: Rc<RefCell<DiagRateLimiter>>,
     bridge_path: Option<PathBuf>,
     bridge: Option<UnixStream>,
     bridge_reconnect: BridgeReconnectMachine,
@@ -158,9 +159,14 @@ struct VirtualOffer {
 }
 
 impl VirtualClipboardState {
-    pub fn new(vm_name: String, bridge_config: BridgeConfig) -> Self {
+    pub fn new(
+        vm_name: String,
+        diag: Rc<RefCell<DiagRateLimiter>>,
+        bridge_config: BridgeConfig,
+    ) -> Self {
         Self {
             vm_name,
+            diag,
             bridge_path: bridge_config.socket_path.clone(),
             bridge: None,
             bridge_reconnect: BridgeReconnectMachine::new(&bridge_config),
@@ -286,12 +292,16 @@ impl VirtualClipboardState {
         }
         match UnixStream::connect(&path) {
             Ok(stream) => {
-                if let Err(error) = stream.set_nonblocking(true) {
-                    log::debug!(
-                        "[d2b-wlproxy] vm={} clipboard bridge nonblocking setup failed at {}: {}",
-                        self.vm_name,
-                        path.display(),
-                        error
+                if let Err(_error) = stream.set_nonblocking(true) {
+                    let vm = self.vm_name.clone();
+                    self.diag.borrow_mut().warn(
+                        "clipboard-bridge",
+                        "nonblocking-failed",
+                        || {
+                            format!(
+                                "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=nonblocking-failed"
+                            )
+                        },
                     );
                     self.bridge_reconnect.connect_failed();
                     self.schedule_bridge_retry();
@@ -301,13 +311,15 @@ impl VirtualClipboardState {
                 self.next_bridge_retry = None;
                 self.bridge = Some(stream);
             }
-            Err(error) => {
-                log::debug!(
-                    "[d2b-wlproxy] vm={} clipboard bridge connect failed at {}: {}",
-                    self.vm_name,
-                    path.display(),
-                    error
-                );
+            Err(_error) => {
+                let vm = self.vm_name.clone();
+                self.diag
+                    .borrow_mut()
+                    .warn("clipboard-bridge", "connect-failed", || {
+                        format!(
+                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-failed"
+                        )
+                    });
                 self.bridge_reconnect.connect_failed();
                 self.schedule_bridge_retry();
             }
@@ -328,6 +340,12 @@ impl VirtualClipboardState {
         });
         if !retried {
             self.mark_bridge_disconnected();
+            let vm = self.vm_name.clone();
+            self.diag
+                .borrow_mut()
+                .warn("clipboard-bridge", "handoff-failed", || {
+                    format!("[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-failed")
+                });
         }
     }
 
@@ -557,14 +575,17 @@ impl WlRegistryHandler for FilterRegistryHandler {
         };
 
         if !bind_matches_advertised_cap(advertised, id.interface(), id.version()) {
-            log::warn!(
-                "[d2b-wlproxy] vm={} event=bind-denied reason=version-cap registry-name={} interface={} requested-version={} advertised-version={}",
-                self.policy.vm_name,
-                name,
-                advertised.interface.name(),
-                id.version(),
-                advertised.version,
-            );
+            let vm = self.policy.vm_name.clone();
+            let iface = advertised.interface.name().to_owned();
+            let requested = id.version();
+            let advertised_version = advertised.version;
+            self.diag
+                .borrow_mut()
+                .warn("bind-denied", "version-cap", || {
+                    format!(
+                        "[d2b-wlproxy] vm={vm} event=bind-denied reason=version-cap registry-name={name} interface={iface} requested-version={requested} advertised-version={advertised_version}"
+                    )
+                });
             if let Some(client) = id.client() {
                 client.disconnect();
             }
@@ -600,13 +621,17 @@ impl WlRegistryHandler for FilterRegistryHandler {
                 Some(eglstream_display) => {
                     eglstream_display.set_handler(FilterEglstreamDisplayHandler {
                         vm: self.policy.vm_name.clone(),
+                        diag: self.diag.clone(),
                     });
                 }
                 _ => {
                     if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
                         && !self.policy.dmabuf_filters.is_empty()
                     {
-                        dmabuf.set_handler(DmabufHandler::new(self.policy.dmabuf_filters.clone()));
+                        dmabuf.set_handler(DmabufHandler::new(
+                            self.policy.dmabuf_filters.clone(),
+                            self.diag.clone(),
+                        ));
                     }
                 }
             },
@@ -718,10 +743,16 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
         _icon: Option<&Rc<wl_proxy::protocols::wayland::wl_surface::WlSurface>>,
         _serial: u32,
     ) {
-        log::warn!(
-            "[d2b-wlproxy] vm={} denied wl_data_device.start_drag; DND is not virtualized in clipboard v1",
-            self.vm_name,
-        );
+        if let Some(clipboard) = self.clipboard.upgrade() {
+            let vm = self.vm_name.clone();
+            clipboard
+                .borrow()
+                .diag
+                .borrow_mut()
+                .warn("clipboard-dnd", "start-drag-denied", || {
+                    format!("[d2b-wlproxy] vm={vm} event=clipboard-dnd reason=start-drag-denied")
+                });
+        }
         if let Some(client) = slf.client() {
             client.disconnect();
         }
@@ -845,6 +876,7 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
 /// guest-to-host Wayland boundary.
 struct FilterEglstreamDisplayHandler {
     vm: String,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
@@ -867,11 +899,15 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
             return;
         }
 
-        log::warn!(
-            "[d2b-wlproxy] vm={} denied wl_eglstream_display.create_stream with non-fd handle_type={}",
-            self.vm,
-            r#type
-        );
+        let vm = self.vm.clone();
+        let handle_type = r#type;
+        self.diag
+            .borrow_mut()
+            .warn("eglstream", "create-stream-denied", || {
+                format!(
+                    "[d2b-wlproxy] vm={vm} event=eglstream reason=create-stream-denied handle-type={handle_type}"
+                )
+            });
         if let Some(client) = id.client() {
             client.disconnect();
         }
@@ -944,8 +980,10 @@ mod tests {
     }
 
     fn clipboard() -> Rc<RefCell<VirtualClipboardState>> {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         Rc::new(RefCell::new(VirtualClipboardState::new(
             "work".to_owned(),
+            diag,
             BridgeConfig::disabled(),
         )))
     }

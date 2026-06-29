@@ -645,6 +645,7 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
+      ] ++ lib.optionals config.d2b.site.clipboard.enable [
         "--clipd-bridge-socket" bridgeSock
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };

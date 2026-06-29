@@ -440,6 +440,7 @@ impl EventLoop<'_> {
                         self.supervisor,
                     ),
                     Ok(PickerPoll::Closed) => {
+                        log::warn!("d2b-clipd: picker exited before completing the paste request");
                         let _ = self.fallback.cancel_picker();
                         let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
                     }
@@ -525,7 +526,7 @@ enum BridgeFrame {
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum BridgeAttribution {
     ExactClient,
 }
@@ -543,6 +544,8 @@ fn install_bridge_listeners(
             .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o770))
+            .map_err(|e| format!("set bridge socket dir mode {}: {e}", parent.display()))?;
         if path.exists() {
             let meta = std::fs::symlink_metadata(&path)
                 .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
@@ -736,7 +739,7 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
         }
         let mut buf = [0_u8; 4096];
         let mut iov = [std::io::IoSliceMut::new(&mut buf)];
-        let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+        let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(64))];
         let mut control = rustix::net::RecvAncillaryBuffer::new(&mut cmsg_space);
         let msg = match rustix::net::recvmsg(
             &stream.stream,
@@ -760,12 +763,16 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
                 stream.received_fds.extend(fds);
             }
         }
-        if stream.received_fds.len() > 1 {
+        if stream.received_fds.len() > 64 {
+            stream.received_fds.clear();
             return Err(BridgeReadError::Invalid(
-                "bridge frame carried too many transfer fds".to_owned(),
+                "bridge frame carried too many queued transfer fds".to_owned(),
             ));
         }
-        if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
+        let control_truncated =
+            rustix::net::RecvFlags::from_bits_retain(nix::libc::MSG_CTRUNC as u32);
+        if msg.flags.contains(control_truncated) {
+            stream.received_fds.clear();
             return Err(BridgeReadError::Invalid(
                 "bridge control message truncated".to_owned(),
             ));
@@ -776,6 +783,17 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
             ));
         }
         stream.read_buffer.extend_from_slice(&buf[..msg.bytes]);
+        let queued_frames = stream
+            .read_buffer
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        if queued_frames > 0 && stream.received_fds.len() > queued_frames {
+            stream.received_fds.clear();
+            return Err(BridgeReadError::Invalid(
+                "bridge frame carried too many transfer fds".to_owned(),
+            ));
+        }
         if stream.read_buffer.len() > 4096 {
             return Err(BridgeReadError::Invalid(
                 "bridge frame too large".to_owned(),

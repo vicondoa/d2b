@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::CString,
     fs::File,
@@ -20,6 +21,8 @@ use wl_proxy::protocols::{
     },
     wayland::{wl_buffer::WlBuffer, wl_surface::WlSurface},
 };
+
+use crate::diag::DiagRateLimiter;
 
 pub const LINEAR_MODIFIER: u64 = 0;
 pub const INVALID_MODIFIER: u64 = 0x00ff_ffff_ffff_ffff;
@@ -200,11 +203,12 @@ fn parse_u64(s: &str) -> Option<u64> {
 
 pub struct DmabufHandler {
     filters: Arc<DmabufFilterList>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl DmabufHandler {
-    pub fn new(filters: Arc<DmabufFilterList>) -> Self {
-        Self { filters }
+    pub fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
+        Self { filters, diag }
     }
 }
 
@@ -252,7 +256,10 @@ impl ZwpLinuxDmabufV1Handler for DmabufHandler {
         slf: &Rc<ZwpLinuxDmabufV1>,
         params_id: &Rc<ZwpLinuxBufferParamsV1>,
     ) {
-        params_id.set_handler(DmabufBufferParamsHandler::new(self.filters.clone()));
+        params_id.set_handler(DmabufBufferParamsHandler::new(
+            self.filters.clone(),
+            self.diag.clone(),
+        ));
         slf.send_create_params(params_id);
     }
 }
@@ -275,6 +282,7 @@ impl DmabufPlane {
 
 struct DmabufBufferParamsHandler {
     filters: Arc<DmabufFilterList>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
     planes: Vec<DmabufPlane>,
     invalid_plane_count: usize,
 }
@@ -289,9 +297,10 @@ enum DmabufCreateAction {
 }
 
 impl DmabufBufferParamsHandler {
-    fn new(filters: Arc<DmabufFilterList>) -> Self {
+    fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             filters,
+            diag,
             planes: Vec::new(),
             invalid_plane_count: 0,
         }
@@ -425,6 +434,7 @@ trait DmabufCreateSink {
 struct ProxyCreateSink<'a> {
     params: &'a Rc<ZwpLinuxBufferParamsV1>,
     buffer: Option<&'a Rc<WlBuffer>>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl DmabufCreateSink for ProxyCreateSink<'_> {
@@ -451,7 +461,11 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
         let Some(buffer) = self.buffer else {
-            log::warn!("dmabuf create_immed requested without a wl_buffer id");
+            self.diag
+                .borrow_mut()
+                .warn("dmabuf", "create-immed-missing-buffer", || {
+                    "dmabuf create_immed requested without a wl_buffer id".to_owned()
+                });
             self.params.send_failed();
             return;
         };
@@ -460,10 +474,14 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
     }
 
     fn failed(&mut self, format: u32, denied_count: usize, examples: &[String]) {
-        log::warn!(
-            "dmabuf buffer creation denied: format=0x{format:08x} denied_count={denied_count} examples=[{}]",
-            examples.join(", ")
-        );
+        let examples = examples.join(", ");
+        self.diag
+            .borrow_mut()
+            .warn("dmabuf", "buffer-denied", || {
+                format!(
+                    "dmabuf buffer creation denied: format=0x{format:08x} denied_count={denied_count} examples=[{examples}]"
+                )
+            });
         self.params.send_failed();
     }
 }
@@ -493,6 +511,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: None,
+            diag: self.diag.clone(),
         };
         self.handle_create_with_sink(&mut sink, width, height, format, flags);
     }
@@ -509,6 +528,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: Some(buffer_id),
+            diag: self.diag.clone(),
         };
         self.handle_create_immed_with_sink(&mut sink, width, height, format, flags);
     }
@@ -771,7 +791,7 @@ mod tests {
                 modifier: Some(LINEAR_MODIFIER),
             }],
         ));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
         handler.planes.push(DmabufPlane {
             fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
             plane_idx: 0,
@@ -781,6 +801,10 @@ mod tests {
             modifier_lo: modifier as u32,
         });
         handler
+    }
+
+    fn diag() -> Rc<RefCell<DiagRateLimiter>> {
+        Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())))
     }
 
     #[test]
@@ -984,7 +1008,7 @@ mod tests {
     fn invalid_plane_set_fails_create_without_unbounded_examples() {
         let format = 0x3432_5258u32;
         let filters = Arc::new(DmabufFilterList::new(&[], &[]));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
         handler.invalid_plane_count = 100;
 
         assert_eq!(

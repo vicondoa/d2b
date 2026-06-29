@@ -32,6 +32,7 @@ struct RateKey {
     label: String,
 }
 
+#[derive(Debug)]
 struct BucketState {
     count: u64,
     window_start: Instant,
@@ -42,6 +43,7 @@ const WINDOW: Duration = Duration::from_secs(60);
 const MAX_PER_WINDOW: u64 = 5;
 
 /// Per-state rate limiter for filter diagnostics.
+#[derive(Debug)]
 pub struct DiagRateLimiter {
     vm: String,
     buckets: HashMap<RateKey, BucketState>,
@@ -93,6 +95,10 @@ impl DiagRateLimiter {
             bucket.suppressed += 1;
             false
         }
+    }
+
+    pub fn warn(&mut self, event: &'static str, label: &str, msg: impl FnOnce() -> String) -> bool {
+        self.emit(event, label, msg)
     }
 
     /// Log a bind-denial event (security boundary enforcement).

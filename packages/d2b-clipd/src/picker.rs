@@ -54,7 +54,9 @@ impl PickerProcess for Child {
     }
 
     fn terminate(&mut self) {
-        let _ = self.kill();
+        if let Some(pid) = rustix::process::Pid::from_raw(self.id() as i32) {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::Term);
+        }
     }
 
     fn kill(&mut self) {

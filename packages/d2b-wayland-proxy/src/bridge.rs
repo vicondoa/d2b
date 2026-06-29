@@ -178,10 +178,7 @@ impl BridgeReconnectMachine {
 
     pub fn disconnected(&mut self) {
         if matches!(self.state, BridgeConnectionState::Connected) {
-            self.state = BridgeConnectionState::Backoff {
-                attempt: 1,
-                delay: self.policy.initial_delay,
-            };
+            self.state = BridgeConnectionState::Disconnected;
         }
     }
 
@@ -259,17 +256,7 @@ impl BridgeHandoff for UnixStream {
             None,
         ) {
             Ok(n) if n == frame.len() => HandoffStatus::Delivered,
-            Ok(n) => {
-                log::debug!(
-                    "d2b-wayland-proxy: bridge fd handoff short write: {n}/{}",
-                    frame.len()
-                );
-                HandoffStatus::Failed
-            }
-            Err(error) => {
-                log::debug!("d2b-wayland-proxy: bridge fd handoff failed: {error}");
-                HandoffStatus::Failed
-            }
+            Ok(_) | Err(_) => HandoffStatus::Failed,
         }
     }
 }
@@ -404,13 +391,7 @@ mod tests {
         machine.connect_succeeded();
         assert_eq!(machine.state(), BridgeConnectionState::Connected);
         machine.disconnected();
-        assert_eq!(
-            machine.state(),
-            BridgeConnectionState::Backoff {
-                attempt: 1,
-                delay: Duration::from_millis(250)
-            }
-        );
+        assert_eq!(machine.state(), BridgeConnectionState::Disconnected);
     }
 
     #[test]

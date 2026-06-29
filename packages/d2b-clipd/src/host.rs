@@ -104,7 +104,8 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     /// Called when the data-control device reports a new host selection.
-    /// Queries Niri for the current focused window to attach attribution.
+    /// Uses the Niri event-stream cache to attach best-effort attribution without
+    /// blocking the clipboard event loop on synchronous compositor IPC.
     pub fn on_host_selection_changed(
         &mut self,
         offer: Option<DataControlOffer>,
@@ -153,13 +154,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             log::debug!("d2b-clipd: paste fd rejected (already holding one)");
             return Err(ReasonCode::FdCapExceeded);
         }
-        // Refresh synchronously at the instant of the paste request; the
-        // asynchronous Niri event stream may lag behind the Wayland send event.
-        let dest = self
-            .attributor
-            .on_host_selection_changed()
-            .window
-            .unwrap_or_default();
+        let dest = self.focused_window_snapshot().unwrap_or_default();
         self.pending_paste = Some(PasteWriteFd::new(
             write_fd,
             mime_type,
@@ -260,12 +255,11 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 
 // ─── Non-blocking write helper ────────────────────────────────────────────────
 
-/// Write all `data` bytes to `fd` which must already be in non-blocking mode
-/// (the Wayland compositor pipe write end should be set by us after receipt).
+/// Write available `data` bytes to `fd` without waiting for a slow peer. The
+/// event loop must never block behind a malicious or stalled Wayland requester.
 ///
 /// Returns `Ok(())` on success, `Err(String)` on any error.
-fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], deadline: Instant) -> Result<(), String> {
-    use rustix::event::{PollFd, PollFlags, poll};
+fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], _deadline: Instant) -> Result<(), String> {
     use std::os::fd::AsFd;
 
     rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|error| error.to_string())?;
@@ -276,29 +270,7 @@ fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], deadline: Instant) -> Result
             Ok(0) => return Err("short write to closed fd".to_owned()),
             Ok(written) => remaining = &remaining[written..],
             Err(rustix::io::Errno::INTR) => {}
-            Err(rustix::io::Errno::AGAIN) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err("write timed out".to_owned());
-                }
-                let timeout = deadline
-                    .saturating_duration_since(now)
-                    .as_millis()
-                    .min(i32::MAX as u128) as i32;
-                let mut fds = [PollFd::new(
-                    fd,
-                    PollFlags::OUT | PollFlags::ERR | PollFlags::HUP,
-                )];
-                match poll(&mut fds, timeout) {
-                    Ok(0) => return Err("write timed out".to_owned()),
-                    Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
-                        return Err("write fd closed".to_owned());
-                    }
-                    Ok(_) => {}
-                    Err(rustix::io::Errno::INTR) => {}
-                    Err(error) => return Err(error.to_string()),
-                }
-            }
+            Err(rustix::io::Errno::AGAIN) => return Err("write would block".to_owned()),
             Err(error) => return Err(error.to_string()),
         }
     }

@@ -563,6 +563,7 @@ let
         writablePaths = [
           (mkWritablePath "/run/d2b-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
+        ] ++ lib.optionals cfg.site.clipboard.enable [
           (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
             "Connect to this VM's d2b-clipd clipboard bridge socket.")
         ];
@@ -712,6 +713,7 @@ let
       writablePaths = [
         (mkWritablePath "/run/d2b-wlproxy/${name}"
           "Create the per-VM qemu-media Wayland proxy listen socket.")
+      ] ++ lib.optionals cfg.site.clipboard.enable [
         (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
           "Connect to this VM's d2b-clipd clipboard bridge socket.")
       ];

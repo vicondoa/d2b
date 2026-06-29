@@ -433,6 +433,22 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
     }
 
     pub fn on_host_selection_changed(&mut self) -> HostSelectionAttribution {
+        self.cached_focused_window_guess()
+    }
+
+    pub fn cached_focused_window_guess(&mut self) -> HostSelectionAttribution {
+        let quality = if self.cache.is_stale() {
+            AttributionQuality::CacheStaleFocusedWindowGuess
+        } else {
+            AttributionQuality::FocusedWindowGuess
+        };
+        HostSelectionAttribution {
+            window: self.cache.focused_window(),
+            quality,
+        }
+    }
+
+    pub fn refresh_from_provider(&mut self) -> HostSelectionAttribution {
         match self.provider.query_focused_window() {
             Ok(window) => HostSelectionAttribution {
                 window: self.cache.update_focused_window(window),
@@ -595,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn host_selection_query_refreshes_focused_window() {
+    fn provider_refresh_updates_focused_window() {
         let provider = FakeFocusedWindowProvider {
             responses: vec![Ok(Some(NiriWindow {
                 id: Some(9),
@@ -606,7 +622,7 @@ mod tests {
         };
         let mut attributor = HostClipboardAttributor::new(provider);
 
-        let attribution = attributor.on_host_selection_changed();
+        let attribution = attributor.refresh_from_provider();
         assert_eq!(attribution.quality, AttributionQuality::FocusedWindowGuess);
         assert_eq!(
             attribution.window.and_then(|window| window.app_id),
@@ -615,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn host_selection_failure_returns_cache_stale_guess() {
+    fn provider_failure_returns_cache_stale_guess() {
         let provider = FakeFocusedWindowProvider {
             responses: vec![Err(NiriIpcError::Io("disconnected".to_owned()))],
         };
@@ -628,7 +644,7 @@ mod tests {
                 ..NiriWindow::default()
             }));
 
-        let attribution = attributor.on_host_selection_changed();
+        let attribution = attributor.refresh_from_provider();
         assert_eq!(
             attribution.quality,
             AttributionQuality::CacheStaleFocusedWindowGuess

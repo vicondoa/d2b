@@ -261,6 +261,7 @@ fn accept_loop(
     let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
     let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(
         vm.clone(),
+        diag.clone(),
         bridge_config,
     )));
     let state = match build_state(&upstream) {
