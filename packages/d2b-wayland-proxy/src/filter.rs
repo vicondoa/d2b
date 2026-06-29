@@ -555,6 +555,7 @@ pub struct FilterRegistryHandler {
     /// interface and version we advertised. Bind requests above this version
     /// are rejected even if the client guessed the original compositor version.
     advertised_globals: HashMap<u32, AdvertisedGlobal>,
+    synthetic_clipboard_name: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -576,7 +577,39 @@ impl FilterRegistryHandler {
             clipboard,
             hidden_globals: HashSet::new(),
             advertised_globals: HashMap::new(),
+            synthetic_clipboard_name: None,
         }
+    }
+
+    fn ensure_synthetic_clipboard_global(&mut self, slf: &Rc<WlRegistry>, reserved_name: u32) {
+        if self.synthetic_clipboard_name.is_some() {
+            return;
+        }
+        let name = self.allocate_synthetic_clipboard_name(reserved_name);
+        let interface = ObjectInterface::WlDataDeviceManager;
+        let version = 3;
+        self.synthetic_clipboard_name = Some(name);
+        self.advertised_globals.insert(
+            name,
+            AdvertisedGlobal {
+                interface,
+                version,
+                synthetic_clipboard: true,
+            },
+        );
+        slf.send_global(name, interface, version);
+    }
+
+    fn allocate_synthetic_clipboard_name(&self, reserved_name: u32) -> u32 {
+        for name in (0..=u32::MAX).rev() {
+            if name != reserved_name
+                && !self.advertised_globals.contains_key(&name)
+                && !self.hidden_globals.contains(&name)
+            {
+                return name;
+            }
+        }
+        unreachable!("Wayland registry exhausted every u32 global name")
     }
 }
 
@@ -589,17 +622,9 @@ impl WlRegistryHandler for FilterRegistryHandler {
         version: u32,
     ) {
         let iface_name = interface.name();
+        self.ensure_synthetic_clipboard_global(slf, name);
         if iface_name == "wl_data_device_manager" {
-            let adv_version = version.min(3);
-            self.advertised_globals.insert(
-                name,
-                AdvertisedGlobal {
-                    interface,
-                    version: adv_version,
-                    synthetic_clipboard: true,
-                },
-            );
-            slf.send_global(name, interface, adv_version);
+            self.hidden_globals.insert(name);
             return;
         }
 
@@ -1182,6 +1207,33 @@ mod tests {
         let advertised = handler.advertised_globals.get(&11).expect("synthetic");
         assert!(advertised.synthetic_clipboard);
         assert_eq!(advertised.interface, ObjectInterface::WlDataDeviceManager);
+    }
+
+    #[test]
+    fn synthetic_clipboard_global_uses_reserved_high_name() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+
+        assert_eq!(handler.allocate_synthetic_clipboard_name(7), u32::MAX);
+    }
+
+    #[test]
+    fn synthetic_clipboard_global_avoids_server_and_existing_names() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        handler.advertised_globals.insert(
+            u32::MAX,
+            AdvertisedGlobal {
+                interface: ObjectInterface::WlCompositor,
+                version: 6,
+                synthetic_clipboard: false,
+            },
+        );
+
+        assert_eq!(
+            handler.allocate_synthetic_clipboard_name(u32::MAX - 1),
+            u32::MAX - 2
+        );
     }
 
     #[test]

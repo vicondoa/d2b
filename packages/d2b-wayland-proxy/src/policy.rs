@@ -404,7 +404,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("zwp_pointer_constraints_v1", Allow, AppDefault);
     entry!("zwp_pointer_gestures_v1", Allow, AppDefault);
     entry!("zwp_tablet_manager_v2", Allow, AppDefault);
-    entry!("zwp_text_input_manager_v3", Allow, AppDefault);
+    entry!("zwp_text_input_manager_v3", Deny, AppDefault);
     entry!("zwp_input_timestamps_manager_v1", Allow, AppDefault);
     entry!(
         "zwp_keyboard_shortcuts_inhibit_manager_v1",
@@ -543,6 +543,15 @@ mod tests {
                 "clipboard boundary global `{iface}` must be denied until virtualized"
             );
         }
+    }
+
+    #[test]
+    fn unstable_text_input_global_is_denied_by_default() {
+        let p = policy_for("work");
+        assert!(
+            !p.is_allowed("zwp_text_input_manager_v3"),
+            "text-input v3 is denied until the proxy can validate seat-bound requests"
+        );
     }
 
     #[test]

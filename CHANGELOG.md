@@ -36,6 +36,10 @@ deprecations ship one minor release before removal.
 
 - USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
   spawn failures as retryable instead of reporting the helper as missing.
+- `d2b-wayland-proxy` now advertises its virtual clipboard manager even when
+  the host compositor omits `wl_data_device_manager`, and denies unstable
+  text-input v3 forwarding by default to avoid guest app crashes on invalid
+  seat-bound requests.
 
 ### Added
 
