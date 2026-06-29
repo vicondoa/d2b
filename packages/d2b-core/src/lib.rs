@@ -1,9 +1,11 @@
 #![doc = "Canonical data transfer objects for d2b bundle artifacts."]
 
+pub mod audio_policy;
 pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;
+pub mod console_ring;
 pub mod contract_id;
 pub mod error;
 pub mod host;
@@ -16,6 +18,7 @@ pub mod privileges;
 pub mod privileges_w3;
 pub mod process_builder;
 pub mod processes;
+pub mod provider_capabilities;
 pub mod runtime;
 pub mod static_invariants;
 pub mod storage;

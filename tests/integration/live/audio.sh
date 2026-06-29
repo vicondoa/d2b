@@ -25,11 +25,8 @@
 #       - The host has at least one Audio Device, at least one Sink,
 #         at least one Source.
 #   2. Audio sidecar lifecycle
-#       - `systemctl start d2b-<vm>-snd.service` (system service) creates
-#         the listening UDS under /run/user/<uid>/ with group=kvm
-#         mode=0660; stop removes it.
-#       - The .service auto-activates via socket activation when
-#         something connects.
+#       - d2bd starts the broker-spawned audio runner before the VM's
+#         hypervisor consumes `/run/d2b/vms/<vm>/snd.sock`.
 #   3. `d2b audio` CLI smoke
 #       - `d2b audio status <vm>` reports a clean baseline
 #       - `d2b audio mic on <vm>` -> state file updated, sidecar
@@ -162,10 +159,6 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   exit 2
 fi
 
-# Shared scratch VM name we use for sidecar lifecycle tests. Doesn't
-# need to be a real VM (the .socket template instantiates per any name).
-SCRATCH_VM=__d2b_test_audio__
-
 # ---------------------------------------------------------------------
 # Cleanups: at exit, stop the scratch sidecar and reset every
 # audio-enabled VM's state file to what we found it as.
@@ -179,8 +172,6 @@ for vm in $TEST_VMS; do
 done
 
 cleanup_audio() {
-  systemctl stop "d2b-${SCRATCH_VM}-snd.service" 2>/dev/null || true
-  systemctl reset-failed "d2b-${SCRATCH_VM}-snd.service" 2>/dev/null || true
   for vm in "${!D2B_AUDIO_BASELINE[@]}"; do
     local f="$STATE_ROOT/$vm/state/audio-state.json"
     local baseline="${D2B_AUDIO_BASELINE[$vm]}"
@@ -321,76 +312,6 @@ test_host_has_audio_sinks_and_sources() {
 # Layer 2: sidecar lifecycle
 # =====================================================================
 
-test_sidecar_unit_present() {
-  log "test_sidecar_unit_present"
-  # d2b-<vm>-snd.service is now a per-VM system service (not
-  # a template, not user). Look for at least one such unit.
-  if ! systemctl list-unit-files 'd2b-*-snd.service' --no-pager \
-       --no-legend 2>/dev/null | grep -q 'd2b-.*-snd.service'; then
-    fail "no d2b-<vm>-snd.service unit registered"
-  else
-    ok "d2b-<vm>-snd.service unit(s) registered"
-  fi
-}
-
-test_sidecar_socket_lifecycle() {
-  log "test_sidecar_socket_lifecycle"
-  # d2b-<vm>-snd.service is a per-VM system service with
-  # User=d2b-<vm>-snd.  Synthetic VM names (SCRATCH_VM) have no
-  # declared system user so systemd refuses to start them ("Access denied").
-  # Use the first stopped audio-enabled manifest VM instead so the user
-  # exists and the sidecar starts cleanly without disrupting a running VM.
-  local test_vm=""
-  for _av in $TEST_VMS; do
-    if ! vm_running "$_av" 2>/dev/null; then
-      test_vm="$_av"
-      break
-    fi
-  done
-  if [ -z "$test_vm" ]; then
-    log "  SKIP: no stopped audio-enabled VM available for sidecar lifecycle test"
-    return 0
-  fi
-
-  local sock
-  sock="/run/d2b/vms/${test_vm}/snd.sock"
-  local svc="d2b-${test_vm}-snd.service"
-  systemctl stop "$svc" 2>/dev/null || true
-  systemctl reset-failed "$svc" 2>/dev/null || true
-
-  if ! systemctl start "$svc"; then
-    fail "could not start $svc"
-    return 1
-  fi
-  ok "systemctl start $svc succeeded"
-
-  # Wait for the service to be fully active and the socket to appear.
-  # The sidecar dir is owned by d2b-<vm>-snd and not traversable by
-  # the Wayland user, so use sudo -A for socket existence and ownership checks.
-  for _ in 1 2 3 4 5; do
-    sudo -A test -S "$sock" 2>/dev/null && break
-    sleep 0.5
-  done
-  if ! sudo -A test -S "$sock" 2>/dev/null; then
-    fail "socket file $sock did not appear after start"
-    systemctl stop "$svc" 2>/dev/null || true
-    return 1
-  fi
-  ok "socket created at $sock"
-
-  local owner
-  owner=$(sudo -A stat -c '%U' "$sock" 2>/dev/null)
-  assert_eq "$owner" "d2b-${test_vm}-snd" "socket owner d2b-${test_vm}-snd"
-
-  systemctl stop "$svc"
-  sleep 0.5
-  if systemctl is-active --quiet "$svc"; then
-    fail "sidecar still active after stop"
-  else
-    ok "sidecar inactive after stop"
-  fi
-}
-
 # =====================================================================
 # Layer 3: CLI smoke
 # =====================================================================
@@ -421,66 +342,32 @@ test_cli_grant_revoke() {
   local vm rc=0
   vm=$(printf '%s\n' "$TEST_VMS" | head -1)
   local f="$STATE_ROOT/$vm/state/audio-state.json"
-  local sock
-  sock="/run/d2b/vms/${vm}/snd.sock"
-  local svc="d2b-${vm}-snd.service"
 
-  # baseline reset (also tears down any stale sidecar). reset-failed
-  # so the next start isn't blocked by start-limit-hit.
+  # baseline reset
   d2b audio off "$vm" >/dev/null
-  systemctl reset-failed "$svc" 2>/dev/null || true
 
   # grant mic
   d2b audio mic on "$vm" >/dev/null
   local state
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"on","speaker":"off"}' "state after mic on" || rc=1
-  # Sidecar should be active; socket file PRESENCE is unreliable because
-  # vhost-device-sound v0.2.0 unlinks the listener path on accept (its
-  # Drop impl in rust-vmm/vhost). When CH is connected the file is
-  # transiently gone but the daemon is still serving. Check the
-  # systemd service instead. If no VM is currently connected the
-  # daemon's outer loop binds a fresh socket file each iteration, so
-  # the file should appear within a couple of seconds.
-  # d2b-<vm>-snd is a SYSTEM service (not user); use systemctl without --user.
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    systemctl is-active --quiet "$svc" && break
-    sleep 0.5
-  done
-  if ! systemctl is-active --quiet "$svc"; then
-    fail "sidecar not active after mic on (within 5s)"
-    rc=1
-  else
-    ok "sidecar active after mic on"
-  fi
+  ok "mic grant persisted; daemon runner lifecycle is covered by VM start/e2e checks"
 
   # grant speaker too
   d2b audio speaker on "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"on","speaker":"on"}' "state after speaker on" || rc=1
 
-  # mic off, speaker still on -> sidecar should stay up
+  # mic off, speaker still on -> state should retain speaker grant
   d2b audio mic off "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"off","speaker":"on"}' "state after mic off" || rc=1
-  if ! systemctl is-active --quiet "$svc"; then
-    fail "sidecar not active after mic off but speaker still on"
-    rc=1
-  else
-    ok "sidecar retained while speaker still on"
-  fi
 
   # revoke all
   d2b audio off "$vm" >/dev/null
   state=$(cat "$f")
   assert_eq "$state" '{"mic":"off","speaker":"off"}' "state after off" || rc=1
-  sleep 0.5
-  if systemctl is-active --quiet "$svc"; then
-    fail "sidecar still active after audio off"
-    rc=1
-  else
-    ok "sidecar inactive after audio off"
-  fi
+  ok "audio off state persisted"
 
   return $rc
 }
@@ -896,11 +783,6 @@ test_e2e_node_name_per_vm() {
     return 0
   fi
   local vm="$RUNNING_AUDIO_VM"
-  if ! systemctl is-active --quiet "d2b-${vm}-snd.service"; then
-    skip "$vm: sidecar not active"
-    return 0
-  fi
-
   local dump
   dump=$(_e2e_pw_dump) || dump=""
   if [ -z "$dump" ]; then
@@ -1205,7 +1087,6 @@ QUICK_TESTS=(
   test_host_pipewire_alive
   test_host_has_audio_devices
   test_host_has_audio_sinks_and_sources
-  test_sidecar_unit_present
   test_cloud_hypervisor_capabilities
   test_audio_state_fail_closed_missing
   test_audio_state_fail_closed_garbage
@@ -1225,8 +1106,6 @@ ALL_TESTS=(
   test_host_pipewire_alive
   test_host_has_audio_devices
   test_host_has_audio_sinks_and_sources
-  test_sidecar_unit_present
-  test_sidecar_socket_lifecycle
   test_cli_status_smoke
   test_cli_grant_revoke
   test_cli_rejects_audio_disabled_vm

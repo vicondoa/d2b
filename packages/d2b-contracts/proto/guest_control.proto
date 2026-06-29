@@ -57,6 +57,13 @@ service GuestControl {
   // Framework op: rejoinable status for an activation transient unit. Status is
   // backed by guestd root-owned /run state and never returns stdout/stderr.
   rpc ActivateSystemStatus(GuestActivationStatusRequest) returns (GuestActivationStatusResponse);
+
+  // Audio ops: read/mutate per-VM audio policy from inside the guest.
+  // Auth-gated; guestd applies changes to the workload-user PipeWire session.
+  // Never invoked for qemu-media VMs (no guestd); ACA sandboxes route over the
+  // provider relay transport.
+  rpc AudioStatus(AudioStatusRequest) returns (AudioStatusResponse);
+  rpc AudioSet(AudioSetRequest) returns (AudioSetResponse);
 }
 
 message RequestMetadata {
@@ -558,6 +565,10 @@ enum GuestCapability {
   GUEST_CAPABILITY_SHELL_FORCE_ATTACH = 13;
   GUEST_CAPABILITY_USBIP_STATUS = 14;
   GUEST_CAPABILITY_SYSTEM_ACTIVATION = 15;
+  // Audio policy status query (read-only; workload-user PipeWire session).
+  GUEST_CAPABILITY_AUDIO_STATUS = 16;
+  // Audio policy mutation: mic/speaker grant + level/gain changes.
+  GUEST_CAPABILITY_AUDIO_SET = 17;
 }
 
 enum GuestSubsystem {
@@ -572,6 +583,7 @@ enum GuestSubsystem {
   GUEST_SUBSYSTEM_SHELL = 8;
   GUEST_SUBSYSTEM_SHPOOL = 9;
   GUEST_SUBSYSTEM_SYSTEM_ACTIVATION = 10;
+  GUEST_SUBSYSTEM_AUDIO = 11;
 }
 
 enum TerminalKind {
@@ -796,4 +808,64 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE = 62;
   GUEST_CONTROL_ERROR_KIND_ACTIVATION_TIMED_OUT = 63;
   GUEST_CONTROL_ERROR_KIND_ACTIVATION_SPAWN_FAILED = 64;
+  // Audio errors.
+  GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE = 65;
+  GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN = 66;
+  GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE = 67;
+  GUEST_CONTROL_ERROR_KIND_AUDIO_ENFORCEMENT_FAILED = 68;
+}
+
+// Audio channel selector.
+enum AudioChannel {
+  AUDIO_CHANNEL_UNSPECIFIED = 0;
+  AUDIO_CHANNEL_MICROPHONE = 1;
+  AUDIO_CHANNEL_SPEAKER = 2;
+}
+
+// Current state of one audio channel as seen by the guest PipeWire session.
+message GuestAudioChannelState {
+  // True when the channel is muted (grant = off).
+  bool muted = 1;
+  // Current level 0–100; 0 when not configured or unavailable.
+  uint32 level = 2;
+  // True when the level value is meaningful (false → level is not available).
+  bool level_known = 3;
+}
+
+// Request: query current guest audio policy state.
+message AudioStatusRequest {
+  RequestMetadata metadata = 1;
+}
+
+// Response: per-channel guest audio state.
+message AudioStatusResponse {
+  GuestAudioChannelState microphone = 1;
+  GuestAudioChannelState speaker = 2;
+  GuestControlError error = 3;
+}
+
+// Audio mutation kind.
+enum AudioSetKind {
+  AUDIO_SET_KIND_UNSPECIFIED = 0;
+  // Turn a channel on (unmute) or off (mute).
+  AUDIO_SET_KIND_GRANT = 1;
+  // Adjust the channel level (volume/gain).
+  AUDIO_SET_KIND_LEVEL = 2;
+}
+
+// Request: mutate one audio channel's grant or level in the guest session.
+message AudioSetRequest {
+  RequestMetadata metadata = 1;
+  AudioChannel channel = 2;
+  AudioSetKind kind = 3;
+  // For GRANT: true = on, false = off.
+  bool grant_on = 4;
+  // For LEVEL: 0–100; ignored for GRANT.
+  uint32 level = 5;
+}
+
+// Response: updated channel state after the mutation.
+message AudioSetResponse {
+  GuestAudioChannelState state = 1;
+  GuestControlError error = 2;
 }

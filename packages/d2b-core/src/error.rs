@@ -49,6 +49,11 @@ pub enum Kind {
     /// mode, or SHA-256 hash mismatch).
     #[serde(rename = "bundle-tampered")]
     BundleTampered,
+    /// A provider required by an audio or console operation is present but
+    /// not in a state where enforcement can proceed (e.g. expected guestd
+    /// agent absent). Operator remediation required.
+    #[serde(rename = "provider-misconfigured")]
+    ProviderMisconfigured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +66,7 @@ pub struct ErrorKindRecord {
     pub docs_anchor: &'static str,
 }
 
-static ERROR_KIND_RECORDS: [ErrorKindRecord; 14] = [
+static ERROR_KIND_RECORDS: [ErrorKindRecord; 15] = [
     ErrorKindRecord {
         kind: Kind::AuthzNotALauncher,
         exit_code: 10,
@@ -174,6 +179,14 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 14] = [
         remediation: "Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state.",
         docs_anchor: "#bundle-tampered",
     },
+    ErrorKindRecord {
+        kind: Kind::ProviderMisconfigured,
+        exit_code: 80,
+        owning_command: "provider",
+        message_template: "provider for {vm} is misconfigured: {reason}",
+        remediation: "Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running.",
+        docs_anchor: "#provider-misconfigured",
+    },
 ];
 
 impl Kind {
@@ -197,6 +210,7 @@ impl Kind {
             Self::ManifestVersionMismatch => "manifest-version-mismatch",
             Self::InternalIo => "internal-io",
             Self::BundleTampered => "bundle-tampered",
+            Self::ProviderMisconfigured => "provider-misconfigured",
         }
     }
 
@@ -240,6 +254,7 @@ impl Kind {
             Self::ManifestVersionMismatch => &ERROR_KIND_RECORDS[11],
             Self::InternalIo => &ERROR_KIND_RECORDS[12],
             Self::BundleTampered => &ERROR_KIND_RECORDS[13],
+            Self::ProviderMisconfigured => &ERROR_KIND_RECORDS[14],
         }
     }
 }
@@ -258,6 +273,7 @@ pub enum Error {
     Manifest(ManifestError),
     Internal(InternalError),
     Bundle(BundleError),
+    Audio(AudioError),
 }
 
 impl Error {
@@ -344,6 +360,15 @@ impl Error {
         })
     }
 
+    /// Provider required by an audio or console operation is present but
+    /// misconfigured (e.g. expected guestd agent absent).
+    pub fn provider_misconfigured(vm: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Audio(AudioError::ProviderMisconfigured {
+            vm: vm.into(),
+            reason: reason.into(),
+        })
+    }
+
     pub const fn all_kinds() -> &'static [ErrorKindRecord] {
         &ERROR_KIND_RECORDS
     }
@@ -356,6 +381,7 @@ impl Error {
             Self::Manifest(error) => error.kind(),
             Self::Internal(error) => error.kind(),
             Self::Bundle(error) => error.kind(),
+            Self::Audio(error) => error.kind(),
         }
     }
 
@@ -371,6 +397,7 @@ impl Error {
             Self::Manifest(error) => error.message(),
             Self::Internal(error) => error.message(),
             Self::Bundle(error) => error.message(),
+            Self::Audio(error) => error.message(),
         }
     }
 
@@ -432,6 +459,36 @@ impl From<InternalError> for Error {
 impl From<BundleError> for Error {
     fn from(value: BundleError) -> Self {
         Self::Bundle(value)
+    }
+}
+
+impl From<AudioError> for Error {
+    fn from(value: AudioError) -> Self {
+        Self::Audio(value)
+    }
+}
+
+/// Errors for audio provider operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioError {
+    /// Provider required by an audio or console operation is present but
+    /// misconfigured (e.g. expected guestd agent absent).
+    ProviderMisconfigured { vm: String, reason: String },
+}
+
+impl AudioError {
+    pub const fn kind(&self) -> Kind {
+        match self {
+            Self::ProviderMisconfigured { .. } => Kind::ProviderMisconfigured,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::ProviderMisconfigured { vm, reason } => {
+                format!("provider for {vm} is misconfigured: {reason}")
+            }
+        }
     }
 }
 
@@ -977,7 +1034,7 @@ mod tests {
     fn all_kinds_records_are_unique_and_operator_visible() {
         let records = Error::all_kinds();
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(records.len(), 13);
+        assert_eq!(records.len(), 15);
 
         let mut codes = BTreeSet::new();
         let mut anchors = BTreeSet::new();
@@ -1063,6 +1120,10 @@ mod tests {
                 Error::internal_io("ENOENT during state-lock acquisition"),
                 "internal-io",
             ),
+            (
+                Error::provider_misconfigured("corp-vm", "guestd agent not found"),
+                "provider-misconfigured",
+            ),
             // BundleTampered: the message contains the path, so the
             // assert_no_path_in_message check is deliberately skipped for it.
         ];
@@ -1082,8 +1143,8 @@ mod tests {
     }
 
     #[test]
-    fn all_kinds_count_is_fourteen() {
+    fn all_kinds_count_is_fifteen() {
         // Kind::ManifestVersionMismatch is part of the public table.
-        assert_eq!(Error::all_kinds().len(), 14);
+        assert_eq!(Error::all_kinds().len(), 15);
     }
 }

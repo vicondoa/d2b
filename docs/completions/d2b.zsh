@@ -133,11 +133,12 @@ esac
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
-':vm:_default' \
+':vm -- VM name whose foreground serial console should be attached:_default' \
 && ret=0
 ;;
 (audio)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ":: :_d2b__subcmd__audio_commands" \
@@ -152,32 +153,38 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (status)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
-'::vm:_default' \
+'::vm -- Optional VM name; omitted lists audio status for every audio-enabled VM:_default' \
 && ret=0
 ;;
 (mic)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-':state:(on off)' \
-':vm:_default' \
+'--json[Emit machine-readable JSON output]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
+off\:"Disable the selected audio direction"))' \
+':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (speaker)
 _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-':state:(on off)' \
-':vm:_default' \
+'--json[Emit machine-readable JSON output]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
+off\:"Disable the selected audio direction"))' \
+':vm -- VM name whose audio grant should be changed:_default' \
 && ret=0
 ;;
 (off)
 _arguments "${_arguments_options[@]}" : \
+'--json[Emit machine-readable JSON output]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':vm:_default' \
+':vm -- VM name whose microphone and speaker grants should both be disabled:_default' \
 && ret=0
 ;;
 (help)
@@ -1629,8 +1636,8 @@ _d2b_commands() {
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
-'audio:Per-VM audio grant bridge (not yet implemented)' \
+'console:Foreground serial console bridge for headless VMs' \
+'audio:Per-VM audio status and grant controls' \
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
@@ -1876,8 +1883,8 @@ _d2b__subcmd__help_commands() {
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
-'audio:Per-VM audio grant bridge (not yet implemented)' \
+'console:Foreground serial console bridge for headless VMs' \
+'audio:Per-VM audio status and grant controls' \
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \

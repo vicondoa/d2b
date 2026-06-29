@@ -1640,7 +1640,7 @@ mod tests {
                 );
                 entry.is_net_vm = *vm == "vm-booted";
                 entry.tpm = index % 2 == 1;
-                entry.services.snd = Some(format!("d2b-{vm}-snd.service"));
+                entry.services.snd = None;
                 entry.services.swtpm = entry.tpm.then(|| format!("d2b-{vm}-swtpm.service"));
                 entry.services.video = entry.graphics.then(|| format!("d2b-{vm}-video.service"));
                 entry.ssh_user = (index % 2 == 0).then(|| "alice".to_owned());
@@ -1782,14 +1782,14 @@ mod tests {
                 services: Vec::new(),
             },
             services: PublicVmServices {
-                gpu: graphics.then(|| format!("d2b-{vm}-gpu.service")),
+                gpu: graphics.then(|| "running".to_owned()),
                 microvm: format!("microvm@{vm}.service"),
                 d2b: format!("d2b@{vm}.service"),
                 qemu_media: None,
                 snd: None,
                 swtpm: None,
                 video: None,
-                virtiofsd: format!("virtiofsd-{vm}.service"),
+                virtiofsd: "running".to_owned(),
             },
             ssh_user: Some("alice".to_owned()),
             static_ip: Some("10.20.0.10".to_owned()),

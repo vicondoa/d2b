@@ -56,7 +56,9 @@ pub enum Request {
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
     Shell(public_wire::ShellOp),
+    Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
+    Audio(public_wire::AudioOp),
 }
 
 impl Request {
@@ -92,7 +94,9 @@ impl Request {
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
             Self::Shell(_) => "shell",
+            Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
+            Self::Audio(_) => "audio",
         }
     }
 
@@ -124,6 +128,11 @@ impl Request {
             | Self::HostDestroy(_)
             | Self::HostInstall(_)
             | Self::HostReconcile(_) => OpLockClass::Global,
+            // Per-VM audio set ops serialize on the named VM. Status is read-only.
+            Self::Audio(public_wire::AudioOp::SetVolume(args)) => {
+                OpLockClass::PerVm(args.vm.clone())
+            }
+            Self::Audio(public_wire::AudioOp::Mute(args)) => OpLockClass::PerVm(args.vm.clone()),
             // Read-only / status / session-managed verbs: no lock.
             Self::List(_)
             | Self::Status(_)
@@ -136,7 +145,9 @@ impl Request {
             | Self::ReadGuestConfig(_)
             | Self::Exec(_)
             | Self::Shell(_)
-            | Self::GatewayDisplay(_) => OpLockClass::ReadOnly,
+            | Self::Console(_)
+            | Self::GatewayDisplay(_)
+            | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
         }
     }
 }
@@ -347,8 +358,17 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 .map(Request::Shell)
                 .map_err(map_parse_error)
         }
+        "console" => {
+            object.remove("opId");
+            serde_json::from_value(Value::Object(object.clone()))
+                .map(Request::Console)
+                .map_err(map_parse_error)
+        }
         "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::GatewayDisplay)
+            .map_err(map_parse_error),
+        "audio" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::Audio)
             .map_err(map_parse_error),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
@@ -629,6 +649,30 @@ pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse
     let mut value = shell_response(payload);
     if let Some(obj) = value.as_object_mut() {
         obj.insert("opId".to_owned(), Value::from(op_id));
+    }
+    value
+}
+
+/// Serialize a `ConsoleOpResponse` as the `consoleResponse` daemon wire frame.
+pub fn console_response(payload: &public_wire::ConsoleOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("consoleResponse".to_owned()),
+        );
+    }
+    value
+}
+
+/// Serialize an `AudioOpResponse` as the `audioOpResponse` daemon wire frame.
+pub fn audio_response(payload: &public_wire::AudioOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("audioOpResponse".to_owned()),
+        );
     }
     value
 }

@@ -117,7 +117,7 @@ inventory. Private bundle artifacts live beside it and are documented in
     "gpuSocket": "/var/lib/d2b/vms/work/work-gpu.sock",
     "tpmSocket": "/run/d2b/vms/work/tpm.sock",
     "audioStateFile": "/var/lib/d2b/vms/work/state/audio-state.json",
-    "audioService": "d2b-work-snd.service",
+    "audioService": null,
     "observability": {
       "enabled": true,
       "vsockCid": 110,
@@ -170,7 +170,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `gpuSocket` | string \| null | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Null for providers without the d2b GPU sidecar socket. |
 | `tpmSocket` | string \| null | yes | swtpm vTPM socket (`/run/d2b/vms/<name>/tpm.sock`). Null for providers without d2b-managed TPM state. |
 | `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the d2b audio sidecar. |
-| `audioService` | string \| null | yes | Host-side audio sidecar identifier (`d2b-<name>-snd.service`). Null for providers without the d2b audio sidecar. |
+| `audioService` | string \| null | yes | Retired field. Always null; the audio sidecar is broker-spawned through the daemon DAG. |
 | `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
 | `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for providers without d2b guest-control. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1–256, and `maxAttached` is 1–64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
 | `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |

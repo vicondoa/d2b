@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmAudioStatusOutputV1",
+  "description": "Output for `d2b audio status --json` (version 1).\n\nPer-VM entries are sorted by VM name. Per-VM errors are emitted separately so a single misconfigured provider does not suppress all other entries.",
+  "type": "object",
+  "required": [
+    "command",
+    "entries"
+  ],
+  "properties": {
+    "command": {
+      "description": "CLI command string for display/logging.",
+      "type": "string"
+    },
+    "entries": {
+      "description": "Per-VM state for targets that resolved successfully.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmAudioStatusEntryOutputV1"
+      }
+    },
+    "errors": {
+      "description": "Per-VM errors for targets that could not be resolved.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmAudioErrorOutputV1"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AudioEnforcementPosture": {
+      "description": "How audio enforcement is applied for a target VM (ADR 0041).\n\nThis enum describes only *successful* enforcement outcomes. Provider misconfiguration is not a successful outcome and is reported exclusively through [`AudioVmError`] with `kind = AudioErrorKind::ProviderMisconfigured`.",
+      "oneOf": [
+        {
+          "description": "Host-side PipeWire policy and guest-side guestd policy both applied.",
+          "type": "string",
+          "enum": [
+            "host-and-guest"
+          ]
+        },
+        {
+          "description": "Host-side enforcement only; guestd is absent or the provider does not support guest enforcement.",
+          "type": "string",
+          "enum": [
+            "host-only"
+          ]
+        },
+        {
+          "description": "Guest-side guestd enforcement only; no local PipeWire node (e.g. ACA sandbox with a guestd-compatible agent).",
+          "type": "string",
+          "enum": [
+            "guest-only"
+          ]
+        },
+        {
+          "description": "Neither host nor guest enforcement is supported for this target.",
+          "type": "string",
+          "enum": [
+            "unsupported"
+          ]
+        }
+      ]
+    },
+    "AudioErrorKind": {
+      "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
+          "type": "string",
+          "enum": [
+            "provider-misconfigured"
+          ]
+        },
+        {
+          "description": "The requested VM was not found in the bundle.",
+          "type": "string",
+          "enum": [
+            "vm-not-found"
+          ]
+        },
+        {
+          "description": "Audio enforcement is not available for this VM (e.g. the runtime does not support it and no degraded path exists).",
+          "type": "string",
+          "enum": [
+            "enforcement-unavailable"
+          ]
+        },
+        {
+          "description": "The VM exists but audio is not enabled in its manifest entry.",
+          "type": "string",
+          "enum": [
+            "audio-not-enabled"
+          ]
+        },
+        {
+          "description": "An unexpected I/O or deserialization error occurred while reading or writing audio state. Operator should check daemon logs.",
+          "type": "string",
+          "enum": [
+            "internal-error"
+          ]
+        }
+      ]
+    },
+    "AudioProviderKind": {
+      "description": "Which runtime provider handles audio for a given target VM.",
+      "oneOf": [
+        {
+          "description": "Cloud Hypervisor NixOS VM with vhost-user-sound + PipeWire.",
+          "type": "string",
+          "enum": [
+            "local-hypervisor"
+          ]
+        },
+        {
+          "description": "qemu-media VM with a declared qemu audio backend.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
+          "description": "ACA sandbox with a guestd-compatible agent for audio policy.",
+          "type": "string",
+          "enum": [
+            "aca-sandbox"
+          ]
+        }
+      ]
+    },
+    "LevelPercent": {
+      "description": "Audio level in the range 0..=100.",
+      "type": "integer",
+      "maximum": 100.0,
+      "minimum": 0.0
+    },
+    "VmAudioErrorOutputV1": {
+      "description": "Per-VM error entry in [`VmAudioStatusOutputV1`].",
+      "type": "object",
+      "required": [
+        "kind",
+        "vm"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Low-cardinality error kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioErrorKind"
+            }
+          ]
+        },
+        "remediation": {
+          "description": "Optional operator-facing remediation hint.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "description": "VM that failed.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmAudioStatusEntryOutputV1": {
+      "description": "Per-VM audio status entry in [`VmAudioStatusOutputV1`].",
+      "type": "object",
+      "required": [
+        "enforcement",
+        "micMuted",
+        "providerKind",
+        "speakerMuted",
+        "vm"
+      ],
+      "properties": {
+        "enforcement": {
+          "description": "Enforcement posture for this VM.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioEnforcementPosture"
+            }
+          ]
+        },
+        "micLevel": {
+          "description": "Microphone gain (0–100), if known.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LevelPercent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "micMuted": {
+          "description": "Whether the microphone is muted.",
+          "type": "boolean"
+        },
+        "providerKind": {
+          "description": "Provider kind for this VM.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioProviderKind"
+            }
+          ]
+        },
+        "speakerLevel": {
+          "description": "Speaker level (0–100), if known.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LevelPercent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speakerMuted": {
+          "description": "Whether the speaker is muted.",
+          "type": "boolean"
+        },
+        "vm": {
+          "description": "VM name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

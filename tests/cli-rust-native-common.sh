@@ -270,10 +270,8 @@ d2b_write_system_state_fixture() {
   "units": {
     "d2b@corp-vm.service": "inactive",
     "microvm@corp-vm.service": "inactive",
-    "microvm-virtiofsd@corp-vm.service": "inactive",
     "d2b@sys-work-net.service": "active",
-    "microvm@sys-work-net.service": "active",
-    "microvm-virtiofsd@sys-work-net.service": "active"
+    "microvm@sys-work-net.service": "active"
   },
   "bridges": {
     "br-work-lan": {
@@ -299,8 +297,7 @@ d2b_write_system_state_fixture_pending() {
 {
   "units": {
     "d2b@corp-vm.service": "active",
-    "microvm@corp-vm.service": "active",
-    "microvm-virtiofsd@corp-vm.service": "active"
+    "microvm@corp-vm.service": "active"
   },
   "bridges": {
     "br-work-lan": {

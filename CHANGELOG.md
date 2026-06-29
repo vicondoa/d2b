@@ -12,6 +12,21 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
+  `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
+  point `console` and `audio` surfaces at ADR 0041 and the provider capability
+  matrix.
+- The host-side `d2b-wayland-filter` proxy is source-built from the checked-out
+  workspace even when other host tools use release prebuilts, so local eval
+  gates do not depend on a matching release tarball for this policy binary.
+- The `with-entra-id` eval workflow now overrides GitHub inputs to the
+  committed lock revisions and authenticates Nix fetches with the Actions token
+  to avoid transient unauthenticated API rate limits.
+- Host activation grants `d2bd` narrow access to the Wayland user's
+  PipeWire/Pulse sockets so daemon-owned audio policy enforcement does not
+  depend on host-local ACL overrides.
+- Console drainers now spawn on a daemon-owned Tokio runtime even when console
+  attach requests are handled by synchronous public-socket worker threads.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
@@ -33,6 +48,59 @@ deprecations ship one minor release before removal.
   `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
   input, bridge runtime path policy, eval assertions, and reference docs for the
   authority split, picker protocol, and policy caps.
+- Staged the ADR 0041 console/audio contract surface: public
+  `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
+  console/audio capability descriptors for Cloud Hypervisor NixOS,
+  qemu-media, and ACA sandboxes, generated schemas, the provider
+  capability matrix reference, and a step-by-step console/audio how-to.
+  The docs cover broker-owned qemu chardev posture, console stream QoS,
+  OFD audio lock semantics, provider-specific enforcement modes, and
+  d2b-wlcontrol badge/control constraints.
+- Console output ring buffer (`d2b-core::console_ring`) with monotonic
+  offset tracking, per-byte drop accounting, and fast-forward detection
+  for slow clients. EOF flag propagation notifies waiters when the VM console
+  closes.
+- `d2b console <vm>` CLI command attaches to the VM console via the daemon,
+  polls output in a 200 ms raw-mode loop, forwards stdin, supports Ctrl-]
+  detach, and exits cleanly on EOF or session expiry.
+- `ConsoleOp` daemon dispatch: `d2bd` handles all console operations
+  (Attach, ReadOutput, WriteStdin, Resize, Wait, Close) via a per-VM
+  `ConsoleSessionTable`. Cloud Hypervisor VMs get a d2bd-internal tokio
+  drainer task that connects to the CH serial socket and reconnects on
+  drop; qemu-media and ACA targets return typed errors directing operators
+  to use the appropriate broker-fd or provider-relay path.
+- `QemuMediaArgvInput.console_fd` field: when provided, QEMU emits
+  `-chardev socket,id=con0,fd=N -serial chardev:con0` instead of
+  `-serial none`.
+  Accepts only fds >= 3 (rejects stdin/stdout/stderr).
+- `d2bd` now dispatches `AudioOp` (status, set-volume, mute/off) for all
+  provider types. Cloud Hypervisor NixOS VMs use OFD-locked atomic
+  reads and writes of `/run/d2b/audio/<vm>.json` guarded by
+  `/run/d2b/locks/audio-<vm>.lock`; qemu-media VMs report
+  guest-enforcement as unsupported; ACA sandbox VMs route exclusively
+  through provider guest-control (no local audio state is created).
+  Provider capability resolution runs before any state access. Host
+  PipeWire enforcement and guestd `AudioStatus` / `AudioSet` integration
+  are connected, and responses report `host-and-guest`, `host-only`,
+  `guest-only`, or `unsupported` according to the enforcement actually
+  applied.
+- `guestd` `AudioStatus` and `AudioSet` handlers now use real `wpctl`
+  argv-only subprocesses targeting the workload user's PipeWire session.
+  The `--wpctl-path` flag (set to `wireplumber/bin/wpctl` by the guest
+  audio component) enables the runtime; capabilities are only advertised
+  when the binary exists and the workload UID is known at startup.
+  `PIPEWIRE_RUNTIME_DIR` is set per-user so wpctl never touches root's
+  PipeWire socket. Level > 100 returns `AudioLevelOutOfRange`; missing
+  PipeWire returns typed `AudioPipeWireUnavailable`.
+- `audioService` (`d2b-<vm>-snd.service`) is fully retired: the field
+  is unconditionally `null` in all manifest and daemon-access paths;
+  `ProcessRole::Audio` is the sole source of truth for audio runner
+  identity.
+- `d2bd` now preserves a `TypedError::OtelHostBridgeReadinessTimeout` typed
+  error as a structured `degraded` field in the `vm start` success JSON
+  envelope when the OtelHostBridge readiness gate times out in non-strict
+  mode. Operators and `d2b host doctor` can detect the degraded condition
+  from the structured response without log parsing.
 - `d2bd` now recognizes `uid=0` connections as a narrow `HostShutdown`
   authority scoped exclusively to `vmStop` during host-shutdown teardown. This
   fixes the long-standing post-reboot failure where the guarded `ExecStop`
@@ -61,6 +129,44 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- The console drain path is now treated as a long-lived daemon-internal tokio
+  task rather than a broker-spawned runner or one-shot readiness probe.
+- `d2b console` dispatch: launcher peers can no longer access another user's VM
+  console session. The per-session owner UID is now tracked at `Attach` time;
+  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
+  peers whose UID does not match the session owner (`AuthzNotAdmin`).
+- QEMU console chardev now uses `-chardev socket,id=con0,fd=N` instead of the
+  generic `-chardev fd` backend for correct socketpair semantics.
+- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
+  chunk are now forwarded to the VM before closing. Stdin buffer increased from
+  256 to 4096 bytes.
+- `d2b console` prints an operator hint when connected to a qemu-media VM
+  noting that the serial console may appear blank until the guest writes to
+  `/dev/ttyS0`.
+- `d2bd` audio dispatch now calls guestd `AudioSet` RPCs for Cloud Hypervisor
+  NixOS VMs instead of statically defaulting to `HostOnly`. `combined_audio_applied`
+  returns `HostAndGuest` when both host and guest succeed, `HostOnly` when only
+  host applies, `GuestOnly` for ACA sandboxes, and `Unsupported` on full failure.
+  qemu-media VMs never call guestd; ACA VMs fail closed when guestd is
+  unreachable.
+- `wpctl` subprocesses in guestd now drop to `workload_uid` before exec and set
+  both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` to `/run/user/<uid>`, so
+  WirePlumber locates the correct per-user socket. In d2bd the host PipeWire uid
+  is derived from `metadata(pipewire_runtime_dir).uid()` and passed via
+  `CommandExt::uid()` without shell string construction.
+- `wpctl` subprocess failures in guestd now capture bounded sanitized stderr for
+  operator diagnostics; d2bd host-side failures log only static messages so
+  PipeWire node identifiers, paths, and volume values do not leak.
+- OFD lock unlock now uses `F_OFD_SETLK` (non-blocking release) instead of the
+  incorrect `F_OFD_SETLKW` (blocking wait), which is semantically wrong for a lock
+  release path.
+- Audio lock file opens now use `OpenOptions::create(true).write(true)` instead of
+  `custom_flags(libc::O_CREAT)`, which previously required undocumented write
+  permission to function correctly.
+- `d2b audio` CLI is fully implemented: `status`, `mic on|off`, `speaker on|off`,
+  and `off` subcommands send typed `AudioOp` requests to the daemon public socket
+  and render results as human text or `--json`. `d2b audio status --json` emits
+  `AudioStatusResult` JSON for d2b-wlcontrol consumers.
 - Static USBIP declarations now reconcile on strict VM start after a host reboot
   even when volatile `/run/d2b/locks/usbip/*` claim files are gone. The
   daemon replays declared per-VM bind intents through the existing broker policy
@@ -127,8 +233,6 @@ deprecations ship one minor release before removal.
   `OperationFields` variants; 2 JSON-schema contract tests in
   `usb_json_contract`; and 3 network-scoping contract tests in
   `usb_network_scoping`.
-
-### Fixed
 
 - `d2b switch` now threads the configured live activation timeout into
   guest-control and includes identity-flow recovery guidance when guest
@@ -201,8 +305,6 @@ deprecations ship one minor release before removal.
 - QEMU media's redacted registry index is now private to declared daemon/broker
   readers (`0640`) and QEMU media state lives under a dedicated per-VM
   `qemu-media` subdirectory.
-
-### Fixed
 
 - `d2b vm exec` and `d2b vm exec -d` no longer time out with
   `guest-control-timeout` (exit 69) when a long-running GUI application
@@ -758,8 +860,6 @@ deprecations ship one minor release before removal.
   `qemuMedia.source.usbSelector.byIdName` and `d2b usb probe`, while
   running qemu-media VMs still use QMP-backed `d2b usb attach` /
   `detach` hotplug.
-
-### Fixed
 
 - CLI/docs: added the missing `vm display` authorization-matrix row so the
   declared display-session management command is covered by the generated

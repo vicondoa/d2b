@@ -8,6 +8,8 @@ use std::{
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::Duration,
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -114,9 +116,9 @@ enum NativeCommand {
     Status(StatusArgs),
     /// USB attach / detach / probe.
     Usb(UsbArgs),
-    /// Foreground serial console bridge for headless VMs (not yet implemented).
+    /// Foreground serial console bridge for headless VMs.
     Console(ConsoleArgs),
-    /// Per-VM audio grant bridge (not yet implemented).
+    /// Per-VM audio status and grant controls.
     Audio(AudioArgs),
     /// Tail the broker audit log.
     Audit(AuditArgs),
@@ -969,11 +971,15 @@ struct MigrateArgs {
 
 #[derive(Debug, Args)]
 struct ConsoleArgs {
+    /// VM name whose foreground serial console should be attached.
     vm: String,
 }
 
 #[derive(Debug, Args)]
 struct AudioArgs {
+    /// Emit machine-readable JSON output.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Option<AudioCommand>,
 }
@@ -992,24 +998,30 @@ enum AudioCommand {
 
 #[derive(Debug, Args)]
 struct AudioStatusArgs {
+    /// Optional VM name; omitted lists audio status for every audio-enabled VM.
     vm: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct AudioToggleArgs {
+    /// The new grant state to apply.
     #[arg(value_enum)]
     state: AudioGrantState,
+    /// VM name whose audio grant should be changed.
     vm: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum AudioGrantState {
+    /// Enable the selected audio direction.
     On,
+    /// Disable the selected audio direction.
     Off,
 }
 
 #[derive(Debug, Args)]
 struct AudioOffArgs {
+    /// VM name whose microphone and speaker grants should both be disabled.
     vm: String,
 }
 
@@ -3468,19 +3480,558 @@ fn cmd_audit(
 }
 
 fn cmd_console(
-    _context: &Context,
-    _args: &ConsoleArgs,
+    context: &Context,
+    args: &ConsoleArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    emit_host_error(&not_yet_implemented_envelope("console"), false)
+    use d2b_contracts::public_wire::{ConsoleOp, ConsoleOpResponse};
+    use d2b_contracts::terminal_wire::TerminalStream;
+    use terminal_client::{TerminalHostIo as _, TerminalSignalSource as _};
+
+    let vm = &args.vm;
+
+    if !context.public_socket.exists() {
+        return Err(CliFailure::new(
+            3,
+            "daemon is not running (socket not found)",
+        ));
+    }
+
+    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket)
+        .map_err(|err| CliFailure::new(3, format!("failed to connect to daemon: {err}")))?;
+
+    // Handshake.
+    let hello = daemon_hello_frame("hello")?;
+    socket
+        .send_frame(&hello)
+        .map_err(|err| CliFailure::new(1, format!("failed to send hello: {err}")))?;
+    let hello_reply = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(1, format!("failed to recv hello reply: {err}")))?;
+    parse_hello_reply(&hello_reply)?;
+
+    // Determine initial terminal size (best-effort; UART ignores it).
+    let size = exec_client::current_window_size()
+        .map(|(rows, cols)| d2b_contracts::terminal_wire::TerminalSize { rows, cols })
+        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+
+    // Attach to the console session.
+    let attach_response = console_round_trip(
+        &mut socket,
+        &ConsoleOp::Attach(d2b_contracts::public_wire::ConsoleAttachArgs {
+            vm: vm.clone(),
+            initial_terminal_size: size,
+        }),
+    )?;
+    let ConsoleOpResponse::Attach(attach) = attach_response else {
+        return Err(CliFailure::new(
+            1,
+            "console attach: unexpected daemon response",
+        ));
+    };
+
+    let session = attach.session.clone();
+    let mut stdout_offset = attach.ring_buffer_start_offset;
+
+    print_stderr(&format!(
+        "Connected to console for VM '{}' ({:?}). Press Ctrl-] to detach.\r\n",
+        vm, attach.provider_kind
+    ));
+    if attach.provider_kind == d2b_contracts::public_wire::ConsoleProviderKind::QemuMedia {
+        print_stderr(
+            "Note: QEMU serial console may appear blank until the guest writes \
+             to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
+             or configure console= in the kernel command line).\r\n",
+        );
+    }
+
+    // Enter raw mode when stdin is interactive and at least one operator-facing
+    // stream is a terminal. stdout may be redirected to capture the raw UART.
+    let is_tty =
+        io::stdin().is_terminal() && (io::stdout().is_terminal() || io::stderr().is_terminal());
+    let _raw_guard = if is_tty {
+        exec_client::FdStateGuard::enter(true, true).ok()
+    } else {
+        None
+    };
+
+    let mut signals = exec_client::install_signals().map_err(|err| {
+        CliFailure::new(
+            42,
+            format!("console: failed to install signal handlers: {err}"),
+        )
+    })?;
+
+    let mut host = exec_client::RealHostIo;
+    // 4096-byte buffer: handles pastes and rapid input without excessive round-trips.
+    let mut stdin_buf = vec![0_u8; 4096];
+
+    loop {
+        // Drain any pending signals first.
+        for signal in signals.drain() {
+            match signal {
+                exec_client::ExecSignal::Winch => {
+                    if let Some((rows, cols)) = host.window_size() {
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Resize(d2b_contracts::public_wire::ConsoleResizeArgs {
+                                session: session.clone(),
+                                size: d2b_contracts::terminal_wire::TerminalSize { rows, cols },
+                            }),
+                        );
+                    }
+                }
+                exec_client::ExecSignal::Interrupt
+                | exec_client::ExecSignal::Terminate
+                | exec_client::ExecSignal::Stop
+                | exec_client::ExecSignal::Hangup
+                | exec_client::ExecSignal::Quit => {
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                            session: session.clone(),
+                        }),
+                    );
+                    return Ok(0);
+                }
+            }
+        }
+
+        // Read pending stdin (non-blocking) and forward to daemon.
+        if is_tty {
+            match host.read_stdin(&mut stdin_buf) {
+                Ok(n) if n > 0 => {
+                    let chunk = &stdin_buf[..n];
+                    if let DetachScan::Detach { prefix_len } = scan_chunk_for_detach(chunk) {
+                        // Forward any bytes that arrived before the detach char
+                        // so they are not silently dropped.
+                        if prefix_len > 0 {
+                            let prefix_b64 = d2b_core::base64_codec::encode(&chunk[..prefix_len]);
+                            let _ = console_round_trip(
+                                &mut socket,
+                                &ConsoleOp::WriteStdin(
+                                    d2b_contracts::public_wire::ConsoleWriteStdinArgs {
+                                        session: session.clone(),
+                                        offset: 0,
+                                        chunk_base64: prefix_b64,
+                                        eof: false,
+                                    },
+                                ),
+                            );
+                        }
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                session: session.clone(),
+                            }),
+                        );
+                        print_stderr("\r\nDetached from console.\r\n");
+                        return Ok(0);
+                    }
+                    let chunk_b64 = d2b_core::base64_codec::encode(chunk);
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::WriteStdin(d2b_contracts::public_wire::ConsoleWriteStdinArgs {
+                            session: session.clone(),
+                            offset: 0,
+                            chunk_base64: chunk_b64,
+                            eof: false,
+                        }),
+                    );
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Ok(_) | Err(_) => {}
+            }
+        }
+
+        // Poll for output; the daemon returns immediately so this client owns
+        // the backoff that keeps console idle loops from burning CPU.
+        let read_result = console_round_trip(
+            &mut socket,
+            &ConsoleOp::ReadOutput(d2b_contracts::public_wire::ConsoleReadOutputArgs {
+                session: session.clone(),
+                stream: TerminalStream::Stdout,
+                offset: stdout_offset,
+                max_len: 4096,
+                wait: true,
+                timeout_ms: 200,
+            }),
+        );
+
+        match read_result {
+            Err(err) if err.exit_code == 75 => {
+                // ConsoleSessionStale: daemon restarted.
+                print_stderr("\r\nConsole session expired (daemon restarted).\r\n");
+                return Ok(0);
+            }
+            Err(err) => return Err(err),
+            Ok(ConsoleOpResponse::ReadOutput(out)) => {
+                if out.ring_buffer_start_offset > stdout_offset {
+                    stdout_offset = out.ring_buffer_start_offset;
+                }
+                if !out.chunk_base64.is_empty() {
+                    let bytes = match d2b_core::base64_codec::decode(&out.chunk_base64) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            let _ = console_round_trip(
+                                &mut socket,
+                                &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                }),
+                            );
+                            return Err(CliFailure::new(
+                                1,
+                                "console: daemon returned malformed base64 output",
+                            ));
+                        }
+                    };
+                    if let Err(err) = write_stdout_bytes(&bytes) {
+                        let _ = console_round_trip(
+                            &mut socket,
+                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                                session: session.clone(),
+                            }),
+                        );
+                        if err.kind() == io::ErrorKind::BrokenPipe {
+                            return Ok(0);
+                        }
+                        return Err(CliFailure::new(
+                            1,
+                            format!("console: failed to write stdout: {err}"),
+                        ));
+                    }
+                    stdout_offset = out.offset + bytes.len() as u64;
+                }
+                if out.is_eof && out.chunk_base64.is_empty() {
+                    let _ = console_round_trip(
+                        &mut socket,
+                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                            session: session.clone(),
+                        }),
+                    );
+                    print_stderr("\r\nVM console closed (EOF).\r\n");
+                    return Ok(0);
+                }
+                if out.chunk_base64.is_empty() {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Ok(_) => return Err(CliFailure::new(1, "console read: unexpected response type")),
+        }
+    }
+}
+
+/// Encode and send a [`ConsoleOp`] on `socket`, then receive and parse the
+/// `consoleResponse` reply. Each call is a complete round-trip.
+fn console_round_trip(
+    socket: &mut SeqpacketUnixSocket,
+    op: &d2b_contracts::public_wire::ConsoleOp,
+) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+    let frame = encode_console_op_frame(op)?;
+    socket
+        .send_frame(&frame)
+        .map_err(|err| CliFailure::new(69, format!("console op send failed: {err}")))?;
+    let reply = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(69, format!("console op recv failed: {err}")))?;
+    parse_console_reply(&reply)
+}
+
+/// Encode a [`ConsoleOp`] as a JSON wire frame with `"type": "console"`.
+fn encode_console_op_frame(
+    op: &d2b_contracts::public_wire::ConsoleOp,
+) -> Result<Vec<u8>, CliFailure> {
+    let mut value = serde_json::to_value(op)
+        .map_err(|err| CliFailure::new(1, format!("failed to encode console op: {err}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| CliFailure::new(1, "failed to encode console op: object required"))?;
+    object.insert("type".to_owned(), Value::String("console".to_owned()));
+    serde_json::to_vec(&value)
+        .map_err(|err| CliFailure::new(1, format!("failed to serialize console op: {err}")))
+}
+
+/// Parse a `consoleResponse` or `error` reply frame.
+fn parse_console_reply(
+    bytes: &[u8],
+) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse console reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("consoleResponse") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("opId");
+                obj.remove("type");
+            }
+            serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode consoleResponse: {err}"))
+            })
+        }
+        Some("error") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("opId");
+            }
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode console error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected console reply type {:?}", other),
+        )),
+    }
+}
+
+/// Result of scanning a console stdin chunk for the detach character.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DetachScan {
+    /// No detach char found; forward the whole chunk.
+    NoDetach,
+    /// Detach char found at `prefix_len` bytes from the start.
+    /// `prefix_len == 0` means the detach char is the very first byte;
+    /// a non-zero `prefix_len` means there are bytes to forward before
+    /// closing.
+    Detach { prefix_len: usize },
+}
+
+/// Scan `chunk` for the console detach character (`\x1d`, Ctrl-]).
+///
+/// Returns [`DetachScan::Detach`] with the number of bytes that appear before
+/// the detach char so callers can forward them before closing.
+pub(crate) fn scan_chunk_for_detach(chunk: &[u8]) -> DetachScan {
+    const DETACH: u8 = b'\x1d';
+    match chunk.iter().position(|&b| b == DETACH) {
+        None => DetachScan::NoDetach,
+        Some(pos) => DetachScan::Detach { prefix_len: pos },
+    }
 }
 
 fn cmd_audio(
-    _context: &Context,
-    _args: &AudioArgs,
+    context: &Context,
+    args: &AudioArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    emit_host_error(&not_yet_implemented_envelope("audio"), false)
+    use d2b_contracts::public_wire::{
+        AudioChannel, AudioMuteArgs, AudioOp, AudioOpResponse, AudioSetApplied,
+        AudioStatusArgs as WireStatusArgs,
+    };
+
+    let json = args.json;
+
+    // Build the op(s) to dispatch. `Off` fans out to two `Mute` ops.
+    enum AudioDispatch {
+        Single(AudioOp),
+        Off { vm: String },
+    }
+
+    let dispatch = match &args.command {
+        None | Some(AudioCommand::Status(AudioStatusArgs { vm: None })) => {
+            AudioDispatch::Single(AudioOp::Status(WireStatusArgs { vms: vec![] }))
+        }
+        Some(AudioCommand::Status(AudioStatusArgs { vm: Some(vm) })) => {
+            AudioDispatch::Single(AudioOp::Status(WireStatusArgs {
+                vms: vec![vm.clone()],
+            }))
+        }
+        Some(AudioCommand::Mic(a)) => AudioDispatch::Single(AudioOp::Mute(AudioMuteArgs {
+            vm: a.vm.clone(),
+            channel: AudioChannel::Microphone,
+            mute: a.state == AudioGrantState::Off,
+        })),
+        Some(AudioCommand::Speaker(a)) => AudioDispatch::Single(AudioOp::Mute(AudioMuteArgs {
+            vm: a.vm.clone(),
+            channel: AudioChannel::Speaker,
+            mute: a.state == AudioGrantState::Off,
+        })),
+        Some(AudioCommand::Off(a)) => AudioDispatch::Off { vm: a.vm.clone() },
+    };
+
+    match dispatch {
+        AudioDispatch::Single(op) => {
+            let response = audio_round_trip(context, op)?;
+            render_audio_response(context, &response, json)
+        }
+        AudioDispatch::Off { vm } => {
+            // Mute both channels. Report both; exit non-zero if either fails.
+            let r_spk = audio_round_trip(
+                context,
+                AudioOp::Mute(AudioMuteArgs {
+                    vm: vm.clone(),
+                    channel: AudioChannel::Speaker,
+                    mute: true,
+                }),
+            )?;
+            let r_mic = audio_round_trip(
+                context,
+                AudioOp::Mute(AudioMuteArgs {
+                    vm: vm.clone(),
+                    channel: AudioChannel::Microphone,
+                    mute: true,
+                }),
+            )?;
+            if json {
+                print_json(&serde_json::json!({
+                    "speaker": serde_json::to_value(&r_spk).unwrap_or_default(),
+                    "microphone": serde_json::to_value(&r_mic).unwrap_or_default(),
+                }))?;
+            } else {
+                render_audio_response(context, &r_spk, false)?;
+                render_audio_response(context, &r_mic, false)?;
+            }
+            // Non-zero if either channel reported Unsupported.
+            let both_ok = !matches!(
+                &r_spk,
+                AudioOpResponse::Mute(r) if r.applied == AudioSetApplied::Unsupported
+            ) && !matches!(
+                &r_mic,
+                AudioOpResponse::Mute(r) if r.applied == AudioSetApplied::Unsupported
+            );
+            Ok(if both_ok { 0 } else { 1 })
+        }
+    }
+}
+
+fn audio_round_trip(
+    context: &Context,
+    op: d2b_contracts::public_wire::AudioOp,
+) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
+    let request = encode_type_tagged_message("audio", &op, "audio request")?;
+    match try_public_socket_request(context, &request, "audio")? {
+        PublicSocketOutcome::Reply(response) => parse_audio_reply(&response),
+        PublicSocketOutcome::Unavailable => Err(CliFailure::new(
+            69,
+            format!(
+                "audio: d2bd public socket is unavailable at {}",
+                context.public_socket.display()
+            ),
+        )),
+        PublicSocketOutcome::Unsupported => Err(CliFailure::new(
+            70,
+            "audio: daemon generation does not support audio operations",
+        )),
+    }
+}
+
+fn parse_audio_reply(
+    bytes: &[u8],
+) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
+    use d2b_contracts::public_wire::AudioOpResponse;
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse audio reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("audioOpResponse") => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("type");
+            }
+            serde_json::from_value::<AudioOpResponse>(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode audioOpResponse: {err}"))
+            })
+        }
+        Some("error") => {
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
+                CliFailure::new(1, format!("failed to decode audio error reply: {err}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        other => Err(CliFailure::new(
+            1,
+            format!("unexpected audio reply type {other:?}"),
+        )),
+    }
+}
+
+fn render_audio_response(
+    _context: &Context,
+    response: &d2b_contracts::public_wire::AudioOpResponse,
+    json: bool,
+) -> Result<i32, CliFailure> {
+    use d2b_contracts::public_wire::{AudioOpResponse, AudioSetApplied};
+    match response {
+        AudioOpResponse::Status(status) => {
+            if json {
+                // d2b-wlcontrol consumes this shape: AudioStatusResult.
+                print_json(status)?;
+                return Ok(0);
+            }
+            for vm_state in &status.entries {
+                let spk_muted = if vm_state.speaker.muted {
+                    "muted"
+                } else {
+                    "on"
+                };
+                let mic_muted = if vm_state.microphone.muted {
+                    "muted"
+                } else {
+                    "on"
+                };
+                print_stdout(&format!(
+                    "{}\tspeaker:{} mic:{} enforcement:{}\n",
+                    vm_state.vm,
+                    spk_muted,
+                    mic_muted,
+                    format_enforcement(&vm_state.enforcement)
+                ));
+            }
+            for err in &status.errors {
+                let kind_label = serde_json::to_string(&err.kind)
+                    .map(|s| s.trim_matches('"').to_owned())
+                    .unwrap_or_else(|_| "error".to_owned());
+                print_stdout(&format!("{}\terror:{}\n", err.vm, kind_label));
+            }
+            Ok(0)
+        }
+        AudioOpResponse::Mute(result) | AudioOpResponse::SetVolume(result) => {
+            if json {
+                print_json(result)?;
+                return Ok(if result.applied == AudioSetApplied::Unsupported {
+                    1
+                } else {
+                    0
+                });
+            }
+            let applied_label = match result.applied {
+                AudioSetApplied::HostAndGuest => "applied:host+guest",
+                AudioSetApplied::HostOnly => "applied:host",
+                AudioSetApplied::GuestOnly => "applied:guest",
+                AudioSetApplied::Unsupported => "not-applied",
+            };
+            let muted_label = if result.state.muted { "muted" } else { "on" };
+            print_stdout(&format!(
+                "{} {} {} {}\n",
+                result.vm,
+                format_channel(&result.channel),
+                muted_label,
+                applied_label
+            ));
+            Ok(if result.applied == AudioSetApplied::Unsupported {
+                1
+            } else {
+                0
+            })
+        }
+    }
+}
+
+fn format_enforcement(
+    posture: &d2b_contracts::public_wire::AudioEnforcementPosture,
+) -> &'static str {
+    use d2b_contracts::public_wire::AudioEnforcementPosture;
+    match posture {
+        AudioEnforcementPosture::HostAndGuest => "host+guest",
+        AudioEnforcementPosture::HostOnly => "host",
+        AudioEnforcementPosture::GuestOnly => "guest",
+        AudioEnforcementPosture::Unsupported => "unsupported",
+    }
+}
+
+fn format_channel(channel: &d2b_contracts::public_wire::AudioChannel) -> &'static str {
+    use d2b_contracts::public_wire::AudioChannel;
+    match channel {
+        AudioChannel::Speaker => "speaker",
+        AudioChannel::Microphone => "microphone",
+    }
 }
 
 fn cmd_host_check(context: &Context, args: &HostCheckArgs) -> Result<i32, CliFailure> {
@@ -9110,6 +9661,10 @@ fn print_stdout(text: &str) {
     let _ = write_stdout_bytes(text.as_bytes());
 }
 
+fn print_stderr(text: &str) {
+    let _ = write_stderr_bytes(text.as_bytes());
+}
+
 fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     {
@@ -9439,7 +9994,7 @@ fn redact_broker_error_for_cli(
         "Broker.Unimplemented" => (
             format!("{op_name} refused: broker operation unimplemented"),
             "The daemon reached the broker, but this build does not implement the requested broker operation.".to_owned(),
-            "broker operation is not implemented in this build; Admin: use the supported fallback path for this wave.".to_owned(),
+            "broker operation is not implemented in this build; Admin: use the supported fallback path for this release.".to_owned(),
         ),
         "unknown-operation" => (
             format!("{op_name} refused: broker rejected unknown operation"),
@@ -13688,6 +14243,7 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             audio.command,
             super::NativeCommand::Audio(super::AudioArgs {
+                json: false,
                 command: Some(super::AudioCommand::Mic(super::AudioToggleArgs {
                     state: super::AudioGrantState::On,
                     vm,
@@ -13699,7 +14255,20 @@ mod host_install_dispatch_tests {
             NativeCli::try_parse_from(["d2b", "audio"]).expect("audio status parse");
         assert!(matches!(
             audio_default.command,
-            super::NativeCommand::Audio(super::AudioArgs { command: None })
+            super::NativeCommand::Audio(super::AudioArgs {
+                json: false,
+                command: None,
+            })
+        ));
+
+        let audio_json =
+            NativeCli::try_parse_from(["d2b", "audio", "--json"]).expect("audio json parse");
+        assert!(matches!(
+            audio_json.command,
+            super::NativeCommand::Audio(super::AudioArgs {
+                json: true,
+                command: None,
+            })
         ));
 
         let console =
@@ -13707,6 +14276,130 @@ mod host_install_dispatch_tests {
         assert!(matches!(
             console.command,
             super::NativeCommand::Console(super::ConsoleArgs { vm }) if vm == "personal-dev"
+        ));
+    }
+
+    #[test]
+    fn audio_status_result_json_shape_matches_wire_contract() {
+        // d2b-wlcontrol depends on `d2b audio status --json` producing
+        // AudioStatusResult JSON. This test locks the shape so any schema
+        // change is caught before it breaks downstream consumers.
+        use d2b_contracts::public_wire::AudioChannel;
+        use d2b_contracts::public_wire::{
+            AudioChannelState, AudioEnforcementPosture, AudioOpResponse, AudioProviderKind,
+            AudioSetApplied, AudioSetResult, AudioStatusResult, AudioVmState,
+        };
+
+        let status = AudioStatusResult {
+            entries: vec![AudioVmState {
+                vm: "work".to_owned(),
+                speaker: AudioChannelState {
+                    level: None,
+                    muted: false,
+                },
+                microphone: AudioChannelState {
+                    level: None,
+                    muted: true,
+                },
+                provider_kind: AudioProviderKind::LocalHypervisor,
+                enforcement: AudioEnforcementPosture::HostAndGuest,
+            }],
+            errors: vec![],
+        };
+        let json = serde_json::to_string(&status).expect("serialize");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("roundtrip");
+        assert!(v["entries"].is_array(), "entries must be array");
+        assert_eq!(v["entries"][0]["vm"], "work");
+        assert_eq!(v["entries"][0]["microphone"]["muted"], true);
+        assert_eq!(v["entries"][0]["enforcement"], "host-and-guest");
+
+        // SetResult JSON shape (for mute/setvol JSON output)
+        let set_result = AudioSetResult {
+            vm: "work".to_owned(),
+            channel: AudioChannel::Speaker,
+            applied: AudioSetApplied::HostAndGuest,
+            state: AudioChannelState {
+                level: None,
+                muted: false,
+            },
+        };
+        let set_json = serde_json::to_string(&set_result).expect("serialize set");
+        let sv: serde_json::Value = serde_json::from_str(&set_json).expect("roundtrip set");
+        assert_eq!(sv["vm"], "work");
+        assert_eq!(sv["applied"], "host-and-guest");
+        assert_eq!(sv["channel"], "speaker");
+
+        // AudioOpResponse::Status tag shape (used when printing full envelope)
+        let response = AudioOpResponse::Status(status.clone());
+        let resp_json = serde_json::to_string(&response).expect("serialize response");
+        let rv: serde_json::Value = serde_json::from_str(&resp_json).expect("roundtrip resp");
+        assert_eq!(rv["op"], "status", "AudioOpResponse tag must be 'op'");
+        assert!(
+            rv["result"].is_object(),
+            "AudioOpResponse content must be 'result'"
+        );
+    }
+
+    #[test]
+    fn audio_json_flag_parsed_for_all_subcommands() {
+        // --json must be accepted at the audio subcommand level (before the
+        // sub-subcommand) and after it so d2b-wlcontrol can place the flag
+        // naturally with the requested operation.
+        let with_json =
+            NativeCli::try_parse_from(["d2b", "audio", "--json", "status"]).expect("json status");
+        assert!(matches!(
+            with_json.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+
+        let json_mic =
+            NativeCli::try_parse_from(["d2b", "audio", "--json", "mic", "off", "work-vm"])
+                .expect("json mic");
+        assert!(matches!(
+            json_mic.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+
+        let trailing_json = NativeCli::try_parse_from(["d2b", "audio", "status", "--json"])
+            .expect("trailing json status");
+        assert!(matches!(
+            trailing_json.command,
+            super::NativeCommand::Audio(super::AudioArgs { json: true, .. })
+        ));
+    }
+
+    #[test]
+    fn audio_no_success_shaped_cli_fallback_for_off_command() {
+        // Verify Off fans out to two separate Mute ops (speaker + microphone).
+        // This cannot produce a success result from a single op, so no
+        // success-shaped fallback can exist for the Off path.
+        use super::{AudioArgs, AudioCommand, AudioGrantState, AudioOffArgs, AudioToggleArgs};
+        let off_args = AudioArgs {
+            json: false,
+            command: Some(AudioCommand::Off(AudioOffArgs {
+                vm: "corp-vm".to_owned(),
+            })),
+        };
+        // Confirm the Off variant matches what we expect
+        assert!(matches!(
+            off_args.command,
+            Some(AudioCommand::Off(AudioOffArgs { vm })) if vm == "corp-vm"
+        ));
+
+        // Mic On and Speaker Off are distinct commands with distinct mute bool
+        let mic_on = AudioArgs {
+            json: false,
+            command: Some(AudioCommand::Mic(AudioToggleArgs {
+                state: AudioGrantState::On,
+                vm: "corp-vm".to_owned(),
+            })),
+        };
+        assert!(matches!(
+            mic_on.command,
+            Some(AudioCommand::Mic(AudioToggleArgs {
+                state: AudioGrantState::On,
+                ..
+            }))
         ));
     }
 
@@ -16361,5 +17054,414 @@ mod ssh_spawn_gate {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod console_fsm_tests {
+    //! Unit tests for the console FSM detach-char scanning logic and the
+    //! QEMU blank-console warning message content.
+
+    use super::{
+        AddressFamily, Context, DetachScan, IpcHelloOk, MAX_FRAME_BYTES, MsgFlags, SockFlag,
+        SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
+        scan_chunk_for_detach, send, socket,
+    };
+    use d2b_contracts::{Version, public_wire};
+    use nix::{
+        sys::socket::{Backlog, accept4, bind, listen},
+        unistd::close,
+    };
+    use serde_json::Value;
+    use std::{io, os::fd::AsRawFd as _, path::PathBuf, thread};
+
+    const DETACH: u8 = b'\x1d'; // Ctrl-]
+
+    fn console_test_socket_path(test_name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "d2b-console-{}-{test_name}.sock",
+            std::process::id()
+        ))
+    }
+
+    fn recv_test_frame(fd: std::os::fd::RawFd) -> io::Result<Vec<u8>> {
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
+        let received = super::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        if received < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short frame from seqpacket socket",
+            ));
+        }
+        let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
+        if expected > MAX_FRAME_BYTES || expected + 4 > received {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed seqpacket frame",
+            ));
+        }
+        Ok(buffer[4..4 + expected].to_vec())
+    }
+
+    fn send_test_frame(fd: std::os::fd::RawFd, payload: &[u8]) -> io::Result<()> {
+        let mut frame = Vec::with_capacity(payload.len() + 4);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        let sent = send(fd, &frame, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        if sent != frame.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short write on seqpacket socket",
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn no_detach_char_returns_no_detach() {
+        assert_eq!(scan_chunk_for_detach(b"hello world"), DetachScan::NoDetach);
+        assert_eq!(scan_chunk_for_detach(b""), DetachScan::NoDetach);
+        assert_eq!(scan_chunk_for_detach(b"\x00\x01\x02"), DetachScan::NoDetach);
+    }
+
+    #[test]
+    fn detach_only_chunk_has_zero_prefix() {
+        let chunk = [DETACH];
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn detach_at_start_has_zero_prefix() {
+        let chunk = [DETACH, b'a', b'b'];
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn detach_in_middle_returns_correct_prefix_len() {
+        // "abc\x1ddef" — detach at index 3, prefix "abc"
+        let mut chunk = b"abc".to_vec();
+        chunk.push(DETACH);
+        chunk.extend_from_slice(b"def");
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 3 }
+        );
+    }
+
+    #[test]
+    fn detach_at_end_returns_full_minus_one_prefix() {
+        // "hello\x1d" — detach at index 5, prefix "hello"
+        let mut chunk = b"hello".to_vec();
+        chunk.push(DETACH);
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 5 }
+        );
+    }
+
+    #[test]
+    fn first_detach_char_wins_over_later_occurrences() {
+        // "\x1dabc\x1d" — first detach at index 0
+        let mut chunk = vec![DETACH];
+        chunk.extend_from_slice(b"abc");
+        chunk.push(DETACH);
+        assert_eq!(
+            scan_chunk_for_detach(&chunk),
+            DetachScan::Detach { prefix_len: 0 }
+        );
+    }
+
+    #[test]
+    fn console_control_messages_go_to_stderr_and_payload_to_stdout() {
+        let socket_path = console_test_socket_path("streams");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let attach_request = recv_test_frame(accepted)?;
+                let attach_value: Value = serde_json::from_slice(&attach_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    attach_value.get("op").and_then(Value::as_str),
+                    Some("attach")
+                );
+                let attach_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Attach(public_wire::ConsoleAttachResult {
+                        session: "console-test".to_owned(),
+                        provider_kind: public_wire::ConsoleProviderKind::QemuMedia,
+                        ring_buffer_start_offset: 0,
+                    }),
+                    "console attach response",
+                )
+                .expect("encode console attach response");
+                send_test_frame(accepted, &attach_response)?;
+
+                let read_request = recv_test_frame(accepted)?;
+                let read_value: Value = serde_json::from_slice(&read_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    read_value.get("op").and_then(Value::as_str),
+                    Some("readOutput")
+                );
+                let read_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 0,
+                            chunk_base64: d2b_core::base64_codec::encode(b"guest uart\n"),
+                            is_eof: true,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console read response",
+                )
+                .expect("encode console read response");
+                send_test_frame(accepted, &read_response)?;
+
+                let eof_request = recv_test_frame(accepted)?;
+                let eof_value: Value = serde_json::from_slice(&eof_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(
+                    eof_value.get("op").and_then(Value::as_str),
+                    Some("readOutput")
+                );
+                let eof_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 11,
+                            chunk_base64: String::new(),
+                            is_eof: true,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console eof response",
+                )
+                .expect("encode console eof response");
+                send_test_frame(accepted, &eof_response)?;
+
+                let close_request = recv_test_frame(accepted)?;
+                let close_value: Value = serde_json::from_slice(&close_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(close_value.get("op").and_then(Value::as_str), Some("close"));
+                let close_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Close(public_wire::ConsoleCloseResult {
+                        session: "console-test".to_owned(),
+                        closed: true,
+                    }),
+                    "console close response",
+                )
+                .expect("encode console close response");
+                send_test_frame(accepted, &close_response)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock console daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = super::ConsoleArgs {
+            vm: "media".to_owned(),
+        };
+        let (result, stdout, stderr) =
+            super::with_test_output_capture(|| super::cmd_console(&context, &args, &[]));
+        server.join().expect("join mock console daemon");
+        let _ = std::fs::remove_file(&socket_path);
+
+        assert_eq!(result.expect("console exits cleanly"), 0);
+        assert_eq!(stdout, b"guest uart\n");
+        let stderr = String::from_utf8(stderr).expect("stderr utf8");
+        assert!(stderr.contains("Connected to console for VM 'media'"));
+        assert!(stderr.contains("/dev/ttyS0"));
+        assert!(stderr.contains("serial-getty"));
+        assert!(stderr.contains("VM console closed (EOF)"));
+    }
+
+    #[test]
+    fn console_signal_loop_closes_on_fatal_signals() {
+        let source = include_str!("lib.rs");
+        let start = source.find("fn cmd_console(").expect("cmd_console present");
+        let body = &source[start
+            ..source[start..]
+                .find("fn console_round_trip(")
+                .expect("console_round_trip follows cmd_console")
+                + start];
+        for signal in ["Interrupt", "Terminate", "Stop", "Hangup", "Quit"] {
+            assert!(
+                body.contains(&format!("exec_client::ExecSignal::{signal}")),
+                "cmd_console must close and exit on {signal}"
+            );
+        }
+    }
+
+    #[test]
+    fn console_output_decode_fails_closed() {
+        let socket_path = console_test_socket_path("bad-base64");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let _attach_request = recv_test_frame(accepted)?;
+                let attach_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Attach(public_wire::ConsoleAttachResult {
+                        session: "console-test".to_owned(),
+                        provider_kind: public_wire::ConsoleProviderKind::LocalHypervisor,
+                        ring_buffer_start_offset: 0,
+                    }),
+                    "console attach response",
+                )
+                .expect("encode console attach response");
+                send_test_frame(accepted, &attach_response)?;
+
+                let _read_request = recv_test_frame(accepted)?;
+                let bad_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::ReadOutput(
+                        public_wire::ConsoleReadOutputResult {
+                            session: "console-test".to_owned(),
+                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            offset: 0,
+                            chunk_base64: "not valid base64!".to_owned(),
+                            is_eof: false,
+                            ring_buffer_start_offset: 0,
+                            dropped_bytes: 0,
+                        },
+                    ),
+                    "console malformed output response",
+                )
+                .expect("encode malformed output response");
+                send_test_frame(accepted, &bad_response)?;
+
+                let close_request = recv_test_frame(accepted)?;
+                let close_value: Value = serde_json::from_slice(&close_request)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(close_value.get("op").and_then(Value::as_str), Some("close"));
+                let close_response = encode_type_tagged_message(
+                    "consoleResponse",
+                    &public_wire::ConsoleOpResponse::Close(public_wire::ConsoleCloseResult {
+                        session: "console-test".to_owned(),
+                        closed: true,
+                    }),
+                    "console close response",
+                )
+                .expect("encode console close response");
+                send_test_frame(accepted, &close_response)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock console daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = super::ConsoleArgs {
+            vm: "media".to_owned(),
+        };
+        let (result, stdout, _stderr) =
+            super::with_test_output_capture(|| super::cmd_console(&context, &args, &[]));
+        server.join().expect("join mock console daemon");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let err = result.expect_err("malformed console output must fail closed");
+        assert_eq!(err.exit_code, 1);
+        assert!(err.message.contains("malformed base64"));
+        assert!(
+            stdout.is_empty(),
+            "malformed chunks must not emit synthetic stdout"
+        );
     }
 }

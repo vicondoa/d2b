@@ -540,6 +540,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "packages/d2b-priv-broker/src/runtime.rs",
             "storage root:path:run-root",
         ),
+        (
+            "packages/d2bd/src/audio_dispatch.rs",
+            "storage paths:audio-state + sync lock:audio-<vm>",
+        ),
         ("packages/d2bd/src/lib.rs", "storage root:path:run-root"),
         (
             "packages/d2bd/src/typed_error.rs",

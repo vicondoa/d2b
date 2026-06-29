@@ -6,8 +6,8 @@
 
 #![cfg(any(test, feature = "fake-backends"))]
 
-// TODO: per-module fake backends (cgroup, netlink, nft, devices,
-// modules) used by the L1c canary matrix tests.
+// Per-module fake backends (cgroup, netlink, nft, devices, modules) are added
+// here as the L1 canary matrix grows.
 
 /// Placeholder marker exported so the module compiles as part of the
 /// integrator prep workspace build.

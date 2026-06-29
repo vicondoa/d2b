@@ -200,6 +200,18 @@ impl GuestControlClient {
         ::ttrpc::client_request!(self, ctx, req, "d2b.guest.v1.GuestControl", "ActivateSystemStatus", cres);
         Ok(cres)
     }
+
+    pub fn audio_status(&self, ctx: ttrpc::context::Context, req: &super::guest_control::AudioStatusRequest) -> ::ttrpc::Result<super::guest_control::AudioStatusResponse> {
+        let mut cres = super::guest_control::AudioStatusResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "d2b.guest.v1.GuestControl", "AudioStatus", cres);
+        Ok(cres)
+    }
+
+    pub fn audio_set(&self, ctx: ttrpc::context::Context, req: &super::guest_control::AudioSetRequest) -> ::ttrpc::Result<super::guest_control::AudioSetResponse> {
+        let mut cres = super::guest_control::AudioSetResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "d2b.guest.v1.GuestControl", "AudioSet", cres);
+        Ok(cres)
+    }
 }
 
 struct HelloMethod {
@@ -521,6 +533,28 @@ impl ::ttrpc::r#async::MethodHandler for ActivateSystemStatusMethod {
     }
 }
 
+struct AudioStatusMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for AudioStatusMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, AudioStatusRequest, audio_status);
+    }
+}
+
+struct AudioSetMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for AudioSetMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, AudioSetRequest, audio_set);
+    }
+}
+
 #[async_trait]
 pub trait GuestControl: Sync {
     async fn hello(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::HelloRequest) -> ::ttrpc::Result<super::guest_control::HelloResponse> {
@@ -609,6 +643,12 @@ pub trait GuestControl: Sync {
     }
     async fn activate_system_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::GuestActivationStatusRequest) -> ::ttrpc::Result<super::guest_control::GuestActivationStatusResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v1.GuestControl/ActivateSystemStatus is not supported".to_string())))
+    }
+    async fn audio_status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::AudioStatusRequest) -> ::ttrpc::Result<super::guest_control::AudioStatusResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v1.GuestControl/AudioStatus is not supported".to_string())))
+    }
+    async fn audio_set(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::AudioSetRequest) -> ::ttrpc::Result<super::guest_control::AudioSetResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.guest.v1.GuestControl/AudioSet is not supported".to_string())))
     }
 }
 
@@ -703,6 +743,12 @@ pub fn create_guest_control(service: Arc<dyn GuestControl + Send + Sync>) -> Has
 
     methods.insert("ActivateSystemStatus".to_string(),
                     Box::new(ActivateSystemStatusMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("AudioStatus".to_string(),
+                    Box::new(AudioStatusMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("AudioSet".to_string(),
+                    Box::new(AudioSetMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     ret.insert("d2b.guest.v1.GuestControl".to_string(), ::ttrpc::r#async::Service{ methods, streams });
     ret

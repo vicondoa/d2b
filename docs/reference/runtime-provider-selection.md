@@ -66,3 +66,17 @@ runtime unless a future provider explicitly advertises the needed capability.
   generic runtime fallback.
 - [qemu-media](./qemu-media.md) is a separate media workflow and is not a
   general replacement for the Cloud Hypervisor VM runtime.
+
+## Console and audio provider capability gating
+
+Console streaming and audio enforcement are provider-capability-aware surfaces.
+The daemon resolves the target's runtime provider before touching local host
+state. A missing or unsupported capability returns a typed refusal before any
+side effect; the daemon never falls back to a raw shell, `executeShellCommand`,
+or a provider-specific channel.
+
+The full per-provider matrix — covering Cloud Hypervisor NixOS VMs,
+qemu-media, and ACA sandboxes — is documented in
+[provider capability matrix](./provider-capability-matrix.md).
+See [ADR 0041](../adr/0041-console-and-audio-controls.md) for the binding
+design decision.

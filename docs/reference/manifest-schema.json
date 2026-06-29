@@ -451,7 +451,7 @@
         },
         "audioService": {
           "type": ["string", "null"],
-          "description": "Host-side audio sidecar systemd unit name (d2b-<name>-snd.service). Null for providers without the d2b audio sidecar."
+          "description": "Retired field. Always null; the audio sidecar is broker-spawned through the daemon DAG."
         },
         "observability": {
           "$ref": "#/$defs/vmObservability"

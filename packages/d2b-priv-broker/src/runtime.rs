@@ -22,7 +22,7 @@ use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 use hmac::{Hmac, Mac};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
-use nix::sys::socket::{SockFlag, accept4};
+use nix::sys::socket::{AddressFamily, SockFlag, SockType, accept4, socketpair};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
@@ -1021,6 +1021,10 @@ impl DispatchResult {
             response,
             fds: vec![fd],
         }
+    }
+
+    fn with_fds(response: BrokerResponse, fds: Vec<OwnedFd>) -> Self {
+        Self { response, fds }
     }
 }
 
@@ -2389,6 +2393,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     runtime_allocations: req.runtime_allocations.clone(),
                 },
             )?;
+            let console_fd_index = if outcome.extra_response_fds.is_empty() {
+                None
+            } else {
+                Some(1)
+            };
             let response =
                 BrokerResponse::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerResponse {
                     vm_id: req.vm_id.clone(),
@@ -2397,9 +2406,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     pid: outcome.pid,
                     start_time_ticks: outcome.start_time_ticks,
                     pidfd_index: 0,
+                    console_fd_index,
                 });
             let _ = intent_id_runner;
-            Ok(DispatchResult::with_fd(response, outcome.pidfd))
+            let mut response_fds = Vec::with_capacity(1 + outcome.extra_response_fds.len());
+            response_fds.push(outcome.pidfd);
+            response_fds.extend(outcome.extra_response_fds);
+            Ok(DispatchResult::with_fds(response, response_fds))
         }
         // Pre-existing typed-Unimplemented status.
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
@@ -4896,6 +4909,12 @@ struct LiveDispatchBackend {
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+struct RunnerPreopenedFds {
+    child_fds: Vec<std::os::fd::OwnedFd>,
+    response_fds: Vec<std::os::fd::OwnedFd>,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn prepare_runner_preopened_fds(
     _plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     resolver: &BundleResolver,
@@ -4903,9 +4922,12 @@ fn prepare_runner_preopened_fds(
     audit_log: &crate::audit::AuditLog,
     daemon_uid: u32,
     daemon_gid: u32,
-) -> Result<Vec<std::os::fd::OwnedFd>, BrokerError> {
+) -> Result<RunnerPreopenedFds, BrokerError> {
     if req.role != d2b_contracts::broker_wire::RunnerRole::QemuMedia {
-        return Ok(Vec::new());
+        return Ok(RunnerPreopenedFds {
+            child_fds: Vec::new(),
+            response_fds: Vec::new(),
+        });
     }
 
     let exec = crate::ops::exec_reconcile::SystemLiveExec::new(daemon_uid, daemon_gid);
@@ -4935,7 +4957,17 @@ fn prepare_runner_preopened_fds(
     let tap_fd = outcome
         .fd
         .ok_or_else(|| BrokerError::LiveHandler("qemu-media tap fd missing".to_owned()))?;
-    Ok(vec![tap_fd])
+    let (qemu_console_fd, daemon_console_fd) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+    )
+    .map_err(|err| BrokerError::LiveHandler(format!("qemu-media console socketpair: {err}")))?;
+    Ok(RunnerPreopenedFds {
+        child_fds: vec![tap_fd, qemu_console_fd],
+        response_fds: vec![daemon_console_fd],
+    })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5135,7 +5167,7 @@ impl DispatchBackend for LiveDispatchBackend {
         // orphan child (see `reserve_runner_id_for_spawn`).
         #[cfg(not(feature = "layer1-bootstrap"))]
         reserve_runner_id_for_spawn(runner_id)?;
-        let pre_opened_device_fds = prepare_runner_preopened_fds(
+        let preopened = prepare_runner_preopened_fds(
             plan_input,
             resolver,
             req,
@@ -5143,7 +5175,7 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_uid,
             self.daemon_gid,
         )?;
-        let outcome = crate::live_handlers::live_spawn_runner(plan_input, pre_opened_device_fds)
+        let mut outcome = crate::live_handlers::live_spawn_runner(plan_input, preopened.child_fds)
             .map_err(|err| {
                 // Log the actual LiveHandlerError detail before wrapping it
                 // in the opaque BrokerError::LiveHandler envelope so
@@ -5164,6 +5196,7 @@ impl DispatchBackend for LiveDispatchBackend {
                     other => BrokerError::LiveHandler(other.to_string()),
                 }
             })?;
+        outcome.extra_response_fds = preopened.response_fds;
         register_runner_pidfd(runner_id, &outcome.pidfd).inspect_err(|_err| {
             // Registration failed: the broker is about to drop this
             // just-spawned child's pidfd. Reap it now (targeted,
@@ -10200,6 +10233,7 @@ mod tests {
             self.remember_runner(runner_id)?;
             Ok(crate::live_handlers::SpawnRunnerResult {
                 pidfd: dummy_fd(),
+                extra_response_fds: Vec::new(),
                 pid: 4242,
                 start_time_ticks: 123456,
                 used_fork_fallback: false,

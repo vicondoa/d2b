@@ -1,4 +1,4 @@
-# ADR 0041: d2b clipboard authority and picker split
+# ADR 0042: d2b clipboard authority and picker split
 
 - Status: Accepted
 - Date: 2026-06-28

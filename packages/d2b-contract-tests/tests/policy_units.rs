@@ -194,6 +194,10 @@ fn classify(rel: &str, idx: usize, lines: &[String]) -> Verdict {
         // Bundle processes taxonomy identifier strings — NOT unit declarations.
         return Verdict::Skip;
     }
+    if rel.ends_with("/storage-json.nix") {
+        // Storage principal names and ACL subjects — NOT systemd unit declarations.
+        return Verdict::Skip;
+    }
     if rel.ends_with("/components/observability/host.nix") {
         // Alloy journald source filters may name the historical units; only an
         // actual `systemd.services`/`systemd.sockets` declaration is a failure.

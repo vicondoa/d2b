@@ -64,3 +64,7 @@ required-features = ["fuzz"]
 [[test]]
 name = "bundle-resolver-tamper"
 path = "tests/bundle_resolver_tamper.rs"
+
+[[test]]
+name = "audio-policy"
+path = "tests/audio_policy.rs"

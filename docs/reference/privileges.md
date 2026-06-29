@@ -548,7 +548,7 @@ never both.
 | `microvm-virtiofsd@<vm>.service` (upstream template) | Broker `SpawnRunner{role: Virtiofsd, vm_id: <vm>, …}` + `supervisor::pidfd` watchdog. | not emitted |
 | `d2b-<vm>-gpu.service` (host-sidecars.nix) | Broker `SpawnRunner{role: Gpu, vm_id: <vm>, …}` per the Gpu role matrix. | not emitted |
 | `d2b-<vm>-video.service` (components/video/host.nix) | Broker `SpawnRunner{role: Video, vm_id: <vm>, …}` per the Video role matrix. | not emitted |
-| `d2b-<vm>-snd.service` (components/audio/host.nix) | Broker `SpawnRunner{role: Audio, vm_id: <vm>, …}` per the Audio role matrix. | not emitted |
+| `d2b-<vm>-snd.service` / audio runner (components/audio/host.nix) | Broker `SpawnRunner{role: Audio, vm_id: <vm>, …}` per the Audio role matrix. | not emitted |
 | `d2b-<vm>-swtpm.service` (host-sidecars.nix) | Broker `SpawnRunner{role: Swtpm, vm_id: <vm>, …}` (long-lived sidecar) + `SpawnRunner{role: SwtpmFlush, vm_id: <vm>}` (pre-start one-shot). | not emitted |
 | `d2b-<vm>-store-sync.service` | `host-prep.store-sync` DAG node → `StoreSync` broker dispatch. | not emitted |
 | `d2b-known-hosts-refresh@<vm>.service` | `host-prep.known-hosts-refresh` DAG node → `SshKeygenProbe` broker dispatch. | not emitted |

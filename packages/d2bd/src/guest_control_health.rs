@@ -136,6 +136,20 @@ pub trait GuestControlRpc {
         let _ = request;
         Err(GuestControlHealthError::Protocol)
     }
+    async fn audio_status(
+        &self,
+        request: pb::AudioStatusRequest,
+    ) -> Result<pb::AudioStatusResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
+    async fn audio_set(
+        &self,
+        request: pb::AudioSetRequest,
+    ) -> Result<pb::AudioSetResponse, GuestControlHealthError> {
+        let _ = request;
+        Err(GuestControlHealthError::Protocol)
+    }
 }
 
 pub trait GuestControlSigner {
@@ -298,6 +312,20 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         request: pb::GuestActivationStatusRequest,
     ) -> Result<pb::GuestActivationStatusResponse, GuestControlHealthError> {
         self.unary("ActivateSystemStatus", request).await
+    }
+
+    async fn audio_status(
+        &self,
+        request: pb::AudioStatusRequest,
+    ) -> Result<pb::AudioStatusResponse, GuestControlHealthError> {
+        self.unary("AudioStatus", request).await
+    }
+
+    async fn audio_set(
+        &self,
+        request: pb::AudioSetRequest,
+    ) -> Result<pb::AudioSetResponse, GuestControlHealthError> {
+        self.unary("AudioSet", request).await
     }
 }
 
@@ -502,6 +530,170 @@ pub enum GuestSystemActivationError {
     CapabilityUnavailable,
     GuestRejected(pb::GuestControlErrorKind),
     Protocol,
+}
+
+/// Typed outcome of an authenticated guest-side audio enforcement call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestAudioSetError {
+    /// Handshake/transport/protocol failure.
+    Probe(GuestControlHealthError),
+    /// Authenticated, but the guest does not advertise `AudioSet`.
+    CapabilityUnavailable,
+    /// wpctl subprocess failed inside the guest (PipeWire unavailable).
+    AudioPipeWireUnavailable,
+    /// Level value was out of range (> 100).
+    LevelOutOfRange,
+    /// Unknown channel or malformed response.
+    Protocol,
+}
+
+/// Per-channel state returned by a guestd audio call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestAudioChannelStatus {
+    pub muted: bool,
+    pub level: u32,
+    pub level_known: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestAudioStatus {
+    pub microphone: GuestAudioChannelStatus,
+    pub speaker: GuestAudioChannelStatus,
+}
+
+/// Authenticate to guestd and issue an `AudioStatus` RPC.
+pub async fn audio_status_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+) -> Result<GuestAudioStatus, GuestAudioSetError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+    let advertises = evidence.health.capabilities.iter().any(|cap| {
+        matches!(
+            cap.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_AUDIO_STATUS)
+        )
+    });
+    if !advertises {
+        return Err(GuestAudioSetError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::AudioStatusRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    let response = client
+        .audio_status(request)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+
+    if let Some(error) = response.error.as_ref() {
+        return Err(map_guest_audio_error(error.kind.enum_value_or_default()));
+    }
+    let microphone = response
+        .microphone
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
+    let speaker = response
+        .speaker
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
+
+    Ok(GuestAudioStatus {
+        microphone: GuestAudioChannelStatus {
+            muted: microphone.muted,
+            level: microphone.level,
+            level_known: microphone.level_known,
+        },
+        speaker: GuestAudioChannelStatus {
+            muted: speaker.muted,
+            level: speaker.level,
+            level_known: speaker.level_known,
+        },
+    })
+}
+
+/// Authenticate to the guest control endpoint and issue an `AudioSet` RPC.
+///
+/// The `AudioSet` capability MUST be advertised; an authenticated guest that
+/// never advertised it fails closed (`CapabilityUnavailable`). This prevents
+/// a silent no-op on an older guest generation that predates audio support.
+#[derive(Debug, Clone, Copy)]
+pub struct GuestAudioSetRequest {
+    pub channel: pb::AudioChannel,
+    pub kind: pb::AudioSetKind,
+    pub grant_on: bool,
+    pub level: u32,
+}
+
+pub async fn audio_set_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+    audio_set: GuestAudioSetRequest,
+) -> Result<GuestAudioChannelStatus, GuestAudioSetError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+    let advertises = evidence.health.capabilities.iter().any(|cap| {
+        matches!(
+            cap.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_AUDIO_SET)
+        )
+    });
+    if !advertises {
+        return Err(GuestAudioSetError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::AudioSetRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.channel = protobuf::EnumOrUnknown::new(audio_set.channel);
+    request.kind = protobuf::EnumOrUnknown::new(audio_set.kind);
+    request.grant_on = audio_set.grant_on;
+    request.level = audio_set.level;
+
+    let response = client
+        .audio_set(request)
+        .await
+        .map_err(GuestAudioSetError::Probe)?;
+
+    if let Some(error) = response.error.as_ref() {
+        return Err(map_guest_audio_error(error.kind.enum_value_or_default()));
+    }
+
+    let state = response
+        .state
+        .as_ref()
+        .ok_or(GuestAudioSetError::Protocol)?;
+    Ok(GuestAudioChannelStatus {
+        muted: state.muted,
+        level: state.level,
+        level_known: state.level_known,
+    })
+}
+
+fn map_guest_audio_error(kind: pb::GuestControlErrorKind) -> GuestAudioSetError {
+    use pb::GuestControlErrorKind as K;
+    match kind {
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_PIPEWIRE_UNAVAILABLE => {
+            GuestAudioSetError::AudioPipeWireUnavailable
+        }
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_LEVEL_OUT_OF_RANGE => GuestAudioSetError::LevelOutOfRange,
+        K::GUEST_CONTROL_ERROR_KIND_AUDIO_CHANNEL_UNKNOWN => GuestAudioSetError::Protocol,
+        _ => GuestAudioSetError::Protocol,
+    }
 }
 
 /// Authenticate to the guest control endpoint (reusing the W11 Health-probe

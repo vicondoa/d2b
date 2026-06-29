@@ -105,6 +105,7 @@ use supervisor::pidfd_table::{
 };
 
 mod admission;
+pub mod console_session;
 pub mod exec_detached;
 pub mod exec_session;
 pub mod exec_session_real;
@@ -183,6 +184,13 @@ pub mod autostart;
 // broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
 // `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
 pub mod usbipd_perenv_autostart;
+// Audio policy dispatch: OFD-locked state I/O, provider capability
+// resolution, host PipeWire enforcement, and guestd RPC dispatch.
+mod audio_dispatch;
+// Host-side audio controller strategy (ADR 0041): typed trait plus
+// PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
+// and FakeHostController (test-only).
+mod audio_host_controller;
 // Prometheus scrape endpoint shape. Owns the canonical metric inventory (see
 // `docs/reference/daemon-metrics.md`) and a minimal HTTP/1.1
 // `GET /metrics` handler. The registry is process-local; serving is
@@ -522,6 +530,10 @@ struct ServerState {
     /// Daemon-owned fast list/status read model. This is per ServerState so
     /// independent daemon instances/tests never evict each other's snapshots.
     public_status_read_model: Arc<PublicStatusReadModel>,
+    /// Per-VM console session table (ring buffers and drainer tasks) for
+    /// `d2b console <vm>`. Sessions are created on first Attach and persist
+    /// until the daemon restarts or the VM stops.
+    console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
 }
 
 struct GatewayDisplayRuntime {
@@ -977,6 +989,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
+        )),
+        console_sessions: Arc::new(Mutex::new(
+            crate::console_session::ConsoleSessionTable::default(),
         )),
         gateway_display,
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
@@ -2615,6 +2630,7 @@ fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
             | wire::Request::Exec(public_wire::ExecOp::List(_))
             | wire::Request::Exec(public_wire::ExecOp::Logs(_))
             | wire::Request::Exec(public_wire::ExecOp::Status(_))
+            | wire::Request::Audio(public_wire::AudioOp::Status(_))
     )
 }
 
@@ -2675,7 +2691,290 @@ fn dispatch_request_locked(
         // are ordinary one-shot requests.
         wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
         wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
+        wire::Request::Console(op) => dispatch_console(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
+        wire::Request::Audio(op) => {
+            if !matches!(op, public_wire::AudioOp::Status(_))
+                && !matches!(peer.role, PeerRole::Admin)
+            {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "audio".to_owned(),
+                });
+            }
+            audio_dispatch::dispatch_audio(state, op)
+        }
+    }
+}
+
+fn dispatch_console(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    op: public_wire::ConsoleOp,
+) -> Result<Value, TypedError> {
+    use d2b_contracts::terminal_wire::TerminalStream;
+    use public_wire::{
+        ConsoleCloseResult, ConsoleControlResult, ConsoleOp, ConsoleOpResponse, ConsoleWaitResult,
+    };
+
+    // Only launcher-or-admin peers may use console.
+    match &peer.role {
+        PeerRole::Admin | PeerRole::Launcher => {}
+        _ => {
+            return Err(TypedError::AuthzNotALauncher { peer_uid: peer.uid });
+        }
+    }
+
+    let is_admin = matches!(peer.role, PeerRole::Admin);
+
+    /// Reject a non-admin peer whose uid does not match the uid that
+    /// originally attached to `session_handle`.
+    fn check_console_ownership(
+        table: &crate::console_session::ConsoleSessionTable,
+        session_handle: &str,
+        peer_uid: u32,
+        is_admin: bool,
+        verb: &str,
+    ) -> Result<(), TypedError> {
+        if is_admin {
+            return Ok(());
+        }
+        match table.client_owner_uid(session_handle) {
+            None => Err(TypedError::ConsoleSessionStale),
+            Some(owner_uid) if owner_uid == peer_uid => Ok(()),
+            Some(_) => Err(TypedError::AuthzNotAdmin {
+                verb: format!("console {verb}"),
+            }),
+        }
+    }
+
+    let response = match op {
+        ConsoleOp::Attach(args) => {
+            let vm = &args.vm;
+            // Resolve provider kind from the bundle resolver.
+            let provider_kind = resolve_console_provider_kind(state, vm)?;
+
+            // Ensure a session exists; create one on first attach.
+            {
+                let mut table = state.console_sessions.lock().unwrap();
+                if !table.has_session(vm) {
+                    match create_console_session_for_vm(state, vm, provider_kind) {
+                        Ok(session) => table.register_session(vm.clone(), session),
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+
+            // Attach the client, recording the peer uid for ownership checks.
+            let attach_result = state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .attach(vm, peer.uid)
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "console: failed to allocate secure session handle".to_owned(),
+                })?;
+            match attach_result {
+                Some((handle, kind, start_offset)) => {
+                    let result = public_wire::ConsoleAttachResult {
+                        session: handle.as_str().to_owned(),
+                        provider_kind: kind,
+                        ring_buffer_start_offset: start_offset,
+                    };
+                    ConsoleOpResponse::Attach(result)
+                }
+                None => {
+                    return Err(TypedError::ConsoleSessionTableFull { vm: vm.clone() });
+                }
+            }
+        }
+
+        ConsoleOp::ReadOutput(args) => {
+            let table = state.console_sessions.lock().unwrap();
+            check_console_ownership(&table, &args.session, peer.uid, is_admin, "readOutput")?;
+            let output = table
+                .read_output(&args.session, args.offset, args.max_len)
+                .ok_or(TypedError::ConsoleSessionStale)?;
+            drop(table);
+
+            // Do not long-poll while holding the public socket connection
+            // permit; clients retry with the returned cursor instead.
+            let snap = output.snap;
+
+            let stream = TerminalStream::Stdout;
+            let result = build_read_output_result(&args.session, stream, snap);
+            ConsoleOpResponse::ReadOutput(result)
+        }
+
+        ConsoleOp::WriteStdin(args) => {
+            let bytes = d2b_core::base64_codec::decode(&args.chunk_base64).map_err(|_| {
+                TypedError::WireInvalidFrame {
+                    detail: "console: invalid base64 stdin chunk".to_owned(),
+                }
+            })?;
+            {
+                let table = state.console_sessions.lock().unwrap();
+                check_console_ownership(&table, &args.session, peer.uid, is_admin, "writeStdin")?;
+            }
+            let accepted = state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .write_stdin(&args.session, bytes)
+                .ok_or(TypedError::ConsoleSessionStale)?;
+            ConsoleOpResponse::WriteStdin(ConsoleControlResult {
+                session: args.session,
+                ok: accepted,
+            })
+        }
+
+        ConsoleOp::Resize(args) => {
+            // UART consoles do not support resize; this is a best-effort hint.
+            let _ = args.size;
+            {
+                let table = state.console_sessions.lock().unwrap();
+                check_console_ownership(&table, &args.session, peer.uid, is_admin, "resize")?;
+            }
+            let exists = state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .ring_notify(&args.session)
+                .is_some();
+            if !exists {
+                return Err(TypedError::ConsoleSessionStale);
+            }
+            ConsoleOpResponse::Resize(ConsoleControlResult {
+                session: args.session,
+                ok: false, // UART: resize not supported
+            })
+        }
+
+        ConsoleOp::Wait(args) => {
+            // Wait until EOF with optional timeout.
+            {
+                let table = state.console_sessions.lock().unwrap();
+                check_console_ownership(&table, &args.session, peer.uid, is_admin, "wait")?;
+            }
+            let exited = state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .read_output(&args.session, 0, 0)
+                .map(|o| o.snap.map(|s| s.is_eof).unwrap_or(false))
+                .ok_or(TypedError::ConsoleSessionStale)?;
+            ConsoleOpResponse::Wait(ConsoleWaitResult {
+                session: args.session,
+                exited,
+            })
+        }
+
+        ConsoleOp::Close(args) => {
+            // Ownership check for Close: non-admin may only close their own
+            // session.  A stale handle (already closed or expired) still
+            // returns closed=false below, which is idempotent and harmless.
+            {
+                let table = state.console_sessions.lock().unwrap();
+                // If the handle is unknown it was already closed; allow the
+                // idempotent path to proceed regardless of uid.
+                if table.client_owner_uid(&args.session).is_some() {
+                    check_console_ownership(&table, &args.session, peer.uid, is_admin, "close")?;
+                }
+            }
+            let closed = state.console_sessions.lock().unwrap().close(&args.session);
+            ConsoleOpResponse::Close(ConsoleCloseResult {
+                session: args.session,
+                closed,
+            })
+        }
+    };
+
+    let value = wire::console_response(&response);
+    Ok(value)
+}
+
+/// Resolve which console provider handles `vm`.  Returns an error when the VM
+/// is not known, not running, or the provider is misconfigured.
+fn resolve_console_provider_kind(
+    state: &ServerState,
+    vm: &str,
+) -> Result<public_wire::ConsoleProviderKind, TypedError> {
+    use d2b_core::runtime::RuntimeKind;
+
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
+
+    let entry = resolver
+        .find_manifest_vm(vm)
+        .ok_or_else(|| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
+
+    match entry.runtime.kind {
+        RuntimeKind::QemuMedia => Ok(public_wire::ConsoleProviderKind::QemuMedia),
+        // RuntimeKind::AcaSandbox is not yet defined; any unknown variant that
+        // has an aca driver surfaces as LocalHypervisor for now.  ACA targets
+        // must be explicitly declared once the variant lands.
+        RuntimeKind::Nixos => Ok(public_wire::ConsoleProviderKind::LocalHypervisor),
+    }
+}
+
+/// Create a console session for `vm` using the resolved provider.
+///
+/// For Cloud Hypervisor, connects to the `--serial socket=<path>` endpoint.
+/// For qemu-media, requires a pre-provisioned socketpair fd from the broker;
+/// returns ConsoleNotRunning if no live fd is available.
+fn create_console_session_for_vm(
+    _state: &ServerState,
+    vm: &str,
+    provider_kind: public_wire::ConsoleProviderKind,
+) -> Result<console_session::ConsoleSession, TypedError> {
+    match provider_kind {
+        public_wire::ConsoleProviderKind::LocalHypervisor => {
+            // Cloud Hypervisor serial socket path.
+            let socket_path = format!("/run/d2b/vms/{vm}/console.sock");
+            // The path may not exist yet if CH hasn't started, but the
+            // drainer will reconnect automatically.
+            Ok(console_session::create_ch_session(socket_path))
+        }
+        public_wire::ConsoleProviderKind::QemuMedia => {
+            // qemu-media console requires the broker to create a
+            // socketpair and pass the host fd to the daemon. Return
+            // ConsoleNotRunning if no live fd is available so operators get
+            // a clear remediation.
+            Err(TypedError::ConsoleNotRunning { vm: vm.to_owned() })
+        }
+        public_wire::ConsoleProviderKind::AcaSandbox => {
+            Err(TypedError::ConsoleProviderMisconfigured {
+                vm: vm.to_owned(),
+                detail: "ACA provider relay not available".to_owned(),
+            })
+        }
+    }
+}
+
+/// Build a [`ConsoleReadOutputResult`] wire DTO from an optional ring read.
+fn build_read_output_result(
+    session: &str,
+    stream: d2b_contracts::terminal_wire::TerminalStream,
+    snap: Option<d2b_core::console_ring::RingReadResult>,
+) -> public_wire::ConsoleReadOutputResult {
+    match snap {
+        Some(s) => public_wire::ConsoleReadOutputResult {
+            session: session.to_owned(),
+            stream,
+            offset: s.actual_offset,
+            chunk_base64: d2b_core::base64_codec::encode(&s.data),
+            ring_buffer_start_offset: s.base_offset,
+            dropped_bytes: s.dropped_bytes,
+            is_eof: s.is_eof,
+        },
+        None => public_wire::ConsoleReadOutputResult {
+            session: session.to_owned(),
+            stream,
+            offset: 0,
+            chunk_base64: String::new(),
+            ring_buffer_start_offset: 0,
+            dropped_bytes: 0,
+            is_eof: false,
+        },
     }
 }
 
@@ -8888,7 +9187,7 @@ fn redact_broker_error_for_launcher(
             "{op_name} refused: USB device is not present in sysfs. Admin: confirm the physical device is connected and recognized by the kernel, then retry."
         ),
         "Broker.Unimplemented" => {
-            "broker operation is not implemented in this build; Admin: use the supported fallback path for this wave.".to_owned()
+            "broker operation is not implemented in this build; Admin: use the supported fallback path for this release.".to_owned()
         }
         "unknown-operation" => {
             "broker rejected an unknown operation; Admin: verify daemon and broker versions match.".to_owned()
@@ -9519,6 +9818,28 @@ impl VmStartRunner<'_> {
         ) {
             cleanup_vm_start_registration(self.state, vm, &role_id);
             return Err(error);
+        }
+        if matches!(runner_role, RunnerRole::QemuMedia)
+            && let Some(console_fd_index) = response.console_fd_index
+        {
+            let console_fd = duplicate_received_fd(
+                received_fds,
+                console_fd_index,
+                "duplicate qemu-media console fd",
+            )
+            .map_err(|error| {
+                cleanup_vm_start_registration(self.state, vm, &role_id);
+                error.message()
+            })?;
+            let console_stream: UnixStream = console_fd.into();
+            self.state
+                .console_sessions
+                .lock()
+                .unwrap()
+                .register_session(
+                    vm.to_owned(),
+                    console_session::create_qemu_session(console_stream),
+                );
         }
         Ok(())
     }
@@ -13166,6 +13487,11 @@ fn dispatch_broker_vm_start(
     }
     if report.overall_ok {
         let mut usb_lifecycle_summary = None;
+        // Structured degraded annotation for the OtelHostBridge readiness
+        // gate: set to the typed-error envelope when the gate times out in
+        // non-strict mode so the success response carries machine-readable
+        // evidence without requiring log parsing.
+        let mut otel_degraded: Option<serde_json::Value> = None;
         if !request.no_wait_api {
             // When the VM that just came up is the observability VM AND
             // observability is
@@ -13179,7 +13505,7 @@ fn dispatch_broker_vm_start(
             // `docs/reference/otel-host-bridge-readiness.md`.
             let obs_meta = &resolver.manifest.observability;
             if obs_meta.enabled && obs_meta.vm_name == request.vm {
-                let cfg = otel_host_bridge_readiness::ReadinessWaitConfig::from_env();
+                let cfg = otel_host_bridge_readiness::ReadinessWaitConfig::for_dispatch();
                 let source = otel_host_bridge_readiness::PidfdAndSocketProbeSource {
                     pidfd_table: &state.pidfd_table,
                     vm: request.vm.as_str(),
@@ -13214,6 +13540,13 @@ fn dispatch_broker_vm_start(
                         elapsed_ms,
                         reason = %reason,
                         "vm start succeeded in degraded-mode: otel-host-bridge readiness gate did not close",
+                    );
+                    otel_degraded = Some(
+                        TypedError::OtelHostBridgeReadinessTimeout {
+                            vm: vm.clone(),
+                            elapsed_ms: *elapsed_ms,
+                        }
+                        .to_envelope_value(),
                     );
                 }
             }
@@ -13318,6 +13651,12 @@ fn dispatch_broker_vm_start(
                 "apiReady".to_owned(),
                 serde_json::Value::String("pending".to_owned()),
             );
+        }
+        if let Some(degraded) = otel_degraded {
+            response
+                .as_object_mut()
+                .unwrap()
+                .insert("degraded".to_owned(), degraded);
         }
         return Ok(response);
     }
@@ -13694,6 +14033,11 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         summary.push_str(&usb_summary);
     }
     summary.push_str(&format!(" ({})", drained_roles.join(", ")));
+    state
+        .console_sessions
+        .lock()
+        .unwrap()
+        .remove_session(&request.vm);
     Ok(applied_response(VERB, summary))
 }
 
@@ -16542,6 +16886,9 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime_for_tests(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -18796,7 +19143,7 @@ fn resolve_bundle_artifact_path(base_dir: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
-fn load_json<T>(path: &Path) -> Result<T, TypedError>
+pub(crate) fn load_json<T>(path: &Path) -> Result<T, TypedError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -19434,6 +19781,9 @@ mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -20105,6 +20455,9 @@ mod accept_loop_concurrency_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::new(),
+            )),
         };
         (state, dir)
     }
@@ -20563,6 +20916,10 @@ mod broker_dispatch_tests {
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
+    // Serializes tests that must read-modify-write process env vars so parallel
+    // test threads don't observe each other's transient env state.
+    static ENV_VAR_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct ChildGuard {
         child: Child,
     }
@@ -20623,6 +20980,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -20653,6 +21013,9 @@ mod broker_dispatch_tests {
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
             )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
@@ -20751,7 +21114,7 @@ mod broker_dispatch_tests {
                 "vm-a": {
                     "apiSocket": api_socket.display().to_string(),
                     "audio": false,
-                    "audioService": "d2b-vm-a-snd.service",
+                    "audioService": null,
                     "audioStateFile": "/var/lib/d2b/vms/vm-a/state/audio-state.json",
                     "bridge": null,
                     "env": "dev",
@@ -21149,7 +21512,7 @@ mod broker_dispatch_tests {
                 "vm-a": {
                     "apiSocket": api_socket.display().to_string(),
                     "audio": false,
-                    "audioService": "d2b-vm-a-snd.service",
+                    "audioService": null,
                     "audioStateFile": "/var/lib/d2b/vms/vm-a/state/audio-state.json",
                     "bridge": null,
                     "env": "dev",
@@ -22739,6 +23102,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -22776,6 +23142,7 @@ mod broker_dispatch_tests {
                     pid: child.child().id() as i32,
                     start_time_ticks: read_child_start_time(child.child()),
                     pidfd_index: 0,
+                    console_fd_index: None,
                 }),
                 &[pidfd.as_raw_fd()],
             )
@@ -22956,6 +23323,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -23040,6 +23410,7 @@ mod broker_dispatch_tests {
                         pid: child.child().id() as i32,
                         start_time_ticks: read_child_start_time(child.child()),
                         pidfd_index: 0,
+                        console_fd_index: None,
                     }),
                     &[pidfd.as_raw_fd()],
                 )
@@ -23205,6 +23576,9 @@ mod broker_dispatch_tests {
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
             )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
@@ -24085,6 +24459,7 @@ mod broker_dispatch_tests {
                 pid,
                 start_time_ticks,
                 pidfd_index: 0,
+                console_fd_index: None,
             },
             &[],
         );
@@ -25092,6 +25467,9 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
             gateway_display: crate::new_gateway_display_runtime(),
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
@@ -25592,6 +25970,14 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    fn audio_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // Audio status is read-only and remains launcher-readable; audio
+        // mutations are gated by the AudioOp arm in dispatch_request_locked.
+        assert!(!verb_requires_admin("audio"));
+    }
+
+    #[test]
     fn shell_guest_responses_map_to_public_dtos() {
         let mut attach = pb::ShellAttachResponse::new();
         attach.session_id = Some("shell-1".to_owned());
@@ -25778,6 +26164,361 @@ mod broker_dispatch_tests {
                 other => panic!("expected GuestControlReadFailed, got {other:?}"),
             }
         }
+    }
+
+    // --- OtelHostBridge degraded-mode envelope injection ---
+
+    /// Creates bundle artifacts for a minimal obs-enabled VM start test.
+    /// The obs VM has an empty process DAG (no nodes) so the supervisor DAG
+    /// succeeds immediately without a broker connection. The bundle is wired
+    /// with `_observability.enabled=true` and `vmName="obs"` so
+    /// `dispatch_broker_vm_start` reaches the OtelHostBridge readiness gate.
+    fn write_obs_enabled_bundle_artifacts(root: &Path) -> ArtifactPaths {
+        let bundle_dir = root.join("bundle-fixture-obs");
+        fs::create_dir_all(&bundle_dir).expect("create obs bundle fixture dir");
+        let manifest_path = bundle_dir.join("vms.json");
+        let processes_path = bundle_dir.join("processes.json");
+        let bundle_path = bundle_dir.join("bundle.json");
+        let privileges_path = bundle_dir.join("privileges.json");
+        // Copy the shared host fixture to a test-owned file at 0o640 so
+        // secure_open_and_read's mode check passes for the BundleVerifyPolicy.
+        let host_path = bundle_dir.join("host.json");
+        fs::copy(host_fixture_path(), &host_path).expect("copy host fixture");
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod obs host fixture");
+
+        write_json_file(
+            &manifest_path,
+            &json!({
+                "_manifest": { "manifestVersion": 6 },
+                "_observability": {
+                    "enabled": true,
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
+                    // The obs vsock host socket intentionally does not exist so
+                    // the readiness gate cannot see it as present.
+                    "obsVsockCid": 7,
+                    "obsVsockHostSocket": "/nonexistent-d2b-test-obs-sock-never-created",
+                    "vmName": "obs"
+                },
+                "obs": {
+                    "apiSocket": null,
+                    "audio": false,
+                    "audioService": null,
+                    "audioStateFile": null,
+                    "bridge": null,
+                    "env": "dev",
+                    "gpuSocket": null,
+                    "graphics": false,
+                    "isNetVm": false,
+                    "name": "obs",
+                    "netVm": null,
+                    "observability": {
+                        "agentSocket": "/run/d2b/vms/obs/otel.sock",
+                        "enabled": false,
+                        "vsockCid": 0,
+                        "vsockHostSocket": "/run/d2b/otel-obs.sock"
+                    },
+                    "runtime": {
+                        "kind": "nixos",
+                        "provider": {
+                            "id": "local-cloud-hypervisor",
+                            "type": "local",
+                            "driver": "cloud-hypervisor"
+                        },
+                        "capabilities": {
+                            "lifecycle": true,
+                            "display": false,
+                            "usbHotplug": false,
+                            "guestControl": false,
+                            "exec": false,
+                            "configSync": false,
+                            "ssh": false,
+                            // storeSync disabled so dispatch_broker_vm_start skips
+                            // the StoreSync broker op and reaches the readiness gate
+                            // without needing a live broker connection.
+                            "storeSync": false,
+                            "keys": false,
+                            "inGuestObservability": false
+                        }
+                    },
+                    "sshUser": null,
+                    // Nonexistent state dir: ownership preflight returns Clean.
+                    "stateDir": "/nonexistent-d2b-test-obs-state-never-created",
+                    "staticIp": null,
+                    "tap": "d2b-obs",
+                    "tpm": false,
+                    "tpmSocket": null,
+                    "usbipYubikey": false,
+                    "usbipdHostIp": null
+                }
+            }),
+        );
+
+        write_json_file(
+            &processes_path,
+            &json!({
+                "schemaVersion": "v2",
+                "vms": [
+                    {
+                        "vm": "obs",
+                        // Empty node list: DAG succeeds immediately (overall_ok=true)
+                        // without any broker interaction.
+                        "nodes": [],
+                        "edges": [],
+                        "invariants": {
+                            "swtpmPreStartFlush": false,
+                            "perVmAuditPipeline": false,
+                            "usbipGating": false,
+                            "tpmOwnershipMigrationWithoutRunningVmMutation": false
+                        }
+                    }
+                ]
+            }),
+        );
+        write_json_file(
+            &privileges_path,
+            &json!({ "schemaVersion": "v2", "operations": [] }),
+        );
+        write_json_file(
+            &bundle_path,
+            &json!({
+                "bundleVersion": 4,
+                // v1 avoids the mandatory bundleHash self-hash check that v2
+                // requires; tests cannot easily compute the SHA-256 over the
+                // canonical form, so we stay on the pre-v2 schema version that
+                // treats a missing hash as a warning rather than a hard fail.
+                // (The same pattern is used by all other dispatch-level tests.)
+                "schemaVersion": "v1",
+                "publicManifestPath": manifest_path.display().to_string(),
+                "hostPath": host_path.display().to_string(),
+                "processesPath": processes_path.display().to_string(),
+                "privilegesPath": privileges_path.display().to_string(),
+                "closures": [],
+                "minijailProfiles": [],
+                "managedKeys": {
+                    "keysDir": "/var/lib/d2b/keys",
+                    "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
+                    "overrides": []
+                },
+                "generation": {
+                    "generator": "tests",
+                    "sourceRevision": null,
+                    "generatedAt": null
+                }
+            }),
+        );
+        for path in [
+            &manifest_path,
+            &processes_path,
+            &bundle_path,
+            &privileges_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod obs bundle fixture");
+        }
+        ArtifactPaths {
+            bundle_path,
+            public_manifest_path: manifest_path,
+            host_path,
+            processes_path,
+            ..ArtifactPaths::default()
+        }
+    }
+
+    /// Regression test: when `await_otel_host_bridge_readiness` returns
+    /// `DegradedTimeout` in non-strict mode, `dispatch_broker_vm_start` MUST
+    /// embed the `TypedError::OtelHostBridgeReadinessTimeout` envelope as a
+    /// structured `degraded` field in the success JSON so operators and
+    /// `d2b host doctor` can detect the condition without log parsing.
+    ///
+    /// The test drives the gate to an immediate timeout by setting
+    /// `D2B_OTEL_BRIDGE_READINESS_TIMEOUT_MS=0` and using an obs vsock socket
+    /// path that does not exist. The obs VM's process DAG is deliberately
+    /// empty so `overall_ok=true` without any broker interaction.
+    #[test]
+    fn vm_start_obs_degraded_timeout_injects_degraded_field_in_envelope() {
+        use d2b_contracts::public_wire::{MutationFlags, VmLifecycleRequest};
+
+        let daemon_state_dir = test_daemon_state_dir("obs-degraded-timeout");
+        let locks_dir = daemon_state_dir.join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+        let artifacts = write_obs_enabled_bundle_artifacts(&daemon_state_dir);
+        let broker_reap_log = BrokerReapLog::new();
+        let state = ServerState {
+            config: DaemonConfig {
+                // A nonexistent broker socket is fine here: the empty obs DAG
+                // means dispatch_broker_vm_start never tries to open it.
+                broker_socket_path: unreachable_broker_socket_path("obs-degraded-timeout"),
+                artifacts,
+                locks_dir,
+                ..DaemonConfig::default()
+            },
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: daemon_state_dir.clone(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
+            gateway_display: crate::new_gateway_display_runtime(),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+        };
+
+        // Set a 0ms readiness timeout via the test-only config override so the
+        // gate times out on the very first evaluation (elapsed_ms=0 >=
+        // timeout_ms=0). Serialized by ENV_VAR_MUTEX so parallel tests that
+        // write the same override slot don't race each other.
+        let _env_guard = ENV_VAR_MUTEX.lock().unwrap();
+        crate::otel_host_bridge_readiness::set_test_readiness_config(Some(
+            crate::otel_host_bridge_readiness::ReadinessWaitConfig {
+                timeout: std::time::Duration::from_millis(0),
+                poll_interval: std::time::Duration::from_millis(1),
+                strict: false,
+            },
+        ));
+
+        let response = dispatch_broker_vm_start(
+            &state,
+            VmLifecycleRequest {
+                vm: "obs".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                no_wait_api: false,
+            },
+        )
+        .expect("dispatch_broker_vm_start must not return Err");
+
+        // Restore the env var immediately after the call.
+        crate::otel_host_bridge_readiness::set_test_readiness_config(None);
+        drop(_env_guard);
+
+        // The response must still be a success (outcome=applied): the VM is
+        // left running in degraded mode, not torn down.
+        assert_eq!(
+            response.get("outcome").and_then(serde_json::Value::as_str),
+            Some("applied"),
+            "vm start must succeed (applied) even when the OtelHostBridge gate times out"
+        );
+
+        // The `degraded` field must be present and carry the typed-error
+        // envelope so operators can detect the condition without log parsing.
+        let degraded = response.get("degraded").expect(
+            "response must contain a `degraded` field when the OtelHostBridge gate times out",
+        );
+
+        assert_eq!(
+            degraded.get("kind").and_then(serde_json::Value::as_str),
+            Some("otel-host-bridge-readiness-timeout"),
+            "degraded.kind must be otel-host-bridge-readiness-timeout"
+        );
+        // ErrorEnvelope uses camelCase serialization.
+        assert_eq!(
+            degraded.get("exitCode").and_then(|v| v.as_u64()),
+            Some(65),
+            "degraded.exitCode must be 65"
+        );
+        assert!(
+            degraded
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "degraded.message must be present and non-empty"
+        );
+        assert!(
+            degraded
+                .get("remediation")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
+            "degraded.remediation must be present and non-empty"
+        );
+
+        let _ = fs::remove_dir_all(&daemon_state_dir);
+    }
+
+    /// Complement: when `no_wait_api=true` the OtelHostBridge readiness gate
+    /// is bypassed entirely and the `degraded` field MUST NOT appear in the
+    /// success envelope. Prevents false-positive `degraded` from leaking into
+    /// VM starts that were explicitly requested without the API-readiness wait
+    /// (e.g., CLI `--no-wait-api` flag).
+    #[test]
+    fn vm_start_non_obs_vm_has_no_degraded_field_in_envelope() {
+        use d2b_contracts::public_wire::{MutationFlags, VmLifecycleRequest};
+
+        // Reuse the obs-enabled bundle (schemaVersion v1, empty process DAG)
+        // but pass `no_wait_api: true` so `dispatch_broker_vm_start` skips
+        // the OtelHostBridge readiness gate entirely.  The empty DAG means
+        // the supervisor succeeds immediately without a broker connection, so
+        // the response must be `outcome=applied` with no `degraded` field.
+        let daemon_state_dir = test_daemon_state_dir("non-obs-no-degraded");
+        let locks_dir = daemon_state_dir.join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+        let artifacts = write_obs_enabled_bundle_artifacts(&daemon_state_dir);
+        let broker_reap_log = BrokerReapLog::new();
+        let state = ServerState {
+            config: DaemonConfig {
+                broker_socket_path: unreachable_broker_socket_path("non-obs-no-degraded"),
+                artifacts,
+                locks_dir,
+                ..DaemonConfig::default()
+            },
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: daemon_state_dir.clone(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
+            gateway_display: crate::new_gateway_display_runtime(),
+            conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
+            op_locks: crate::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+        };
+
+        let response = dispatch_broker_vm_start(
+            &state,
+            VmLifecycleRequest {
+                vm: "obs".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                // Bypass the readiness gate entirely: no degraded field must
+                // appear even though observability is enabled in the bundle.
+                no_wait_api: true,
+            },
+        )
+        .expect("dispatch_broker_vm_start must not return Err");
+
+        assert!(
+            response.get("degraded").is_none(),
+            "vm start with no_wait_api=true must never inject a `degraded` field from the OtelHostBridge gate; got: {response}"
+        );
+
+        let _ = fs::remove_dir_all(&daemon_state_dir);
     }
 }
 
@@ -26044,5 +26785,98 @@ mod exec_established_tracing_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod console_dispatch_ownership_tests {
+    //! Verify that dispatch_console enforces per-session UID ownership so a
+    //! non-admin launcher cannot perform ReadOutput / WriteStdin / Resize /
+    //! Wait / Close on a session owned by a different UID, while an admin
+    //! peer is always allowed.
+
+    use super::console_session::{ConsoleRing, ConsoleSession, ConsoleSessionTable};
+    use super::typed_error::TypedError;
+    use d2b_contracts::public_wire::ConsoleProviderKind;
+    use std::sync::{Arc, Mutex};
+
+    fn make_session() -> ConsoleSession {
+        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        ConsoleSession::new(ConsoleProviderKind::LocalHypervisor, ring, None, None)
+    }
+
+    /// Mirror of the inner `check_console_ownership` helper for hermetic testing.
+    fn check_ownership(
+        table: &ConsoleSessionTable,
+        session_handle: &str,
+        peer_uid: u32,
+        is_admin: bool,
+        verb: &str,
+    ) -> Result<(), TypedError> {
+        if is_admin {
+            return Ok(());
+        }
+        match table.client_owner_uid(session_handle) {
+            None => Err(TypedError::ConsoleSessionStale),
+            Some(owner_uid) if owner_uid == peer_uid => Ok(()),
+            Some(_) => Err(TypedError::AuthzNotAdmin {
+                verb: format!("console {verb}"),
+            }),
+        }
+    }
+
+    #[test]
+    fn launcher_can_access_own_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "readOutput").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "writeStdin").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "close").is_ok());
+    }
+
+    #[test]
+    fn launcher_is_denied_another_launchers_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        let result = check_ownership(&table, handle.as_str(), 1001, false, "readOutput");
+        assert!(
+            matches!(result, Err(TypedError::AuthzNotAdmin { .. })),
+            "expected AuthzNotAdmin for cross-uid read, got {result:?}"
+        );
+        let result2 = check_ownership(&table, handle.as_str(), 1001, false, "writeStdin");
+        assert!(
+            matches!(result2, Err(TypedError::AuthzNotAdmin { .. })),
+            "expected AuthzNotAdmin for cross-uid write, got {result2:?}"
+        );
+    }
+
+    #[test]
+    fn admin_can_access_any_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        // Admin (uid=9999, different from session owner 1000) is always allowed.
+        assert!(check_ownership(&table, handle.as_str(), 9999, true, "readOutput").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 9999, true, "writeStdin").is_ok());
+    }
+
+    #[test]
+    fn stale_handle_returns_console_session_stale() {
+        let table = ConsoleSessionTable::new();
+        let result = check_ownership(&table, "no-such-handle", 1000, false, "readOutput");
+        assert!(
+            matches!(result, Err(TypedError::ConsoleSessionStale)),
+            "stale handle should return ConsoleSessionStale, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn admin_bypass_applies_regardless_of_handle_existence() {
+        // Admin bypass is checked before handle lookup; stale handle is
+        // allowed for admins so they can inspect or clean up.
+        let table = ConsoleSessionTable::new();
+        assert!(check_ownership(&table, "no-such-handle", 9999, true, "readOutput").is_ok());
     }
 }

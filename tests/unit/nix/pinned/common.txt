@@ -1,9 +1,13 @@
 # nix-unit case-presence pins (common — present on every system).
 # Regenerate with: make nix-unit-pin
 activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
+activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation
+activation-runtime-tmpfiles/audio-lock-in-locks-dir
+activation-runtime-tmpfiles/audio-locks-dir-d2b-traversal
 activation-runtime-tmpfiles/audio-state-dirs-no-root-posture
 activation-runtime-tmpfiles/gpu-dir
 activation-runtime-tmpfiles/gpu-parent
+activation-runtime-tmpfiles/manifest-audio-service-null
 activation-runtime-tmpfiles/net-var-img-broker-owned
 activation-runtime-tmpfiles/qemu-media-role-acl-script-repairs-run-write-mask
 activation-runtime-tmpfiles/qemu-media-runtime-dirs
@@ -17,6 +21,9 @@ activation-runtime-tmpfiles/run-vm-dir
 activation-runtime-tmpfiles/run-vms-parent
 activation-runtime-tmpfiles/state-dir-acl-script-no-static-sidecar-loop
 activation-runtime-tmpfiles/state-root-posture
+activation-runtime-tmpfiles/storage-json-has-audio-lock-in-locks-dir
+activation-runtime-tmpfiles/storage-json-has-audio-state-dir
+activation-runtime-tmpfiles/storage-json-has-audio-state-file
 activation-runtime-tmpfiles/store-sync-no-run-dir-install
 activation-runtime-tmpfiles/store-view-live-dir
 activation-runtime-tmpfiles/tpm-state-perms-tmpfiles-owned

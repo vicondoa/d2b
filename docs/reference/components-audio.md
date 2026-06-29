@@ -20,6 +20,14 @@ provider capability boundaries.
 Audio remains separate from display; see
 [display and virtual I/O capabilities](./display-io-capabilities.md).
 
+Console and audio are provider-capability-aware daemon surfaces; the
+per-provider capability matrix and enforcement model are documented in
+[provider capability matrix](./provider-capability-matrix.md) and
+[ADR 0041](../adr/0041-console-and-audio-controls.md). The matrix covers
+Cloud Hypervisor NixOS VMs (vhost-user-sound + guestd enforcement),
+qemu-media targets (host/qemu subset only; guest enforcement unsupported),
+and ACA sandboxes (remote guestd policy only; no local host mutations).
+
 Each VM has independent **mic** and **speaker** grants. The
 host-side state file is `/var/lib/d2b/vms/<vm>/state/audio-state.json`.
 The sidecar publishes the resolved mic/speaker state as custom
@@ -27,9 +35,8 @@ PipeWire properties (`d2b.mic`, `d2b.speaker`); a
 host-side `client.conf.d` rule reads those properties and
 null-routes the corresponding stream direction with
 `target.object = "-1"` when it's `off`. Setting `audio.enable = true`
-only enables the *capability* — the current `d2b audio` Rust
-CLI verbs return typed `not-yet-implemented` exit-78 envelopes, so
-there is no daemon-native audio control plane yet. Both directions
+enables the capability; live status and grant changes are driven through
+the daemon-native `d2b audio` Rust CLI surface. Both directions
 default to `off` on first materialisation unless the
 `allow{Mic,Speaker}ByDefault` options are flipped.
 
@@ -79,9 +86,8 @@ The matching guest-visible option (declared in
 > There is no `d2b-<vm>-snd.service` systemd unit. The broker
 > spawns the audio runner under `d2b.slice/<vm>/snd`, and the
 > hardening shape documented below is enforced as the runner
-> contract. The `d2b audio mic|speaker|status` CLI verbs are
-> rust-native shims that currently return a typed
-> `not-yet-implemented` envelope.
+> contract. The `d2b audio mic|speaker|status` CLI verbs dispatch
+> through `d2bd` and provider-specific audio enforcement.
 
 Per audio-enabled VM:
 
@@ -114,16 +120,21 @@ Per audio-enabled VM:
     hard if the socket never materialises.
   - `Restart = "no"` — on-demand only.
 - **State file** `/var/lib/d2b/vms/<vm>/state/audio-state.json`
-  (mode 0640, owner `root:d2b`), initial contents
+  (mode 0640, owner `d2bd:d2b`), initial contents
   `{"mic":"<allowMic>","speaker":"<allowSpeaker>"}`. The containing
-  `state/` directory is mode 0750 `root:d2b`. ACLs
+  `state/` directory is mode 0750 `d2bd:d2b`. ACLs
   grant `d2b-<vm>-gpu` `rx` on the directory and `r` on the
   file so the GPU sidecar can read state at VM-boot time without
-  joining `d2b`.
-- **Lock file** `/run/d2b/audio-<vm>.lock`, mode 0660,
-  `root:d2b`. The current Rust CLI shim returns
-  exit-78 and does not acquire this lock because the daemon-native
-  audio control plane is not yet available.
+  joining `d2b`. A default ACL (`default:u:d2b-<vm>-gpu:r--`,
+  `default:m::r--`) on `state/` ensures that replacement inodes
+  written via atomic rename (write to a temp file in `state/`, rename
+  to `audio-state.json`) inherit the GPU read permission on the new
+  inode.
+- **Lock file** `/run/d2b/locks/audio-<vm>.lock`, mode 0660,
+  `root:d2b`. Precreated via `systemd-tmpfiles` (`f` rule) on each
+  boot; the `f` type never overwrites an existing file, so OFD lock
+  semantics are preserved across daemon restarts. The daemon acquires this
+  lock around `d2b audio` state reads and writes.
 - **`vhost-device-sound`** vendored at
   `pkgs/vhost-device-sound/` because the nixpkgs version has a known
   PipeWire-backend format-negotiation bug. Added to
@@ -144,9 +155,7 @@ Per any audio-enabled host (emitted when at least one VM has
   direction is `on`, WirePlumber's normal default-target hook selects
   the host source.
 
-CLI (`d2b audio` in the Rust CLI — currently a rust-native shim
-that returns typed `not-yet-implemented` exit-78; there is no bash
-helper and no daemon-native audio control plane yet):
+CLI (`d2b audio` in the Rust CLI; there is no bash helper):
 
 - `d2b audio mic on|off <vm>`
 - `d2b audio speaker on|off <vm>`
@@ -156,17 +165,14 @@ helper and no daemon-native audio control plane yet):
 
 ## Lifecycle
 
-`d2b-<vm>-snd.service` carries `restartIfChanged = false`
-(matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
-A `nixos-rebuild switch` updates the unit file but does NOT cycle
-the running `vhost-user-sound` sidecar — vhost-user-sound's socket
-connection to cloud-hypervisor cannot survive a restart, and
-killing this sidecar mid-VM produces silent speakers and mic
-stuck in whatever state it was in. After a rebuild, `d2b
-list` flags the VM with `[pending restart]` if its `current`
-closure has drifted from `booted`; apply with `d2b vm restart
-<vm> --apply` (clean down+up cycles the audio sidecar and CH together so
-the socket gets re-established). See
+The audio runner is part of the daemon-supervised VM DAG. A
+`nixos-rebuild switch` updates the runner intent but does not cycle the
+running `vhost-user-sound` sidecar in place — vhost-user-sound's socket
+connection to cloud-hypervisor cannot survive a restart, and killing the
+sidecar mid-VM produces silent speakers and mic state drift. After a rebuild,
+`d2b list` flags the VM with `[pending restart]` if its `current` closure has
+drifted from `booted`; apply with `d2b vm restart <vm> --apply` (clean down+up
+cycles the audio sidecar and CH together so the socket gets re-established). See
 [`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
 ## Guest-side resources created
@@ -178,12 +184,10 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
   invoked by microvm.nix's runner at VM start. Reads
   `audio-state.json`; if both directions are off, emits nothing
   (no virtio-snd device at all). Otherwise:
-  1. `systemctl reset-failed d2b-<vm>-snd.service` (tolerant).
-  2. `systemctl start d2b-<vm>-snd.service` (tolerant).
-  3. Polls for `/run/d2b/vms/<vm>/snd.sock` up to 5 s.
-  4. Prints `--generic-vhost-user socket=...,virtio_id=25,
-     queue_sizes=[64,64,64,64]`. virtio_id 25 = "sound" per the
-     virtio spec; queue_sizes is a 4-element list matching
+  1. Polls for `/run/d2b/vms/<vm>/snd.sock` up to 5 s.
+  2. Prints `--generic-vhost-user socket=...,virtio_id=25,
+    queue_sizes=[64,64,64,64]`. virtio_id 25 = "sound" per the
+    virtio spec; queue_sizes is a 4-element list matching
      vhost-device-sound's ctrl + event + tx + rx queues.
 - `boot.kernelModules = [ "snd_virtio" ]`.
 - `services.pulseaudio.enable = lib.mkForce false`.
@@ -221,8 +225,8 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
 
 ## Hardening notes
 
-`d2b-<vm>-snd.service` is the security baseline for
-sidecar-as-system-service. Compared to the GPU sidecar template:
+The broker-spawned audio runner profile is the security baseline for the
+sidecar. Compared to the GPU sidecar profile:
 
 - `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
   `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables/Modules`,
@@ -287,6 +291,10 @@ sidecar-as-system-service. Compared to the GPU sidecar template:
 ## See also
 
 - [Design / threat model](../explanation/design.md)
+- [Provider capability matrix](./provider-capability-matrix.md) — per-provider
+  console and audio capability boundaries (Cloud Hypervisor, qemu-media, ACA).
+- [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding design for
+  provider-capability-aware console and audio.
 - [Manifest schema](./manifest-schema.md) — `units.snd` field;
   `audioStateFile` path.
 - [CLI contract](./cli-contract.md) — `d2b audio` subcommand.
