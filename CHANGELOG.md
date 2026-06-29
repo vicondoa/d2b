@@ -40,6 +40,14 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-filter` now includes clipboard virtualization groundwork:
   bridge socket configuration scaffolding, exact guest-client attribution
   bookkeeping, v1 clipboard/DND policy helpers, and FD-handoff lifecycle tests.
+- `d2b-wayland-filter` virtual clipboard now correctly sends `wl_data_source.cancelled`
+  to the previous source owner when a new selection supersedes it; `vm_name`
+  attribution is threaded through all four virtual clipboard handlers
+  (`VirtualDataDeviceManagerHandler`, `VirtualDataSourceHandler`,
+  `VirtualDataDeviceHandler`, `VirtualOfferHandler`) and logged at each
+  clipboard lifecycle event (source created/destroyed, MIME announced,
+  selection set, offer received); source-gone EOF path is explicitly logged
+  with a bridge-handoff TODO marker.
 - `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
   IPC models, bounded Unix-socket request/response helpers, focused-window
   best-effort attribution cache behavior, and fallback arming state-machine tests.
