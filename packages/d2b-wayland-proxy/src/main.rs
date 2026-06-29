@@ -34,6 +34,8 @@ use d2b_wayland_proxy::{
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
 
+const DIAG_ERROR_MAX_BYTES: usize = 256;
+
 #[derive(Parser, Debug)]
 #[command(name = "d2b-wayland-proxy")]
 #[command(about = "Host-side Wayland proxy for d2b graphics VMs")]
@@ -315,7 +317,7 @@ fn accept_loop(
                         let client = match state.add_client(&fd) {
                             Ok(c) => c,
                             Err(e) => {
-                                let error = error_source_chain(&e);
+                                let error = bounded_error_detail(error_source_chain(&e));
                                 diag.borrow_mut().warn(
                                     "client-accept",
                                     "add-client-failed",
@@ -341,8 +343,7 @@ fn accept_loop(
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) if is_recoverable_accept_error(&e) => {
-                        let resource_exhausted = is_resource_exhaustion_accept_error(&e);
-                        let error = e.to_string();
+                        let error = bounded_error_detail(e.to_string());
                         diag.borrow_mut().warn(
                             "client-accept",
                             "recoverable-accept-error",
@@ -352,9 +353,6 @@ fn accept_loop(
                                 )
                             },
                         );
-                        if resource_exhausted {
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
                         break;
                     }
                     Err(e) => {
@@ -411,6 +409,17 @@ fn error_source_chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     out
+}
+
+fn bounded_error_detail(error: String) -> String {
+    if error.len() <= DIAG_ERROR_MAX_BYTES {
+        return error;
+    }
+    let mut end = DIAG_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &error[..end])
 }
 
 #[cfg(test)]

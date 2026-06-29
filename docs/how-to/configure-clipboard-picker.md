@@ -26,6 +26,7 @@ D2b does not include a default picker flake input. Install the separate
               # Or set clipd.package once the daemon package is wired.
               picker.package = d2b-clip-picker.packages.${pkgs.system}.default;
               policy.crossRealm.enable = true;
+              niri.fallback.enable = true;
             };
           };
         })

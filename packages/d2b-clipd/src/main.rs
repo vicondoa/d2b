@@ -50,6 +50,8 @@ const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
+const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -164,6 +166,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         control_streams: Vec::new(),
         bridge_listeners,
         bridge_streams: Vec::new(),
+        accept_diag: AcceptDiagnostics::default(),
         data_control: &mut data_control,
         niri_rx,
         host_clipboard: &mut host_clipboard,
@@ -233,6 +236,7 @@ struct EventLoop<'a> {
     control_streams: Vec<ControlStream>,
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
+    accept_diag: AcceptDiagnostics,
     data_control: &'a mut DataControlClient,
     niri_rx: mpsc::Receiver<NiriMessage>,
     host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
@@ -378,6 +382,16 @@ impl EventLoop<'_> {
                             });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) if is_recoverable_accept_error(&error) => {
+                            self.accept_diag
+                                .warn("control", "recoverable-accept-error", || {
+                                    format!("d2b-clipd: recoverable control accept error: {error}")
+                                });
+                            if is_resource_exhaustion_accept_error(&error) {
+                                std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
+                            }
+                            break;
+                        }
                         Err(error) => return Err(format!("control accept failed: {error}")),
                     }
                 }
@@ -402,7 +416,7 @@ impl EventLoop<'_> {
 
             for index in bridge_listener_ready {
                 if let Some(bridge) = self.bridge_listeners.get(index) {
-                    accept_bridge_streams(bridge, &mut self.bridge_streams);
+                    accept_bridge_streams(bridge, &mut self.bridge_streams, &mut self.accept_diag);
                 }
             }
 
@@ -519,6 +533,34 @@ struct BridgeStream {
     received_fds: Vec<OwnedFd>,
 }
 
+#[derive(Default)]
+struct AcceptDiagnostics {
+    last_warn: BTreeMap<String, Instant>,
+    suppressed: BTreeMap<String, u64>,
+}
+
+impl AcceptDiagnostics {
+    fn warn(&mut self, scope: &str, reason: &str, message: impl FnOnce() -> String) {
+        let key = format!("{scope}:{reason}");
+        let now = Instant::now();
+        let should_emit = self
+            .last_warn
+            .get(&key)
+            .is_none_or(|last| now.duration_since(*last) >= ACCEPT_WARN_INTERVAL);
+        if should_emit {
+            if let Some(count) = self.suppressed.remove(&key)
+                && count > 0
+            {
+                log::warn!("d2b-clipd: accept diagnostic suppressed={count} key={key}");
+            }
+            log::warn!("{}", message());
+            self.last_warn.insert(key, now);
+        } else {
+            *self.suppressed.entry(key).or_insert(0) += 1;
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum BridgeFrame {
@@ -594,7 +636,11 @@ struct BridgePasteRequest {
     fd: OwnedFd,
 }
 
-fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream>) {
+fn accept_bridge_streams(
+    bridge: &BridgeListener,
+    streams: &mut Vec<BridgeStream>,
+    diag: &mut AcceptDiagnostics,
+) {
     let rlimit_nofile = current_nofile_soft_limit();
     if validate_fd_cap(FdCapModel {
         requested_cap: streams.len().saturating_add(1) as u64,
@@ -604,10 +650,13 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
     })
     .is_err()
     {
-        log::warn!(
-            "d2b-clipd: bridge stream cap exceeded for vm={}",
-            bridge.vm_name
-        );
+        diag.warn("bridge", "stream-cap-exceeded", || {
+            format!(
+                "d2b-clipd: bridge stream cap exceeded for vm={}",
+                bridge.vm_name
+            )
+        });
+        std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
         return;
     }
     loop {
@@ -642,6 +691,18 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) if is_recoverable_accept_error(&error) => {
+                diag.warn("bridge", "recoverable-accept-error", || {
+                    format!(
+                        "d2b-clipd: recoverable bridge accept error for vm={}: {error}",
+                        bridge.vm_name
+                    )
+                });
+                if is_resource_exhaustion_accept_error(&error) {
+                    std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
+                }
+                break;
+            }
             Err(error) => {
                 log::warn!(
                     "d2b-clipd: bridge accept failed for vm={}: {error}",
@@ -651,6 +712,23 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
             }
         }
     }
+}
+
+fn is_recoverable_accept_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Interrupted {
+        return true;
+    }
+    matches!(
+        error.raw_os_error(),
+        Some(nix::libc::ECONNABORTED | nix::libc::EINTR)
+    ) || is_resource_exhaustion_accept_error(error)
+}
+
+fn is_resource_exhaustion_accept_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(nix::libc::EMFILE | nix::libc::ENFILE)
+    )
 }
 
 fn current_nofile_soft_limit() -> u64 {
@@ -2102,6 +2180,21 @@ mod tests {
         assert!(err.message().contains("control message truncated"));
         assert!(stream.received_fds.is_empty());
         drop(read_fd);
+    }
+
+    #[test]
+    fn recoverable_accept_errors_include_fd_exhaustion() {
+        for errno in [
+            nix::libc::ECONNABORTED,
+            nix::libc::EINTR,
+            nix::libc::EMFILE,
+            nix::libc::ENFILE,
+        ] {
+            let err = std::io::Error::from_raw_os_error(errno);
+            assert!(is_recoverable_accept_error(&err));
+        }
+        let fatal = std::io::Error::from_raw_os_error(nix::libc::EACCES);
+        assert!(!is_recoverable_accept_error(&fatal));
     }
 
     #[test]

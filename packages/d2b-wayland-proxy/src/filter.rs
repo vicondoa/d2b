@@ -58,6 +58,8 @@ use crate::{
     policy::FilterPolicy,
 };
 
+const DIAG_ERROR_MAX_BYTES: usize = 256;
+
 /// State-level handler: creates per-client display handlers.
 pub struct FilterStateHandler {
     policy: Rc<FilterPolicy>,
@@ -325,7 +327,7 @@ impl VirtualClipboardState {
             }
             Err(error) => {
                 let vm = self.vm_name.clone();
-                let error = error.to_string();
+                let error = bounded_error_detail(error.to_string());
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-bridge", "connect-failed", || {
@@ -336,6 +338,17 @@ impl VirtualClipboardState {
                 self.bridge_reconnect.connect_failed();
                 self.schedule_bridge_retry();
             }
+        }
+
+        fn bounded_error_detail(error: String) -> String {
+            if error.len() <= DIAG_ERROR_MAX_BYTES {
+                return error;
+            }
+            let mut end = DIAG_ERROR_MAX_BYTES;
+            while !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &error[..end])
         }
         self.bridge.as_mut()
     }
