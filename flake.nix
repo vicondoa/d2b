@@ -44,6 +44,22 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages}/. $out/packages/
+        '';
+        rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
+          pname = "d2b-rust-workspace";
+          version = "0.0.0-bootstrap";
+          src = rustPackagesSrc;
+          sourceRoot = "d2b-rust-src/packages";
+          cargoLock = {
+            lockFile = ./packages/Cargo.lock;
+            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+          };
+          RUSTC_WRAPPER = "";
+          SCCACHE_DIR = "";
+        } // args);
         guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages/d2b-constellation-core} $out/packages/d2b-constellation-core
@@ -225,6 +241,11 @@
         d2b-exec-runner-static =
           guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
+        d2b-clipd = rustWorkspace {
+          pname = "d2b-clipd";
+          cargoBuildFlags = [ "--package" "d2b-clipd" "--bin" "d2b-clipd" ];
+          doCheck = false;
+        };
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };

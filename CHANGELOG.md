@@ -45,6 +45,8 @@ deprecations ship one minor release before removal.
   best-effort attribution cache behavior, and fallback arming state-machine tests.
 - `d2b-clipd` now has a real desktop notification backend for bounded,
   content-free fallback-ready and failure notifications.
+- The flake now exports `packages.<system>.d2b-clipd` so host configurations can
+  wire the clipboard authority user service without local package workarounds.
 - Added clipboard architecture Nix/docs/schema scaffolding: a default-off
   `d2b.site.clipboard` module, user-service wiring for externally packaged
   `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
