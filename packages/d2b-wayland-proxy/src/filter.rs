@@ -280,7 +280,7 @@ impl VirtualClipboardState {
         let now = Instant::now();
         match self.bridge_reconnect.state() {
             BridgeConnectionState::Disabled => return None,
-            BridgeConnectionState::Connected => self.bridge_reconnect.disconnected(),
+            BridgeConnectionState::Connected { .. } => self.bridge_reconnect.disconnected(),
             BridgeConnectionState::Backoff { .. } => {
                 if self.next_bridge_retry.is_some_and(|retry| retry > now) {
                     return None;

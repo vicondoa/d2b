@@ -200,7 +200,7 @@ fn main() {
     // listen socket. Each accepted client gets its own upstream connection below.
     match build_state(&args.connect) {
         Ok(_) => {}
-        Err(e) => {
+        Err(_e) => {
             eprintln!(
                 "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
                 args.connect
@@ -315,8 +315,14 @@ fn accept_loop(
                         let client = match state.add_client(&fd) {
                             Ok(c) => c,
                             Err(e) => {
-                                log::warn!(
-                                    "[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}"
+                                diag.borrow_mut().warn(
+                                    "client-accept",
+                                    "add-client-failed",
+                                    || {
+                                        format!(
+                                            "[d2b-wlproxy] vm={vm} event=client-accept reason=add-client-failed client={client_id}"
+                                        )
+                                    },
                                 );
                                 continue;
                             }
@@ -334,7 +340,15 @@ fn accept_loop(
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) if is_recoverable_accept_error(&e) => {
-                        log::warn!("[d2b-wlproxy] vm={vm} recoverable accept error: {e}");
+                        diag.borrow_mut().warn(
+                            "client-accept",
+                            "recoverable-accept-error",
+                            || {
+                                format!(
+                                    "[d2b-wlproxy] vm={vm} event=client-accept reason=recoverable-accept-error"
+                                )
+                            },
+                        );
                         break;
                     }
                     Err(e) => {

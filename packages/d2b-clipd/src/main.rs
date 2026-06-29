@@ -46,6 +46,7 @@ use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
 const CONTROL_MAX_FRAME_BYTES: usize = 1024;
+const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -788,7 +789,8 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
                 "bridge frame carried too many transfer fds".to_owned(),
             ));
         }
-        if stream.read_buffer.len() > 4096 {
+        if stream.read_buffer.len() > BRIDGE_MAX_FRAME_BYTES {
+            stream.received_fds.clear();
             return Err(BridgeReadError::Invalid(
                 "bridge frame too large".to_owned(),
             ));
@@ -2000,6 +2002,22 @@ mod tests {
         assert!(err.message().contains("too many transfer fds"));
         drop(read_a);
         drop(read_b);
+    }
+
+    #[test]
+    fn bridge_frame_rejects_overlong_fragment_without_newline() {
+        let (mut sender, receiver) = UnixStream::pair().expect("bridge pair");
+        sender
+            .write_all(&vec![b'a'; BRIDGE_MAX_FRAME_BYTES + 1])
+            .expect("write");
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: Vec::new(),
+        };
+        let err = recv_bridge_frame(&mut stream).expect_err("overlong bridge frame");
+        assert!(err.message().contains("bridge frame too large"));
     }
 
     #[test]

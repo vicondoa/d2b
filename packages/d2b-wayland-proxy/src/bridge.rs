@@ -122,7 +122,7 @@ pub enum BridgeConnectionState {
     Disabled,
     Disconnected,
     Connecting { attempt: u32 },
-    Connected,
+    Connected { attempt: u32 },
     Backoff { attempt: u32, delay: Duration },
 }
 
@@ -166,8 +166,8 @@ impl BridgeReconnectMachine {
     }
 
     pub fn connect_succeeded(&mut self) {
-        if matches!(self.state, BridgeConnectionState::Connecting { .. }) {
-            self.state = BridgeConnectionState::Connected;
+        if let BridgeConnectionState::Connecting { attempt } = self.state {
+            self.state = BridgeConnectionState::Connected { attempt };
             self.connected_at = Some(Instant::now());
         }
     }
@@ -183,7 +183,7 @@ impl BridgeReconnectMachine {
     }
 
     pub fn disconnected(&mut self) {
-        if matches!(self.state, BridgeConnectionState::Connected) {
+        if let BridgeConnectionState::Connected { attempt } = self.state {
             let stable = self.connected_at.is_some_and(|connected_at| {
                 connected_at.elapsed() >= STABLE_CONNECTION_RESET_AFTER
             });
@@ -191,9 +191,10 @@ impl BridgeReconnectMachine {
             if stable {
                 self.state = BridgeConnectionState::Disconnected;
             } else {
+                let backoff_attempt = attempt.saturating_add(1);
                 self.state = BridgeConnectionState::Backoff {
-                    attempt: 1,
-                    delay: self.policy.initial_delay,
+                    attempt: backoff_attempt,
+                    delay: self.delay_for_attempt(attempt),
                 };
             }
         }
@@ -406,16 +407,23 @@ mod tests {
             BridgeConnectionState::Connecting { attempt: 2 }
         );
         machine.connect_succeeded();
-        assert_eq!(machine.state(), BridgeConnectionState::Connected);
+        assert_eq!(
+            machine.state(),
+            BridgeConnectionState::Connected { attempt: 2 }
+        );
         machine.disconnected();
         assert_eq!(
             machine.state(),
             BridgeConnectionState::Backoff {
-                attempt: 1,
-                delay: Duration::from_millis(250)
+                attempt: 3,
+                delay: Duration::from_millis(500)
             }
         );
         machine.retry_due();
+        assert_eq!(
+            machine.state(),
+            BridgeConnectionState::Connecting { attempt: 3 }
+        );
         machine.connect_succeeded();
         machine.connected_at = Some(Instant::now() - Duration::from_secs(2));
         machine.disconnected();

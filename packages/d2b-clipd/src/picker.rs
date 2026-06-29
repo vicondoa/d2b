@@ -182,7 +182,11 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
     }
 
     pub fn maintenance_deadline(&self) -> Option<Instant> {
-        self.terminating.iter().map(|picker| picker.kill_at).min()
+        self.terminating
+            .iter()
+            .filter(|picker| !picker.killed)
+            .map(|picker| picker.kill_at)
+            .min()
     }
 
     pub fn active_socket(&self) -> Option<&UnixStream> {
