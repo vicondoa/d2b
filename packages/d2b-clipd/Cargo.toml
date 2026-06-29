@@ -10,6 +10,7 @@ description = "Host-session clipboard authority daemon foundation for d2b"
 workspace = true
 
 [dependencies]
+notify-rust = "4"
 rustix = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
