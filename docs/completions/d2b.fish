@@ -410,8 +410,8 @@ complete -c d2b -n "__fish_d2b_using_subcommand config; and __fish_seen_subcomma
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -f -a "arm" -d 'Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and not __fish_seen_subcommand_from arm help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l json
-complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l json -d 'Emit a structured JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -l human -d 'Emit a human-readable status line'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from arm" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "arm" -d 'Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)'
 complete -c d2b -n "__fish_d2b_using_subcommand clipboard; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'

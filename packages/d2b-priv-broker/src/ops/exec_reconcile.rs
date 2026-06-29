@@ -1867,6 +1867,23 @@ mod tests {
         helper
     }
 
+    fn run_usbip_helper_once_retry_text_busy(
+        helper: &Path,
+        subcommand: UsbipSubcommand,
+        bus_id: &str,
+        deadline: Instant,
+    ) -> Result<(), ReconcileExecError> {
+        match run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline) {
+            Err(ReconcileExecError::BinaryMissing { detail, .. })
+                if detail.contains("Text file busy") =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+                run_usbip_driver_helper_once(helper, subcommand, bus_id, deadline)
+            }
+            result => result,
+        }
+    }
+
     #[test]
     fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
         let root = usbip_stream_test_root("used");
@@ -1995,29 +2012,13 @@ exit 7
 "#,
         );
 
-        let err =
-            match run_usbip_driver_helper_once(
-                &helper,
-                UsbipSubcommand::Unbind,
-                "1-2",
-                Instant::now() + Duration::from_secs(2),
-            )
-            .expect_err("large stderr should drain and preserve helper exit status")
-            {
-                ReconcileExecError::BinaryMissing { detail, .. }
-                    if detail.contains("Text file busy") =>
-                {
-                    std::thread::sleep(Duration::from_millis(25));
-                    run_usbip_driver_helper_once(
-                        &helper,
-                        UsbipSubcommand::Unbind,
-                        "1-2",
-                        Instant::now() + Duration::from_secs(2),
-                    )
-                    .expect_err("large stderr retry should preserve helper exit status")
-                }
-                err => err,
-            };
+        let err = run_usbip_helper_once_retry_text_busy(
+            &helper,
+            UsbipSubcommand::Unbind,
+            "1-2",
+            Instant::now() + Duration::from_secs(2),
+        )
+        .expect_err("large stderr should drain and preserve helper exit status");
         match err {
             ReconcileExecError::NonZeroExit {
                 which,
@@ -2053,7 +2054,7 @@ exit 0
 "#,
         );
 
-        run_usbip_driver_helper_once(
+        run_usbip_helper_once_retry_text_busy(
             &helper,
             UsbipSubcommand::Bind,
             "1-2",

@@ -1221,8 +1221,8 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (arm)
 _arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'(--human)--json[Emit a structured JSON envelope]' \
+'(--json)--human[Emit a human-readable status line]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

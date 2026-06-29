@@ -91,6 +91,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "clipboard",
+    "subject": "host clipboard",
+    "scope": "local-user-session",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "no",
+    "auditMode": "errors"
+  },
+  {
     "operation": "realm",
     "subject": "realm command family",
     "scope": "global-or-scoped",

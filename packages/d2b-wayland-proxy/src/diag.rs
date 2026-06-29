@@ -44,7 +44,17 @@ const MAX_PER_WINDOW: u64 = 5;
 const DIAG_ERROR_MAX_BYTES: usize = 256;
 
 pub fn bounded_error_detail(error: impl Into<String>) -> String {
-    let error = error.into();
+    let error = error
+        .into()
+        .chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\t' {
+                '?'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
     if error.len() <= DIAG_ERROR_MAX_BYTES {
         return error;
     }
@@ -218,5 +228,10 @@ mod tests {
     #[test]
     fn bounded_error_detail_preserves_short_errors() {
         assert_eq!(bounded_error_detail("short"), "short");
+    }
+
+    #[test]
+    fn bounded_error_detail_scrubs_control_characters() {
+        assert_eq!(bounded_error_detail("line1\nline2\r\0"), "line1?line2??");
     }
 }

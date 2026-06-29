@@ -52,6 +52,7 @@ const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
+const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -414,6 +415,7 @@ impl EventLoop<'_> {
                             self.control_streams.push(ControlStream {
                                 stream,
                                 read_buffer: Vec::new(),
+                                frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
                             });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -544,6 +546,7 @@ impl EventLoop<'_> {
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
                 log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
             }
+            self.reap_idle_streams(now);
             self.accept_diag.flush_suppressed();
         }
     }
@@ -563,6 +566,12 @@ impl EventLoop<'_> {
         if let Some(deadline) = self.bridge_accept_backoff_until {
             next = Some(next.map_or(deadline, |old| old.min(deadline)));
         }
+        for stream in &self.control_streams {
+            next = Some(next.map_or(stream.frame_deadline, |old| old.min(stream.frame_deadline)));
+        }
+        for stream in &self.bridge_streams {
+            next = Some(next.map_or(stream.frame_deadline, |old| old.min(stream.frame_deadline)));
+        }
         if let FallbackState::Armed { expires_at, .. } = self.fallback.state() {
             next = Some(next.map_or(*expires_at, |old| old.min(*expires_at)));
         }
@@ -574,6 +583,30 @@ impl EventLoop<'_> {
         })
         .unwrap_or(5000)
     }
+
+    fn reap_idle_streams(&mut self, now: Instant) {
+        let control_dropped = reap_idle_control_streams(&mut self.control_streams, now);
+        if control_dropped > 0 {
+            log::debug!("d2b-clipd: reaped {control_dropped} idle control stream(s)");
+        }
+
+        let bridge_dropped = reap_idle_bridge_streams(&mut self.bridge_streams, now);
+        if bridge_dropped > 0 {
+            log::debug!("d2b-clipd: reaped {bridge_dropped} idle bridge stream(s)");
+        }
+    }
+}
+
+fn reap_idle_control_streams(streams: &mut Vec<ControlStream>, now: Instant) -> usize {
+    let before = streams.len();
+    streams.retain(|stream| stream.frame_deadline > now);
+    before.saturating_sub(streams.len())
+}
+
+fn reap_idle_bridge_streams(streams: &mut Vec<BridgeStream>, now: Instant) -> usize {
+    let before = streams.len();
+    streams.retain(|stream| stream.frame_deadline > now);
+    before.saturating_sub(streams.len())
 }
 
 #[derive(Debug)]
@@ -595,6 +628,7 @@ struct BridgeStream {
     stream: UnixStream,
     read_buffer: Vec<u8>,
     received_fds: Vec<OwnedFd>,
+    frame_deadline: Instant,
 }
 
 #[derive(Default)]
@@ -769,6 +803,7 @@ fn accept_bridge_streams(
                     stream,
                     read_buffer: Vec::new(),
                     received_fds: Vec::new(),
+                    frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
                 });
                 if validate_fd_cap(FdCapModel {
                     requested_cap: streams.len().saturating_add(1) as u64,
@@ -1054,6 +1089,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, B
                 source_id,
                 bounded_mime(&mime_type)
             );
+            stream.frame_deadline = Instant::now() + STREAM_FRAME_IDLE_TIMEOUT;
             Ok(BridgePasteRequest {
                 vm_name,
                 mime_type,
@@ -1250,6 +1286,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
 struct ControlStream {
     stream: UnixStream,
     read_buffer: Vec<u8>,
+    frame_deadline: Instant,
 }
 
 enum ControlStreamStatus {
@@ -1280,7 +1317,9 @@ fn handle_control_stream(
                 Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
                 Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
             };
-            if let Err(error) = control.stream.write_all(body.as_bytes()) {
+            if let Err(error) =
+                write_all_nonblocking_stream(&control.stream, body.as_bytes(), BOUNDED_READ_TIMEOUT)
+            {
                 log::warn!("d2b-clipd: write control response failed: {error}");
             }
             ControlStreamStatus::Done
@@ -1289,12 +1328,73 @@ fn handle_control_stream(
         Err(ControlReadError::Closed) => ControlStreamStatus::Done,
         Err(ControlReadError::Invalid(error)) => {
             let body = format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&error));
-            if let Err(error) = control.stream.write_all(body.as_bytes()) {
+            if let Err(error) =
+                write_all_nonblocking_stream(&control.stream, body.as_bytes(), BOUNDED_READ_TIMEOUT)
+            {
                 log::warn!("d2b-clipd: write control error response failed: {error}");
             }
             ControlStreamStatus::Done
         }
     }
+}
+
+fn write_all_nonblocking_stream(
+    stream: &UnixStream,
+    data: &[u8],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut remaining = data;
+    while !remaining.is_empty() {
+        match rustix::io::write(stream, remaining) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "control socket write returned zero",
+                ));
+            }
+            Ok(written) => remaining = &remaining[written..],
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::AGAIN) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "control socket write timed out",
+                    ));
+                }
+                let timeout_ms = deadline
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .min(i32::MAX as u128) as i32;
+                let mut fds = [PollFd::new(
+                    stream,
+                    PollFlags::OUT | PollFlags::ERR | PollFlags::HUP,
+                )];
+                match poll(&mut fds, timeout_ms) {
+                    Ok(0) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "control socket write timed out",
+                        ));
+                    }
+                    Err(rustix::io::Errno::INTR) => {}
+                    Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            "control socket closed while writing",
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        return Err(std::io::Error::from_raw_os_error(error.raw_os_error()));
+                    }
+                }
+            }
+            Err(error) => return Err(std::io::Error::from_raw_os_error(error.raw_os_error())),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2162,11 +2262,57 @@ mod tests {
         let mut control = ControlStream {
             stream: reader,
             read_buffer: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let err = read_control_command_from_stream(&mut control).expect_err("malformed");
         assert!(
             matches!(err, ControlReadError::Invalid(message) if message.contains("invalid control JSON"))
         );
+    }
+
+    #[test]
+    fn nonblocking_control_response_writer_waits_for_writable_socket() {
+        let (mut reader, writer) = UnixStream::pair().expect("pair");
+        writer.set_nonblocking(true).expect("nonblocking writer");
+        write_all_nonblocking_stream(&writer, b"{\"ok\":true}\n", Duration::from_secs(1))
+            .expect("write response");
+        drop(writer);
+        let mut out = String::new();
+        reader.read_to_string(&mut out).expect("read response");
+        assert_eq!(out, "{\"ok\":true}\n");
+    }
+
+    #[test]
+    fn nonblocking_control_response_writer_times_out_on_full_socket() {
+        let (_reader, writer) = UnixStream::pair().expect("pair");
+        writer.set_nonblocking(true).expect("nonblocking writer");
+        let data = vec![b'x'; 16 * 1024 * 1024];
+        let err = write_all_nonblocking_stream(&writer, &data, Duration::from_millis(5))
+            .expect_err("full socket should time out");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn idle_stream_reapers_drop_expired_partial_connections() {
+        let now = Instant::now();
+        let (_control_writer, control_reader) = UnixStream::pair().expect("control pair");
+        let (_bridge_writer, bridge_reader) = UnixStream::pair().expect("bridge pair");
+        let mut control_streams = vec![ControlStream {
+            stream: control_reader,
+            read_buffer: b"{".to_vec(),
+            frame_deadline: now - Duration::from_millis(1),
+        }];
+        let mut bridge_streams = vec![BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: bridge_reader,
+            read_buffer: b"{".to_vec(),
+            received_fds: Vec::new(),
+            frame_deadline: now - Duration::from_millis(1),
+        }];
+        assert_eq!(reap_idle_control_streams(&mut control_streams, now), 1);
+        assert_eq!(reap_idle_bridge_streams(&mut bridge_streams, now), 1);
+        assert!(control_streams.is_empty());
+        assert!(bridge_streams.is_empty());
     }
 
     #[test]
@@ -2196,6 +2342,86 @@ mod tests {
     }
 
     #[test]
+    fn write_all_nonblocking_fd_writes_socketpair_bytes() {
+        let (write_sock, mut read_sock) = UnixStream::pair().expect("pair");
+        let fd: OwnedFd = write_sock.into();
+        write_all_nonblocking_fd(&fd, b"hello", Instant::now() + Duration::from_secs(1))
+            .expect("write");
+        drop(fd);
+        let mut out = Vec::new();
+        read_sock.read_to_end(&mut out).expect("read");
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn write_all_nonblocking_fd_times_out_when_pipe_is_full() {
+        use std::os::fd::AsFd;
+
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        rustix::io::ioctl_fionbio(write_fd.as_fd(), true).expect("nonblocking");
+        let fill = vec![b'x'; 4096];
+        loop {
+            match rustix::io::write(&write_fd, &fill) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::AGAIN) => break,
+                Err(error) => panic!("unexpected pipe fill error: {error}"),
+            }
+        }
+        let err = write_all_nonblocking_fd(
+            &write_fd,
+            b"blocked",
+            Instant::now() + Duration::from_millis(5),
+        )
+        .expect_err("full pipe should time out");
+        assert_eq!(err, ReasonCode::FdWriteTimeout);
+        drop(read_fd);
+        drop(write_fd);
+    }
+
+    #[test]
+    fn spawn_materialize_to_pending_paste_writes_and_releases_pending_fd() {
+        let mut host_clipboard = HostClipboard::new(
+            HostClipboardAttributor::new(NiriQueryProvider::new(None)),
+            Duration::from_secs(30),
+        );
+        let (paste_write, mut paste_read) = UnixStream::pair().expect("paste pair");
+        host_clipboard
+            .accept_paste_fd_for_destination(
+                paste_write.into(),
+                "text/plain".to_owned(),
+                FocusedWindowSnapshot::default(),
+            )
+            .expect("accept paste");
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        rustix::io::write(&write_fd, b"hello").expect("write source");
+        drop(write_fd);
+
+        spawn_materialize_to_pending_paste(&mut host_clipboard, read_fd).expect("spawn");
+        assert!(host_clipboard.pending_paste().is_none());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut out = Vec::new();
+        loop {
+            let mut buf = [0_u8; 16];
+            match paste_read.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for paste bytes"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("read paste failed: {error}"),
+            }
+        }
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
     fn bridge_frame_carries_exact_vm_metadata_and_fd() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");
         let (read_fd, write_fd) =
@@ -2220,6 +2446,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let request = recv_bridge_frame(&mut stream).expect("bridge frame");
         assert_eq!(request.vm_name, "work");
@@ -2254,6 +2481,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let err = recv_bridge_frame(&mut stream).expect_err("non-exact attribution");
         assert!(
@@ -2290,6 +2518,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let err = recv_bridge_frame(&mut stream).expect_err("too many fds rejected");
         assert!(err.message().contains("too many transfer fds"));
@@ -2308,6 +2537,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let err = recv_bridge_frame(&mut stream).expect_err("overlong bridge frame");
         assert!(err.message().contains("bridge frame too large"));
@@ -2344,6 +2574,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let request = recv_bridge_frame(&mut stream).expect("first frame");
         assert_eq!(request.source_id, 7);
@@ -2370,6 +2601,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds,
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let err = validate_bridge_fd_queue(&mut stream, rustix::net::RecvFlags::empty())
             .expect_err("queued fd cap rejected");
@@ -2388,6 +2620,7 @@ mod tests {
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: vec![write_fd],
+            frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
         let flags = rustix::net::RecvFlags::from_bits_retain(nix::libc::MSG_CTRUNC as u32);
         let err =

@@ -22,7 +22,9 @@ use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 use hmac::{Hmac, Mac};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
-use nix::sys::socket::{AddressFamily, SockFlag, SockType, accept4, socketpair};
+#[cfg(not(feature = "layer1-bootstrap"))]
+use nix::sys::socket::{AddressFamily, SockType, socketpair};
+use nix::sys::socket::{SockFlag, accept4};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;

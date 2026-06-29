@@ -131,6 +131,61 @@ metadata.
 
 Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
 
+### `clipboard arm`
+
+**Synopsis:** `d2b clipboard arm [--human | --json]`
+
+Opens the d2b clipboard picker for the current host-focused Niri target
+or, when the picker cannot be launched or its handshake fails, arms the
+native two-step paste fallback. The fallback does not synthesize input:
+after a successful arm response, the operator performs the normal app
+paste action before the short `d2b-clipd` fallback deadline expires.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--json` | boolean | `false` | Emit one JSON response on stdout. Failures are structured as `{ "ok": false, "error": "<bounded-message>" }`. |
+| `--human` | boolean | `false` | Force human text on stdout. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | The picker opened, or picker launch/handshake failed and `d2b-clipd` successfully armed the native paste fallback. | — |
+| `2` | The control socket was unavailable, malformed, timed out, or returned a daemon error. | [`usage`](./error-codes.md#usage) |
+
+The CLI connects to `$XDG_RUNTIME_DIR/d2b/clipd.sock`, sends one bounded
+arm request, and applies five-second read and write deadlines to the
+control socket so a wedged `d2b-clipd` cannot hang the terminal. The
+daemon owns all clipboard state and transfer FDs; this command only asks
+the daemon to open the picker or arm native paste.
+
+**Human examples**
+
+```text
+$ d2b clipboard arm
+picker opened
+$ d2b clipboard arm
+fallback armed
+```
+
+**`--json` examples**
+
+```json
+{ "ok": true, "message": "picker opened" }
+```
+
+```json
+{ "ok": false, "error": "failed to connect to clipboard daemon: No such file or directory (os error 2)" }
+```
+
+**Native**
+
+- Rust-native local user-session control-socket request to `d2b-clipd`.
+  No broker op, no guest contact, no shell-out, no synthetic input, and
+  no clipboard payload or transfer FD crosses the CLI boundary.
+
 ### `realm enter`
 
 **Synopsis:** `d2b realm enter <realm>`

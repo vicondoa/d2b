@@ -510,11 +510,15 @@ enum ClipboardCommand {
 
 #[derive(Debug, Args)]
 struct ClipboardArmArgs {
+    /// Emit a structured JSON envelope.
     #[arg(long, conflicts_with = "human")]
     json: bool,
+    /// Emit a human-readable status line.
     #[arg(long, conflicts_with = "json")]
     human: bool,
 }
+
+const CLIPBOARD_ARM_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Subcommand)]
 enum OpCommand {
@@ -2483,7 +2487,6 @@ fn dispatch(
 fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    use std::time::Duration;
 
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
         clipboard_arm_failure(
@@ -2501,17 +2504,10 @@ fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32,
             ),
         )
     })?;
-    let timeout = Some(Duration::from_secs(5));
-    stream.set_read_timeout(timeout).map_err(|error| {
+    set_clipboard_arm_timeouts(&stream).map_err(|error| {
         clipboard_arm_failure(
             args,
-            format!("failed to set clipboard arm read timeout: {error}"),
-        )
-    })?;
-    stream.set_write_timeout(timeout).map_err(|error| {
-        clipboard_arm_failure(
-            args,
-            format!("failed to set clipboard arm write timeout: {error}"),
+            format!("failed to set clipboard arm socket timeout: {error}"),
         )
     })?;
     stream.write_all(b"{\"type\":\"arm\"}\n").map_err(|error| {
@@ -2547,6 +2543,13 @@ fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32,
     }
 }
 
+fn set_clipboard_arm_timeouts(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    let timeout = Some(CLIPBOARD_ARM_CONTROL_TIMEOUT);
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
+    Ok(())
+}
+
 fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) -> CliFailure {
     let message = message.into();
     if args.json {
@@ -2564,6 +2567,41 @@ fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) ->
         }
     } else {
         CliFailure::new(2, message)
+    }
+}
+
+#[cfg(test)]
+mod clipboard_arm_tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn json_failure_emits_structured_stdout_and_suppresses_stderr() {
+        let args = ClipboardArmArgs {
+            json: true,
+            human: false,
+        };
+        let (failure, stdout, _stderr) =
+            with_test_output_capture(|| clipboard_arm_failure(&args, "daemon unavailable"));
+        assert_eq!(failure.exit_code, 2);
+        assert_eq!(failure.rendered_stderr.as_deref(), Some(""));
+        let value: Value = serde_json::from_slice(&stdout).expect("json failure stdout");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"], "daemon unavailable");
+    }
+
+    #[test]
+    fn clipboard_arm_sets_read_and_write_timeouts() {
+        let (left, _right) = UnixStream::pair().expect("socketpair");
+        set_clipboard_arm_timeouts(&left).expect("set timeouts");
+        assert_eq!(
+            left.read_timeout().expect("read timeout"),
+            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
+        );
+        assert_eq!(
+            left.write_timeout().expect("write timeout"),
+            Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
+        );
     }
 }
 
