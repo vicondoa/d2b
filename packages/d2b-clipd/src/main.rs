@@ -381,6 +381,7 @@ impl EventLoop<'_> {
                     self.fallback,
                     self.supervisor,
                     &self.picker_command,
+                    &mut self.accept_diag,
                 );
             }
 
@@ -433,6 +434,7 @@ impl EventLoop<'_> {
                         self.host_clipboard,
                         self.fallback,
                         self.notifier,
+                        &mut self.accept_diag,
                     ) {
                         ControlStreamStatus::Done => {}
                         ControlStreamStatus::Incomplete => self.control_streams.push(stream),
@@ -488,15 +490,22 @@ impl EventLoop<'_> {
                         self.notifier,
                         self.fallback,
                         self.supervisor,
+                        &mut self.accept_diag,
                     ),
                     Ok(PickerPoll::Closed) => {
-                        log::warn!("d2b-clipd: picker exited before completing the paste request");
+                        self.accept_diag
+                            .warn("picker", "closed-before-selection", || {
+                                "d2b-clipd: picker exited before completing the paste request"
+                                    .to_owned()
+                            });
                         let _ = self.fallback.cancel_picker();
                         let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
                     }
                     Ok(PickerPoll::Incomplete) => {}
                     Err(error) => {
-                        log::warn!("d2b-clipd: picker frame failed: {error}");
+                        self.accept_diag.warn("picker", "frame-failed", || {
+                            format!("d2b-clipd: picker frame failed: {error}")
+                        });
                         let _ = self.fallback.cancel_picker();
                         let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
                     }
@@ -1080,11 +1089,15 @@ fn handle_bridge_paste_request(
             name: MetricName::AuditQueueOverflow,
             reason: Some(reason),
         });
-        log::warn!(
-            "d2b-clipd: bridge audit queue failed for vm={}: {}",
-            bounded_label(&vm_name),
-            reason.as_str()
-        );
+        context
+            .accept_diag
+            .warn("bridge", "audit-queue-failed", || {
+                format!(
+                    "d2b-clipd: bridge audit queue failed for vm={}: {}",
+                    bounded_label(&vm_name),
+                    reason.as_str()
+                )
+            });
         return;
     }
     let _ = context.audit_queue.drain_all();
@@ -1106,6 +1119,7 @@ fn handle_bridge_paste_request(
                     context.notifier,
                     context.supervisor,
                     context.picker_command,
+                    context.accept_diag,
                 );
             }
         }
@@ -1130,6 +1144,7 @@ fn handle_wayland_event(
     fallback: &mut FallbackArming,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
+    accept_diag: &mut AcceptDiagnostics,
 ) {
     match event {
         HostClipboardEvent::SelectionChanged {
@@ -1165,6 +1180,7 @@ fn handle_wayland_event(
                             notifier,
                             supervisor,
                             picker_command,
+                            accept_diag,
                         );
                     }
                 }
@@ -1202,6 +1218,7 @@ fn handle_control_stream(
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     fallback: &mut FallbackArming,
     notifier: &mut DesktopNotifier,
+    accept_diag: &mut AcceptDiagnostics,
 ) -> ControlStreamStatus {
     match read_control_command_from_stream(control) {
         Ok(ControlCommand::Arm) => {
@@ -1211,6 +1228,7 @@ fn handle_control_stream(
                 host_clipboard,
                 fallback,
                 notifier,
+                accept_diag,
             );
             let body = match response {
                 Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
@@ -1287,6 +1305,7 @@ fn handle_picker_message(
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    _accept_diag: &mut AcceptDiagnostics,
 ) {
     match message {
         PickerToDaemonMessage::Select(select) => {
@@ -1478,6 +1497,7 @@ fn handle_arm(
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     fallback: &mut FallbackArming,
     notifier: &mut DesktopNotifier,
+    accept_diag: &mut AcceptDiagnostics,
 ) -> Result<String, String> {
     let dest = host_clipboard
         .refresh_focused_window_snapshot()
@@ -1505,7 +1525,9 @@ fn handle_arm(
                     Ok("picker opened".to_owned())
                 }
                 Err(error) => {
-                    log::warn!("d2b-clipd: picker handshake failed: {error}");
+                    accept_diag.warn("picker", "handshake-failed", || {
+                        format!("d2b-clipd: picker handshake failed: {error}")
+                    });
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
                     arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
@@ -1514,7 +1536,9 @@ fn handle_arm(
             }
         }
         Err(e) => {
-            log::warn!("d2b-clipd: picker launch failed: {e}; arming native fallback");
+            accept_diag.warn("picker", "launch-failed", || {
+                format!("d2b-clipd: picker launch failed: {e}; arming native fallback")
+            });
             let _ = fallback.cancel_picker();
             arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
             Ok("fallback armed".to_owned())
@@ -1628,6 +1652,7 @@ fn open_picker_or_arm_fallback(
     notifier: &mut impl Notifier,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
+    accept_diag: &mut AcceptDiagnostics,
 ) {
     let can_open = picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle);
     if can_open {
@@ -1643,7 +1668,9 @@ fn open_picker_or_arm_fallback(
             Ok(socket) => {
                 let candidates = picker_candidates(host_clipboard);
                 if let Err(error) = picker_handshake(socket, &request_id, &dest, candidates) {
-                    log::warn!("d2b-clipd: picker handshake failed: {error}");
+                    accept_diag.warn("picker", "handshake-failed", || {
+                        format!("d2b-clipd: picker handshake failed: {error}")
+                    });
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
                     arm_native_fallback(fallback, dest, host_clipboard, notifier);
@@ -1655,7 +1682,9 @@ fn open_picker_or_arm_fallback(
                 }
             }
             Err(e) => {
-                log::warn!("d2b-clipd: picker launch failed ({e}); falling back to native paste");
+                accept_diag.warn("picker", "launch-failed", || {
+                    format!("d2b-clipd: picker launch failed ({e}); falling back to native paste")
+                });
                 let _ = fallback.cancel_picker();
                 arm_native_fallback(fallback, dest, host_clipboard, notifier);
             }

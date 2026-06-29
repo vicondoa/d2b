@@ -108,11 +108,11 @@ optional title.
 must not repeatedly shell out to `niri msg`. It maintains a cache from Niri's
 event stream and uses focused-window metadata for host labels: app id, title,
 workspace, and output when available.
-On host clipboard selection changes and native paste requests, it uses the
-event-stream cache so clipboard event handling does not block on synchronous
-compositor IPC. Explicit operator actions such as `d2b clipboard arm` may issue a
-fresh focused-window query before opening the picker or arming fallback. If a
-query fails, attribution is marked cache-stale and remains best-effort.
+On host clipboard selection changes, native paste requests, and explicit
+operator actions such as `d2b clipboard arm`, it uses the event-stream cache so
+clipboard event handling does not block on synchronous compositor IPC. If Niri
+state becomes unavailable, attribution is marked cache-stale and remains
+best-effort.
 
 Host attribution is explicitly best-effort. For host-origin copies,
 `d2b-clipd` records the Niri-focused window at the instant the host clipboard

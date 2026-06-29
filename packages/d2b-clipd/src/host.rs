@@ -100,7 +100,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     pub fn refresh_focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
-        self.attributor.refresh_from_provider().window
+        self.focused_window_snapshot()
     }
 
     /// Called when the data-control device reports a new host selection.

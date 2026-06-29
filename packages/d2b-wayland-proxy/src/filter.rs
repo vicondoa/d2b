@@ -58,6 +58,8 @@ use crate::{
     policy::FilterPolicy,
 };
 
+const MAX_MIME_TYPES_PER_SOURCE: usize = 64;
+
 /// State-level handler: creates per-client display handlers.
 pub struct FilterStateHandler {
     policy: Rc<FilterPolicy>,
@@ -180,6 +182,7 @@ impl VirtualClipboardState {
     }
 
     fn register_source(&mut self, source: &Rc<WlDataSource>) {
+        self.scrub_dead_clipboard_refs();
         self.sources.entry(source.unique_id()).or_insert_with(|| {
             Rc::new(RefCell::new(VirtualSource {
                 source: Rc::downgrade(source),
@@ -198,6 +201,15 @@ impl VirtualClipboardState {
         self.register_source(source);
         if let Some(stored) = self.sources.get(&source.unique_id()) {
             let mut stored = stored.borrow_mut();
+            if stored.mime_types.len() >= MAX_MIME_TYPES_PER_SOURCE {
+                let vm = self.vm_name.clone();
+                self.diag
+                    .borrow_mut()
+                    .warn("clipboard-mime", "source-mime-cap", || {
+                        format!("[d2b-wlproxy] vm={vm} event=clipboard-mime reason=source-mime-cap")
+                    });
+                return;
+            }
             if !stored.mime_types.iter().any(|existing| existing == mime) {
                 stored.mime_types.push(mime.to_owned());
             }
@@ -262,6 +274,21 @@ impl VirtualClipboardState {
 
     fn remove_offer(&mut self, offer: &Rc<WlDataOffer>) {
         self.offers.remove(&offer.unique_id());
+    }
+
+    fn scrub_dead_clipboard_refs(&mut self) {
+        self.sources
+            .retain(|_, source| source.borrow().source.upgrade().is_some());
+        self.offers
+            .retain(|_, offer| offer.borrow().source.borrow().source.upgrade().is_some());
+        self.devices.retain(|device| device.upgrade().is_some());
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|source| source.borrow().source.upgrade().is_none())
+        {
+            self.selection = None;
+        }
     }
 
     fn route(&self) -> ClipboardRoute {
