@@ -431,9 +431,9 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("zwp_virtual_keyboard_manager_v1", Deny, HighRisk);
     entry!("zwlr_virtual_pointer_manager_v1", Deny, HighRisk);
 
-    // --- clipboard-control (disabled by default, high-risk) ---
-    entry!("ext_data_control_manager_v1", Deny, HighRisk);
-    entry!("zwlr_data_control_manager_v1", Deny, HighRisk);
+    // --- clipboard-control (disabled by default, architecture-enforced boundary) ---
+    entry!("ext_data_control_manager_v1", Deny, ClipboardBoundary);
+    entry!("zwlr_data_control_manager_v1", Deny, ClipboardBoundary);
     entry!(
         "zwp_primary_selection_device_manager_v1",
         Deny,
@@ -517,7 +517,6 @@ mod tests {
         for iface in &[
             "zwlr_screencopy_manager_v1",
             "zwp_virtual_keyboard_manager_v1",
-            "ext_data_control_manager_v1",
             "zwlr_layer_shell_v1",
             "ext_session_lock_manager_v1",
         ] {
@@ -533,6 +532,8 @@ mod tests {
         let p = policy_for("work");
         for iface in &[
             "wl_data_device_manager",
+            "ext_data_control_manager_v1",
+            "zwlr_data_control_manager_v1",
             "zwp_primary_selection_device_manager_v1",
             "wp_primary_selection_device_manager_v1",
             "gtk_primary_selection_device_manager",
