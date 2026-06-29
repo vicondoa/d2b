@@ -59,10 +59,9 @@ between d2b components. Transfer FDs never go to the picker.
 `d2b-clipd` connects directly to `$NIRI_SOCKET` and speaks Niri JSON IPC. It
 does not shell out to `niri msg`. Focused-window data is labeling context only:
 host attribution is recorded as best-effort `focused_window_guess`. Native
-clipboard events use the maintained Niri event-stream cache so the daemon's
-Wayland event loop does not block on synchronous compositor IPC; explicit
-operator actions such as `d2b clipboard arm` may refresh the focused-window
-sample before opening the picker or arming fallback.
+clipboard events and explicit operator actions such as `d2b clipboard arm` use
+the maintained Niri event-stream cache so the daemon's Wayland event loop does
+not block on synchronous compositor IPC.
 
 Host cross-realm native paste requires a trusted no-patch Niri hook or future
 upstream-equivalent IPC event. Focus alone is not paste intent. When that hook is

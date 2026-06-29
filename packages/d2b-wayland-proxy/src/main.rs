@@ -315,6 +315,19 @@ fn accept_loop(
             loop {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(true) {
+                            let error = bounded_error_detail(error.to_string());
+                            diag.borrow_mut().warn(
+                                "client-accept",
+                                "client-nonblocking-failed",
+                                || {
+                                    format!(
+                                        "[d2b-wlproxy] vm={vm} event=client-accept reason=client-nonblocking-failed error={error}"
+                                    )
+                                },
+                            );
+                            continue;
+                        }
                         let client_id = next_client_id;
                         next_client_id += 1;
                         let fd = Rc::new(stream.into());

@@ -1995,13 +1995,29 @@ exit 7
 "#,
         );
 
-        let err = run_usbip_driver_helper_once(
-            &helper,
-            UsbipSubcommand::Unbind,
-            "1-2",
-            Instant::now() + Duration::from_secs(2),
-        )
-        .expect_err("large stderr should drain and preserve helper exit status");
+        let err =
+            match run_usbip_driver_helper_once(
+                &helper,
+                UsbipSubcommand::Unbind,
+                "1-2",
+                Instant::now() + Duration::from_secs(2),
+            )
+            .expect_err("large stderr should drain and preserve helper exit status")
+            {
+                ReconcileExecError::BinaryMissing { detail, .. }
+                    if detail.contains("Text file busy") =>
+                {
+                    std::thread::sleep(Duration::from_millis(25));
+                    run_usbip_driver_helper_once(
+                        &helper,
+                        UsbipSubcommand::Unbind,
+                        "1-2",
+                        Instant::now() + Duration::from_secs(2),
+                    )
+                    .expect_err("large stderr retry should preserve helper exit status")
+                }
+                err => err,
+            };
         match err {
             ReconcileExecError::NonZeroExit {
                 which,

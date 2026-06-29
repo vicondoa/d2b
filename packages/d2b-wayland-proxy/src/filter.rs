@@ -11,7 +11,8 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    os::fd::OwnedFd,
+    io,
+    os::fd::{AsRawFd, OwnedFd},
     os::unix::net::UnixStream,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -155,6 +156,19 @@ struct VirtualSource {
     mime_types: Vec<String>,
 }
 
+impl VirtualSource {
+    fn add_mime_bounded(&mut self, mime: &str) -> bool {
+        if self.mime_types.iter().any(|existing| existing == mime) {
+            return true;
+        }
+        if self.mime_types.len() >= MAX_MIME_TYPES_PER_SOURCE {
+            return false;
+        }
+        self.mime_types.push(mime.to_owned());
+        true
+    }
+}
+
 #[derive(Debug)]
 struct VirtualOffer {
     source: Rc<RefCell<VirtualSource>>,
@@ -201,17 +215,13 @@ impl VirtualClipboardState {
         self.register_source(source);
         if let Some(stored) = self.sources.get(&source.unique_id()) {
             let mut stored = stored.borrow_mut();
-            if stored.mime_types.len() >= MAX_MIME_TYPES_PER_SOURCE {
+            if !stored.add_mime_bounded(mime) {
                 let vm = self.vm_name.clone();
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-mime", "source-mime-cap", || {
                         format!("[d2b-wlproxy] vm={vm} event=clipboard-mime reason=source-mime-cap")
                     });
-                return;
-            }
-            if !stored.mime_types.iter().any(|existing| existing == mime) {
-                stored.mime_types.push(mime.to_owned());
             }
         }
     }
@@ -329,7 +339,7 @@ impl VirtualClipboardState {
             BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
             BridgeConnectionState::Connecting { .. } => {}
         }
-        match UnixStream::connect(&path) {
+        match connect_bridge_nonblocking(&path) {
             Ok(stream) => {
                 if let Err(_error) = stream.set_nonblocking(true) {
                     let vm = self.vm_name.clone();
@@ -362,6 +372,27 @@ impl VirtualClipboardState {
                     });
                 self.bridge_reconnect.connect_failed();
                 self.schedule_bridge_retry();
+            }
+        }
+
+        fn connect_bridge_nonblocking(path: &std::path::Path) -> io::Result<UnixStream> {
+            use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+
+            let fd = socket(
+                AddressFamily::Unix,
+                SockType::Stream,
+                SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+            let addr = UnixAddr::new(path)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            match connect(fd.as_raw_fd(), &addr) {
+                Ok(()) => Ok(UnixStream::from(fd)),
+                Err(nix::errno::Errno::EINPROGRESS) => {
+                    Err(io::Error::from(io::ErrorKind::WouldBlock))
+                }
+                Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
             }
         }
 
@@ -414,7 +445,10 @@ fn register_virtual_device(
     clipboard: &Rc<RefCell<VirtualClipboardState>>,
     device: &Rc<WlDataDevice>,
 ) {
-    clipboard.borrow_mut().devices.push(Rc::downgrade(device));
+    let mut clipboard_state = clipboard.borrow_mut();
+    clipboard_state.scrub_dead_clipboard_refs();
+    clipboard_state.devices.push(Rc::downgrade(device));
+    drop(clipboard_state);
     send_selection_to_device(clipboard, device);
 }
 
@@ -1034,6 +1068,49 @@ mod tests {
             diag,
             BridgeConfig::disabled(),
         )))
+    }
+
+    #[test]
+    fn virtual_source_caps_unique_mime_types() {
+        let mut source = VirtualSource {
+            source: Weak::new(),
+            mime_types: Vec::new(),
+        };
+        for index in 0..MAX_MIME_TYPES_PER_SOURCE {
+            assert!(source.add_mime_bounded(&format!("application/x-test-{index}")));
+        }
+        assert!(!source.add_mime_bounded("application/x-overflow"));
+        assert!(source.add_mime_bounded("application/x-test-0"));
+        assert_eq!(source.mime_types.len(), MAX_MIME_TYPES_PER_SOURCE);
+    }
+
+    #[test]
+    fn scrub_dead_clipboard_refs_clears_sources_offers_devices_and_selection() {
+        let mut clipboard = VirtualClipboardState::new(
+            "work".to_owned(),
+            Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned()))),
+            BridgeConfig::disabled(),
+        );
+        let source = Rc::new(RefCell::new(VirtualSource {
+            source: Weak::new(),
+            mime_types: vec!["text/plain".to_owned()],
+        }));
+        clipboard.sources.insert(1, source.clone());
+        clipboard.offers.insert(
+            2,
+            Rc::new(RefCell::new(VirtualOffer {
+                source: source.clone(),
+            })),
+        );
+        clipboard.selection = Some(source);
+        clipboard.devices.push(Weak::new());
+
+        clipboard.scrub_dead_clipboard_refs();
+
+        assert!(clipboard.sources.is_empty());
+        assert!(clipboard.offers.is_empty());
+        assert!(clipboard.devices.is_empty());
+        assert!(clipboard.selection.is_none());
     }
 
     #[test]
