@@ -81,6 +81,7 @@ pub struct Candidate {
     pub content_type: String,
     pub timestamp_unix_ms: u64,
     pub thumbnail_png_base64: Option<String>,
+    pub byte_count: Option<u64>,
     pub confirmation_required: bool,
 }
 
@@ -165,6 +166,7 @@ mod tests {
           "content_type":"text/plain",
           "timestamp_unix_ms":7,
           "thumbnail_png_base64":null,
+          "byte_count":12,
           "confirmation_required":false,
           "future_display_field":"ignored"
         }"#;

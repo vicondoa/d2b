@@ -6,6 +6,7 @@ struct Args {
     picker: Option<PathBuf>,
     bridge_root: PathBuf,
     check_config: bool,
+    oneshot: bool,
 }
 
 fn main() {
@@ -39,7 +40,14 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         println!("d2b-clipd: config ok");
         return Ok(());
     }
-    println!("d2b-clipd: clipboard runtime wiring is not enabled in this foundation build");
+    println!(
+        "d2b-clipd: running clipboard authority foundation (config={}, bridge_root={})",
+        args.config.display(),
+        args.bridge_root.display()
+    );
+    if !args.oneshot {
+        std::thread::park();
+    }
     Ok(())
 }
 
@@ -48,6 +56,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut picker = None;
     let mut bridge_root = None;
     let mut check_config = false;
+    let mut oneshot = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -70,9 +79,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 ));
             }
             "--check-config" => check_config = true,
+            "--oneshot" => oneshot = true,
             "--help" | "-h" => {
                 return Err(
-                    "usage: d2b-clipd --config <path> --bridge-root <path> [--picker <path>] [--check-config]"
+                    "usage: d2b-clipd --config <path> --bridge-root <path> [--picker <path>] [--check-config] [--oneshot]"
                         .to_owned(),
                 );
             }
@@ -84,6 +94,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         picker,
         bridge_root: bridge_root.ok_or_else(|| "--bridge-root is required".to_owned())?,
         check_config,
+        oneshot,
     })
 }
 
@@ -99,11 +110,13 @@ mod tests {
             "--bridge-root".to_owned(),
             "/run/d2b/clipd".to_owned(),
             "--check-config".to_owned(),
+            "--oneshot".to_owned(),
         ])
         .expect("args");
         assert_eq!(args.config, PathBuf::from("/etc/d2b/clipboard.json"));
         assert_eq!(args.bridge_root, PathBuf::from("/run/d2b/clipd"));
         assert!(args.check_config);
+        assert!(args.oneshot);
     }
 
     #[test]
