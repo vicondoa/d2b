@@ -11,6 +11,19 @@ pub trait Notifier {
 }
 
 #[derive(Debug, Default)]
+pub struct DesktopNotifier;
+
+impl Notifier for DesktopNotifier {
+    fn notify(&mut self, notification: Notification) {
+        let _ = notify_rust::Notification::new()
+            .appname("d2b-clipd")
+            .summary(&notification.summary)
+            .body(&notification.body)
+            .show();
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct RecordingNotifier {
     pub notifications: Vec<Notification>,
 }
@@ -31,6 +44,10 @@ pub fn fallback_ready(target_label: &str) -> Notification {
     }
 }
 
+pub fn emit_fallback_ready<N: Notifier>(notifier: &mut N, target_label: &str) {
+    notifier.notify(fallback_ready(target_label));
+}
+
 pub fn user_visible_failure(
     reason: ReasonCode,
     source_realm: &str,
@@ -45,6 +62,19 @@ pub fn user_visible_failure(
             reason.as_str()
         ),
     }
+}
+
+pub fn emit_user_visible_failure<N: Notifier>(
+    notifier: &mut N,
+    reason: ReasonCode,
+    source_realm: &str,
+    destination_realm: &str,
+) {
+    notifier.notify(user_visible_failure(
+        reason,
+        source_realm,
+        destination_realm,
+    ));
 }
 
 pub fn sanitize_notification_text(input: &str, max_chars: usize) -> String {
@@ -72,11 +102,27 @@ mod tests {
     }
 
     #[test]
+    fn fallback_ready_is_emitted_through_notifier() {
+        let mut notifier = RecordingNotifier::default();
+        emit_fallback_ready(&mut notifier, "Personal Firefox");
+        assert_eq!(notifier.notifications.len(), 1);
+        assert!(notifier.notifications[0].body.contains("Ctrl+V"));
+    }
+
+    #[test]
     fn failure_notification_uses_reason_and_realm_labels_only() {
         let notification = user_visible_failure(ReasonCode::PolicyDenied, "Host", "Personal");
         assert!(notification.body.contains("policy_denied"));
         assert!(notification.body.contains("Host"));
         assert!(notification.body.contains("Personal"));
         assert!(!notification.body.contains("secret"));
+    }
+
+    #[test]
+    fn failure_notification_is_emitted_through_notifier() {
+        let mut notifier = RecordingNotifier::default();
+        emit_user_visible_failure(&mut notifier, ReasonCode::PolicyDenied, "Host", "Personal");
+        assert_eq!(notifier.notifications.len(), 1);
+        assert!(notifier.notifications[0].body.contains("policy_denied"));
     }
 }

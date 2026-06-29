@@ -43,6 +43,8 @@ deprecations ship one minor release before removal.
 - `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
   IPC models, bounded Unix-socket request/response helpers, focused-window
   best-effort attribution cache behavior, and fallback arming state-machine tests.
+- `d2b-clipd` now has a real desktop notification backend for bounded,
+  content-free fallback-ready and failure notifications.
 - Added clipboard architecture Nix/docs/schema scaffolding: a default-off
   `d2b.site.clipboard` module, user-service wiring for externally packaged
   `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
