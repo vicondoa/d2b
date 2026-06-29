@@ -62,7 +62,7 @@ impl PickerProcess for Child {
     }
 
     fn reap(&mut self) {
-        let _ = self.wait();
+        let _ = self.try_wait();
     }
 }
 

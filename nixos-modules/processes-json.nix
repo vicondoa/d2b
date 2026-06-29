@@ -542,7 +542,7 @@ EOF
       microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
       # When the filter proxy is emitted, crosvm connects to the filter
       # socket. Otherwise preserve the legacy display backend by connecting
       # directly to the real host compositor socket.
@@ -580,7 +580,7 @@ EOF
       microvm = d2bLib.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/d2b-wlproxy/${name}/wayland-0";
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
       waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
@@ -616,24 +616,24 @@ EOF
       upstreamSock = waylandHostSock;
       appIdPrefix = "d2b.${vmName}.";
       titlePrefix = "[${vmName}] ";
-      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandFilter.denyGlobals;
-      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandFilter.allowGlobals;
+      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
+      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandProxy.allowGlobals;
       maxVersionArgs = lib.concatMap
         (nameVersion:
           let parts = lib.splitString "=" nameVersion;
           in [ "--max-version" nameVersion ])
-        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
-      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
-      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
+        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandProxy.maxVersions);
+      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandProxy.dmabufAllow;
+      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandProxy.dmabufDeny;
     in {
       binaryPath = d2bWaylandProxyBinary;
       env = [
         "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
         "WAYLAND_DISPLAY=${waylandDisplay}"
-      ] ++ lib.optionals vm.graphics.waylandFilter.debugLogging [
+      ] ++ lib.optionals vm.graphics.waylandProxy.debugLogging [
         "WL_PROXY_DEBUG=1"
         "WL_PROXY_PREFIX=d2b-${vmName}-wlproxy"
-      ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
+      ] ++ lib.optionals vm.graphics.waylandProxy.byteLogging [
         "WL_PROXY_HEXDUMP=1"
         "WL_PROXY_HEXDUMP_LIMIT=256"
       ];
@@ -917,9 +917,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         (unixSocketExists (d2bLib.vmRunner config name).graphics.socket)
       ] ++ lib.optional vm.graphics.virglVideo
         (componentReady "graphics.virglVideo=true");
-      # Whether the host-jailed Wayland filter proxy is emitted for this VM.
-      # Requires graphics.enable, crossDomainTrusted, and waylandFilter.enable.
-      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      # Whether the host-jailed Wayland proxy is emitted for this VM.
+      # Requires graphics.enable, crossDomainTrusted, and waylandProxy.enable.
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable;
       # Resolved GPU node id: gpu-render-node when renderNodeOnly is true.
       graphicsNodeId = if vm.graphics.renderNodeOnly then "gpu-render-node" else "gpu";
       preVmmNodeIds =
@@ -1080,14 +1080,14 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")
         ++ lib.optional emitWaylandProxy
-          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
+          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
         ++ lib.optional vm.graphics.videoSidecar
           (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
         # GPU connects to the filter socket, so wayland-proxy must be
         # listening before the GPU starts. Emit only when the proxy is
         # present.
         ++ lib.optional emitWaylandProxy
-          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland filter proxy is listening on its socket.")
+          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland proxy is listening on its socket.")
       )
       ++ lib.optionals vm.audio.enable (
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
@@ -1135,8 +1135,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ];
       edges =
         if emitWaylandProxy then [
-          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
-          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland filter proxy instead of the host compositor socket.")
+          (edge "host-reconcile" "wayland-proxy" "The Wayland proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
+          (edge "wayland-proxy" "qemu-media" "QEMU media connects to the per-VM Wayland proxy instead of the host compositor socket.")
         ] else [
           (edge "host-reconcile" "qemu-media" "QEMU media starts only after host reconciliation prepares runtime directories and network state.")
         ];

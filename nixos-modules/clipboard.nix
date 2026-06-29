@@ -4,6 +4,7 @@
 let
   cfg = config.d2b.site.clipboard;
   site = config.d2b.site;
+  d2bLib = import ./lib.nix { inherit lib; };
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
@@ -29,8 +30,12 @@ let
 
   niriProgramEnabled = config.programs.niri.enable or false;
   bridgeVms = lib.attrNames (lib.filterAttrs (_name: vm:
-    vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable
+    vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
   ) config.d2b.vms);
+  bridgePeers = map (vm: {
+    vmName = vm;
+    expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
+  }) bridgeVms;
 
   configJson = builtins.toJSON {
     version = 1;
@@ -52,6 +57,7 @@ let
       bridgeRoot = cfg.runtime.bridgeRoot;
       bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<vm>/${cfg.runtime.bridgeSocketName}";
       inherit bridgeVms;
+      inherit bridgePeers;
       parentProvisioning = "d2bd-broker-lifecycle";
       staticTmpfilesOnly = false;
     };

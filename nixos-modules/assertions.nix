@@ -877,13 +877,13 @@ let
             && !vm.graphics.virglVideo
             && !vm.graphics.renderNodeOnly
             && vm.graphics.niriBorderColor == null
-            && !vm.graphics.waylandFilter.debugLogging
-            && !vm.graphics.waylandFilter.byteLogging
-            && vm.graphics.waylandFilter.denyGlobals == [ ]
-            && vm.graphics.waylandFilter.allowGlobals == [ ]
-            && vm.graphics.waylandFilter.maxVersions == { }
-            && vm.graphics.waylandFilter.dmabufAllow == [ ]
-            && vm.graphics.waylandFilter.dmabufDeny == [ ];
+            && !vm.graphics.waylandProxy.debugLogging
+            && !vm.graphics.waylandProxy.byteLogging
+            && vm.graphics.waylandProxy.denyGlobals == [ ]
+            && vm.graphics.waylandProxy.allowGlobals == [ ]
+            && vm.graphics.waylandProxy.maxVersions == { }
+            && vm.graphics.waylandProxy.dmabufAllow == [ ]
+            && vm.graphics.waylandProxy.dmabufDeny == [ ];
           message = ''
             d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with d2b graphics options.

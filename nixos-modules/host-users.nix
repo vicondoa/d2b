@@ -85,7 +85,7 @@ in
       isSystemUser = true;
       uid = stablePrincipalId "d2b-${name}-wlproxy";
       group = "d2b-${name}-wlproxy";
-      description = "d2b Wayland filter proxy sidecar for VM ${name}";
+      description = "d2b Wayland proxy sidecar for VM ${name}";
     }) waylandProxyVms)
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "d2b-${name}-snd" {

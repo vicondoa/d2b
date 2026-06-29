@@ -727,7 +727,7 @@ in
         seccompPolicyRef = "w1-wayland-proxy";
         writablePaths = [
           "/run/d2b-wlproxy/media"
-          "/run/d2b/clipd"
+          "/run/d2b/clipd/1000/bridge/media"
         ];
         deviceBinds = [ ];
         bindMounts = [ ];

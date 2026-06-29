@@ -58,7 +58,7 @@
 
   # ---------------------------------------------------------------
   # The Wayland-session user `d2b.site.waylandUser` references.
-  # Required: the Wayland filter proxy (`d2b-<vm>-wlproxy`) connects
+  # Required: the Wayland proxy (`d2b-<vm>-wlproxy`) connects
   # to this user's compositor socket; the audio sidecar also uses this
   # user's PipeWire socket.
   #   /run/user/<uid>/<waylandDisplay>   (filter proxy; not the GPU sidecar)

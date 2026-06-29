@@ -61,7 +61,7 @@ of the store.
    - the per-VM launcher log
 3. **Wait for the per-VM graphics Wayland socket when present.** Polls
    `/run/d2b-wlproxy/<vm>/wayland-0` when
-   `graphics.waylandFilter.enable = true`. In the direct fallback, the
+   `graphics.waylandProxy.enable = true`. In the direct fallback, the
    GPU sidecar connects to the host compositor socket that step 1 already
    waited for; the role-local `/run/d2b-gpu/<vm>/wayland-0` path is
    only visible inside the GPU runner's mount namespace. The daemon's

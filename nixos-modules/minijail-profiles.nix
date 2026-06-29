@@ -531,7 +531,7 @@ let
       };
     }
     // lib.optionalAttrs vm.graphics.enable {
-      # Wayland filter proxy role profile.
+      # Wayland proxy role profile.
       #
       # Per ADR 0025: the host-jailed filter proxy sits between the crosvm
       # GPU sidecar and the real host compositor socket. It runs as a
@@ -563,8 +563,8 @@ let
         writablePaths = [
           (mkWritablePath "/run/d2b-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
-          (mkWritablePath cfg.site.clipboard.runtime.bridgeRoot
-            "Connect to the per-user d2b-clipd clipboard bridge socket.")
+          (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
+            "Connect to this VM's d2b-clipd clipboard bridge socket.")
         ];
         # The proxy connects directly to the real host compositor socket path.
         # Host activation grants this principal access to exactly that socket;
@@ -711,9 +711,9 @@ let
       seccompPolicyRef = "w1-wayland-proxy";
       writablePaths = [
         (mkWritablePath "/run/d2b-wlproxy/${name}"
-          "Create the per-VM qemu-media Wayland filter listen socket.")
-        (mkWritablePath cfg.site.clipboard.runtime.bridgeRoot
-          "Connect to the per-user d2b-clipd clipboard bridge socket.")
+          "Create the per-VM qemu-media Wayland proxy listen socket.")
+        (mkWritablePath "${cfg.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${name}"
+          "Connect to this VM's d2b-clipd clipboard bridge socket.")
       ];
       bindMounts = [ ];
       deviceBinds = [ ];
@@ -732,7 +732,7 @@ let
       readOnlyPaths = [ "/" ];
       writablePaths = [
         (mkWritablePath "/run/d2b/vms/${name}" "Create the QMP control socket without exposing media paths.")
-        (mkWritablePath "/run/d2b-wlproxy/${name}" "Connect to the per-VM Wayland filter proxy socket.")
+        (mkWritablePath "/run/d2b-wlproxy/${name}" "Connect to the per-VM Wayland proxy socket.")
         (mkWritablePath (stateDirOf name) "Write only qemu-media runner state under this VM's state directory.")
       ];
       deviceBinds = [ "/dev/kvm" ];

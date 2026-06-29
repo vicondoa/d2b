@@ -18,7 +18,7 @@ Display capability boundaries are documented in
 [display and virtual I/O capabilities](./display-io-capabilities.md).
 
 When `graphics.crossDomainTrusted = true` and
-`graphics.waylandFilter.enable = true`, the guest-side
+`graphics.waylandProxy.enable = true`, the guest-side
 `wl-cross-domain-proxy` bridges the virtio-gpu cross-domain transport to
 the guest socket, while the host-side `d2b-wayland-proxy` runs as a
 broker-spawned `wayland-proxy` role and mediates access to the real host
@@ -34,27 +34,27 @@ runners. The GPU sidecar runs as the dedicated per-VM
 |---|---|---|---|
 | `d2b.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
-| `d2b.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-proxy` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
-| `d2b.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side proxy runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
-| `d2b.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side proxy runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
-| `d2b.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
-| `d2b.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
-| `d2b.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
-| `d2b.vms.<vm>.graphics.waylandFilter.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
-| `d2b.vms.<vm>.graphics.waylandFilter.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
+| `d2b.vms.<vm>.graphics.waylandProxy.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-proxy` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
+| `d2b.vms.<vm>.graphics.waylandProxy.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side proxy runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
+| `d2b.vms.<vm>.graphics.waylandProxy.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side proxy runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
+| `d2b.vms.<vm>.graphics.waylandProxy.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
+| `d2b.vms.<vm>.graphics.waylandProxy.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
+| `d2b.vms.<vm>.graphics.waylandProxy.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
+| `d2b.vms.<vm>.graphics.waylandProxy.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
+| `d2b.vms.<vm>.graphics.waylandProxy.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
 | `d2b.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
 The proxy's built-in policy exposes the compositor's
 `zwp_linux_dmabuf_v1` version by default so Mesa can use dmabuf feedback
-for accelerated Wayland EGL. Use `waylandFilter.maxVersions` only as a
+for accelerated Wayland EGL. Use `waylandProxy.maxVersions` only as a
 short-lived diagnostic override when isolating driver/proxy regressions.
-Use `waylandFilter.dmabufDeny` / `dmabufAllow` when the protocol version is
+Use `waylandProxy.dmabufDeny` / `dmabufAllow` when the protocol version is
 correct but a specific format/modifier pair is not safe for the host driver.
 For example, NVIDIA hosts affected by linear DMA-BUF pitch import issues can
 keep dmabuf feedback v4/v5 visible while hiding linear modifiers:
 
 ```nix
-d2b.vms.work.graphics.waylandFilter.dmabufDeny = [ "all:linear" ];
+d2b.vms.work.graphics.waylandProxy.dmabufDeny = [ "all:linear" ];
 ```
 
 Site-level dependency:

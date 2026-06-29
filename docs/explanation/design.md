@@ -549,7 +549,7 @@ by pidfd:
 - `wayland-proxy` — present when
   `d2b.vms.<vm>.graphics.enable = true`,
   `graphics.crossDomainTrusted = true`, and
-  `graphics.waylandFilter.enable = true`. Runs the
+  `graphics.waylandProxy.enable = true`. Runs the
   `d2b-wayland-proxy` binary as `d2b-<vm>-wlproxy` (per-VM
   uid). This is the **only** per-VM role that holds the real host
   compositor socket; it listens on

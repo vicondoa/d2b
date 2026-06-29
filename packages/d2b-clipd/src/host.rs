@@ -191,18 +191,11 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         notifier: &mut impl Notifier,
     ) -> Result<(), ReasonCode> {
         let paste = self.pending_paste.take().ok_or(ReasonCode::IntentMissing)?;
-        let label = paste
-            .destination
-            .app_id
-            .as_deref()
-            .or(paste.destination.title.as_deref())
-            .unwrap_or("host application");
         match write_all_nonblocking(&paste.fd, data, paste.deadline) {
             Ok(()) => {
                 log::debug!("d2b-clipd: paste write complete");
                 drop(paste.fd);
                 let _ = notifier;
-                let _ = label;
                 Ok(())
             }
             Err(e) => {

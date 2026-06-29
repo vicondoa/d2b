@@ -248,12 +248,7 @@ impl VirtualClipboardState {
                     mime_type: mime_type.to_owned(),
                     source_id: source.unique_id(),
                 };
-                if let Some(bridge) = self.ensure_bridge_connected()
-                    && bridge.handoff_transfer_fd(fd, &metadata)
-                        == crate::bridge::HandoffStatus::Failed
-                {
-                    self.mark_bridge_disconnected();
-                }
+                self.handoff_via_bridge(fd, &metadata);
             }
             MimeDecision::Deny => {}
         }
@@ -318,6 +313,20 @@ impl VirtualClipboardState {
             }
         }
         self.bridge.as_mut()
+    }
+
+    fn handoff_via_bridge(&mut self, fd: &OwnedFd, metadata: &BridgeTransferMetadata) {
+        let delivered = self.ensure_bridge_connected().is_some_and(|bridge| {
+            bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
+        });
+        self.mark_bridge_disconnected();
+        if delivered {
+            return;
+        }
+        let _ = self.ensure_bridge_connected().is_some_and(|bridge| {
+            bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
+        });
+        self.mark_bridge_disconnected();
     }
 
     fn mark_bridge_disconnected(&mut self) {

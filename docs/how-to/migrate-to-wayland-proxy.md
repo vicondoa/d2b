@@ -78,7 +78,7 @@ The Wayland proxy is enabled by default for graphics VMs with
 `crossDomainTrusted = true`.  You can set it explicitly for clarity:
 
 ```nix
-d2b.vms.work.graphics.waylandFilter.enable = true;
+d2b.vms.work.graphics.waylandProxy.enable = true;
 ```
 
 Leave it enabled unless you intentionally want the GPU sidecar to use the
@@ -171,7 +171,7 @@ high-risk.  These warnings do not block evaluation or builds; they appear
 in the `d2b-wayland-proxy` journal stream when the VM starts.
 
 For a full list of warning conditions, see
-[`docs/reference/wayland-filter-warnings.md`](../reference/wayland-filter-warnings.md).
+[`docs/reference/wayland-proxy-warnings.md`](../reference/wayland-proxy-warnings.md).
 
 ## Rollback
 
@@ -179,7 +179,7 @@ If you encounter a regression and need to roll back before completing
 the migration:
 
 1. Set `graphics.crossDomainTrusted = false` and
-   `graphics.waylandFilter.enable = false`.
+   `graphics.waylandProxy.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `d2b vm stop <vm> --apply && d2b vm start <vm> --apply`.
 

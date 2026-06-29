@@ -10,7 +10,7 @@
 #     carry the `d2b.<vm>.` prefix and applying a per-VM border
 #     color.
 #   - one window-rule per enabled qemu-media VM, matching the app-id
-#     prefix written by the Wayland filter proxy.
+#     prefix written by the Wayland proxy.
 #
 # Operators source the file from their niri config with:
 #   include "/etc/d2b/niri-vm-borders.kdl"
@@ -129,7 +129,7 @@ in
       `/etc/d2b/niri-vm-borders.kdl`) containing one
       `window-rule` per enabled graphics VM and qemu-media VM.
       Graphics rules match app-ids that carry the `d2b.<vm>.`
-      prefix, which the host-side Wayland filter proxy writes onto
+      prefix, which the host-side Wayland proxy writes onto
       every surface from that VM.  qemu-media also routes QEMU's host
       window through the same filter proxy, so its app-id carries the
       `d2b.<vm>.` prefix too. Each rule applies a configurable

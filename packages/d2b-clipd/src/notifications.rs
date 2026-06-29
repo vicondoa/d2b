@@ -62,8 +62,32 @@ pub fn user_visible_failure(
             "Paste from {} to {} failed: {}.",
             sanitize_notification_text(source_realm, 48),
             sanitize_notification_text(destination_realm, 48),
-            reason.as_str()
+            reason_label(reason)
         ),
+    }
+}
+
+fn reason_label(reason: ReasonCode) -> &'static str {
+    match reason {
+        ReasonCode::Allowed => "allowed",
+        ReasonCode::MimeRejected => "MIME type is not allowed",
+        ReasonCode::PolicyDenied => "policy denied the transfer",
+        ReasonCode::BackgroundProbe => "request did not match recent paste intent",
+        ReasonCode::IntentMissing => "paste intent is missing",
+        ReasonCode::PickerNotConfigured => "clipboard picker is not configured",
+        ReasonCode::PickerBusy => "clipboard picker is already open",
+        ReasonCode::PickerCrashed => "clipboard picker exited unexpectedly",
+        ReasonCode::PickerTimeout => "clipboard picker timed out",
+        ReasonCode::RequestExpired => "paste request expired",
+        ReasonCode::FdWriteTimeout => "paste transfer timed out",
+        ReasonCode::FdClosed => "paste target closed the transfer",
+        ReasonCode::FdCapExceeded => "too many paste transfers are already pending",
+        ReasonCode::BridgeUnavailable => "clipboard bridge is unavailable",
+        ReasonCode::SourceMaterializeTimeout => "clipboard source timed out",
+        ReasonCode::MaterializationRateLimited => "clipboard source was rate limited",
+        ReasonCode::MemoryCapExceeded => "clipboard memory cap was exceeded",
+        ReasonCode::LoopSuppressed => "broker feedback loop was suppressed",
+        ReasonCode::AuditFailure => "audit queue is unavailable",
     }
 }
 
@@ -115,7 +139,7 @@ mod tests {
     #[test]
     fn failure_notification_uses_reason_and_realm_labels_only() {
         let notification = user_visible_failure(ReasonCode::PolicyDenied, "Host", "Personal");
-        assert!(notification.body.contains("policy_denied"));
+        assert!(notification.body.contains("policy denied"));
         assert!(notification.body.contains("Host"));
         assert!(notification.body.contains("Personal"));
         assert!(!notification.body.contains("secret"));
@@ -126,6 +150,6 @@ mod tests {
         let mut notifier = RecordingNotifier::default();
         emit_user_visible_failure(&mut notifier, ReasonCode::PolicyDenied, "Host", "Personal");
         assert_eq!(notifier.notifications.len(), 1);
-        assert!(notifier.notifications[0].body.contains("policy_denied"));
+        assert!(notifier.notifications[0].body.contains("policy denied"));
     }
 }

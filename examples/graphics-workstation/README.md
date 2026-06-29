@@ -301,7 +301,7 @@ Plasma + PipeWire + d2b closure and takes minutes.
   `d2b.site.waylandUser` either. See `examples/minimal/`.
 - Want a different Wayland compositor on the host? Swap
   `services.desktopManager.plasma6.enable = true` for your
-  compositor of choice; the host-side Wayland filter proxy connects to
+  compositor of choice; the host-side Wayland proxy connects to
   whatever socket the user named by `d2b.site.waylandUser` owns.
 
 ## Common gotchas

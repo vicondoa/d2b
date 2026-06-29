@@ -8,10 +8,10 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::OpenOptions;
+use std::fs::Permissions;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::fs::FileTypeExt;
+use std::os::fd::OwnedFd;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -33,7 +33,7 @@ use d2b_clipd::notifications::{
 use d2b_clipd::picker::{
     CommandPickerSpawner, PickerCommand, PickerPoll, PickerState, PickerSupervisor,
 };
-use d2b_clipd::policy::ReasonCode;
+use d2b_clipd::policy::{ReasonCode, is_mime_allowed};
 use d2b_clipd::protocol::{
     AttributionQuality, Candidate, ClientHello, DaemonToPickerMessage, DestinationMetadata,
     OpenRequest, PickerToDaemonMessage, RealmKind,
@@ -81,7 +81,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         .and_then(|v| v.as_str())
         .map(PathBuf::from);
     let picker = args.picker.clone().or(picker_from_config);
-    let bridge_vms = parse_bridge_vms(&config_json)?;
+    let bridge_peers = parse_bridge_peers(&config_json)?;
     if let Some(p) = &args.picker
         && !p.is_absolute()
     {
@@ -141,7 +141,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("set_nonblocking: {e}"))?;
-    let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_vms)?;
+    let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_peers)?;
 
     log::info!(
         "d2b-clipd: ready (config={}, bridge_root={}, control={})",
@@ -156,7 +156,9 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
 
     let mut event_loop = EventLoop {
         listener: &listener,
+        control_streams: Vec::new(),
         bridge_listeners,
+        bridge_streams: Vec::new(),
         data_control: &mut data_control,
         niri_rx,
         host_clipboard: &mut host_clipboard,
@@ -169,7 +171,34 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     event_loop.run()
 }
 
-fn parse_bridge_vms(config_json: &serde_json::Value) -> Result<Vec<String>, String> {
+fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerConfig>, String> {
+    if let Some(value) = config_json.pointer("/runtime/bridgePeers") {
+        let Some(items) = value.as_array() else {
+            return Err("runtime.bridgePeers must be an array".to_owned());
+        };
+        return items
+            .iter()
+            .map(|item| {
+                let vm_name = item
+                    .get("vmName")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| "runtime.bridgePeers[].vmName must be a string".to_owned())?
+                    .to_owned();
+                let expected_uid = item
+                    .get("expectedUid")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| {
+                        "runtime.bridgePeers[].expectedUid must be an integer".to_owned()
+                    })?;
+                Ok(BridgePeerConfig {
+                    vm_name,
+                    expected_uid: expected_uid
+                        .try_into()
+                        .map_err(|_| "runtime.bridgePeers[].expectedUid too large".to_owned())?,
+                })
+            })
+            .collect();
+    }
     let Some(value) = config_json.pointer("/runtime/bridgeVms") else {
         return Ok(Vec::new());
     };
@@ -179,9 +208,14 @@ fn parse_bridge_vms(config_json: &serde_json::Value) -> Result<Vec<String>, Stri
     items
         .iter()
         .map(|item| {
-            item.as_str()
+            let vm_name = item
+                .as_str()
                 .map(str::to_owned)
-                .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())
+                .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())?;
+            Ok(BridgePeerConfig {
+                vm_name,
+                expected_uid: u32::MAX,
+            })
         })
         .collect()
 }
@@ -190,7 +224,9 @@ fn parse_bridge_vms(config_json: &serde_json::Value) -> Result<Vec<String>, Stri
 
 struct EventLoop<'a> {
     listener: &'a UnixListener,
+    control_streams: Vec<UnixStream>,
     bridge_listeners: Vec<BridgeListener>,
+    bridge_streams: Vec<BridgeStream>,
     data_control: &'a mut DataControlClient,
     niri_rx: mpsc::Receiver<NiriMessage>,
     host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
@@ -207,7 +243,13 @@ impl EventLoop<'_> {
             // Flush pending Wayland requests before polling.
             self.data_control.flush().ok();
 
-            let (wayland_ready, control_ready, bridge_ready) = {
+            let (
+                wayland_ready,
+                control_ready,
+                control_stream_ready,
+                bridge_listener_ready,
+                bridge_stream_ready,
+            ) = {
                 let mut poll_fds = vec![
                     PollFd::from_borrowed_fd(
                         self.data_control.as_fd(),
@@ -218,9 +260,21 @@ impl EventLoop<'_> {
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
                     ),
                 ];
+                for stream in &self.control_streams {
+                    poll_fds.push(PollFd::new(
+                        stream,
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ));
+                }
                 for bridge in &self.bridge_listeners {
                     poll_fds.push(PollFd::new(
                         &bridge.listener,
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ));
+                }
+                for bridge in &self.bridge_streams {
+                    poll_fds.push(PollFd::new(
+                        &bridge.stream,
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
                     ));
                 }
@@ -229,17 +283,39 @@ impl EventLoop<'_> {
                     Err(rustix::io::Errno::INTR) => continue,
                     Err(error) => return Err(format!("poll failed: {error}")),
                 }
-                let bridge_ready = poll_fds[2..]
+                let bridge_listener_offset = 2 + self.control_streams.len();
+                let bridge_stream_offset = bridge_listener_offset + self.bridge_listeners.len();
+                let control_stream_ready = poll_fds[2..bridge_listener_offset]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, fd)| {
+                        fd.revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP)
+                            .then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                let bridge_listener_ready = poll_fds[bridge_listener_offset..bridge_stream_offset]
                     .iter()
                     .enumerate()
                     .filter_map(|(index, fd)| fd.revents().contains(PollFlags::IN).then_some(index))
+                    .collect::<Vec<_>>();
+                let bridge_stream_ready = poll_fds[bridge_stream_offset..]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, fd)| {
+                        fd.revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP)
+                            .then_some(index)
+                    })
                     .collect::<Vec<_>>();
                 (
                     poll_fds[0]
                         .revents()
                         .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
                     poll_fds[1].revents().contains(PollFlags::IN),
-                    bridge_ready,
+                    control_stream_ready,
+                    bridge_listener_ready,
+                    bridge_stream_ready,
                 )
             };
 
@@ -274,15 +350,7 @@ impl EventLoop<'_> {
                                 );
                                 continue;
                             }
-
-                            let _ = handle_control_connection(
-                                stream,
-                                self.supervisor,
-                                &self.picker_command,
-                                self.host_clipboard,
-                                self.fallback,
-                                self.notifier,
-                            );
+                            self.control_streams.push(stream);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(error) => return Err(format!("control accept failed: {error}")),
@@ -290,10 +358,31 @@ impl EventLoop<'_> {
                 }
             }
 
-            for index in bridge_ready {
+            for index in control_stream_ready.into_iter().rev() {
+                if index < self.control_streams.len() {
+                    let stream = self.control_streams.swap_remove(index);
+                    let _ = handle_control_connection(
+                        stream,
+                        self.supervisor,
+                        &self.picker_command,
+                        self.host_clipboard,
+                        self.fallback,
+                        self.notifier,
+                    );
+                }
+            }
+
+            for index in bridge_listener_ready {
                 if let Some(bridge) = self.bridge_listeners.get(index) {
-                    drain_bridge_listener(
-                        bridge,
+                    accept_bridge_streams(bridge, &mut self.bridge_streams);
+                }
+            }
+
+            for index in bridge_stream_ready.into_iter().rev() {
+                if index < self.bridge_streams.len() {
+                    let stream = self.bridge_streams.swap_remove(index);
+                    handle_bridge_stream(
+                        stream,
                         self.host_clipboard,
                         self.notifier,
                         self.fallback,
@@ -370,9 +459,22 @@ impl EventLoop<'_> {
 }
 
 #[derive(Debug)]
+struct BridgePeerConfig {
+    vm_name: String,
+    expected_uid: u32,
+}
+
+#[derive(Debug)]
 struct BridgeListener {
     vm_name: String,
+    expected_uid: u32,
     listener: UnixListener,
+}
+
+#[derive(Debug)]
+struct BridgeStream {
+    vm_name: String,
+    stream: UnixStream,
 }
 
 #[derive(Debug, Deserialize)]
@@ -394,17 +496,19 @@ enum BridgeAttribution {
 
 fn install_bridge_listeners(
     root: &Path,
-    bridge_vms: &[String],
+    bridge_peers: &[BridgePeerConfig],
 ) -> Result<Vec<BridgeListener>, String> {
     let uid = rustix::process::getuid().as_raw();
     let mut listeners = Vec::new();
-    for vm in bridge_vms {
-        let path = bridge_socket_path(root, uid, vm)?;
+    for peer in bridge_peers {
+        let path = bridge_socket_path(root, uid, &peer.vm_name)?;
         let parent = path
             .parent()
             .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+        std::fs::set_permissions(parent, Permissions::from_mode(0o700))
+            .map_err(|e| format!("chmod bridge socket dir {}: {e}", parent.display()))?;
         if path.exists() {
             let meta = std::fs::symlink_metadata(&path)
                 .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
@@ -420,7 +524,8 @@ fn install_bridge_listeners(
             .set_nonblocking(true)
             .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
         listeners.push(BridgeListener {
-            vm_name: vm.clone(),
+            vm_name: peer.vm_name.clone(),
+            expected_uid: peer.expected_uid,
             listener,
         });
     }
@@ -438,6 +543,7 @@ fn bridge_socket_path(root: &Path, uid: u32, vm: &str) -> Result<PathBuf, String
         .join("clip.sock"))
 }
 
+#[derive(Debug)]
 struct BridgePasteRequest {
     vm_name: String,
     mime_type: String,
@@ -445,15 +551,7 @@ struct BridgePasteRequest {
     fd: OwnedFd,
 }
 
-fn drain_bridge_listener(
-    bridge: &BridgeListener,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    notifier: &mut DesktopNotifier,
-    fallback: &mut FallbackArming,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    audit_queue: &mut AuditQueue,
-) {
+fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream>) {
     loop {
         match bridge.listener.accept() {
             Ok((stream, _)) => {
@@ -461,23 +559,17 @@ fn drain_bridge_listener(
                     log::warn!("d2b-clipd: bridge stream nonblocking failed: {error}");
                     continue;
                 }
-                match recv_bridge_frame(&bridge.vm_name, &stream) {
-                    Ok(request) => handle_bridge_paste_request(
-                        request,
-                        host_clipboard,
-                        notifier,
-                        fallback,
-                        supervisor,
-                        picker_command,
-                        audit_queue,
-                    ),
-                    Err(error) => {
-                        log::warn!(
-                            "d2b-clipd: bridge frame failed for vm={}: {error}",
-                            bridge.vm_name
-                        );
-                    }
+                if let Err(error) = validate_bridge_peer(&stream, bridge.expected_uid) {
+                    log::warn!(
+                        "d2b-clipd: bridge peer rejected for vm={}: {error}",
+                        bridge.vm_name
+                    );
+                    continue;
                 }
+                streams.push(BridgeStream {
+                    vm_name: bridge.vm_name.clone(),
+                    stream,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) => {
@@ -491,32 +583,75 @@ fn drain_bridge_listener(
     }
 }
 
+fn handle_bridge_stream(
+    bridge: BridgeStream,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    notifier: &mut DesktopNotifier,
+    fallback: &mut FallbackArming,
+    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &Option<PickerCommand>,
+    audit_queue: &mut AuditQueue,
+) {
+    match recv_bridge_frame(&bridge.vm_name, &bridge.stream) {
+        Ok(request) => handle_bridge_paste_request(
+            request,
+            host_clipboard,
+            notifier,
+            fallback,
+            supervisor,
+            picker_command,
+            audit_queue,
+        ),
+        Err(error) => {
+            log::warn!(
+                "d2b-clipd: bridge frame failed for vm={}: {error}",
+                bridge.vm_name
+            );
+        }
+    }
+}
+
+fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> Result<(), String> {
+    let creds = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
+        .map_err(|e| e.to_string())?;
+    if creds.uid() == expected_uid {
+        Ok(())
+    } else {
+        Err(format!(
+            "uid mismatch: expected {}, got {}",
+            expected_uid,
+            creds.uid()
+        ))
+    }
+}
+
 fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePasteRequest, String> {
     let mut buf = [0_u8; 4096];
     let mut iov = [std::io::IoSliceMut::new(&mut buf)];
-    let mut cmsg_space = nix::cmsg_space!([i32; 1]);
-    let msg = nix::sys::socket::recvmsg::<()>(
-        stream.as_raw_fd(),
+    let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+    let mut control = rustix::net::RecvAncillaryBuffer::new(&mut cmsg_space);
+    let msg = rustix::net::recvmsg(
+        stream,
         &mut iov,
-        Some(&mut cmsg_space),
-        nix::sys::socket::MsgFlags::MSG_DONTWAIT | nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
+        &mut control,
+        rustix::net::RecvFlags::DONTWAIT | rustix::net::RecvFlags::CMSG_CLOEXEC,
     )
     .map_err(|e| e.to_string())?;
     let bytes = msg.bytes;
     let mut received_fds = Vec::new();
-    for cmsg in msg.cmsgs().map_err(|e| e.to_string())? {
-        if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
+    for cmsg in control.drain() {
+        if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
             received_fds.extend(fds);
         }
     }
-    if msg.flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC) {
-        close_raw_fds(received_fds);
+    if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
+        drop(received_fds);
         return Err("bridge control message truncated".to_owned());
     }
     let frame: BridgeFrame = match serde_json::from_slice(&buf[..bytes]) {
         Ok(frame) => frame,
         Err(error) => {
-            close_raw_fds(received_fds);
+            drop(received_fds);
             return Err(error.to_string());
         }
     };
@@ -530,18 +665,17 @@ fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePas
             let Some(fd) = received_fds.pop() else {
                 return Err("bridge frame did not include transfer fd".to_owned());
             };
-            close_raw_fds(received_fds);
+            drop(received_fds);
             if vm_name != expected_vm {
-                close_raw_fds(vec![fd]);
+                drop(fd);
                 return Err(format!(
                     "bridge vm mismatch: expected {expected_vm}, got {vm_name}"
                 ));
             }
             if source_attribution != BridgeAttribution::ExactClient {
-                close_raw_fds(vec![fd]);
+                drop(fd);
                 return Err("bridge frame did not carry exact attribution".to_owned());
             }
-            let fd = duplicate_raw_fd_for_write(fd)?;
             log::debug!(
                 "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
                 bounded_label(&vm_name),
@@ -556,24 +690,6 @@ fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePas
             })
         }
     }
-}
-
-fn close_raw_fds(fds: Vec<i32>) {
-    for fd in fds {
-        let _ = nix::unistd::close(fd);
-    }
-}
-
-fn duplicate_raw_fd_for_write(fd: i32) -> Result<OwnedFd, String> {
-    let file = OpenOptions::new()
-        .write(true)
-        .open(format!("/proc/self/fd/{fd}"))
-        .map_err(|e| {
-            let _ = nix::unistd::close(fd);
-            format!("duplicate bridge fd through procfs: {e}")
-        })?;
-    let _ = nix::unistd::close(fd);
-    Ok(file.into())
 }
 
 fn handle_bridge_paste_request(
@@ -592,6 +708,27 @@ fn handle_bridge_paste_request(
         fd,
     } = request;
     let request_id = format!("bridge-{vm_name}-{source_id}");
+    if !is_mime_allowed(&mime_type) {
+        drop(fd);
+        d2b_clipd::notifications::emit_user_visible_failure(
+            notifier,
+            ReasonCode::MimeRejected,
+            "host",
+            &vm_name,
+        );
+        let _ = audit_queue.enqueue_fail_closed(AuditEvent {
+            request_id,
+            source_realm: "host".to_owned(),
+            destination_realm: vm_name,
+            mime_type,
+            byte_count: 0,
+            decision: AuditDecision::Deny,
+            attribution: d2b_clipd::policy::AttributionQuality::ExactClient,
+            reason: ReasonCode::MimeRejected,
+            timestamp_unix_ms: unix_millis(),
+        });
+        return;
+    }
     let dest = FocusedWindowSnapshot {
         id: None,
         app_id: Some(format!("d2b.{vm_name}")),
@@ -974,6 +1111,7 @@ fn handle_arm(
                     log::warn!("d2b-clipd: picker handshake failed: {error}");
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
+                    arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
                     Err(error)
                 }
             }
@@ -982,7 +1120,7 @@ fn handle_arm(
             log::warn!("d2b-clipd: picker launch failed: {e}; arming native fallback");
             let _ = fallback.cancel_picker();
             arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
-            Err(e.to_string())
+            Ok("fallback armed".to_owned())
         }
     }
 }
@@ -1148,11 +1286,7 @@ fn arm_native_fallback(
         Duration::from_secs(30),
     );
     if matches!(transition, FallbackTransition::Armed) {
-        let label = dest
-            .app_id
-            .as_deref()
-            .or(dest.title.as_deref())
-            .unwrap_or("host application");
+        let label = dest.app_id.as_deref().unwrap_or("host application");
         emit_fallback_ready(notifier, label);
         log::debug!(
             "d2b-clipd: fallback armed for {}; user should press Ctrl+V",
@@ -1466,6 +1600,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
 
     #[test]
     fn parses_required_args() {
@@ -1568,6 +1703,31 @@ mod tests {
         assert_eq!(request.mime_type, "text/plain");
         assert_eq!(request.source_id, 7);
         drop(request.fd);
+        drop(read_fd);
+    }
+
+    #[test]
+    fn bridge_frame_rejects_non_exact_attribution() {
+        let (sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        let frame = br#"{"type":"vm_paste_request","vm_name":"work","mime_type":"text/plain","source_id":7,"source_attribution":"focused_window_guess"}
+"#;
+        let iov = [std::io::IoSlice::new(frame)];
+        let raw_fd = write_fd.as_raw_fd();
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&[raw_fd])];
+        nix::sys::socket::sendmsg::<()>(
+            sender.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            None,
+        )
+        .expect("sendmsg");
+        drop(write_fd);
+
+        let err = recv_bridge_frame("work", &receiver).expect_err("non-exact attribution");
+        assert!(err.contains("unknown variant") || err.contains("exact attribution"));
         drop(read_fd);
     }
 }
