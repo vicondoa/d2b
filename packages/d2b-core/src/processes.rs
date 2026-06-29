@@ -166,9 +166,9 @@ pub enum ProcessRole {
     GuestControlHealth,
     /// USBIP proxy or attach helper.
     Usbip,
-    /// Host-jailed Wayland filter proxy. Runs as `d2b-<vm>-wlproxy`
+    /// Host-jailed Wayland proxy. Runs as `d2b-<vm>-wlproxy`
     /// with the real host compositor socket bound read/write at a fixed
-    /// in-jail upstream path and the per-VM filter socket at
+    /// in-jail upstream path and the per-VM proxy socket at
     /// `/run/d2b-wlproxy/<vm>`. Empty host capabilities; mandatory
     /// `seccompPolicyRef`; no PipeWire/Pulse socket access.
     WaylandProxy,

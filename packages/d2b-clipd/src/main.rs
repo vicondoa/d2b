@@ -36,6 +36,7 @@ use d2b_clipd::protocol::{
     OpenRequest, PickerToDaemonMessage, RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, HostClipboardEvent};
+use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
 const CONTROL_MAX_FRAME_BYTES: usize = 1024;
@@ -177,8 +178,34 @@ impl EventLoop<'_> {
             // Flush pending Wayland requests before polling.
             self.data_control.flush().ok();
 
+            let (wayland_ready, control_ready) = {
+                let mut poll_fds = [
+                    PollFd::from_borrowed_fd(
+                        self.data_control.as_fd(),
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ),
+                    PollFd::new(
+                        self.listener,
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ),
+                ];
+                match poll(&mut poll_fds, 50) {
+                    Ok(_) => {}
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(error) => return Err(format!("poll failed: {error}")),
+                }
+                (
+                    poll_fds[0]
+                        .revents()
+                        .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
+                    poll_fds[1].revents().contains(PollFlags::IN),
+                )
+            };
+
             // ── Wayland events ────────────────────────────────────────────────
-            self.data_control.prepare_and_read().ok();
+            if wayland_ready {
+                self.data_control.prepare_and_read().ok();
+            }
             let wl_events = self.data_control.dispatch_pending().unwrap_or_else(|e| {
                 log::error!("d2b-clipd: wayland dispatch: {e}");
                 vec![]
@@ -195,20 +222,28 @@ impl EventLoop<'_> {
             }
 
             // ── Control socket accepts ────────────────────────────────────────
-            loop {
-                match self.listener.accept() {
-                    Ok((stream, _)) => {
-                        let _ = handle_control_connection(
-                            stream,
-                            self.supervisor,
-                            &self.picker_command,
-                            self.host_clipboard,
-                            self.fallback,
-                            self.notifier,
-                        );
+            if control_ready {
+                loop {
+                    match self.listener.accept() {
+                        Ok((stream, _)) => {
+                            if let Err(error) = stream.set_nonblocking(true) {
+                                log::warn!(
+                                    "d2b-clipd: failed to set control stream nonblocking: {error}"
+                                );
+                                continue;
+                            }
+                            let _ = handle_control_connection(
+                                stream,
+                                self.supervisor,
+                                &self.picker_command,
+                                self.host_clipboard,
+                                self.fallback,
+                                self.notifier,
+                            );
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) => return Err(format!("control accept failed: {error}")),
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(error) => return Err(format!("control accept failed: {error}")),
                 }
             }
 
@@ -254,7 +289,6 @@ impl EventLoop<'_> {
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
                 log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
             }
-            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }

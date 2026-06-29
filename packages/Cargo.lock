@@ -1121,6 +1121,7 @@ dependencies = [
  "libc",
  "log",
  "nix 0.29.0",
+ "rustix 0.38.44",
  "thiserror 2.0.18",
  "uapi",
  "wl-proxy",

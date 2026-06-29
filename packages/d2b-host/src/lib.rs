@@ -69,7 +69,7 @@ pub mod usbip_argv;
 // d2b-otel-host-bridge.service with a broker SpawnRunner under
 // RunnerRole::OtelHostBridge.
 pub mod otel_host_bridge_argv;
-// Host-jailed Wayland filter proxy argv generator. Emits argv for the
+// Host-jailed Wayland proxy argv generator. Emits argv for the
 // per-VM d2b-<vm>-wlproxy role spawned via RunnerRole::WaylandProxy.
 pub mod wayland_proxy_argv;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem

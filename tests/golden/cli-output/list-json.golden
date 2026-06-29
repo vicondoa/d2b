@@ -8,7 +8,7 @@
     "staticIp": "10.20.0.10",
     "status": "stopped",
     "isNetVm": false,
-    "guestClosureOutPath": "/nix/store/2iz5k5gw96l7h33zyx9bbqnwhp7ryl56-nixos-system-corp-vm-26.05pre-git",
+    "guestClosureOutPath": "/nix/store/7x3zdhqg3rgs0kmm37z5bk8d9x75yl4d-nixos-system-corp-vm-26.05pre-git",
     "runtimeCapabilities": [
       "config-sync",
       "display",
@@ -37,7 +37,7 @@
     "staticIp": "192.0.2.2",
     "status": "running",
     "isNetVm": true,
-    "guestClosureOutPath": "/nix/store/b4jkdrlwim35xmhq0jr0yj9fgfdzlpxz-nixos-system-sys-work-net-26.05pre-git",
+    "guestClosureOutPath": "/nix/store/bdp8zanm54ci4qjk34d1krw4ngxlbwh5-nixos-system-sys-work-net-26.05pre-git",
     "runtimeCapabilities": [
       "config-sync",
       "display",

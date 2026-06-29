@@ -1,7 +1,7 @@
 # `graphics.waylandFilter` warning catalog
 
 > **Reference** for the advisory runtime diagnostics the d2b
-> Wayland filter proxy emits when operator configuration deviates from
+> Wayland proxy emits when operator configuration deviates from
 > the secure baseline or touches a rule d2b classifies as required
 > or high-risk.
 
@@ -122,7 +122,7 @@ d2b's baseline, and d2b should facilitate informed, documented
 exceptions rather than blocking them.
 
 The non-overridable invariants are the **enforcement mechanics** of the
-filter proxy itself: no raw-socket bypass, fail-closed binds for
+Wayland proxy itself: no raw-socket bypass, fail-closed binds for
 unadvertised globals, and minijail process isolation. Those cannot be
 changed through the option surface.
 

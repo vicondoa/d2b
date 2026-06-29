@@ -1469,7 +1469,7 @@ pub enum RunnerRole {
     /// capability in the role profile. Broker invokes
     /// `d2b_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
     OtelHostBridge,
-    /// Host-jailed Wayland filter proxy. Broker invokes
+    /// Host-jailed Wayland proxy. Broker invokes
     /// `d2b_host::wayland_proxy_argv::generate_wayland_proxy_argv`.
     /// Empty host capabilities; mandatory `seccompPolicyRef`; no
     /// PipeWire/Pulse socket access. Runs as `d2b-<vm>-wlproxy`

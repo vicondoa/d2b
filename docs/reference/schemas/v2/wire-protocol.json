@@ -8757,7 +8757,7 @@
           ]
         },
         {
-          "description": "Host-jailed Wayland filter proxy. Broker invokes `d2b_host::wayland_proxy_argv::generate_wayland_proxy_argv`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access. Runs as `d2b-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path.",
+          "description": "Host-jailed Wayland proxy. Broker invokes `d2b_host::wayland_proxy_argv::generate_wayland_proxy_argv`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access. Runs as `d2b-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path.",
           "type": "string",
           "enum": [
             "wayland-proxy"

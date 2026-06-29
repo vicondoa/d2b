@@ -11,7 +11,7 @@ hidden on the host compositor.
 - At least one VM with `d2b.vms.<vm>.graphics.enable = true` or
   `d2b.vms.<vm>.runtime.kind = "qemu-media"`
 - `d2b.vms.<vm>.graphics.crossDomainTrusted = true` on VMs that
-  use the Wayland filter proxy (required for app-id rewriting)
+  use the Wayland proxy (required for app-id rewriting)
 
 ## Enabling the generated include
 
@@ -64,7 +64,7 @@ window-rule {
 ### Per-VM border rules
 
 Each enabled graphics VM gets a `window-rule` block that matches its
-app-id prefix.  The host-side Wayland filter proxy rewrites guest
+app-id prefix.  The host-side Wayland proxy rewrites guest
 app-ids to `d2b.<vm>.<original-app-id>`, so the regex
 `^d2b\.<vm>\.` reliably selects only windows from that VM:
 
@@ -88,7 +88,7 @@ color; set them in d2b if you prefer a neutral inactive color.
 ### qemu-media host-window rules
 
 Each enabled qemu-media VM routes the host QEMU window through the
-d2b Wayland filter proxy. The generated `window-rule` block matches
+d2b Wayland proxy. The generated `window-rule` block matches
 the proxy-rewritten app-id prefix `d2b.<vm>.`, just like graphics VM
 windows:
 
@@ -174,7 +174,7 @@ Then update the `include` line in `config.kdl` accordingly.
 
    The `app_id` field should start with `d2b.<vm>.`.  For graphics
    VMs, if it shows the original app-id without the prefix, the VM's
-   `crossDomainTrusted` may be false or the Wayland filter proxy may
+   `crossDomainTrusted` may be false or the Wayland proxy may
    not be running. For qemu-media VMs, qemu-media itself should start
    only after the per-VM Wayland proxy is ready.
 
@@ -183,7 +183,7 @@ Then update the `include` line in `config.kdl` accordingly.
 
 ## Why `crossDomainTrusted` is required for app-id matching
 
-App-id rewriting is performed by the host-side Wayland filter proxy,
+App-id rewriting is performed by the host-side Wayland proxy,
 which runs only when `graphics.crossDomainTrusted = true`.  With the
 proxy absent, guest windows retain their original app-ids and the
 `d2b.<vm>.` prefix is never written, so the generated niri rules

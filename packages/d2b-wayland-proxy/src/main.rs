@@ -32,6 +32,7 @@ use d2b_wayland_proxy::{
     policy::{FilterPolicy, PolicyInput},
 };
 use env_logger::Env;
+use rustix::event::{PollFd, PollFlags, poll};
 
 #[derive(Parser, Debug)]
 #[command(name = "d2b-wayland-proxy")]
@@ -272,37 +273,66 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
     let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
     while state.is_not_destroyed() {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let client_id = next_client_id;
-                next_client_id += 1;
-                let fd = Rc::new(stream.into());
-                let client = match state.add_client(&fd) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::warn!(
-                            "[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}"
+        let (listener_ready, _state_ready) = {
+            let mut poll_fds = [
+                PollFd::new(&listener, PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
+                PollFd::new(state.poll_fd(), PollFlags::IN),
+            ];
+            match poll(&mut poll_fds, 250) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => {
+                    log::warn!("[d2b-wlproxy] vm={vm} poll error: {error}");
+                    break;
+                }
+            }
+            (
+                poll_fds[0].revents().contains(PollFlags::IN),
+                !poll_fds[1].revents().is_empty(),
+            )
+        };
+
+        if listener_ready {
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let client_id = next_client_id;
+                        next_client_id += 1;
+                        let fd = Rc::new(stream.into());
+                        let client = match state.add_client(&fd) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                log::warn!(
+                                    "[d2b-wlproxy] vm={vm} client={client_id} failed to add client: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        client.set_handler(FilterClientHandler::with_destructor(
+                            vm.clone(),
+                            state.create_destructor(),
+                        ));
+                        install_client_handlers(
+                            &client,
+                            policy.clone(),
+                            diag.clone(),
+                            clipboard.clone(),
                         );
-                        continue;
                     }
-                };
-                client.set_handler(FilterClientHandler::with_destructor(
-                    vm.clone(),
-                    state.create_destructor(),
-                ));
-                install_client_handlers(&client, policy.clone(), diag.clone(), clipboard.clone());
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-            Err(e) if is_recoverable_accept_error(&e) => {
-                log::warn!("[d2b-wlproxy] vm={vm} recoverable accept error: {e}");
-            }
-            Err(e) => {
-                eprintln!("d2b-wayland-proxy: accept error: {e}");
-                std::process::exit(1);
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if is_recoverable_accept_error(&e) => {
+                        log::warn!("[d2b-wlproxy] vm={vm} recoverable accept error: {e}");
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("d2b-wayland-proxy: accept error: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
 
-        match state.dispatch(Some(Duration::from_millis(10))) {
+        match state.dispatch(Some(Duration::from_secs(0))) {
             Ok(_) => {}
             Err(e) => {
                 log::warn!(
