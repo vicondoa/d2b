@@ -13,7 +13,7 @@
 
 Warnings are **advisory**: the NixOS configuration still evaluates and
 builds when a warning condition is met. The warning is emitted by the
-host-side filter process when the VM starts.
+host-side proxy process when the VM starts.
 
 Secure defaults emit **zero** `waylandFilter` warnings. A clean
 configuration with no overrides produces no output from this catalog.

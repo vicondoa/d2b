@@ -35,8 +35,8 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `d2b.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `d2b.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
 | `d2b.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `d2b-wayland-proxy` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
-| `d2b.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
-| `d2b.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side filter runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
+| `d2b.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side proxy runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
+| `d2b.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side proxy runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
 | `d2b.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
 | `d2b.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
 | `d2b.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
@@ -61,7 +61,7 @@ Site-level dependency:
 
 | Option | Type | Required when | Description |
 |---|---|---|---|
-| `d2b.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar or the host-side Wayland filter needs this user's `/run/user/<uid>/<waylandDisplay>` socket. Eval fails with a clear message if unset. |
+| `d2b.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar or the host-side Wayland proxy needs this user's `/run/user/<uid>/<waylandDisplay>` socket. Eval fails with a clear message if unset. |
 
 ## Options (guest-side propagation)
 
@@ -89,12 +89,12 @@ The matching guest-visible option lives in the imported
   [`host-users.nix`](../../nixos-modules/host-users.nix)). It is a
   per-VM runner principal and is separate from the host Wayland user.
 - **Daemon process nodes** in `processes.json`: `wayland-proxy` when the
-  filter is enabled for a cross-domain VM, `gpu` (or `gpu-render-node`),
+  proxy is enabled for a cross-domain VM, `gpu` (or `gpu-render-node`),
   and `cloud-hypervisor-runner`. `d2bd` supervises them through the
   broker `SpawnRunner` / pidfd path; no per-VM graphics systemd service
   is emitted.
-- **`/run/d2b-wlproxy/<vm>/wayland-0`** for the filtered compositor
-  socket that crosvm connects to when the host filter is active.
+- **`/run/d2b-wlproxy/<vm>/wayland-0`** for the proxied compositor
+  socket that crosvm connects to when the host proxy is active.
   `/run/d2b-gpu/<vm>/` remains the GPU role-local runtime directory.
 - **Device allowlist** from the minijail profile. Normal GPU runners
   use the closed device set needed by cloud-hypervisor/crosvm; the
@@ -142,7 +142,7 @@ The matching guest-visible option lives in the imported
 
 - The CH + crosvm-gpu processes show up as `d2b-<vm>-gpu` in
   `ps -ef`; never as the operator's Wayland user.
-- With the host filter active, the GPU runner connects to
+- With the host proxy active, the GPU runner connects to
   `/run/d2b-wlproxy/<vm>/wayland-0` and does not hold the real host
   compositor socket. The `wayland-proxy` role is the VM-specific process
   with access to the real compositor socket.
@@ -228,7 +228,7 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
   in the module header, re-test, then bump `testedWithCrosvmRev`.
 - **Sidecar permission denied on the Wayland socket.** The host
   Wayland socket must exist for `d2b.site.waylandUser` before the VM
-  starts. If the socket is absent, the host-side filter or the direct GPU
+  starts. If the socket is absent, the host-side proxy or the direct GPU
   fallback cannot connect to the compositor.
 - **Cross-domain forwarding silently disabled.** With
   `crossDomainTrusted = false` (the default) GUI apps still work via

@@ -47,7 +47,7 @@ The host-side Wayland proxy activates only when
 `graphics.crossDomainTrusted = true`.  The default is still false.
 The proxy path requires explicit opt-in because the cross-domain
 virtio-gpu channel carries all guest Wayland messages and must be
-trusted before the host filter can forward them.
+trusted before the host proxy can forward them.
 
 ## Step-by-step migration
 
@@ -72,9 +72,9 @@ d2b.vms.work.graphics.crossDomainTrusted = true;
 > inside such a VM could leverage the cross-domain channel to reach
 > the host compositor.
 
-### 3. Confirm the Wayland filter is enabled
+### 3. Confirm the Wayland proxy is enabled
 
-The Wayland filter is enabled by default for graphics VMs with
+The Wayland proxy is enabled by default for graphics VMs with
 `crossDomainTrusted = true`.  You can set it explicitly for clarity:
 
 ```nix

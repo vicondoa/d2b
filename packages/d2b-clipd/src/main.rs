@@ -1056,4 +1056,20 @@ mod tests {
             .expect_err("overlong");
         assert!(err.contains("frame exceeds"));
     }
+
+    #[test]
+    fn bounded_line_times_out_on_hanging_frame() {
+        let (_writer, reader) = UnixStream::pair().expect("pair");
+        reader.set_nonblocking(true).expect("nonblocking");
+        let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_millis(5))
+            .expect_err("timeout");
+        assert!(err.contains("timed out"));
+    }
+
+    #[test]
+    fn fd_materialization_times_out_on_hanging_stream() {
+        let (read_fd, _write_fd) = rustix::pipe::pipe().expect("pipe");
+        let err = read_fd_to_vec(read_fd, 1024, Duration::from_millis(5)).expect_err("timeout");
+        assert_eq!(err, ReasonCode::SourceMaterializeTimeout);
+    }
 }
