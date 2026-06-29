@@ -755,8 +755,8 @@ impl WlRegistryHandler for FilterRegistryHandler {
         };
 
         if !bind_matches_advertised_cap(advertised, id.interface(), id.version()) {
-            let vm = self.policy.vm_name.clone();
-            let iface = advertised.interface.name().to_owned();
+            let vm = &self.policy.vm_name;
+            let iface = advertised.interface.name();
             let requested = id.version();
             let advertised_version = advertised.version;
             self.diag

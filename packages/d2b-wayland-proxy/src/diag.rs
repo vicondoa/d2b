@@ -129,11 +129,10 @@ impl DiagRateLimiter {
     pub fn bind_denied(&mut self, reason: DropReason, registry_name: u32, interface: &str) {
         let reason_str = reason.as_str();
         let vm = self.vm.clone();
-        let iface = interface.to_owned();
         self.emit("bind-denied", interface, || {
             format!(
                 "[d2b-wlproxy] vm={vm} event=bind-denied reason={reason_str} \
-                 interface={iface} registry-name={registry_name}"
+                 interface={interface} registry-name={registry_name}"
             )
         });
     }
@@ -141,9 +140,8 @@ impl DiagRateLimiter {
     /// Log a global-filtered event (advertisement filtered; opt-in via `--log-filtered-globals`).
     pub fn global_filtered(&mut self, interface: &str) {
         let vm = self.vm.clone();
-        let iface = interface.to_owned();
         self.emit("global-filtered", interface, || {
-            format!("[d2b-wlproxy] vm={vm} event=global-filtered interface={iface}")
+            format!("[d2b-wlproxy] vm={vm} event=global-filtered interface={interface}")
         });
     }
 

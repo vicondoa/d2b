@@ -1,6 +1,6 @@
 # Clipboard architecture
 
-**Diataxis category:** reference.
+**Diataxis category:** explanation.
 
 D2b clipboard support is a split-trust design. The trusted d2b control plane
 owns clipboard authority; the picker is only a UI client.

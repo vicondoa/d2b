@@ -39,7 +39,8 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now advertises its virtual clipboard manager even when
   the host compositor omits `wl_data_device_manager`, and denies unstable
   text-input v3 forwarding by default to avoid guest app crashes on invalid
-  seat-bound requests.
+  seat-bound requests. Clipboard-boundary allow overrides now remain denied
+  and emit stable `W-*` diagnostics.
 
 ### Added
 

@@ -60,37 +60,69 @@ pub enum PolicyWarning {
 }
 
 impl PolicyWarning {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::RequiredGlobalDenied { .. } => "W-DENY-BASELINE",
+            Self::AcceleratedRenderingDisabled { .. } => "W-DENY-ACCEL",
+            Self::HighRiskGlobalEnabled { .. } => "W-ALLOW-HIGH-RISK",
+            Self::ClipboardBoundaryOverrideIgnored { .. } => "W-ALLOW-CLIPBOARD-BOUNDARY",
+            Self::AppIdPrefixNotVmPrefix { .. } => "W-APP-ID-PREFIX",
+            Self::TitlePrefixDisabled => "W-TITLE-PREFIX",
+            Self::UnclassifiedGlobalAllowed { .. } => "W-ALLOW-UNCLASSIFIED",
+        }
+    }
+
+    fn sort_key(&self) -> (&'static str, &str) {
+        match self {
+            Self::RequiredGlobalDenied { interface }
+            | Self::AcceleratedRenderingDisabled { interface }
+            | Self::HighRiskGlobalEnabled { interface }
+            | Self::ClipboardBoundaryOverrideIgnored { interface }
+            | Self::UnclassifiedGlobalAllowed { interface } => (self.code(), interface.as_str()),
+            Self::AppIdPrefixNotVmPrefix { prefix, .. } => (self.code(), prefix.as_str()),
+            Self::TitlePrefixDisabled => (self.code(), ""),
+        }
+    }
+
     /// Human-readable runtime advisory emitted by d2b-wayland-proxy.
     pub fn message(&self) -> String {
         match self {
             Self::RequiredGlobalDenied { interface } => format!(
-                "waylandProxy: required global `{interface}` is denied; graphics path may break"
+                "waylandProxy: [{}] required global `{interface}` is denied; graphics path may break",
+                self.code()
             ),
             Self::AcceleratedRenderingDisabled { interface } => format!(
-                "waylandProxy: accelerated-rendering global `{interface}` is denied; \
-                 apps may fall back to software rendering"
+                "waylandProxy: [{}] accelerated-rendering global `{interface}` is denied; \
+                 apps may fall back to software rendering",
+                self.code()
             ),
             Self::HighRiskGlobalEnabled { interface } => format!(
-                "waylandProxy: high-risk global `{interface}` is enabled; \
-                 this global has elevated access to host compositor state"
+                "waylandProxy: [{}] high-risk global `{interface}` is enabled; \
+                 this global has elevated access to host compositor state",
+                self.code()
             ),
             Self::ClipboardBoundaryOverrideIgnored { interface } => format!(
-                "waylandProxy: clipboard boundary global `{interface}` override ignored; \
-                 d2b enforces virtualized clipboard, primary-selection, and DND boundaries"
+                "waylandProxy: [{}] clipboard boundary global `{interface}` override ignored; \
+                 d2b enforces virtualized clipboard, primary-selection, and DND boundaries",
+                self.code()
             ),
             Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
-                "waylandProxy: appIdPrefix is `{prefix}` rather than the default \
+                "waylandProxy: [{}] appIdPrefix is `{prefix}` rather than the default \
                  `d2b.{vm}.`; generated niri border rules will not match unless \
-                 overridden too"
+                 overridden too",
+                self.code()
             ),
             Self::TitlePrefixDisabled => {
-                "waylandProxy: titlePrefix is empty; non-niri compositors lose VM \
-                 disambiguation"
-                    .to_owned()
+                format!(
+                    "waylandProxy: [{}] titlePrefix is empty; non-niri compositors lose VM \
+                     disambiguation",
+                    self.code()
+                )
             }
             Self::UnclassifiedGlobalAllowed { interface } => format!(
-                "waylandProxy: unclassified global `{interface}` is explicitly allowed; \
-                 d2b has not reviewed this protocol's security posture"
+                "waylandProxy: [{}] unclassified global `{interface}` is explicitly allowed; \
+                 d2b has not reviewed this protocol's security posture",
+                self.code()
             ),
         }
     }
@@ -254,6 +286,7 @@ impl FilterPolicy {
         if title_prefix.is_empty() {
             warnings.push(PolicyWarning::TitlePrefixDisabled);
         }
+        warnings.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
 
         Self {
             entries,
@@ -537,6 +570,7 @@ mod tests {
             "zwlr_data_control_manager_v1",
             "zwp_primary_selection_device_manager_v1",
             "wp_primary_selection_device_manager_v1",
+            "wp_primary_selection_unstable_v1",
             "gtk_primary_selection_device_manager",
             "xdg_toplevel_drag_manager_v1",
         ] {
@@ -648,6 +682,7 @@ mod tests {
             "zwlr_data_control_manager_v1",
             "zwp_primary_selection_device_manager_v1",
             "wp_primary_selection_device_manager_v1",
+            "wp_primary_selection_unstable_v1",
             "gtk_primary_selection_device_manager",
             "xdg_toplevel_drag_manager_v1",
         ];
@@ -673,6 +708,39 @@ mod tests {
                 "clipboard-boundary allow override must be ignored for {iface}"
             );
         }
+    }
+
+    #[test]
+    fn warning_messages_include_stable_codes_and_order() {
+        let p = FilterPolicy::build(PolicyInput {
+            vm_name: "work".to_owned(),
+            deny_globals: vec!["wl_compositor".to_owned()],
+            allow_globals: vec![
+                "wl_data_device_manager".to_owned(),
+                "zwlr_screencopy_manager_v1".to_owned(),
+                "completely_unknown_v1".to_owned(),
+            ],
+            ..Default::default()
+        });
+        let messages = p
+            .warnings
+            .iter()
+            .map(PolicyWarning::message)
+            .collect::<Vec<_>>();
+        for code in [
+            "W-ALLOW-CLIPBOARD-BOUNDARY",
+            "W-ALLOW-HIGH-RISK",
+            "W-ALLOW-UNCLASSIFIED",
+            "W-DENY-BASELINE",
+        ] {
+            assert!(
+                messages.iter().any(|message| message.contains(code)),
+                "missing warning code {code} in {messages:?}"
+            );
+        }
+        let mut sorted = messages.clone();
+        sorted.sort();
+        assert_eq!(messages, sorted);
     }
 
     #[test]
