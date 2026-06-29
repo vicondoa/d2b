@@ -8,13 +8,16 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_clipd::audit::bounded_mime;
+use d2b_clipd::audit::{AuditDecision, AuditEvent, AuditQueue, AuditQueueConfig, bounded_mime};
 use d2b_clipd::fallback::{FallbackArming, FallbackState, FallbackTransition};
 use d2b_clipd::framing::{
     OpenRequestFrameCaps, PICKER_TO_DAEMON_MAX_FRAME_BYTES, decode_frame, encode_frame,
@@ -78,6 +81,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         .and_then(|v| v.as_str())
         .map(PathBuf::from);
     let picker = args.picker.clone().or(picker_from_config);
+    let bridge_vms = parse_bridge_vms(&config_json)?;
     if let Some(p) = &args.picker
         && !p.is_absolute()
     {
@@ -125,6 +129,9 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     // ── Fallback state machine ───────────────────────────────────────────────
     let mut fallback = FallbackArming::default();
     let mut notifier = DesktopNotifier;
+    let mut audit_queue = AuditQueue::new(AuditQueueConfig {
+        per_realm_quota: 1024,
+    });
 
     // ── Control socket ───────────────────────────────────────────────────────
     let control_socket = control_socket_path()?;
@@ -134,6 +141,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("set_nonblocking: {e}"))?;
+    let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_vms)?;
 
     log::info!(
         "d2b-clipd: ready (config={}, bridge_root={}, control={})",
@@ -148,6 +156,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
 
     let mut event_loop = EventLoop {
         listener: &listener,
+        bridge_listeners,
         data_control: &mut data_control,
         niri_rx,
         host_clipboard: &mut host_clipboard,
@@ -155,14 +164,33 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         picker_command,
         fallback: &mut fallback,
         notifier: &mut notifier,
+        audit_queue: &mut audit_queue,
     };
     event_loop.run()
+}
+
+fn parse_bridge_vms(config_json: &serde_json::Value) -> Result<Vec<String>, String> {
+    let Some(value) = config_json.pointer("/runtime/bridgeVms") else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = value.as_array() else {
+        return Err("runtime.bridgeVms must be an array".to_owned());
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())
+        })
+        .collect()
 }
 
 // ─── Event loop ───────────────────────────────────────────────────────────────
 
 struct EventLoop<'a> {
     listener: &'a UnixListener,
+    bridge_listeners: Vec<BridgeListener>,
     data_control: &'a mut DataControlClient,
     niri_rx: mpsc::Receiver<NiriMessage>,
     host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
@@ -170,6 +198,7 @@ struct EventLoop<'a> {
     picker_command: Option<PickerCommand>,
     fallback: &'a mut FallbackArming,
     notifier: &'a mut DesktopNotifier,
+    audit_queue: &'a mut AuditQueue,
 }
 
 impl EventLoop<'_> {
@@ -178,8 +207,8 @@ impl EventLoop<'_> {
             // Flush pending Wayland requests before polling.
             self.data_control.flush().ok();
 
-            let (wayland_ready, control_ready) = {
-                let mut poll_fds = [
+            let (wayland_ready, control_ready, bridge_ready) = {
+                let mut poll_fds = vec![
                     PollFd::from_borrowed_fd(
                         self.data_control.as_fd(),
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
@@ -189,16 +218,28 @@ impl EventLoop<'_> {
                         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
                     ),
                 ];
-                match poll(&mut poll_fds, 50) {
+                for bridge in &self.bridge_listeners {
+                    poll_fds.push(PollFd::new(
+                        &bridge.listener,
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                    ));
+                }
+                match poll(&mut poll_fds, self.poll_timeout_ms()) {
                     Ok(_) => {}
                     Err(rustix::io::Errno::INTR) => continue,
                     Err(error) => return Err(format!("poll failed: {error}")),
                 }
+                let bridge_ready = poll_fds[2..]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, fd)| fd.revents().contains(PollFlags::IN).then_some(index))
+                    .collect::<Vec<_>>();
                 (
                     poll_fds[0]
                         .revents()
                         .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
                     poll_fds[1].revents().contains(PollFlags::IN),
+                    bridge_ready,
                 )
             };
 
@@ -233,6 +274,7 @@ impl EventLoop<'_> {
                                 );
                                 continue;
                             }
+
                             let _ = handle_control_connection(
                                 stream,
                                 self.supervisor,
@@ -245,6 +287,20 @@ impl EventLoop<'_> {
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(error) => return Err(format!("control accept failed: {error}")),
                     }
+                }
+            }
+
+            for index in bridge_ready {
+                if let Some(bridge) = self.bridge_listeners.get(index) {
+                    drain_bridge_listener(
+                        bridge,
+                        self.host_clipboard,
+                        self.notifier,
+                        self.fallback,
+                        self.supervisor,
+                        &self.picker_command,
+                        self.audit_queue,
+                    );
                 }
             }
 
@@ -263,6 +319,7 @@ impl EventLoop<'_> {
                 ),
                 Ok(PickerPoll::Closed) => {
                     let _ = self.fallback.cancel_picker();
+                    let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
                 }
                 Ok(PickerPoll::Incomplete) => {}
                 Err(error) => {
@@ -290,6 +347,320 @@ impl EventLoop<'_> {
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
                 log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
             }
+        }
+    }
+
+    fn poll_timeout_ms(&self) -> i32 {
+        let now = Instant::now();
+        let mut next = self.host_clipboard.pending_paste_deadline();
+        if let Some(deadline) = self.supervisor.deadline() {
+            next = Some(next.map_or(deadline, |old| old.min(deadline)));
+        }
+        if let FallbackState::Armed { expires_at, .. } = self.fallback.state() {
+            next = Some(next.map_or(*expires_at, |old| old.min(*expires_at)));
+        }
+        next.map(|deadline| {
+            deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(i32::MAX as u128) as i32
+        })
+        .unwrap_or(5000)
+    }
+}
+
+#[derive(Debug)]
+struct BridgeListener {
+    vm_name: String,
+    listener: UnixListener,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum BridgeFrame {
+    VmPasteRequest {
+        vm_name: String,
+        mime_type: String,
+        source_id: u64,
+        source_attribution: BridgeAttribution,
+    },
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BridgeAttribution {
+    ExactClient,
+}
+
+fn install_bridge_listeners(
+    root: &Path,
+    bridge_vms: &[String],
+) -> Result<Vec<BridgeListener>, String> {
+    let uid = rustix::process::getuid().as_raw();
+    let mut listeners = Vec::new();
+    for vm in bridge_vms {
+        let path = bridge_socket_path(root, uid, vm)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+        if path.exists() {
+            let meta = std::fs::symlink_metadata(&path)
+                .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
+            if !meta.file_type().is_socket() {
+                return Err(format!("refusing to replace non-socket {}", path.display()));
+            }
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
+        }
+        let listener = UnixListener::bind(&path)
+            .map_err(|e| format!("bind bridge socket {}: {e}", path.display()))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
+        listeners.push(BridgeListener {
+            vm_name: vm.clone(),
+            listener,
+        });
+    }
+    Ok(listeners)
+}
+
+fn bridge_socket_path(root: &Path, uid: u32, vm: &str) -> Result<PathBuf, String> {
+    if vm.is_empty() || vm == "." || vm == ".." || vm.contains('/') || vm.contains('\0') {
+        return Err(format!("invalid bridge VM name: {vm:?}"));
+    }
+    Ok(root
+        .join(uid.to_string())
+        .join("bridge")
+        .join(vm)
+        .join("clip.sock"))
+}
+
+struct BridgePasteRequest {
+    vm_name: String,
+    mime_type: String,
+    source_id: u64,
+    fd: OwnedFd,
+}
+
+fn drain_bridge_listener(
+    bridge: &BridgeListener,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    notifier: &mut DesktopNotifier,
+    fallback: &mut FallbackArming,
+    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &Option<PickerCommand>,
+    audit_queue: &mut AuditQueue,
+) {
+    loop {
+        match bridge.listener.accept() {
+            Ok((stream, _)) => {
+                if let Err(error) = stream.set_nonblocking(true) {
+                    log::warn!("d2b-clipd: bridge stream nonblocking failed: {error}");
+                    continue;
+                }
+                match recv_bridge_frame(&bridge.vm_name, &stream) {
+                    Ok(request) => handle_bridge_paste_request(
+                        request,
+                        host_clipboard,
+                        notifier,
+                        fallback,
+                        supervisor,
+                        picker_command,
+                        audit_queue,
+                    ),
+                    Err(error) => {
+                        log::warn!(
+                            "d2b-clipd: bridge frame failed for vm={}: {error}",
+                            bridge.vm_name
+                        );
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => {
+                log::warn!(
+                    "d2b-clipd: bridge accept failed for vm={}: {error}",
+                    bridge.vm_name
+                );
+                break;
+            }
+        }
+    }
+}
+
+fn recv_bridge_frame(expected_vm: &str, stream: &UnixStream) -> Result<BridgePasteRequest, String> {
+    let mut buf = [0_u8; 4096];
+    let mut iov = [std::io::IoSliceMut::new(&mut buf)];
+    let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+    let msg = nix::sys::socket::recvmsg::<()>(
+        stream.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_space),
+        nix::sys::socket::MsgFlags::MSG_DONTWAIT | nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
+    )
+    .map_err(|e| e.to_string())?;
+    let bytes = msg.bytes;
+    let mut received_fds = Vec::new();
+    for cmsg in msg.cmsgs().map_err(|e| e.to_string())? {
+        if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
+            received_fds.extend(fds);
+        }
+    }
+    if msg.flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC) {
+        close_raw_fds(received_fds);
+        return Err("bridge control message truncated".to_owned());
+    }
+    let frame: BridgeFrame = match serde_json::from_slice(&buf[..bytes]) {
+        Ok(frame) => frame,
+        Err(error) => {
+            close_raw_fds(received_fds);
+            return Err(error.to_string());
+        }
+    };
+    match frame {
+        BridgeFrame::VmPasteRequest {
+            vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+        } => {
+            let Some(fd) = received_fds.pop() else {
+                return Err("bridge frame did not include transfer fd".to_owned());
+            };
+            close_raw_fds(received_fds);
+            if vm_name != expected_vm {
+                close_raw_fds(vec![fd]);
+                return Err(format!(
+                    "bridge vm mismatch: expected {expected_vm}, got {vm_name}"
+                ));
+            }
+            if source_attribution != BridgeAttribution::ExactClient {
+                close_raw_fds(vec![fd]);
+                return Err("bridge frame did not carry exact attribution".to_owned());
+            }
+            let fd = duplicate_raw_fd_for_write(fd)?;
+            log::debug!(
+                "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
+                bounded_label(&vm_name),
+                source_id,
+                bounded_mime(&mime_type)
+            );
+            Ok(BridgePasteRequest {
+                vm_name,
+                mime_type,
+                source_id,
+                fd,
+            })
+        }
+    }
+}
+
+fn close_raw_fds(fds: Vec<i32>) {
+    for fd in fds {
+        let _ = nix::unistd::close(fd);
+    }
+}
+
+fn duplicate_raw_fd_for_write(fd: i32) -> Result<OwnedFd, String> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(format!("/proc/self/fd/{fd}"))
+        .map_err(|e| {
+            let _ = nix::unistd::close(fd);
+            format!("duplicate bridge fd through procfs: {e}")
+        })?;
+    let _ = nix::unistd::close(fd);
+    Ok(file.into())
+}
+
+fn handle_bridge_paste_request(
+    request: BridgePasteRequest,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    notifier: &mut DesktopNotifier,
+    fallback: &mut FallbackArming,
+    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &Option<PickerCommand>,
+    audit_queue: &mut AuditQueue,
+) {
+    let BridgePasteRequest {
+        vm_name,
+        mime_type,
+        source_id,
+        fd,
+    } = request;
+    let request_id = format!("bridge-{vm_name}-{source_id}");
+    let dest = FocusedWindowSnapshot {
+        id: None,
+        app_id: Some(format!("d2b.{vm_name}")),
+        title: Some(format!("{vm_name} VM")),
+        workspace_id: None,
+        output_label: None,
+    };
+    if let Err(reason) = audit_queue.enqueue_fail_closed(AuditEvent {
+        request_id: request_id.clone(),
+        source_realm: "host".to_owned(),
+        destination_realm: vm_name.clone(),
+        mime_type: mime_type.clone(),
+        byte_count: 0,
+        decision: AuditDecision::Allow,
+        attribution: d2b_clipd::policy::AttributionQuality::ExactClient,
+        reason: ReasonCode::Allowed,
+        timestamp_unix_ms: unix_millis(),
+    }) {
+        drop(fd);
+        log::warn!(
+            "d2b-clipd: bridge audit queue failed for vm={}: {}",
+            bounded_label(&vm_name),
+            reason.as_str()
+        );
+        return;
+    }
+    match host_clipboard.accept_paste_fd_for_destination(fd, mime_type, dest.clone()) {
+        Ok(dest) if picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle) => {
+            let _ = fallback.capture_target_before_picker(dest.clone());
+            let ambient: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
+            match supervisor.launch(
+                request_id.clone(),
+                picker_command.clone(),
+                &ambient,
+                Duration::from_secs(30),
+            ) {
+                Ok(socket) => {
+                    let candidates = picker_candidates(host_clipboard);
+                    if let Err(error) = picker_handshake(socket, &request_id, &dest, candidates) {
+                        log::warn!("d2b-clipd: bridge picker handshake failed: {error}");
+                        if let Some(paste) = host_clipboard.take_pending_paste() {
+                            paste.close_with_reason(ReasonCode::PickerCrashed);
+                        }
+                        let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
+                        let _ = fallback.cancel_picker();
+                    }
+                }
+                Err(error) => {
+                    log::warn!("d2b-clipd: bridge picker launch failed: {error}");
+                    if let Some(paste) = host_clipboard.take_pending_paste() {
+                        paste.close_with_reason(ReasonCode::PickerNotConfigured);
+                    }
+                    let _ = fallback.cancel_picker();
+                }
+            }
+        }
+        Ok(_) => {
+            if let Some(paste) = host_clipboard.take_pending_paste() {
+                paste.close_with_reason(ReasonCode::PickerNotConfigured);
+            }
+            d2b_clipd::notifications::emit_user_visible_failure(
+                notifier,
+                ReasonCode::PickerNotConfigured,
+                "host",
+                &vm_name,
+            );
+        }
+        Err(reason) => {
+            d2b_clipd::notifications::emit_user_visible_failure(notifier, reason, "host", &vm_name);
         }
     }
 }
@@ -458,8 +829,8 @@ fn fulfill_armed_fallback(
 ) -> bool {
     let FallbackState::Armed {
         entry_id,
+        target,
         expires_at,
-        ..
     } = fallback.state().clone()
     else {
         return false;
@@ -467,6 +838,16 @@ fn fulfill_armed_fallback(
     if Instant::now() >= expires_at {
         let _ = fallback.on_timeout(Instant::now());
         return false;
+    }
+    let Some(paste) = host_clipboard.pending_paste() else {
+        return false;
+    };
+    if !target.same_target(&paste.destination) {
+        if let Some(paste) = host_clipboard.take_pending_paste() {
+            paste.close_with_reason(ReasonCode::BackgroundProbe);
+        }
+        let _ = fallback.cancel_picker();
+        return true;
     }
     let result = materialize_selected_entry(host_clipboard, data_control, &entry_id)
         .and_then(|bytes| host_clipboard.write_paste_data(&bytes, notifier));
@@ -514,7 +895,8 @@ fn materialize_selected_entry(
     {
         return Err(ReasonCode::MimeRejected);
     }
-    let (read_fd, write_fd) = rustix::pipe::pipe().map_err(|_| ReasonCode::FdClosed)?;
+    let (read_fd, write_fd) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+        .map_err(|_| ReasonCode::FdClosed)?;
     offer.receive(requested_mime.to_owned(), &write_fd);
     data_control
         .flush()
@@ -599,7 +981,7 @@ fn handle_arm(
         Err(e) => {
             log::warn!("d2b-clipd: picker launch failed: {e}; arming native fallback");
             let _ = fallback.cancel_picker();
-            arm_native_fallback(fallback, dest.clone(), notifier);
+            arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
             Err(e.to_string())
         }
     }
@@ -707,7 +1089,7 @@ fn protocol_attribution(quality: d2b_clipd::policy::AttributionQuality) -> Attri
 fn open_picker_or_arm_fallback(
     fallback: &mut FallbackArming,
     dest: FocusedWindowSnapshot,
-    host_clipboard: &HostClipboard<NiriQueryProvider>,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut impl Notifier,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
@@ -729,7 +1111,7 @@ fn open_picker_or_arm_fallback(
                     log::warn!("d2b-clipd: picker handshake failed: {error}");
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
-                    arm_native_fallback(fallback, dest, notifier);
+                    arm_native_fallback(fallback, dest, host_clipboard, notifier);
                 } else {
                     log::debug!(
                         "d2b-clipd: picker opened for paste to {}",
@@ -740,19 +1122,23 @@ fn open_picker_or_arm_fallback(
             Err(e) => {
                 log::warn!("d2b-clipd: picker launch failed ({e}); falling back to native paste");
                 let _ = fallback.cancel_picker();
-                arm_native_fallback(fallback, dest, notifier);
+                arm_native_fallback(fallback, dest, host_clipboard, notifier);
             }
         }
     } else {
-        arm_native_fallback(fallback, dest, notifier);
+        arm_native_fallback(fallback, dest, host_clipboard, notifier);
     }
 }
 
 fn arm_native_fallback(
     fallback: &mut FallbackArming,
     dest: FocusedWindowSnapshot,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut impl Notifier,
 ) {
+    if let Some(paste) = host_clipboard.take_pending_paste() {
+        paste.close_with_reason(ReasonCode::PickerNotConfigured);
+    }
     if matches!(fallback.state(), FallbackState::Idle) {
         let _ = fallback.capture_target_before_picker(dest.clone());
     }
@@ -837,12 +1223,8 @@ fn drain_niri_channel(
     for _ in 0..64 {
         match rx.try_recv() {
             Ok(NiriMessage::Event(event)) => {
-                host_clipboard.apply_niri_cache_event(event.clone());
+                let snapshot = host_clipboard.apply_niri_cache_event(event.clone());
                 if let NiriEvent::FocusChanged { .. } = &event {
-                    // The updated cache is reflected the next time attribution is queried.
-                    let snapshot = host_clipboard
-                        .current_selection()
-                        .and_then(|s| s.attribution.window.clone());
                     let _ = fallback.on_focus_changed(snapshot);
                 }
             }
@@ -913,11 +1295,41 @@ enum ControlFrame {
 }
 
 fn read_control_command(stream: &UnixStream) -> Result<ControlCommand, String> {
-    let line = read_bounded_line(stream, CONTROL_MAX_FRAME_BYTES, BOUNDED_READ_TIMEOUT)?;
+    let line = read_bounded_line_no_wait(stream, CONTROL_MAX_FRAME_BYTES)?;
     match serde_json::from_slice::<ControlFrame>(&line)
         .map_err(|e| format!("invalid control JSON: {e}"))?
     {
         ControlFrame::Arm => Ok(ControlCommand::Arm),
+    }
+}
+
+fn read_bounded_line_no_wait(
+    stream: &UnixStream,
+    max_frame_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut stream = stream
+        .try_clone()
+        .map_err(|e| format!("clone stream: {e}"))?;
+    let mut out = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => return Err("peer closed before newline".to_owned()),
+            Ok(_) => {
+                out.push(byte[0]);
+                if out.len() > max_frame_bytes {
+                    return Err(format!("frame exceeds {max_frame_bytes} bytes"));
+                }
+                if byte[0] == b'\n' {
+                    return Ok(out);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err("incomplete control frame".to_owned());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
     }
 }
 
@@ -968,9 +1380,6 @@ fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<()
     )];
     match poll(&mut fds, timeout) {
         Ok(0) => Err("timed out waiting for readability".to_owned()),
-        Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
-            Err("fd closed while waiting for readability".to_owned())
-        }
         Ok(_) => Ok(()),
         Err(rustix::io::Errno::INTR) => Ok(()),
         Err(error) => Err(error.to_string()),
@@ -1132,5 +1541,33 @@ mod tests {
         let (read_fd, _write_fd) = rustix::pipe::pipe().expect("pipe");
         let err = read_fd_to_vec(read_fd, 1024, Duration::from_millis(5)).expect_err("timeout");
         assert_eq!(err, ReasonCode::SourceMaterializeTimeout);
+    }
+
+    #[test]
+    fn bridge_frame_carries_exact_vm_metadata_and_fd() {
+        let (sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        let frame = br#"{"type":"vm_paste_request","vm_name":"work","mime_type":"text/plain","source_id":7,"source_attribution":"exact_client"}
+"#;
+        let iov = [std::io::IoSlice::new(frame)];
+        let raw_fd = write_fd.as_raw_fd();
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&[raw_fd])];
+        nix::sys::socket::sendmsg::<()>(
+            sender.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            None,
+        )
+        .expect("sendmsg");
+        drop(write_fd);
+
+        let request = recv_bridge_frame("work", &receiver).expect("bridge frame");
+        assert_eq!(request.vm_name, "work");
+        assert_eq!(request.mime_type, "text/plain");
+        assert_eq!(request.source_id, 7);
+        drop(request.fd);
+        drop(read_fd);
     }
 }

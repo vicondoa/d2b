@@ -14,7 +14,7 @@ deprecations ship one minor release before removal.
 
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
-  point `console` and `audio` surfaces at ADR 0041 and the provider capability
+  point `console` and `audio` surfaces at the provider capability
   matrix.
 - The host-side `d2b-wayland-proxy` proxy is source-built from the checked-out
   workspace even when other host tools use release prebuilts, so local eval
@@ -37,7 +37,7 @@ deprecations ship one minor release before removal.
 - Added the `d2b-clipd` Rust crate with picker NDJSON DTOs, bounded framing,
   clipboard policy primitives, FD safety models, picker supervision,
   fail-closed audit / droppable metrics queues, host data-control integration,
-  and the ADR 0042 fallback arm control socket.
+  and the clipboard fallback arm control socket.
 - Renamed the host-side Wayland package/binary to `d2b-wayland-proxy`.
 - `d2b-wayland-proxy` now virtualizes the standard guest clipboard locally:
   it advertises a synthetic `wl_data_device_manager`, never binds guest
@@ -63,16 +63,16 @@ deprecations ship one minor release before removal.
   picker package/path configuration with no bundled GPL input, bridge runtime
   path policy, eval assertions, and reference docs for the authority split,
   picker protocol, and policy caps.
-- Added `d2b clipboard arm` CLI subcommand for the ADR 0042 two-step fallback
+- Added `d2b clipboard arm` CLI subcommand for the two-step fallback
   paste arming workflow; it sends an arm request to the running `d2b-clipd`
   control socket and surfaces typed failures when the daemon is unavailable.
-- Added ADR 0042 test gates: scaffold-detection test asserting `d2b-clipd`
+- Added clipboard test gates: scaffold-detection test asserting `d2b-clipd`
   uses no `thread::park()` stub; picker handshake integration test
   (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
   flake export of `d2b-clipd`, `Clipboard` subcommand existence in the CLI,
   Wayland proxy synthetic-clipboard invariant, and no-regression checks against
   reintroducing a substrate-gap marker.
-- `d2b-clipd` now implements the full ADR 0042 host-authority event loop:
+- `d2b-clipd` now implements the host-authority event loop:
   connects to the host Wayland compositor via `ext-data-control-v1`
   (preferring the stable extension, falling back to `zwlr-data-control-v1`
   when only the WLR variant is advertised); subscribes Niri IPC events for
@@ -82,7 +82,7 @@ deprecations ship one minor release before removal.
   picker process over a `socketpair` using `CommandPickerSpawner`; falls
   back to native-paste arming (no synthetic input) when no picker command is
   configured; logs notification errors without exposing raw clipboard content.
-- Staged the ADR 0041 console/audio contract surface: public
+- Staged the console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,
   qemu-media, and ACA sandboxes, generated schemas, the provider

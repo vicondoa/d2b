@@ -226,20 +226,36 @@ impl LocalTransferFd {
 }
 
 pub trait BridgeHandoff {
-    fn handoff_transfer_fd(&mut self, fd: &OwnedFd) -> HandoffStatus;
+    fn handoff_transfer_fd(
+        &mut self,
+        fd: &OwnedFd,
+        metadata: &BridgeTransferMetadata,
+    ) -> HandoffStatus;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeTransferMetadata {
+    pub vm_name: String,
+    pub mime_type: String,
+    pub source_id: u64,
 }
 
 impl BridgeHandoff for UnixStream {
-    fn handoff_transfer_fd(&mut self, local_fd: &OwnedFd) -> HandoffStatus {
+    fn handoff_transfer_fd(
+        &mut self,
+        local_fd: &OwnedFd,
+        metadata: &BridgeTransferMetadata,
+    ) -> HandoffStatus {
         let raw_fd = local_fd.as_raw_fd();
-        let iov = [IoSlice::new(b"F")];
+        let frame = bridge_frame(metadata);
+        let iov = [IoSlice::new(frame.as_bytes())];
         let fds = [raw_fd];
         let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
         match nix::sys::socket::sendmsg::<()>(
             self.as_raw_fd(),
             &iov,
             &cmsg,
-            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
             None,
         ) {
             Ok(_) => HandoffStatus::Delivered,
@@ -249,6 +265,30 @@ impl BridgeHandoff for UnixStream {
             }
         }
     }
+}
+
+fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
+    format!(
+        "{{\"type\":\"vm_paste_request\",\"vm_name\":\"{}\",\"mime_type\":\"{}\",\"source_id\":{},\"source_attribution\":\"exact_client\"}}\n",
+        json_escape(&metadata.vm_name),
+        json_escape(&metadata.mime_type),
+        metadata.source_id
+    )
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            ch if ch.is_control() => "?".chars().collect::<Vec<_>>(),
+            ch => vec![ch],
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -381,12 +421,20 @@ mod tests {
         let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
         let local: OwnedFd = local.into();
+        let metadata = BridgeTransferMetadata {
+            vm_name: "work".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            source_id: 7,
+        };
 
-        assert_eq!(bridge.handoff_transfer_fd(&local), HandoffStatus::Delivered);
+        assert_eq!(
+            bridge.handoff_transfer_fd(&local, &metadata),
+            HandoffStatus::Delivered
+        );
         drop(local);
 
-        let mut byte = [0_u8; 1];
-        let mut iov = [IoSliceMut::new(&mut byte)];
+        let mut frame = [0_u8; 256];
+        let mut iov = [IoSliceMut::new(&mut frame)];
         let mut cmsg_space = nix::cmsg_space!([i32; 1]);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
@@ -395,7 +443,7 @@ mod tests {
             nix::sys::socket::MsgFlags::empty(),
         )
         .expect("recvmsg");
-        assert_eq!(msg.bytes, 1);
+        let bytes = msg.bytes;
         let mut saw_fd = false;
         for cmsg in msg.cmsgs().expect("cmsgs") {
             if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
@@ -406,6 +454,10 @@ mod tests {
             }
         }
         assert!(saw_fd, "bridge handoff must carry one SCM_RIGHTS fd");
+        let frame = std::str::from_utf8(&frame[..bytes]).expect("utf8 frame");
+        assert!(frame.contains("\"type\":\"vm_paste_request\""));
+        assert!(frame.contains("\"source_attribution\":\"exact_client\""));
+        assert!(frame.contains("\"vm_name\":\"work\""));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
     }

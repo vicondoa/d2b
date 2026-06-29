@@ -563,6 +563,8 @@ let
         writablePaths = [
           (mkWritablePath "/run/d2b-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
+          (mkWritablePath cfg.site.clipboard.runtime.bridgeRoot
+            "Connect to the per-user d2b-clipd clipboard bridge socket.")
         ];
         # The proxy connects directly to the real host compositor socket path.
         # Host activation grants this principal access to exactly that socket;
@@ -710,6 +712,8 @@ let
       writablePaths = [
         (mkWritablePath "/run/d2b-wlproxy/${name}"
           "Create the per-VM qemu-media Wayland filter listen socket.")
+        (mkWritablePath cfg.site.clipboard.runtime.bridgeRoot
+          "Connect to the per-user d2b-clipd clipboard bridge socket.")
       ];
       bindMounts = [ ];
       deviceBinds = [ ];

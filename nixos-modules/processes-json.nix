@@ -644,6 +644,8 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
+        "--clipd-bridge-root" config.d2b.site.clipboard.runtime.bridgeRoot
+        "--clipd-bridge-user-uid" waylandUid
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 

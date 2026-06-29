@@ -48,7 +48,10 @@ use wl_proxy::{
 };
 
 use crate::{
-    bridge::{BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine},
+    bridge::{
+        BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
+        BridgeTransferMetadata,
+    },
     clipboard::{ClipboardMimePolicy, ClipboardRoute, MimeDecision},
     diag::{DiagRateLimiter, DropReason},
     dmabuf::DmabufHandler,
@@ -240,8 +243,14 @@ impl VirtualClipboardState {
         match self.mime_policy.decide(self.route(), mime_type) {
             MimeDecision::PreserveSameVmRichMime => source.send_send(mime_type, fd),
             MimeDecision::MaterializeViaBridge => {
+                let metadata = BridgeTransferMetadata {
+                    vm_name: self.vm_name.clone(),
+                    mime_type: mime_type.to_owned(),
+                    source_id: source.unique_id(),
+                };
                 if let Some(bridge) = self.ensure_bridge_connected()
-                    && bridge.handoff_transfer_fd(fd) == crate::bridge::HandoffStatus::Failed
+                    && bridge.handoff_transfer_fd(fd, &metadata)
+                        == crate::bridge::HandoffStatus::Failed
                 {
                     self.mark_bridge_disconnected();
                 }
@@ -282,6 +291,17 @@ impl VirtualClipboardState {
         }
         match UnixStream::connect(&path) {
             Ok(stream) => {
+                if let Err(error) = stream.set_nonblocking(true) {
+                    log::debug!(
+                        "[d2b-wlproxy] vm={} clipboard bridge nonblocking setup failed at {}: {}",
+                        self.vm_name,
+                        path.display(),
+                        error
+                    );
+                    self.bridge_reconnect.connect_failed();
+                    self.schedule_bridge_retry();
+                    return None;
+                }
                 self.bridge_reconnect.connect_succeeded();
                 self.next_bridge_retry = None;
                 self.bridge = Some(stream);

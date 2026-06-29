@@ -88,8 +88,15 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 
     /// Update Niri state cache from an event stream event; does not produce
     /// attribution – that happens on explicit `on_host_selection_changed`.
-    pub fn apply_niri_cache_event(&mut self, event: crate::niri::NiriEvent) {
-        self.attributor.cache_mut().apply_event(event);
+    pub fn apply_niri_cache_event(
+        &mut self,
+        event: crate::niri::NiriEvent,
+    ) -> Option<FocusedWindowSnapshot> {
+        self.attributor.cache_mut().apply_event(event)
+    }
+
+    pub fn focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
+        self.attributor.cache_mut().focused_window()
     }
 
     /// Called when the data-control device reports a new host selection.
@@ -148,6 +155,25 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             .cache_mut()
             .focused_window()
             .unwrap_or_default();
+        self.pending_paste = Some(PasteWriteFd::new(
+            write_fd,
+            mime_type,
+            dest.clone(),
+            self.paste_fd_timeout,
+        ));
+        Ok(dest)
+    }
+
+    pub fn accept_paste_fd_for_destination(
+        &mut self,
+        write_fd: OwnedFd,
+        mime_type: String,
+        dest: FocusedWindowSnapshot,
+    ) -> Result<FocusedWindowSnapshot, ReasonCode> {
+        if self.pending_paste.is_some() {
+            log::debug!("d2b-clipd: paste fd rejected (already holding one)");
+            return Err(ReasonCode::FdCapExceeded);
+        }
         self.pending_paste = Some(PasteWriteFd::new(
             write_fd,
             mime_type,
@@ -220,6 +246,10 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     /// Peek at the current paste fd.
     pub fn pending_paste(&self) -> Option<&PasteWriteFd> {
         self.pending_paste.as_ref()
+    }
+
+    pub fn pending_paste_deadline(&self) -> Option<Instant> {
+        self.pending_paste.as_ref().map(|paste| paste.deadline)
     }
 
     /// Attribution quality of the current selection.

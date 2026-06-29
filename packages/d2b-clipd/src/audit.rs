@@ -214,6 +214,14 @@ mod tests {
     }
 
     #[test]
+    fn audit_mime_preserves_rejected_parameters() {
+        let mut event = event("vm-a", "r1");
+        event.mime_type = "image/png; exploit=1".to_owned();
+        let json = serde_json::to_string(&event).expect("json");
+        assert!(json.contains("image/png; exploit=1"));
+    }
+
+    #[test]
     fn metrics_queue_take_dropped_count_resets_counter() {
         let mut queue = MetricsQueue::new(0);
         queue.enqueue_droppable(MetricEvent {

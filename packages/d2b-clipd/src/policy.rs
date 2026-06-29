@@ -106,6 +106,8 @@ mod tests {
         assert!(is_mime_allowed("text/plain"));
         assert!(is_mime_allowed("Text/Plain ; Charset=UTF-8"));
         assert!(is_mime_allowed("image/png"));
+        assert!(!is_mime_allowed("image/png; exploit=1"));
+        assert!(!is_mime_allowed("text/plain; exploit=1"));
         assert!(!is_mime_allowed("application/octet-stream"));
         assert!(!is_mime_allowed("text/uri-list"));
     }

@@ -197,4 +197,4 @@ longer apply.
 - **Clipboard and DnD** are policy-owned by d2b. The standard clipboard
   (`wl_data_device_manager`) is virtualized by `d2b-wayland-proxy`; primary
   selection, privileged clipboard-control globals, and DnD are explicitly
-  denied in the ADR 0042 implementation.
+  denied by the proxy policy.

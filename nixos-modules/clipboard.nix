@@ -28,6 +28,9 @@ let
     || (cfg.policy.crossRealm.enable && (cfg.modes.hostCrossRealmPicker || cfg.modes.vmCrossRealmPicker));
 
   niriProgramEnabled = config.programs.niri.enable or false;
+  bridgeVms = lib.attrNames (lib.filterAttrs (_name: vm:
+    vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable
+  ) config.d2b.vms);
 
   configJson = builtins.toJSON {
     version = 1;
@@ -48,6 +51,7 @@ let
     runtime = {
       bridgeRoot = cfg.runtime.bridgeRoot;
       bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<vm>/${cfg.runtime.bridgeSocketName}";
+      inherit bridgeVms;
       parentProvisioning = "d2bd-broker-lifecycle";
       staticTmpfilesOnly = false;
     };
@@ -449,6 +453,17 @@ in
           niri paste-intent hook, an upstream-equivalent IPC event, or the
           explicit fallback workflow. Focused-window metadata alone is not a
           paste-intent token.
+        '';
+      }
+      {
+        assertion = !(cfg.policy.crossRealm.enable && cfg.policy.crossRealm.requirePasteIntent)
+          || cfg.niri.pasteIntentHook != "disabled"
+          || cfg.niri.fallback.enable;
+        message = ''
+          d2b.site.clipboard.policy.crossRealm.enable with requirePasteIntent
+          needs a trusted niri paste-intent hook, an upstream-equivalent IPC
+          event, or the explicit fallback workflow. Otherwise cross-realm
+          transfers would be denied without an operator-visible path.
         '';
       }
     ];

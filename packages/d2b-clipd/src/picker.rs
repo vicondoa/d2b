@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
+
+use command_fds::{CommandFdExt, FdMapping};
 
 use crate::framing::{FramingError, decode_frame};
 use crate::policy::ReasonCode;
@@ -43,6 +45,7 @@ pub trait PickerProcess {
     fn id(&self) -> u32;
     fn terminate(&mut self);
     fn kill(&mut self);
+    fn reap(&mut self);
 }
 
 impl PickerProcess for Child {
@@ -57,6 +60,10 @@ impl PickerProcess for Child {
     fn kill(&mut self) {
         let _ = Child::kill(self);
     }
+
+    fn reap(&mut self) {
+        let _ = self.wait();
+    }
 }
 
 #[derive(Debug, Default)]
@@ -66,23 +73,20 @@ impl PickerSpawner for CommandPickerSpawner {
     type Process = Child;
 
     fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
-        clear_cloexec(&launch.child_ipc_fd)?;
         let mut command = Command::new(&launch.command.program);
         command.args(&launch.argv);
         command.env_clear();
         command.envs(&launch.env);
-        let _keep_child_fd_open_until_spawn = launch.child_ipc_fd;
+        command
+            .fd_mappings(vec![FdMapping {
+                parent_fd: launch.child_ipc_fd,
+                child_fd: launch.ipc_fd_number,
+            }])
+            .map_err(|err| PickerError::FdFlags(err.to_string()))?;
         command
             .spawn()
             .map_err(|err| PickerError::Spawn(err.to_string()))
     }
-}
-
-fn clear_cloexec(fd: &OwnedFd) -> Result<(), PickerError> {
-    let mut flags =
-        rustix::io::fcntl_getfd(fd).map_err(|err| PickerError::FdFlags(err.to_string()))?;
-    flags.remove(rustix::io::FdFlags::CLOEXEC);
-    rustix::io::fcntl_setfd(fd, flags).map_err(|err| PickerError::FdFlags(err.to_string()))
 }
 
 pub trait PickerSpawner {
@@ -160,6 +164,10 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         }
     }
 
+    pub fn deadline(&self) -> Option<Instant> {
+        self.active.as_ref().map(|active| active.deadline)
+    }
+
     pub fn launch(
         &mut self,
         request_id: String,
@@ -179,8 +187,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             .set_nonblocking(true)
             .map_err(|err| PickerError::Socketpair(err.to_string()))?;
         let child_ipc_fd = OwnedFd::from(child_socket);
-        clear_cloexec(&child_ipc_fd)?;
-        let child_fd_number = child_ipc_fd.as_raw_fd();
+        let child_fd_number = PICKER_IPC_FD;
         let argv = picker_argv(&command, child_fd_number);
         let env = sanitize_picker_env(ambient_env);
         let deadline = Instant::now() + timeout;
@@ -243,6 +250,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
     pub fn cancel_active(&mut self, reason: ReasonCode) -> Option<ReasonCode> {
         let mut active = self.active.take()?;
         active.process.terminate();
+        active.process.reap();
         Some(reason)
     }
 
@@ -252,6 +260,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             let mut active = self.active.take().expect("active");
             active.process.terminate();
             active.process.kill();
+            active.process.reap();
             Some(ReasonCode::PickerTimeout)
         } else {
             None
@@ -310,6 +319,10 @@ mod tests {
         fn kill(&mut self) {
             self.events.borrow_mut().push("kill");
         }
+
+        fn reap(&mut self) {
+            self.events.borrow_mut().push("reap");
+        }
     }
 
     #[derive(Debug, Default)]
@@ -324,8 +337,8 @@ mod tests {
         fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
             let flags = rustix::io::fcntl_getfd(&launch.child_ipc_fd).expect("child ipc fd flags");
             assert!(
-                !flags.contains(rustix::io::FdFlags::CLOEXEC),
-                "picker IPC fd must survive execve"
+                flags.contains(rustix::io::FdFlags::CLOEXEC),
+                "parent must keep picker IPC fd CLOEXEC until child pre_exec"
             );
             self.last_launch = Some(launch);
             Ok(FakeProcess {
@@ -436,7 +449,7 @@ mod tests {
             supervisor.reap_expired(Instant::now()),
             Some(ReasonCode::PickerTimeout)
         );
-        assert_eq!(&*events.borrow(), &["terminate", "kill"]);
+        assert_eq!(&*events.borrow(), &["terminate", "kill", "reap"]);
         assert_eq!(supervisor.state(), PickerState::Idle);
     }
 
@@ -461,7 +474,7 @@ mod tests {
             supervisor.cancel_active(ReasonCode::PolicyDenied),
             Some(ReasonCode::PolicyDenied)
         );
-        assert_eq!(&*events.borrow(), &["terminate"]);
+        assert_eq!(&*events.borrow(), &["terminate", "reap"]);
         assert_eq!(supervisor.state(), PickerState::Idle);
     }
 

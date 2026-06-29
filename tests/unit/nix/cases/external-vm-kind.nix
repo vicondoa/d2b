@@ -631,6 +631,10 @@ in
           "d2b.media."
           "--title-prefix"
           "[media] "
+          "--clipd-bridge-root"
+          "/run/d2b/clipd"
+          "--clipd-bridge-user-uid"
+          "1000"
         ];
       };
     };
@@ -723,6 +727,7 @@ in
         seccompPolicyRef = "w1-wayland-proxy";
         writablePaths = [
           "/run/d2b-wlproxy/media"
+          "/run/d2b/clipd"
         ];
         deviceBinds = [ ];
         bindMounts = [ ];
