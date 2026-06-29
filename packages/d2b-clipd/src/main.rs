@@ -1653,7 +1653,7 @@ fn handle_arm(
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
                     arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
-                    Err(error)
+                    Ok("fallback armed".to_owned())
                 }
             }
         }

@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 
 use wayland_client::protocol::{wl_registry, wl_seat};
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
+use wayland_client::{
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, backend::WaylandError, delegate_noop,
+};
 use wayland_protocols::ext::data_control::v1::client::{
     ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_offer_v1,
     ext_data_control_source_v1,
@@ -629,10 +631,13 @@ impl DataControlClient {
     /// Call after `poll` returns POLLIN on [`Self::as_fd`].
     pub fn prepare_and_read(&self) -> Result<(), DataControlError> {
         match self.conn.prepare_read() {
-            Some(guard) => guard
-                .read()
-                .map(|_| ())
-                .map_err(|e| DataControlError::Protocol(e.to_string())),
+            Some(guard) => match guard.read() {
+                Ok(_) => Ok(()),
+                Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    Ok(())
+                }
+                Err(error) => Err(DataControlError::Protocol(error.to_string())),
+            },
             None => Ok(()), // no events buffered / another path already prepared
         }
     }

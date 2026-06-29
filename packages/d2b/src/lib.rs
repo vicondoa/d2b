@@ -2483,32 +2483,50 @@ fn dispatch(
 fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
+    use std::time::Duration;
 
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        CliFailure::new(
-            2,
+        clipboard_arm_failure(
+            args,
             "XDG_RUNTIME_DIR is not set; cannot locate d2b-clipd control socket",
         )
     })?;
     let socket_path = PathBuf::from(runtime).join("d2b-clipd/clipd.sock");
     let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
-        CliFailure::new(
-            2,
+        clipboard_arm_failure(
+            args,
             format!(
                 "failed to connect to d2b-clipd control socket {}: {error}",
                 socket_path.display()
             ),
         )
     })?;
-    stream
-        .write_all(b"{\"type\":\"arm\"}\n")
-        .map_err(|error| CliFailure::new(2, format!("failed to request clipboard arm: {error}")))?;
+    let timeout = Some(Duration::from_secs(5));
+    stream.set_read_timeout(timeout).map_err(|error| {
+        clipboard_arm_failure(
+            args,
+            format!("failed to set clipboard arm read timeout: {error}"),
+        )
+    })?;
+    stream.set_write_timeout(timeout).map_err(|error| {
+        clipboard_arm_failure(
+            args,
+            format!("failed to set clipboard arm write timeout: {error}"),
+        )
+    })?;
+    stream.write_all(b"{\"type\":\"arm\"}\n").map_err(|error| {
+        clipboard_arm_failure(args, format!("failed to request clipboard arm: {error}"))
+    })?;
     let mut line = Vec::new();
     stream.take(4096).read_to_end(&mut line).map_err(|error| {
-        CliFailure::new(2, format!("failed to read clipboard arm response: {error}"))
+        clipboard_arm_failure(
+            args,
+            format!("failed to read clipboard arm response: {error}"),
+        )
     })?;
-    let value: serde_json::Value = serde_json::from_slice(&line)
-        .map_err(|error| CliFailure::new(2, format!("invalid d2b-clipd response: {error}")))?;
+    let value: serde_json::Value = serde_json::from_slice(&line).map_err(|error| {
+        clipboard_arm_failure(args, format!("invalid d2b-clipd response: {error}"))
+    })?;
     if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
         if args.json {
             print_stdout(&format!("{value}\n"));
@@ -2525,7 +2543,27 @@ fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32,
             .get("error")
             .and_then(|error| error.as_str())
             .unwrap_or("d2b-clipd rejected clipboard arm request");
-        Err(CliFailure::new(2, error))
+        Err(clipboard_arm_failure(args, error))
+    }
+}
+
+fn clipboard_arm_failure(args: &ClipboardArmArgs, message: impl Into<String>) -> CliFailure {
+    let message = message.into();
+    if args.json {
+        print_stdout(&format!(
+            "{}\n",
+            serde_json::json!({
+                "ok": false,
+                "error": message,
+            })
+        ));
+        CliFailure {
+            exit_code: 2,
+            rendered_stderr: Some(String::new()),
+            message,
+        }
+    } else {
+        CliFailure::new(2, message)
     }
 }
 
