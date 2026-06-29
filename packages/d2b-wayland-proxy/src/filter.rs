@@ -45,7 +45,7 @@ use wl_proxy::{
             xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
         },
     },
-    state::{Destructor, State, StateHandler},
+    state::{State, StateHandler},
 };
 
 use crate::{
@@ -1113,22 +1113,11 @@ fn bind_matches_advertised_cap(
 /// Minimal `ClientHandler` that logs disconnections for debugging.
 pub struct FilterClientHandler {
     vm: String,
-    _destructor: Option<Destructor>,
 }
 
 impl FilterClientHandler {
     pub fn new(vm: String) -> Self {
-        Self {
-            vm,
-            _destructor: None,
-        }
-    }
-
-    pub fn with_destructor(vm: String, destructor: Destructor) -> Self {
-        Self {
-            vm,
-            _destructor: Some(destructor),
-        }
+        Self { vm }
     }
 }
 

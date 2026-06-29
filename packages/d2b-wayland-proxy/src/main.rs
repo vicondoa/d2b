@@ -347,10 +347,7 @@ fn accept_loop(
                                 continue;
                             }
                         };
-                        client.set_handler(FilterClientHandler::with_destructor(
-                            vm.clone(),
-                            state.create_destructor(),
-                        ));
+                        client.set_handler(FilterClientHandler::new(vm.clone()));
                         install_client_handlers(
                             &client,
                             policy.clone(),
@@ -550,6 +547,21 @@ mod tests {
         assert_eq!(
             error_source_chain(&Outer(Inner)),
             "could not dispatch server events: receiver object 42 does not exist"
+        );
+    }
+
+    #[test]
+    fn clients_do_not_own_state_destructors() {
+        let main_src = include_str!("main.rs");
+        assert!(
+            !main_src.contains(concat!("state.", "create_destructor("))
+                && !main_src.contains(concat!("FilterClientHandler::", "with_destructor")),
+            "per-client destructors terminate the long-lived proxy when a client disconnects"
+        );
+        let filter_src = include_str!("filter.rs");
+        assert!(
+            !filter_src.contains("Destructor"),
+            "FilterClientHandler must not own state destructors"
         );
     }
 }
