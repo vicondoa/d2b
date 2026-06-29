@@ -50,6 +50,7 @@
     # semantics. There is no public file with example VMs (yet —
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
+    ./clipboard.nix
     ./store.nix
     ./manifest.nix
     ./bundle.nix

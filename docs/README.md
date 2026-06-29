@@ -71,6 +71,13 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   lifecycle capability boundaries.
+- [`reference/clipboard-architecture.md`](./reference/clipboard-architecture.md) —
+  trusted clipboard authority, picker split, Niri integration, and bridge
+  runtime path contract.
+- [`reference/clipboard-picker-protocol.md`](./reference/clipboard-picker-protocol.md) —
+  versioned socketpair JSON protocol between `d2b-clipd` and the picker.
+- [`reference/clipboard-policy.md`](./reference/clipboard-policy.md) —
+  MIME allowlist, caps, retention, audit, metrics, and failure posture.
 - [`reference/realm-policy.md`](./reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
@@ -146,6 +153,8 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   the `nixpkgs` follow policy and eval-only test pattern.
 - [`how-to/configure-work-gateway.md`](./how-to/configure-work-gateway.md) —
   declare a work/provider realm gateway and verify default-deny isolation.
+- [`how-to/configure-clipboard-picker.md`](./how-to/configure-clipboard-picker.md) —
+  install the separate picker package and wire it into `d2b.site.clipboard`.
 - [`how-to/realm-gateway.md`](./how-to/realm-gateway.md) —
   configure, enter, and recover realm gateway guests.
 - [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) —

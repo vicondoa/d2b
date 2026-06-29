@@ -34,6 +34,20 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the initial `d2b-clipd` Rust crate foundation with picker NDJSON DTOs,
+  bounded framing, clipboard policy primitives, FD safety models, picker
+  supervision scaffolding, and fail-closed audit / droppable metrics queues.
+- `d2b-wayland-filter` now includes clipboard virtualization groundwork:
+  bridge socket configuration scaffolding, exact guest-client attribution
+  bookkeeping, v1 clipboard/DND policy helpers, and FD-handoff lifecycle tests.
+- `d2b-clipd` now has a host/Niri integration foundation with tolerant Niri JSON
+  IPC models, bounded Unix-socket request/response helpers, focused-window
+  best-effort attribution cache behavior, and fallback arming state-machine tests.
+- Added clipboard architecture Nix/docs/schema scaffolding: a default-off
+  `d2b.site.clipboard` module, user-service wiring for externally packaged
+  `d2b-clipd`, explicit picker package/path configuration with no bundled GPL
+  input, bridge runtime path policy, eval assertions, and reference docs for the
+  authority split, picker protocol, and policy caps.
 - Staged the ADR 0041 console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,

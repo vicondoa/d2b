@@ -1,0 +1,16 @@
+[package]
+name = "d2b-clipd"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "Host-session clipboard authority daemon foundation for d2b"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustix = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2"
