@@ -167,6 +167,8 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         bridge_listeners,
         bridge_streams: Vec::new(),
         accept_diag: AcceptDiagnostics::default(),
+        control_accept_backoff_until: None,
+        bridge_accept_backoff_until: None,
         data_control: &mut data_control,
         niri_rx,
         host_clipboard: &mut host_clipboard,
@@ -237,6 +239,8 @@ struct EventLoop<'a> {
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
     accept_diag: AcceptDiagnostics,
+    control_accept_backoff_until: Option<Instant>,
+    bridge_accept_backoff_until: Option<Instant>,
     data_control: &'a mut DataControlClient,
     niri_rx: mpsc::Receiver<NiriMessage>,
     host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
@@ -253,6 +257,19 @@ impl EventLoop<'_> {
         loop {
             // Flush pending Wayland requests before polling.
             self.data_control.flush().ok();
+            let now = Instant::now();
+            let control_accept_in_backoff = self
+                .control_accept_backoff_until
+                .is_some_and(|until| until > now);
+            if !control_accept_in_backoff {
+                self.control_accept_backoff_until = None;
+            }
+            let bridge_accept_in_backoff = self
+                .bridge_accept_backoff_until
+                .is_some_and(|until| until > now);
+            if !bridge_accept_in_backoff {
+                self.bridge_accept_backoff_until = None;
+            }
 
             let (
                 wayland_ready,
@@ -269,7 +286,11 @@ impl EventLoop<'_> {
                     ),
                     PollFd::new(
                         self.listener,
-                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                        if control_accept_in_backoff {
+                            PollFlags::empty()
+                        } else {
+                            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+                        },
                     ),
                 ];
                 if let Some(socket) = self.supervisor.active_socket() {
@@ -287,7 +308,11 @@ impl EventLoop<'_> {
                 for bridge in &self.bridge_listeners {
                     poll_fds.push(PollFd::new(
                         &bridge.listener,
-                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+                        if bridge_accept_in_backoff {
+                            PollFlags::empty()
+                        } else {
+                            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+                        },
                     ));
                 }
                 for bridge in &self.bridge_streams {
@@ -335,10 +360,14 @@ impl EventLoop<'_> {
                     poll_fds[0]
                         .revents()
                         .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
-                    poll_fds[1].revents().contains(PollFlags::IN),
+                    !control_accept_in_backoff && poll_fds[1].revents().contains(PollFlags::IN),
                     picker_ready,
                     control_stream_ready,
-                    bridge_listener_ready,
+                    if bridge_accept_in_backoff {
+                        Vec::new()
+                    } else {
+                        bridge_listener_ready
+                    },
                     bridge_stream_ready,
                 )
             };
@@ -371,8 +400,14 @@ impl EventLoop<'_> {
                     match self.listener.accept() {
                         Ok((stream, _)) => {
                             if let Err(error) = stream.set_nonblocking(true) {
-                                log::warn!(
-                                    "d2b-clipd: failed to set control stream nonblocking: {error}"
+                                self.accept_diag.warn(
+                                    "control",
+                                    "stream-nonblocking-failed",
+                                    || {
+                                        format!(
+                                            "d2b-clipd: failed to set control stream nonblocking: {error}"
+                                        )
+                                    },
                                 );
                                 continue;
                             }
@@ -383,13 +418,14 @@ impl EventLoop<'_> {
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(error) if is_recoverable_accept_error(&error) => {
+                            if is_resource_exhaustion_accept_error(&error) {
+                                self.control_accept_backoff_until =
+                                    Some(Instant::now() + ACCEPT_RESOURCE_BACKOFF);
+                            }
                             self.accept_diag
                                 .warn("control", "recoverable-accept-error", || {
                                     format!("d2b-clipd: recoverable control accept error: {error}")
                                 });
-                            if is_resource_exhaustion_accept_error(&error) {
-                                std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
-                            }
                             break;
                         }
                         Err(error) => return Err(format!("control accept failed: {error}")),
@@ -416,7 +452,15 @@ impl EventLoop<'_> {
 
             for index in bridge_listener_ready {
                 if let Some(bridge) = self.bridge_listeners.get(index) {
-                    accept_bridge_streams(bridge, &mut self.bridge_streams, &mut self.accept_diag);
+                    let backoff = accept_bridge_streams(
+                        bridge,
+                        &mut self.bridge_streams,
+                        &mut self.accept_diag,
+                    );
+                    if backoff {
+                        self.bridge_accept_backoff_until =
+                            Some(Instant::now() + ACCEPT_RESOURCE_BACKOFF);
+                    }
                 }
             }
 
@@ -430,6 +474,7 @@ impl EventLoop<'_> {
                         fallback: self.fallback,
                         supervisor: self.supervisor,
                         picker_command: &self.picker_command,
+                        accept_diag: &mut self.accept_diag,
                         audit_queue: self.audit_queue,
                         metrics_queue: self.metrics_queue,
                     };
@@ -497,6 +542,12 @@ impl EventLoop<'_> {
             next = Some(next.map_or(deadline, |old| old.min(deadline)));
         }
         if let Some(deadline) = self.supervisor.maintenance_deadline() {
+            next = Some(next.map_or(deadline, |old| old.min(deadline)));
+        }
+        if let Some(deadline) = self.control_accept_backoff_until {
+            next = Some(next.map_or(deadline, |old| old.min(deadline)));
+        }
+        if let Some(deadline) = self.bridge_accept_backoff_until {
             next = Some(next.map_or(deadline, |old| old.min(deadline)));
         }
         if let FallbackState::Armed { expires_at, .. } = self.fallback.state() {
@@ -640,7 +691,7 @@ fn accept_bridge_streams(
     bridge: &BridgeListener,
     streams: &mut Vec<BridgeStream>,
     diag: &mut AcceptDiagnostics,
-) {
+) -> bool {
     let rlimit_nofile = current_nofile_soft_limit();
     if validate_fd_cap(FdCapModel {
         requested_cap: streams.len().saturating_add(1) as u64,
@@ -656,21 +707,27 @@ fn accept_bridge_streams(
                 bridge.vm_name
             )
         });
-        std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
-        return;
+        return true;
     }
     loop {
         match bridge.listener.accept() {
             Ok((stream, _)) => {
                 if let Err(error) = stream.set_nonblocking(true) {
-                    log::warn!("d2b-clipd: bridge stream nonblocking failed: {error}");
+                    diag.warn("bridge", "stream-nonblocking-failed", || {
+                        format!(
+                            "d2b-clipd: bridge stream nonblocking failed for vm={}: {error}",
+                            bridge.vm_name
+                        )
+                    });
                     continue;
                 }
                 if let Err(error) = validate_bridge_peer(&stream, bridge.expected_uid) {
-                    log::warn!(
-                        "d2b-clipd: bridge peer rejected for vm={}: {error}",
-                        bridge.vm_name
-                    );
+                    diag.warn("bridge", "peer-rejected", || {
+                        format!(
+                            "d2b-clipd: bridge peer rejected for vm={}: {error}",
+                            bridge.vm_name
+                        )
+                    });
                     continue;
                 }
                 streams.push(BridgeStream {
@@ -687,7 +744,7 @@ fn accept_bridge_streams(
                 })
                 .is_err()
                 {
-                    break;
+                    return true;
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -698,20 +755,20 @@ fn accept_bridge_streams(
                         bridge.vm_name
                     )
                 });
-                if is_resource_exhaustion_accept_error(&error) {
-                    std::thread::sleep(ACCEPT_RESOURCE_BACKOFF);
-                }
-                break;
+                return is_resource_exhaustion_accept_error(&error);
             }
             Err(error) => {
-                log::warn!(
-                    "d2b-clipd: bridge accept failed for vm={}: {error}",
-                    bridge.vm_name
-                );
+                diag.warn("bridge", "accept-failed", || {
+                    format!(
+                        "d2b-clipd: bridge accept failed for vm={}: {error}",
+                        bridge.vm_name
+                    )
+                });
                 break;
             }
         }
     }
+    false
 }
 
 fn is_recoverable_accept_error(error: &std::io::Error) -> bool {
@@ -727,7 +784,7 @@ fn is_recoverable_accept_error(error: &std::io::Error) -> bool {
 fn is_resource_exhaustion_accept_error(error: &std::io::Error) -> bool {
     matches!(
         error.raw_os_error(),
-        Some(nix::libc::EMFILE | nix::libc::ENFILE)
+        Some(nix::libc::EMFILE | nix::libc::ENFILE | nix::libc::ENOBUFS | nix::libc::ENOMEM)
     )
 }
 
@@ -749,6 +806,7 @@ struct BridgeHandlerContext<'a> {
     fallback: &'a mut FallbackArming,
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &'a Option<PickerCommand>,
+    accept_diag: &'a mut AcceptDiagnostics,
     audit_queue: &'a mut AuditQueue,
     metrics_queue: &'a mut MetricsQueue,
 }
@@ -765,11 +823,13 @@ fn handle_bridge_stream(
                     Ok(request) => handle_bridge_paste_request(request, context),
                     Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
                     Err(error) => {
-                        log::warn!(
-                            "d2b-clipd: bridge frame failed for vm={}: {}",
-                            bridge.vm_name,
-                            error.message()
-                        );
+                        context.accept_diag.warn("bridge", "frame-failed", || {
+                            format!(
+                                "d2b-clipd: bridge frame failed for vm={}: {}",
+                                bridge.vm_name,
+                                error.message()
+                            )
+                        });
                         return BridgeStreamStatus::Done;
                     }
                 }
@@ -777,11 +837,13 @@ fn handle_bridge_stream(
         }
         Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
         Err(error) => {
-            log::warn!(
-                "d2b-clipd: bridge frame failed for vm={}: {}",
-                bridge.vm_name,
-                error.message()
-            );
+            context.accept_diag.warn("bridge", "frame-failed", || {
+                format!(
+                    "d2b-clipd: bridge frame failed for vm={}: {}",
+                    bridge.vm_name,
+                    error.message()
+                )
+            });
         }
     }
     BridgeStreamStatus::Done
@@ -2189,12 +2251,27 @@ mod tests {
             nix::libc::EINTR,
             nix::libc::EMFILE,
             nix::libc::ENFILE,
+            nix::libc::ENOBUFS,
+            nix::libc::ENOMEM,
         ] {
             let err = std::io::Error::from_raw_os_error(errno);
             assert!(is_recoverable_accept_error(&err));
         }
         let fatal = std::io::Error::from_raw_os_error(nix::libc::EACCES);
         assert!(!is_recoverable_accept_error(&fatal));
+    }
+
+    #[test]
+    fn accept_diagnostics_rate_limit_and_flush_suppressed() {
+        let mut diag = AcceptDiagnostics::default();
+        diag.warn("control", "recoverable", || "first".to_owned());
+        diag.warn("control", "recoverable", || "second".to_owned());
+        let key = "control:recoverable".to_owned();
+        assert_eq!(diag.suppressed.get(&key), Some(&1));
+        diag.last_warn
+            .insert(key.clone(), Instant::now() - ACCEPT_WARN_INTERVAL);
+        diag.warn("control", "recoverable", || "third".to_owned());
+        assert_eq!(diag.suppressed.get(&key), None);
     }
 
     #[test]

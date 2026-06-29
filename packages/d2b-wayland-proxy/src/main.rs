@@ -27,14 +27,14 @@ use d2b_wayland_proxy::filter::{
 };
 use d2b_wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
-    diag::DiagRateLimiter,
+    diag::{DiagRateLimiter, bounded_error_detail},
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
 };
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
 
-const DIAG_ERROR_MAX_BYTES: usize = 256;
+const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Parser, Debug)]
 #[command(name = "d2b-wayland-proxy")]
@@ -283,14 +283,31 @@ fn accept_loop(
 
     let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
+    let mut listener_backoff_until: Option<Instant> = None;
     while state.is_not_destroyed() {
         let (listener_ready, _state_ready) = {
-            let timeout = Duration::from_secs(60)
-                .saturating_sub(last_diag_flush.elapsed())
+            let now = Instant::now();
+            let listener_in_backoff = listener_backoff_until.is_some_and(|until| until > now);
+            if !listener_in_backoff {
+                listener_backoff_until = None;
+            }
+            let diag_timeout = Duration::from_secs(60).saturating_sub(last_diag_flush.elapsed());
+            let backoff_timeout = listener_backoff_until
+                .map(|until| until.saturating_duration_since(now))
+                .unwrap_or(diag_timeout);
+            let timeout = diag_timeout
+                .min(backoff_timeout)
                 .as_millis()
                 .min(i32::MAX as u128) as i32;
             let mut poll_fds = [
-                PollFd::new(&listener, PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
+                PollFd::new(
+                    &listener,
+                    if listener_in_backoff {
+                        PollFlags::empty()
+                    } else {
+                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+                    },
+                ),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
             match poll(&mut poll_fds, timeout) {
@@ -302,7 +319,7 @@ fn accept_loop(
                 }
             }
             (
-                poll_fds[0].revents().contains(PollFlags::IN),
+                !listener_in_backoff && poll_fds[0].revents().contains(PollFlags::IN),
                 !poll_fds[1].revents().is_empty(),
             )
         };
@@ -353,6 +370,9 @@ fn accept_loop(
                                 )
                             },
                         );
+                        if is_resource_exhaustion_accept_error(&e) {
+                            listener_backoff_until = Some(Instant::now() + ACCEPT_RESOURCE_BACKOFF);
+                        }
                         break;
                     }
                     Err(e) => {
@@ -393,7 +413,10 @@ fn is_recoverable_accept_error(error: &io::Error) -> bool {
 }
 
 fn is_resource_exhaustion_accept_error(error: &io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM)
+    )
 }
 
 /// Renders an error together with its full `source()` chain on one line, e.g.
@@ -409,17 +432,6 @@ fn error_source_chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     out
-}
-
-fn bounded_error_detail(error: String) -> String {
-    if error.len() <= DIAG_ERROR_MAX_BYTES {
-        return error;
-    }
-    let mut end = DIAG_ERROR_MAX_BYTES;
-    while !error.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &error[..end])
 }
 
 #[cfg(test)]
@@ -440,7 +452,7 @@ mod tests {
 
     #[test]
     fn fd_exhaustion_accept_errors_are_recoverable() {
-        for errno in [libc::EMFILE, libc::ENFILE] {
+        for errno in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
             let err = io::Error::from_raw_os_error(errno);
             assert!(is_recoverable_accept_error(&err));
             assert!(is_resource_exhaustion_accept_error(&err));

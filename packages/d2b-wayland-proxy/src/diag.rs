@@ -41,6 +41,19 @@ struct BucketState {
 
 const WINDOW: Duration = Duration::from_secs(60);
 const MAX_PER_WINDOW: u64 = 5;
+const DIAG_ERROR_MAX_BYTES: usize = 256;
+
+pub fn bounded_error_detail(error: impl Into<String>) -> String {
+    let error = error.into();
+    if error.len() <= DIAG_ERROR_MAX_BYTES {
+        return error;
+    }
+    let mut end = DIAG_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &error[..end])
+}
 
 /// Per-state rate limiter for filter diagnostics.
 #[derive(Debug)]
@@ -191,5 +204,19 @@ mod tests {
 
         let bucket = rl.buckets.values().next().expect("bucket exists");
         assert_eq!(bucket.suppressed, 0);
+    }
+
+    #[test]
+    fn bounded_error_detail_truncates_on_utf8_boundary() {
+        let detail = format!("{}{}", "a".repeat(DIAG_ERROR_MAX_BYTES - 1), "é".repeat(4));
+        let bounded = bounded_error_detail(detail);
+        assert!(bounded.len() <= DIAG_ERROR_MAX_BYTES + 3);
+        assert!(bounded.ends_with("..."));
+        assert!(std::str::from_utf8(bounded.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn bounded_error_detail_preserves_short_errors() {
+        assert_eq!(bounded_error_detail("short"), "short");
     }
 }

@@ -45,14 +45,17 @@ let
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
-        "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 ${site.waylandUser} root -"
-        "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 ${site.waylandUser} root -"
-        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 ${site.waylandUser} root -"
-        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 ${site.waylandUser} root -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${site.waylandUser}:--x"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 root root -"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:${site.waylandUser}:--x"
       ]
       ++ lib.concatMap (vm: [
         "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
         "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "a+ /run/d2b - - - - u:d2b-${vm}-wlproxy:--x"
         "a+ ${cfg.runtime.bridgeRoot} - - - - u:d2b-${vm}-wlproxy:--x"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"

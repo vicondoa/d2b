@@ -152,6 +152,7 @@ EOF
         (lib.optionals vm.audio.enable (runtimeAclUser "/run/d2b" "d2b-${name}-snd" "--x"))
         (lib.optionals vm.audio.enable (runtimeAclUser "/run/d2b/vms" "d2b-${name}-snd" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b" "d2b-${name}-gpu" "--x"))
+        (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b" "d2b-${name}-wlproxy" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b/vms" "d2b-${name}-gpu" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b-gpu" "d2b-${name}-gpu" "--x"))
         (lib.optionals vm.graphics.enable (runtimeAclUser "/run/d2b-wlproxy" "d2b-${name}-gpu" "--x"))
@@ -168,6 +169,7 @@ EOF
       in
       lib.concatLists [
         (runtimeAclUser "/run/d2b" qemuMediaPrincipal "--x")
+        (runtimeAclUser "/run/d2b" wlproxyPrincipal "--x")
         (runtimeAclUser "/run/d2b/vms" qemuMediaPrincipal "--x")
         (runtimeAclUser "/run/d2b-wlproxy" qemuMediaPrincipal "--x")
         (runtimeAclUser "/run/d2b-wlproxy" wlproxyPrincipal "--x")

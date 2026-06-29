@@ -53,12 +53,10 @@ use crate::{
         BridgeTransferMetadata,
     },
     clipboard::{ClipboardMimePolicy, ClipboardRoute, MimeDecision},
-    diag::{DiagRateLimiter, DropReason},
+    diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
 };
-
-const DIAG_ERROR_MAX_BYTES: usize = 256;
 
 /// State-level handler: creates per-client display handlers.
 pub struct FilterStateHandler {
@@ -340,16 +338,6 @@ impl VirtualClipboardState {
             }
         }
 
-        fn bounded_error_detail(error: String) -> String {
-            if error.len() <= DIAG_ERROR_MAX_BYTES {
-                return error;
-            }
-            let mut end = DIAG_ERROR_MAX_BYTES;
-            while !error.is_char_boundary(end) {
-                end -= 1;
-            }
-            format!("{}...", &error[..end])
-        }
         self.bridge.as_mut()
     }
 
