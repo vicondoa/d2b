@@ -504,6 +504,7 @@ enum ClipboardCommand {
     /// Opens the d2b-clip-picker, waits for a selection, then arms d2b-clipd
     /// to satisfy the next native paste request from the current focused window.
     /// Requires d2b-clipd to be running.
+    #[command(alias = "picker")]
     Arm(ClipboardArmArgs),
 }
 

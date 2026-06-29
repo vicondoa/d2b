@@ -62,7 +62,7 @@ impl PickerProcess for Child {
     }
 
     fn reap(&mut self) {
-        let _ = self.try_wait();
+        let _ = self.wait();
     }
 }
 
@@ -221,7 +221,11 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             let mut buf = [0_u8; 512];
             match active.parent_socket.read(&mut buf) {
                 Ok(0) if active.read_buffer.is_empty() => return Ok(PickerPoll::Closed),
-                Ok(0) => break,
+                Ok(0) => {
+                    return Err(PickerError::Frame(
+                        "picker closed with incomplete frame".to_owned(),
+                    ));
+                }
                 Ok(n) => {
                     active.read_buffer.extend_from_slice(&buf[..n]);
                     if active.read_buffer.len() > max_frame_bytes {

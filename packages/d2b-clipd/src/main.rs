@@ -337,10 +337,10 @@ impl EventLoop<'_> {
             if wayland_ready {
                 self.data_control.prepare_and_read().ok();
             }
-            let wl_events = self.data_control.dispatch_pending().unwrap_or_else(|e| {
-                log::error!("d2b-clipd: wayland dispatch: {e}");
-                vec![]
-            });
+            let wl_events = self
+                .data_control
+                .dispatch_pending()
+                .map_err(|e| format!("wayland dispatch failed: {e}"))?;
             for event in wl_events {
                 handle_wayland_event(
                     event,
@@ -695,8 +695,14 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
                     Err(BridgeReadError::Incomplete)
                 };
             }
+            Err(rustix::io::Errno::INTR) => continue,
             Err(error) => return Err(BridgeReadError::Invalid(error.to_string())),
         };
+        for cmsg in control.drain() {
+            if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
+                stream.received_fds.extend(fds);
+            }
+        }
         if msg.flags.bits() & (nix::libc::MSG_CTRUNC as u32) != 0 {
             return Err(BridgeReadError::Invalid(
                 "bridge control message truncated".to_owned(),
@@ -708,11 +714,6 @@ fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, Br
             ));
         }
         stream.read_buffer.extend_from_slice(&buf[..msg.bytes]);
-        for cmsg in control.drain() {
-            if let rustix::net::RecvAncillaryMessage::ScmRights(fds) = cmsg {
-                stream.received_fds.extend(fds);
-            }
-        }
         if stream.read_buffer.len() > 4096 {
             return Err(BridgeReadError::Invalid(
                 "bridge frame too large".to_owned(),
@@ -1127,14 +1128,10 @@ fn fulfill_armed_fallback(
         let _ = fallback.on_timeout(Instant::now());
         return false;
     }
-    let Some(paste) = host_clipboard.pending_paste() else {
+    if host_clipboard.pending_paste().is_none() {
         return false;
-    };
-    if !target.same_target(&paste.destination) {
-        if let Some(paste) = host_clipboard.take_pending_paste() {
-            paste.close_with_reason(ReasonCode::BackgroundProbe);
-        }
-        let _ = fallback.cancel_picker();
+    }
+    if reject_background_probe_if_target_mismatch(&target, host_clipboard) {
         return true;
     }
     let result = materialize_selected_entry(host_clipboard, data_control, &entry_id)
@@ -1158,6 +1155,22 @@ fn fulfill_armed_fallback(
             true
         }
     }
+}
+
+fn reject_background_probe_if_target_mismatch(
+    target: &FocusedWindowSnapshot,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+) -> bool {
+    let Some(paste) = host_clipboard.pending_paste() else {
+        return false;
+    };
+    if target.same_target(&paste.destination) {
+        return false;
+    }
+    if let Some(paste) = host_clipboard.take_pending_paste() {
+        paste.close_with_reason(ReasonCode::BackgroundProbe);
+    }
+    true
 }
 
 fn materialize_selected_entry(
@@ -1222,7 +1235,7 @@ fn read_fd_to_vec(
     }
 }
 
-/// `d2b clipboard picker` sends `{"type":"arm"}` to this socket.
+/// `d2b clipboard arm` sends `{"type":"arm"}` to this socket.
 /// We open the picker (if configured) and arm the native-paste fallback for
 /// the current focused window.
 fn handle_arm(
@@ -1864,5 +1877,55 @@ mod tests {
                 || err.message().contains("exact attribution")
         );
         drop(read_fd);
+    }
+
+    #[test]
+    fn bridge_peer_validation_checks_uid() {
+        let (left, _right) = UnixStream::pair().expect("pair");
+        let current = rustix::process::getuid().as_raw();
+        validate_bridge_peer(&left, current).expect("current uid accepted");
+        let wrong = if current == u32::MAX {
+            current - 1
+        } else {
+            current + 1
+        };
+        let err = validate_bridge_peer(&left, wrong).expect_err("wrong uid rejected");
+        assert!(err.contains("uid mismatch"));
+    }
+
+    #[test]
+    fn background_probe_closes_pending_fd_without_clearing_arm() {
+        let mut host_clipboard = HostClipboard::new(
+            HostClipboardAttributor::new(NiriQueryProvider::new(None)),
+            Duration::from_secs(30),
+        );
+        let (write_sock, mut read_sock) = UnixStream::pair().expect("pair");
+        host_clipboard
+            .accept_paste_fd_for_destination(
+                write_sock.into(),
+                "text/plain".to_owned(),
+                FocusedWindowSnapshot {
+                    id: Some(2),
+                    app_id: Some("background".to_owned()),
+                    title: None,
+                    workspace_id: None,
+                    output_label: None,
+                },
+            )
+            .expect("accept");
+        let target = FocusedWindowSnapshot {
+            id: Some(1),
+            app_id: Some("target".to_owned()),
+            title: None,
+            workspace_id: None,
+            output_label: None,
+        };
+        assert!(reject_background_probe_if_target_mismatch(
+            &target,
+            &mut host_clipboard
+        ));
+        assert!(host_clipboard.pending_paste().is_none());
+        let mut byte = [0_u8; 1];
+        assert_eq!(read_sock.read(&mut byte).expect("eof"), 0);
     }
 }

@@ -614,6 +614,7 @@ EOF
       vmName = name;
       filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
       upstreamSock = waylandHostSock;
+      bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
       titlePrefix = "[${vmName}] ";
       denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
@@ -644,8 +645,7 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
-        "--clipd-bridge-root" config.d2b.site.clipboard.runtime.bridgeRoot
-        "--clipd-bridge-user-uid" waylandUid
+        "--clipd-bridge-socket" bridgeSock
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 

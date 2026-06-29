@@ -39,6 +39,9 @@ deprecations ship one minor release before removal.
   fail-closed audit / droppable metrics queues, host data-control integration,
   and the clipboard fallback arm control socket.
 - Renamed the host-side Wayland package/binary to `d2b-wayland-proxy`.
+- Renamed the per-VM graphics options from `graphics.waylandFilter.*` to
+  `graphics.waylandProxy.*`; the old option path remains as a compatibility
+  alias for this release.
 - `d2b-wayland-proxy` now virtualizes the standard guest clipboard locally:
   it advertises a synthetic `wl_data_device_manager`, never binds guest
   `wl_data_*` objects into the host compositor clipboard namespace, routes

@@ -1713,6 +1713,10 @@ pub use fake::{FakeReconcileExecutor, ReconcileOp};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static HELPER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Sysctl key validation: the broker callers pass dotted keys
     /// (`net.ipv4.ip_forward`); the executor translates dots to
@@ -1843,14 +1847,19 @@ mod tests {
             .expect("cwd")
             .join("target")
             .join(format!(
-                "usbip-unbind-helper-{name}-{}-{}",
+                "usbip-unbind-helper-{name}-{}-{}-{}",
                 std::process::id(),
-                current_unix_ms()
+                current_unix_ms(),
+                HELPER_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create helper root");
         let helper = root.join("usbip");
-        std::fs::write(&helper, body).expect("write helper");
+        {
+            let mut file = std::fs::File::create(&helper).expect("create helper");
+            file.write_all(body.as_bytes()).expect("write helper");
+            file.sync_all().expect("sync helper");
+        }
         let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
         permissions.set_mode(0o755);

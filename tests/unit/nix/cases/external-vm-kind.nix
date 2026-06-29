@@ -631,10 +631,8 @@ in
           "d2b.media."
           "--title-prefix"
           "[media] "
-          "--clipd-bridge-root"
-          "/run/d2b/clipd"
-          "--clipd-bridge-user-uid"
-          "1000"
+          "--clipd-bridge-socket"
+          "/run/d2b/clipd/1000/bridge/media/clip.sock"
         ];
       };
     };

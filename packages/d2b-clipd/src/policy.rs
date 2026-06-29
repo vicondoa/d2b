@@ -37,7 +37,6 @@ pub enum ReasonCode {
     SourceMaterializeTimeout,
     MaterializationRateLimited,
     MemoryCapExceeded,
-    LoopSuppressed,
     AuditFailure,
 }
 
@@ -61,7 +60,6 @@ impl ReasonCode {
             Self::SourceMaterializeTimeout => "source_materialize_timeout",
             Self::MaterializationRateLimited => "materialization_rate_limited",
             Self::MemoryCapExceeded => "memory_cap_exceeded",
-            Self::LoopSuppressed => "loop_suppressed",
             Self::AuditFailure => "audit_failure",
         }
     }

@@ -30,7 +30,7 @@ let
 
   niriProgramEnabled = config.programs.niri.enable or false;
   bridgeVms = lib.attrNames (lib.filterAttrs (_name: vm:
-    vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
+    vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
   ) config.d2b.vms);
   bridgePeers = map (vm: {
     vmName = vm;

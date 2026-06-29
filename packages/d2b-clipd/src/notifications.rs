@@ -86,7 +86,6 @@ fn reason_label(reason: ReasonCode) -> &'static str {
         ReasonCode::SourceMaterializeTimeout => "clipboard source timed out",
         ReasonCode::MaterializationRateLimited => "clipboard source was rate limited",
         ReasonCode::MemoryCapExceeded => "clipboard memory cap was exceeded",
-        ReasonCode::LoopSuppressed => "broker feedback loop was suppressed",
         ReasonCode::AuditFailure => "audit queue is unavailable",
     }
 }
@@ -110,7 +109,10 @@ pub fn emit_user_visible_failure<N: Notifier>(
 fn is_user_visible_failure(reason: ReasonCode) -> bool {
     matches!(
         reason,
-        ReasonCode::PickerNotConfigured
+        ReasonCode::PolicyDenied
+            | ReasonCode::IntentMissing
+            | ReasonCode::MimeRejected
+            | ReasonCode::PickerNotConfigured
             | ReasonCode::PickerCrashed
             | ReasonCode::PickerTimeout
             | ReasonCode::SourceMaterializeTimeout
@@ -166,14 +168,15 @@ mod tests {
     fn failure_notification_is_emitted_through_notifier() {
         let mut notifier = RecordingNotifier::default();
         emit_user_visible_failure(&mut notifier, ReasonCode::PolicyDenied, "Host", "Personal");
-        assert_eq!(notifier.notifications.len(), 0);
+        assert_eq!(notifier.notifications.len(), 1);
+        assert!(notifier.notifications[0].body.contains("policy denied"));
         emit_user_visible_failure(
             &mut notifier,
             ReasonCode::PickerNotConfigured,
             "Host",
             "Personal",
         );
-        assert_eq!(notifier.notifications.len(), 1);
-        assert!(notifier.notifications[0].body.contains("not configured"));
+        assert_eq!(notifier.notifications.len(), 2);
+        assert!(notifier.notifications[1].body.contains("not configured"));
     }
 }

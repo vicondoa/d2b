@@ -263,7 +263,7 @@ fn write_all_nonblocking(fd: &OwnedFd, data: &[u8], deadline: Instant) -> Result
     use rustix::event::{PollFd, PollFlags, poll};
     use std::os::fd::AsFd;
 
-    let _ = rustix::io::ioctl_fionbio(fd.as_fd(), true);
+    rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|error| error.to_string())?;
 
     let mut remaining = data;
     while !remaining.is_empty() {
