@@ -36,9 +36,9 @@ stable v1 daemon-received messages are rejected.
 
 ### `OpenRequest` clipd → picker
 
-Contains the selected protocol version, request id, destination metadata,
-requested MIME type, expiry, and filtered candidates. Clipboard payload bytes are
-not included.
+Contains the selected protocol version, `clipd_version`, request id,
+destination metadata, requested MIME type, expiry, and filtered candidates.
+Clipboard payload bytes are not included.
 
 ### `Select` picker → clipd
 

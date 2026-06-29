@@ -195,7 +195,10 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             .is_some_and(|p| p.is_expired(now));
         if expired {
             let paste = self.pending_paste.take().unwrap();
-            log::debug!("d2b-clipd: paste fd timed out for mime={}", paste.mime_type);
+            log::debug!(
+                "d2b-clipd: paste fd timed out for mime={}",
+                crate::audit::bounded_mime(&paste.mime_type)
+            );
             Some(paste)
         } else {
             None
@@ -243,7 +246,7 @@ fn write_all_nonblocking(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
             Ok(0) => return Err("short write to closed fd".to_owned()),
             Ok(written) => remaining = &remaining[written..],
             Err(rustix::io::Errno::INTR) => {}
-            Err(rustix::io::Errno::AGAIN) => std::thread::yield_now(),
+            Err(rustix::io::Errno::AGAIN) => return Err("write would block".to_owned()),
             Err(error) => return Err(error.to_string()),
         }
     }

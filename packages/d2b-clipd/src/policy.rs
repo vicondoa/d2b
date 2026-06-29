@@ -88,7 +88,7 @@ pub fn has_secret_hint<'a>(mime_names: impl IntoIterator<Item = &'a str>) -> boo
         .any(|mime| SECRET_HINT_MIME_TYPES.contains(&mime.as_str()))
 }
 
-fn normalize_mime(mime: &str) -> String {
+pub fn normalize_mime(mime: &str) -> String {
     mime.trim()
         .split(';')
         .map(str::trim)

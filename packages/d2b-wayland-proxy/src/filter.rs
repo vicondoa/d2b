@@ -212,7 +212,7 @@ impl VirtualClipboardState {
             log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: source gone at receive; returning EOF to requester mime={}",
                 self.vm_name,
-                mime_type,
+                bounded_log_mime(mime_type),
             );
             return;
         };
@@ -300,6 +300,22 @@ fn send_selection_to_device(
         offer.send_offer(&mime);
     }
     device.send_selection(Some(&offer));
+}
+
+fn bounded_log_mime(mime: &str) -> String {
+    let mut out = String::new();
+    for ch in mime.chars() {
+        if out.len() + ch.len_utf8() > 64 {
+            out.push('…');
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else {
+            out.push('?');
+        }
+    }
+    out
 }
 
 /// Per-registry handler: filters globals and intercepts binds.
@@ -542,7 +558,7 @@ impl WlDataSourceHandler for VirtualDataSourceHandler {
                 "[d2b-wlproxy] vm={} clipboard: source id={} announced mime={}",
                 self.vm_name,
                 slf.unique_id(),
-                mime_type,
+                bounded_log_mime(mime_type),
             );
         }
     }
@@ -623,7 +639,7 @@ impl WlDataOfferHandler for VirtualOfferHandler {
             "[d2b-wlproxy] vm={} clipboard: receive offer id={} mime={}",
             self.vm_name,
             slf.unique_id(),
-            mime_type,
+            bounded_log_mime(mime_type),
         );
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().receive_offer(slf, mime_type, fd);

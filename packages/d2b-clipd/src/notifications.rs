@@ -15,11 +15,14 @@ pub struct DesktopNotifier;
 
 impl Notifier for DesktopNotifier {
     fn notify(&mut self, notification: Notification) {
-        let _ = notify_rust::Notification::new()
+        if let Err(error) = notify_rust::Notification::new()
             .appname("d2b-clipd")
             .summary(&notification.summary)
             .body(&notification.body)
-            .show();
+            .show()
+        {
+            log::warn!("d2b-clipd: desktop notification failed: {error}");
+        }
     }
 }
 

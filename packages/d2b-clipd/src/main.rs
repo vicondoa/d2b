@@ -8,12 +8,13 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use d2b_clipd::audit::bounded_mime;
 use d2b_clipd::fallback::{FallbackArming, FallbackState, FallbackTransition};
 use d2b_clipd::framing::{
     OpenRequestFrameCaps, PICKER_TO_DAEMON_MAX_FRAME_BYTES, decode_frame, encode_frame,
@@ -23,14 +24,22 @@ use d2b_clipd::niri::{
     FocusedWindowSnapshot, HostClipboardAttributor, NiriEvent, NiriIpcError, NiriJsonClient,
     NiriRequest,
 };
-use d2b_clipd::notifications::{DesktopNotifier, Notifier, emit_fallback_ready};
-use d2b_clipd::picker::{CommandPickerSpawner, PickerCommand, PickerState, PickerSupervisor};
+use d2b_clipd::notifications::{
+    DesktopNotifier, Notifier, emit_fallback_ready, sanitize_notification_text,
+};
+use d2b_clipd::picker::{
+    CommandPickerSpawner, PickerCommand, PickerPoll, PickerState, PickerSupervisor,
+};
 use d2b_clipd::policy::ReasonCode;
 use d2b_clipd::protocol::{
     AttributionQuality, ClientHello, DaemonToPickerMessage, DestinationMetadata, OpenRequest,
     PickerToDaemonMessage, RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, HostClipboardEvent};
+use serde::Deserialize;
+
+const CONTROL_MAX_FRAME_BYTES: usize = 1024;
+const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -201,13 +210,39 @@ impl EventLoop<'_> {
                 }
             }
 
+            // ── Picker responses ──────────────────────────────────────────────
+            match self
+                .supervisor
+                .poll_active(PICKER_TO_DAEMON_MAX_FRAME_BYTES)
+            {
+                Ok(PickerPoll::Message(message)) => handle_picker_message(
+                    message,
+                    self.host_clipboard,
+                    self.notifier,
+                    self.fallback,
+                    self.supervisor,
+                ),
+                Ok(PickerPoll::Closed) => {
+                    let _ = self.fallback.cancel_picker();
+                }
+                Ok(PickerPoll::Incomplete) => {}
+                Err(error) => {
+                    log::warn!("d2b-clipd: picker frame failed: {error}");
+                    let _ = self.fallback.cancel_picker();
+                    let _ = self.supervisor.cancel_active(ReasonCode::PickerCrashed);
+                }
+            }
+
             // ── Niri event channel (mpsc, drained each iteration) ─────────────
             drain_niri_channel(&self.niri_rx, self.host_clipboard, self.fallback);
 
             // ── Periodic timeout checks ───────────────────────────────────────
             let now = Instant::now();
             if let Some(expired) = self.host_clipboard.check_paste_timeout(now) {
-                log::debug!("d2b-clipd: paste fd timed out (mime={})", expired.mime_type);
+                log::debug!(
+                    "d2b-clipd: paste fd timed out (mime={})",
+                    bounded_mime(&expired.mime_type)
+                );
                 expired.close_with_reason(ReasonCode::FdWriteTimeout);
             }
             if let Some(_reason) = self.supervisor.reap_expired(now) {
@@ -253,8 +288,9 @@ fn handle_wayland_event(
             match host_clipboard.accept_paste_fd(fd, mime_type.clone()) {
                 Ok(dest) => {
                     log::debug!(
-                        "d2b-clipd: paste fd held for mime={mime_type} dest={:?}",
-                        dest.app_id
+                        "d2b-clipd: paste fd held for mime={} dest={}",
+                        bounded_mime(&mime_type),
+                        bounded_label(dest.app_id.as_deref().unwrap_or("unknown"))
                     );
                     open_picker_or_arm_fallback(
                         fallback,
@@ -308,6 +344,49 @@ fn handle_control_connection(
         .map_err(|e| format!("write control response: {e}"))
 }
 
+fn handle_picker_message(
+    message: PickerToDaemonMessage,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    notifier: &mut DesktopNotifier,
+    fallback: &mut FallbackArming,
+    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+) {
+    match message {
+        PickerToDaemonMessage::Select(select) => {
+            log::debug!(
+                "d2b-clipd: picker selected entry for request {}",
+                select.request_id
+            );
+            if let Some(paste) = host_clipboard.take_pending_paste() {
+                paste.close_with_reason(ReasonCode::PolicyDenied);
+                d2b_clipd::notifications::emit_user_visible_failure(
+                    notifier,
+                    ReasonCode::PolicyDenied,
+                    "clipboard",
+                    "host",
+                );
+            }
+            let _ = fallback.arm_selected_entry(
+                select.entry_id,
+                Instant::now(),
+                Duration::from_secs(30),
+            );
+            let _ = supervisor.cancel_active(ReasonCode::Allowed);
+        }
+        PickerToDaemonMessage::Cancel(cancel) => {
+            log::debug!("d2b-clipd: picker cancelled request {}", cancel.request_id);
+            if let Some(paste) = host_clipboard.take_pending_paste() {
+                paste.close_with_reason(ReasonCode::PickerTimeout);
+            }
+            let _ = fallback.cancel_picker();
+            let _ = supervisor.cancel_active(ReasonCode::PickerTimeout);
+        }
+        PickerToDaemonMessage::ClientHello(_) => {
+            log::debug!("d2b-clipd: ignored duplicate picker client_hello");
+        }
+    }
+}
+
 /// `d2b clipboard picker` sends `{"type":"arm"}` to this socket.
 /// We open the picker (if configured) and arm the native-paste fallback for
 /// the current focused window.
@@ -338,12 +417,18 @@ fn handle_arm(
     ) {
         Ok(socket) => {
             // Drive picker handshake: read ClientHello, send OpenRequest.
-            let picker_version = picker_handshake(socket, &request_id, &dest).unwrap_or_else(|e| {
-                log::warn!("d2b-clipd: picker handshake failed: {e}");
-                "unknown".to_owned()
-            });
-            log::debug!("d2b-clipd: picker opened (version={picker_version})");
-            Ok("picker opened".to_owned())
+            match picker_handshake(socket, &request_id, &dest) {
+                Ok(picker_version) => {
+                    log::debug!("d2b-clipd: picker opened (version={picker_version})");
+                    Ok("picker opened".to_owned())
+                }
+                Err(error) => {
+                    log::warn!("d2b-clipd: picker handshake failed: {error}");
+                    let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
+                    let _ = fallback.cancel_picker();
+                    Err(error)
+                }
+            }
         }
         Err(e) => {
             log::warn!("d2b-clipd: picker launch failed: {e}; arming native fallback");
@@ -361,15 +446,12 @@ fn picker_handshake(
     request_id: &str,
     dest: &FocusedWindowSnapshot,
 ) -> Result<String, String> {
-    let mut reader = BufReader::new(
-        socket
-            .try_clone()
-            .map_err(|e| format!("clone socket: {e}"))?,
-    );
-    let mut hello_buf = Vec::new();
-    reader
-        .read_until(b'\n', &mut hello_buf)
-        .map_err(|e| format!("read hello: {e}"))?;
+    let hello_buf = read_bounded_line(
+        socket,
+        PICKER_TO_DAEMON_MAX_FRAME_BYTES,
+        BOUNDED_READ_TIMEOUT,
+    )
+    .map_err(|e| format!("read hello: {e}"))?;
     let hello: PickerToDaemonMessage = decode_frame(&hello_buf, PICKER_TO_DAEMON_MAX_FRAME_BYTES)
         .map_err(|e| format!("decode hello: {e}"))?;
     let picker_version = match hello {
@@ -421,14 +503,25 @@ fn open_picker_or_arm_fallback(
     if can_open {
         let _ = fallback.capture_target_before_picker(dest.clone());
         let ambient: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
+        let request_id = format!("paste-{}", unix_millis());
         match supervisor.launch(
-            format!("paste-{}", unix_millis()),
+            request_id.clone(),
             picker_command.clone(),
             &ambient,
             Duration::from_secs(30),
         ) {
-            Ok(_socket) => {
-                log::debug!("d2b-clipd: picker opened for paste to {:?}", dest.app_id);
+            Ok(socket) => {
+                if let Err(error) = picker_handshake(socket, &request_id, &dest) {
+                    log::warn!("d2b-clipd: picker handshake failed: {error}");
+                    let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
+                    let _ = fallback.cancel_picker();
+                    arm_native_fallback(fallback, dest, notifier);
+                } else {
+                    log::debug!(
+                        "d2b-clipd: picker opened for paste to {}",
+                        bounded_label(dest.app_id.as_deref().unwrap_or("unknown"))
+                    );
+                }
             }
             Err(e) => {
                 log::warn!("d2b-clipd: picker launch failed ({e}); falling back to native paste");
@@ -458,7 +551,10 @@ fn arm_native_fallback(
             .or(dest.title.as_deref())
             .unwrap_or("host application");
         emit_fallback_ready(notifier, label);
-        log::debug!("d2b-clipd: fallback armed for {label}; user should press Ctrl+V");
+        log::debug!(
+            "d2b-clipd: fallback armed for {}; user should press Ctrl+V",
+            bounded_label(label)
+        );
     }
 }
 
@@ -575,7 +671,7 @@ impl d2b_clipd::niri::FocusedWindowProvider for NiriQueryProvider {
 fn control_socket_path() -> Result<PathBuf, String> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or_else(|| "XDG_RUNTIME_DIR is required for d2b-clipd control socket".to_owned())?;
-    Ok(PathBuf::from(runtime).join("d2b/clipd.sock"))
+    Ok(PathBuf::from(runtime).join("d2b-clipd/clipd.sock"))
 }
 
 fn install_control_socket_parent(socket: &Path) -> Result<(), String> {
@@ -593,21 +689,53 @@ enum ControlCommand {
     Arm,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum ControlFrame {
+    Arm,
+}
+
 fn read_control_command(stream: &UnixStream) -> Result<ControlCommand, String> {
-    let mut reader = BufReader::new(
-        stream
-            .try_clone()
-            .map_err(|e| format!("clone control stream: {e}"))?,
-    );
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| format!("read control command: {e}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&line).map_err(|e| format!("invalid control JSON: {e}"))?;
-    match value.get("type").and_then(|v| v.as_str()) {
-        Some("arm") => Ok(ControlCommand::Arm),
-        other => Err(format!("unknown control command: {other:?}")),
+    let line = read_bounded_line(stream, CONTROL_MAX_FRAME_BYTES, BOUNDED_READ_TIMEOUT)?;
+    match serde_json::from_slice::<ControlFrame>(&line)
+        .map_err(|e| format!("invalid control JSON: {e}"))?
+    {
+        ControlFrame::Arm => Ok(ControlCommand::Arm),
+    }
+}
+
+fn read_bounded_line(
+    stream: &UnixStream,
+    max_frame_bytes: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + timeout;
+    let mut stream = stream
+        .try_clone()
+        .map_err(|e| format!("clone stream: {e}"))?;
+    let mut out = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => return Err("peer closed before newline".to_owned()),
+            Ok(_) => {
+                out.push(byte[0]);
+                if out.len() > max_frame_bytes {
+                    return Err(format!("frame exceeds {max_frame_bytes} bytes"));
+                }
+                if byte[0] == b'\n' {
+                    return Ok(out);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("timed out waiting for newline".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
     }
 }
 
@@ -624,6 +752,10 @@ fn unix_millis() -> u64 {
 
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"serialization-error\"".to_owned())
+}
+
+fn bounded_label(label: &str) -> String {
+    sanitize_notification_text(label, 80)
 }
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────

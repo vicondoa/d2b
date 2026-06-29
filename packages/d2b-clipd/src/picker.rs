@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
+use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
+use crate::framing::{FramingError, decode_frame};
 use crate::policy::ReasonCode;
+use crate::protocol::PickerToDaemonMessage;
 use thiserror::Error;
 
 pub const PICKER_IPC_FD: i32 = 3;
@@ -63,6 +66,7 @@ impl PickerSpawner for CommandPickerSpawner {
     type Process = Child;
 
     fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
+        clear_cloexec(&launch.child_ipc_fd)?;
         let mut command = Command::new(&launch.command.program);
         command.args(&launch.argv);
         command.env_clear();
@@ -72,6 +76,13 @@ impl PickerSpawner for CommandPickerSpawner {
             .spawn()
             .map_err(|err| PickerError::Spawn(err.to_string()))
     }
+}
+
+fn clear_cloexec(fd: &OwnedFd) -> Result<(), PickerError> {
+    let mut flags =
+        rustix::io::fcntl_getfd(fd).map_err(|err| PickerError::FdFlags(err.to_string()))?;
+    flags.remove(rustix::io::FdFlags::CLOEXEC);
+    rustix::io::fcntl_setfd(fd, flags).map_err(|err| PickerError::FdFlags(err.to_string()))
 }
 
 pub trait PickerSpawner {
@@ -92,6 +103,17 @@ pub enum PickerError {
     Socketpair(String),
     #[error("picker spawn failed: {0}")]
     Spawn(String),
+    #[error("picker fd flag update failed: {0}")]
+    FdFlags(String),
+    #[error("picker frame error: {0}")]
+    Frame(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PickerPoll {
+    Message(PickerToDaemonMessage),
+    Incomplete,
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +132,7 @@ pub struct ActivePicker<P> {
     deadline: Instant,
     process: P,
     parent_socket: UnixStream,
+    read_buffer: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -156,6 +179,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             .set_nonblocking(true)
             .map_err(|err| PickerError::Socketpair(err.to_string()))?;
         let child_ipc_fd = OwnedFd::from(child_socket);
+        clear_cloexec(&child_ipc_fd)?;
         let child_fd_number = child_ipc_fd.as_raw_fd();
         let argv = picker_argv(&command, child_fd_number);
         let env = sanitize_picker_env(ambient_env);
@@ -173,8 +197,47 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             deadline,
             process,
             parent_socket,
+            read_buffer: Vec::new(),
         });
         Ok(&self.active.as_ref().expect("active").parent_socket)
+    }
+
+    pub fn poll_active(&mut self, max_frame_bytes: usize) -> Result<PickerPoll, PickerError> {
+        let Some(active) = self.active.as_mut() else {
+            return Ok(PickerPoll::Incomplete);
+        };
+        loop {
+            let mut buf = [0_u8; 512];
+            match active.parent_socket.read(&mut buf) {
+                Ok(0) if active.read_buffer.is_empty() => return Ok(PickerPoll::Closed),
+                Ok(0) => break,
+                Ok(n) => {
+                    active.read_buffer.extend_from_slice(&buf[..n]);
+                    if active.read_buffer.len() > max_frame_bytes {
+                        return Err(PickerError::Frame(
+                            FramingError::FrameTooLong {
+                                max: max_frame_bytes,
+                            }
+                            .to_string(),
+                        ));
+                    }
+                    if active.read_buffer.contains(&b'\n') {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(PickerError::Frame(error.to_string())),
+            }
+        }
+
+        let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n') else {
+            return Ok(PickerPoll::Incomplete);
+        };
+        let frame = active.read_buffer.drain(..=newline).collect::<Vec<_>>();
+        let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)
+            .map_err(|err| PickerError::Frame(err.to_string()))?;
+        Ok(PickerPoll::Message(message))
     }
 
     pub fn cancel_active(&mut self, reason: ReasonCode) -> Option<ReasonCode> {
@@ -259,6 +322,11 @@ mod tests {
         type Process = FakeProcess;
 
         fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
+            let flags = rustix::io::fcntl_getfd(&launch.child_ipc_fd).expect("child ipc fd flags");
+            assert!(
+                !flags.contains(rustix::io::FdFlags::CLOEXEC),
+                "picker IPC fd must survive execve"
+            );
             self.last_launch = Some(launch);
             Ok(FakeProcess {
                 pid: 42,

@@ -2484,7 +2484,7 @@ fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32,
             "XDG_RUNTIME_DIR is not set; cannot locate d2b-clipd control socket",
         )
     })?;
-    let socket_path = PathBuf::from(runtime).join("d2b/clipd.sock");
+    let socket_path = PathBuf::from(runtime).join("d2b-clipd/clipd.sock");
     let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
         CliFailure::new(
             2,

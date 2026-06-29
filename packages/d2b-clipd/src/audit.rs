@@ -20,9 +20,10 @@ pub struct AuditEvent {
     pub timestamp_unix_ms: u64,
 }
 
-fn bounded_mime(mime_type: &str) -> String {
-    if crate::policy::is_mime_allowed(mime_type) {
-        return mime_type.to_owned();
+pub fn bounded_mime(mime_type: &str) -> String {
+    let normalized = crate::policy::normalize_mime(mime_type);
+    if crate::policy::is_mime_allowed(&normalized) {
+        return normalized;
     }
     let mut out = String::new();
     for ch in mime_type.chars() {

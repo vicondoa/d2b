@@ -1,8 +1,8 @@
-# Migrate to the host-side Wayland filter proxy
+# Migrate to the host-side Wayland proxy
 
 This guide covers the changes you need to make when a graphics VM
 switches from the legacy in-guest-only proxy path to the host-side
-Wayland filter proxy.
+Wayland proxy.
 
 ## What changes
 
@@ -12,7 +12,7 @@ The old in-guest proxy service is replaced by `wl-cross-domain-proxy`.
 The new proxy only bridges the
 virtio-gpu cross-domain transport to the guest's Wayland socket; it
 does not perform security filtering or app-id rewriting.  Those
-responsibilities move to the host-side filter proxy, which runs as a
+responsibilities move to the host-side Wayland proxy, which runs as a
 separate broker-spawned process outside the guest.
 
 ### App-ids are rewritten on the host
@@ -144,13 +144,13 @@ niri msg windows
 
 Every window from the VM should have `app_id` starting with
 `d2b.<vm>.`.  If the original app-id appears without the prefix,
-confirm `crossDomainTrusted = true` and that the filter proxy is
+confirm `crossDomainTrusted = true` and that the Wayland proxy is
 running (`d2b vm status <vm>`).
 
 ### Check the host compositor socket ownership
 
 After migration, the GPU runner should no longer hold a direct file
-descriptor to the host compositor socket.  The Wayland filter proxy
+descriptor to the host compositor socket.  The Wayland proxy
 should be the only VM-specific process with compositor socket access:
 
 ```bash
@@ -165,7 +165,7 @@ ls -la /proc/$(pgrep -f "d2b-wayland-proxy.*work")/fd 2>/dev/null \
 
 ## Understanding the warning model
 
-The filter proxy's policy engine emits runtime advisory diagnostics when
+The Wayland proxy's policy engine emits runtime advisory diagnostics when
 an operator override changes a rule d2b considers required or
 high-risk.  These warnings do not block evaluation or builds; they appear
 in the `d2b-wayland-proxy` journal stream when the VM starts.
@@ -194,6 +194,7 @@ longer apply.
   Setting it to true fails eval during the Wayland-only migration phase.
 - **Multi-output enumeration** works through the filter; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
-- **Clipboard and DnD** are forwarded for standard protocols
-  (`wl_data_device_manager`) by default; privileged clipboard-control
-  globals remain opt-in.
+- **Clipboard and DnD** are policy-owned by d2b. The standard clipboard
+  (`wl_data_device_manager`) is virtualized by `d2b-wayland-proxy`; primary
+  selection, privileged clipboard-control globals, and DnD are explicitly
+  denied in the ADR 0042 implementation.
