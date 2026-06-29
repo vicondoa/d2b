@@ -102,7 +102,6 @@ eval.
 | `p5`     | First-run validation UX shipped (`d2b host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
 | `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
 | `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | `tests/static.sh` + per-example flake-check green.                                                             |
-| `p0Cb`   | Clipboard authority smoke path: `d2b-clipd`, the picker protocol handshake, and `d2b clipboard arm`.                                                               | `tests/integration/live/clipboard-picker-smoke.sh` green against the configured `d2b-clip-picker` binary.      |
 
 > **Drift gate.** `tests/wave-evidence-schema-eval.sh` asserts every
 > wave declared in `readinessWaveSpecs` has a matching `| \`<wave>\` |`

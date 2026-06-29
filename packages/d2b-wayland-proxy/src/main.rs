@@ -242,10 +242,15 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    accept_loop(listener, args.connect, policy);
+    accept_loop(listener, args.connect, policy, bridge_config);
 }
 
-fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
+fn accept_loop(
+    listener: UnixListener,
+    upstream: String,
+    policy: FilterPolicy,
+    bridge_config: BridgeConfig,
+) {
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
         std::process::exit(1);
@@ -254,7 +259,19 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
     let policy = Rc::new(policy);
     let vm = policy.vm_name.clone();
     let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
-    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(vm.clone())));
+    let bridge = bridge_config.socket_path.as_ref().and_then(|path| {
+        match std::os::unix::net::UnixStream::connect(path) {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                log::warn!(
+                    "[d2b-wlproxy] vm={vm} clipboard bridge unavailable at {}: {error}",
+                    path.display()
+                );
+                None
+            }
+        }
+    });
+    let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(vm.clone(), bridge)));
     let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {

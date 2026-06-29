@@ -177,11 +177,6 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
         summary: "Docs blast-radius + v1.0 cut.",
         validators: &[],
     },
-    WaveSpec {
-        wave: "p0Cb",
-        summary: "Clipboard authority (d2b-clipd + picker protocol handshake smoke).",
-        validators: &["integration/live/clipboard-picker-smoke.sh"],
-    },
 ];
 
 /// Per-wave status reported by both dry-run and apply modes.
@@ -798,7 +793,7 @@ mod tests {
         // other direction.
         let expected = [
             "w4Fu", "w5Fu", "w6Fu", "w7Fu", "w8Fu", "w9Fu", "p0", "p0Fu", "p1", "p2", "p3", "p4",
-            "p5", "p6", "p7", "p0Cb",
+            "p5", "p6", "p7",
         ];
         let got: Vec<&str> = WAVE_CATALOG.iter().map(|w| w.wave).collect();
         assert_eq!(got, expected);

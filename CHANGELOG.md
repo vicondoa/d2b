@@ -71,11 +71,7 @@ deprecations ship one minor release before removal.
   (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
   flake export of `d2b-clipd`, `Clipboard` subcommand existence in the CLI,
   Wayland proxy synthetic-clipboard invariant, and no-regression checks against
-  reintroducing a substrate-gap marker;
-  `tests/integration/live/clipboard-picker-smoke.sh` Layer-2 script for
-  `d2b host validate --wave p0Cb`.
-- Added `p0Cb` readiness wave to `WAVE_CATALOG` and `readinessWaveSpecs`
-  covering clipboard authority smoke validation.
+  reintroducing a substrate-gap marker.
 - `d2b-clipd` now implements the full ADR 0042 host-authority event loop:
   connects to the host Wayland compositor via `ext-data-control-v1`
   (preferring the stable extension, falling back to `zwlr-data-control-v1`

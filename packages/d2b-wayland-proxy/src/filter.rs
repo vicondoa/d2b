@@ -12,6 +12,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     os::fd::OwnedFd,
+    os::unix::net::UnixStream,
     rc::{Rc, Weak},
 };
 use wl_proxy::{
@@ -45,6 +46,8 @@ use wl_proxy::{
 };
 
 use crate::{
+    bridge::BridgeHandoff,
+    clipboard::{ClipboardMimePolicy, ClipboardRoute, MimeDecision},
     diag::{DiagRateLimiter, DropReason},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -127,6 +130,8 @@ impl WlDisplayHandler for FilterDisplayHandler {
 #[derive(Debug)]
 pub struct VirtualClipboardState {
     vm_name: String,
+    bridge: Option<UnixStream>,
+    mime_policy: ClipboardMimePolicy,
     devices: Vec<Weak<WlDataDevice>>,
     sources: HashMap<u64, Rc<RefCell<VirtualSource>>>,
     offers: HashMap<u64, Rc<RefCell<VirtualOffer>>>,
@@ -145,9 +150,11 @@ struct VirtualOffer {
 }
 
 impl VirtualClipboardState {
-    pub fn new(vm_name: String) -> Self {
+    pub fn new(vm_name: String, bridge: Option<UnixStream>) -> Self {
         Self {
             vm_name,
+            bridge,
+            mime_policy: ClipboardMimePolicy::v1_defaults(),
             devices: Vec::new(),
             sources: HashMap::new(),
             offers: HashMap::new(),
@@ -165,6 +172,12 @@ impl VirtualClipboardState {
     }
 
     fn add_source_mime(&mut self, source: &Rc<WlDataSource>, mime: &str) {
+        if matches!(
+            self.mime_policy.decide(ClipboardRoute::SameVm, mime),
+            MimeDecision::Deny
+        ) {
+            return;
+        }
         self.register_source(source);
         if let Some(stored) = self.sources.get(&source.unique_id()) {
             let mut stored = stored.borrow_mut();
@@ -216,7 +229,15 @@ impl VirtualClipboardState {
             );
             return;
         };
-        source.send_send(mime_type, fd);
+        match self.mime_policy.decide(ClipboardRoute::SameVm, mime_type) {
+            MimeDecision::PreserveSameVmRichMime => source.send_send(mime_type, fd),
+            MimeDecision::MaterializeViaBridge => {
+                if let Some(bridge) = &mut self.bridge {
+                    let _ = bridge.handoff_transfer_fd(fd);
+                }
+            }
+            MimeDecision::Deny => {}
+        }
     }
 
     fn remove_offer(&mut self, offer: &Rc<WlDataOffer>) {
@@ -824,7 +845,10 @@ mod tests {
     }
 
     fn clipboard() -> Rc<RefCell<VirtualClipboardState>> {
-        Rc::new(RefCell::new(VirtualClipboardState::new("work".to_owned())))
+        Rc::new(RefCell::new(VirtualClipboardState::new(
+            "work".to_owned(),
+            None,
+        )))
     }
 
     #[test]

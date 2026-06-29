@@ -223,25 +223,19 @@ impl LocalTransferFd {
         drop(self.fd.take());
         status
     }
-
-    fn as_raw_fd(&self) -> Option<i32> {
-        self.fd.as_ref().map(AsRawFd::as_raw_fd)
-    }
 }
 
 pub trait BridgeHandoff {
-    fn handoff_transfer_fd(&mut self, fd: LocalTransferFd) -> HandoffStatus;
+    fn handoff_transfer_fd(&mut self, fd: &OwnedFd) -> HandoffStatus;
 }
 
 impl BridgeHandoff for UnixStream {
-    fn handoff_transfer_fd(&mut self, local_fd: LocalTransferFd) -> HandoffStatus {
-        let Some(raw_fd) = local_fd.as_raw_fd() else {
-            return local_fd.close_after_handoff(HandoffStatus::Failed);
-        };
+    fn handoff_transfer_fd(&mut self, local_fd: &OwnedFd) -> HandoffStatus {
+        let raw_fd = local_fd.as_raw_fd();
         let iov = [IoSlice::new(b"F")];
         let fds = [raw_fd];
         let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
-        let status = match nix::sys::socket::sendmsg::<()>(
+        match nix::sys::socket::sendmsg::<()>(
             self.as_raw_fd(),
             &iov,
             &cmsg,
@@ -253,8 +247,7 @@ impl BridgeHandoff for UnixStream {
                 log::debug!("d2b-wayland-proxy: bridge fd handoff failed: {error}");
                 HandoffStatus::Failed
             }
-        };
-        local_fd.close_after_handoff(status)
+        }
     }
 }
 
@@ -387,9 +380,10 @@ mod tests {
     fn bridge_handoff_sends_fd_with_scm_rights() {
         let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
-        let local = LocalTransferFd::new(local.into());
+        let local: OwnedFd = local.into();
 
-        assert_eq!(bridge.handoff_transfer_fd(local), HandoffStatus::Delivered);
+        assert_eq!(bridge.handoff_transfer_fd(&local), HandoffStatus::Delivered);
+        drop(local);
 
         let mut byte = [0_u8; 1];
         let mut iov = [IoSliceMut::new(&mut byte)];
