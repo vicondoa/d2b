@@ -410,6 +410,7 @@ in
       bridgeSocketName = lib.mkOption {
         type = lib.types.strMatching "^[A-Za-z0-9_.-]+\\.sock$";
         default = "clip.sock";
+        readOnly = true;
         description = "Basename for each per-VM internal clipboard bridge socket.";
       };
     };

@@ -287,27 +287,14 @@ fn accept_loop(
     while state.is_not_destroyed() {
         let (listener_ready, _state_ready) = {
             let now = Instant::now();
-            let listener_in_backoff = listener_backoff_until.is_some_and(|until| until > now);
+            let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
             if !listener_in_backoff {
                 listener_backoff_until = None;
             }
             let diag_timeout = Duration::from_secs(60).saturating_sub(last_diag_flush.elapsed());
-            let backoff_timeout = listener_backoff_until
-                .map(|until| until.saturating_duration_since(now))
-                .unwrap_or(diag_timeout);
-            let timeout = diag_timeout
-                .min(backoff_timeout)
-                .as_millis()
-                .min(i32::MAX as u128) as i32;
+            let timeout = accept_poll_timeout_ms(diag_timeout, listener_backoff_until, now);
             let mut poll_fds = [
-                PollFd::new(
-                    &listener,
-                    if listener_in_backoff {
-                        PollFlags::empty()
-                    } else {
-                        PollFlags::IN | PollFlags::ERR | PollFlags::HUP
-                    },
-                ),
+                PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
             match poll(&mut poll_fds, timeout) {
@@ -419,6 +406,32 @@ fn is_resource_exhaustion_accept_error(error: &io::Error) -> bool {
     )
 }
 
+fn accept_backoff_active(backoff_until: Option<Instant>, now: Instant) -> bool {
+    backoff_until.is_some_and(|until| until > now)
+}
+
+fn listener_accept_poll_flags(in_backoff: bool) -> PollFlags {
+    if in_backoff {
+        PollFlags::empty()
+    } else {
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+    }
+}
+
+fn accept_poll_timeout_ms(
+    diag_timeout: Duration,
+    listener_backoff_until: Option<Instant>,
+    now: Instant,
+) -> i32 {
+    let backoff_timeout = listener_backoff_until
+        .map(|until| until.saturating_duration_since(now))
+        .unwrap_or(diag_timeout);
+    diag_timeout
+        .min(backoff_timeout)
+        .as_millis()
+        .min(i32::MAX as u128) as i32
+}
+
 /// Renders an error together with its full `source()` chain on one line, e.g.
 /// `could not dispatch server events: receiver object 4278190081 does not exist`.
 /// `thiserror`'s `Display` only prints the top-level message, so without walking
@@ -457,6 +470,35 @@ mod tests {
             assert!(is_recoverable_accept_error(&err));
             assert!(is_resource_exhaustion_accept_error(&err));
         }
+    }
+
+    #[test]
+    fn accept_backoff_masks_listener_and_bounds_poll_timeout() {
+        let now = Instant::now();
+        let backoff_until = now + Duration::from_millis(50);
+        assert!(accept_backoff_active(Some(backoff_until), now));
+        assert!(listener_accept_poll_flags(true).is_empty());
+        assert_eq!(
+            listener_accept_poll_flags(false),
+            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+        );
+        assert_eq!(
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), now),
+            50
+        );
+    }
+
+    #[test]
+    fn expired_accept_backoff_restores_listener_interest() {
+        let now = Instant::now();
+        assert!(!accept_backoff_active(
+            Some(now - Duration::from_millis(1)),
+            now
+        ));
+        assert_eq!(
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), now),
+            0
+        );
     }
 
     #[test]

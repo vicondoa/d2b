@@ -258,15 +258,13 @@ impl EventLoop<'_> {
             // Flush pending Wayland requests before polling.
             self.data_control.flush().ok();
             let now = Instant::now();
-            let control_accept_in_backoff = self
-                .control_accept_backoff_until
-                .is_some_and(|until| until > now);
+            let control_accept_in_backoff =
+                accept_backoff_active(self.control_accept_backoff_until, now);
             if !control_accept_in_backoff {
                 self.control_accept_backoff_until = None;
             }
-            let bridge_accept_in_backoff = self
-                .bridge_accept_backoff_until
-                .is_some_and(|until| until > now);
+            let bridge_accept_in_backoff =
+                accept_backoff_active(self.bridge_accept_backoff_until, now);
             if !bridge_accept_in_backoff {
                 self.bridge_accept_backoff_until = None;
             }
@@ -286,11 +284,7 @@ impl EventLoop<'_> {
                     ),
                     PollFd::new(
                         self.listener,
-                        if control_accept_in_backoff {
-                            PollFlags::empty()
-                        } else {
-                            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
-                        },
+                        accept_listener_poll_flags(control_accept_in_backoff),
                     ),
                 ];
                 if let Some(socket) = self.supervisor.active_socket() {
@@ -308,11 +302,7 @@ impl EventLoop<'_> {
                 for bridge in &self.bridge_listeners {
                     poll_fds.push(PollFd::new(
                         &bridge.listener,
-                        if bridge_accept_in_backoff {
-                            PollFlags::empty()
-                        } else {
-                            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
-                        },
+                        accept_listener_poll_flags(bridge_accept_in_backoff),
                     ));
                 }
                 for bridge in &self.bridge_streams {
@@ -786,6 +776,18 @@ fn is_resource_exhaustion_accept_error(error: &std::io::Error) -> bool {
         error.raw_os_error(),
         Some(nix::libc::EMFILE | nix::libc::ENFILE | nix::libc::ENOBUFS | nix::libc::ENOMEM)
     )
+}
+
+fn accept_backoff_active(backoff_until: Option<Instant>, now: Instant) -> bool {
+    backoff_until.is_some_and(|until| until > now)
+}
+
+fn accept_listener_poll_flags(in_backoff: bool) -> PollFlags {
+    if in_backoff {
+        PollFlags::empty()
+    } else {
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+    }
 }
 
 fn current_nofile_soft_limit() -> u64 {
@@ -2259,6 +2261,24 @@ mod tests {
         }
         let fatal = std::io::Error::from_raw_os_error(nix::libc::EACCES);
         assert!(!is_recoverable_accept_error(&fatal));
+    }
+
+    #[test]
+    fn accept_backoff_masks_listener_poll_interest() {
+        let now = Instant::now();
+        assert!(accept_backoff_active(
+            Some(now + Duration::from_millis(50)),
+            now
+        ));
+        assert!(!accept_backoff_active(
+            Some(now - Duration::from_millis(1)),
+            now
+        ));
+        assert!(accept_listener_poll_flags(true).is_empty());
+        assert_eq!(
+            accept_listener_poll_flags(false),
+            PollFlags::IN | PollFlags::ERR | PollFlags::HUP
+        );
     }
 
     #[test]
