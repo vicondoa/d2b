@@ -99,6 +99,10 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         self.attributor.cache_mut().focused_window()
     }
 
+    pub fn refresh_focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
+        self.attributor.on_host_selection_changed().window
+    }
+
     /// Called when the data-control device reports a new host selection.
     /// Queries Niri for the current focused window to attach attribution.
     pub fn on_host_selection_changed(

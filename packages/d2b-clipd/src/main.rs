@@ -586,9 +586,10 @@ struct BridgePasteRequest {
 }
 
 fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream>) {
+    let rlimit_nofile = current_nofile_soft_limit();
     if validate_fd_cap(FdCapModel {
         requested_cap: streams.len().saturating_add(1) as u64,
-        rlimit_nofile: 1024,
+        rlimit_nofile,
         base_reserved: 64,
         max_fds_per_recvmsg: 1,
     })
@@ -622,7 +623,7 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
                 });
                 if validate_fd_cap(FdCapModel {
                     requested_cap: streams.len().saturating_add(1) as u64,
-                    rlimit_nofile: 1024,
+                    rlimit_nofile,
                     base_reserved: 64,
                     max_fds_per_recvmsg: 1,
                 })
@@ -641,6 +642,12 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
             }
         }
     }
+}
+
+fn current_nofile_soft_limit() -> u64 {
+    nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
+        .map(|(soft, _)| soft)
+        .unwrap_or(1024)
 }
 
 enum BridgeStreamStatus {
@@ -724,6 +731,9 @@ impl BridgeReadError {
 
 fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
     loop {
+        if stream.read_buffer.contains(&b'\n') {
+            return parse_bridge_frame(stream);
+        }
         let mut buf = [0_u8; 4096];
         let mut iov = [std::io::IoSliceMut::new(&mut buf)];
         let mut cmsg_space = [0_u8; rustix::cmsg_space!(ScmRights(1))];
@@ -1294,8 +1304,7 @@ fn handle_arm(
     notifier: &mut DesktopNotifier,
 ) -> Result<String, String> {
     let dest = host_clipboard
-        .current_selection()
-        .and_then(|s| s.attribution.window.clone())
+        .refresh_focused_window_snapshot()
         .unwrap_or_default();
 
     let request_id = format!("arm-{}", unix_millis());
