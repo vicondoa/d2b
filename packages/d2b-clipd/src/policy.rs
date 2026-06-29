@@ -41,6 +41,32 @@ pub enum ReasonCode {
     AuditFailure,
 }
 
+impl ReasonCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::MimeRejected => "mime_rejected",
+            Self::PolicyDenied => "policy_denied",
+            Self::BackgroundProbe => "background_probe",
+            Self::IntentMissing => "intent_missing",
+            Self::PickerNotConfigured => "picker_not_configured",
+            Self::PickerBusy => "picker_busy",
+            Self::PickerCrashed => "picker_crashed",
+            Self::PickerTimeout => "picker_timeout",
+            Self::RequestExpired => "request_expired",
+            Self::FdWriteTimeout => "fd_write_timeout",
+            Self::FdClosed => "fd_closed",
+            Self::FdCapExceeded => "fd_cap_exceeded",
+            Self::BridgeUnavailable => "bridge_unavailable",
+            Self::SourceMaterializeTimeout => "source_materialize_timeout",
+            Self::MaterializationRateLimited => "materialization_rate_limited",
+            Self::MemoryCapExceeded => "memory_cap_exceeded",
+            Self::LoopSuppressed => "loop_suppressed",
+            Self::AuditFailure => "audit_failure",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttributionQuality {

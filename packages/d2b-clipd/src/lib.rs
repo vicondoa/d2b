@@ -3,6 +3,7 @@ pub mod fallback;
 pub mod fd;
 pub mod framing;
 pub mod niri;
+pub mod notifications;
 pub mod picker;
 pub mod policy;
 pub mod protocol;

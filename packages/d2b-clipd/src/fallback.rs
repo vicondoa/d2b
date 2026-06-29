@@ -12,7 +12,6 @@ pub enum FallbackState {
         entry_id: String,
         target: FocusedWindowSnapshot,
         expires_at: Instant,
-        ignore_target_restore: bool,
     },
 }
 
@@ -72,7 +71,6 @@ impl FallbackArming {
             entry_id,
             target: target.clone(),
             expires_at: now + timeout,
-            ignore_target_restore: true,
         };
         FallbackTransition::Armed
     }
@@ -89,12 +87,7 @@ impl FallbackArming {
         &mut self,
         focused: Option<FocusedWindowSnapshot>,
     ) -> FallbackTransition {
-        let FallbackState::Armed {
-            target,
-            ignore_target_restore,
-            ..
-        } = &mut self.state
-        else {
+        let FallbackState::Armed { target, .. } = &mut self.state else {
             return current_transition(&self.state);
         };
         let Some(focused) = focused else {
@@ -102,9 +95,6 @@ impl FallbackArming {
             return FallbackTransition::Cleared(FallbackClearReason::TargetDisappeared);
         };
         if target.same_target(&focused) {
-            if *ignore_target_restore {
-                *ignore_target_restore = false;
-            }
             FallbackTransition::Armed
         } else {
             self.state = FallbackState::Idle;
@@ -180,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_expected_picker_to_target_focus_restoration_once() {
+    fn ignores_expected_picker_to_target_focus_restoration() {
         let mut arming = FallbackArming::default();
         let now = Instant::now();
         arming.capture_target_before_picker(target(7, "firefox"));
@@ -190,13 +180,7 @@ mod tests {
             arming.on_focus_changed(Some(target(7, "firefox"))),
             FallbackTransition::Armed
         );
-        assert!(matches!(
-            arming.state(),
-            FallbackState::Armed {
-                ignore_target_restore: false,
-                ..
-            }
-        ));
+        assert!(matches!(arming.state(), FallbackState::Armed { .. }));
     }
 
     #[test]
