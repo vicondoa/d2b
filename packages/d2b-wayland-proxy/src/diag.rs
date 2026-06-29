@@ -126,13 +126,14 @@ impl DiagRateLimiter {
 
     /// Log a bind-denial event (security boundary enforcement).
     /// Always emits via `log::warn`; rate-limited per (vm, event, interface).
-    pub fn bind_denied(&mut self, reason: DropReason, registry_name: u32) {
+    pub fn bind_denied(&mut self, reason: DropReason, registry_name: u32, interface: &str) {
         let reason_str = reason.as_str();
         let vm = self.vm.clone();
-        self.emit("bind-denied", reason_str, || {
+        let iface = interface.to_owned();
+        self.emit("bind-denied", interface, || {
             format!(
                 "[d2b-wlproxy] vm={vm} event=bind-denied reason={reason_str} \
-                 registry-name={registry_name}"
+                 interface={iface} registry-name={registry_name}"
             )
         });
     }
@@ -233,5 +234,30 @@ mod tests {
     #[test]
     fn bounded_error_detail_scrubs_control_characters() {
         assert_eq!(bounded_error_detail("line1\nline2\r\0"), "line1?line2??");
+    }
+
+    #[test]
+    fn bind_denied_rate_limits_by_interface() {
+        let mut rl = DiagRateLimiter::new("vm".to_owned());
+        for name in 0..MAX_PER_WINDOW as u32 {
+            rl.bind_denied(
+                DropReason::BindDeniedUnadvertised,
+                name,
+                "zwp_text_input_manager_v3",
+            );
+        }
+        rl.bind_denied(
+            DropReason::BindDeniedUnadvertised,
+            100,
+            "zwp_text_input_manager_v3",
+        );
+        assert_eq!(rl.suppressed_total_for_tests(), 1);
+
+        rl.bind_denied(
+            DropReason::BindDeniedUnadvertised,
+            101,
+            "wl_data_device_manager",
+        );
+        assert_eq!(rl.suppressed_total_for_tests(), 1);
     }
 }

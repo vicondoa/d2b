@@ -112,6 +112,14 @@ document in the host configuration why the global is safe for this VM.
 Consider filing an issue or PR to have d2b classify the global so the
 warning is resolved upstream.
 
+## Default-denied app protocols
+
+Some classified app protocols are denied by default without producing an
+advisory warning. `zwp_text_input_manager_v3` is currently in this set: guest
+IME/text-input protocol features remain disabled until the proxy can validate
+seat-bound requests safely. This avoids forwarding invalid text-input requests
+that can crash guest applications under Niri-backed cross-domain Wayland.
+
 ## Warning vs. hard assertion
 
 Warnings never become hard assertions. Every warning condition still

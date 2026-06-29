@@ -565,6 +565,19 @@ struct AdvertisedGlobal {
     synthetic_clipboard: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GlobalAdvertisement {
+    name: u32,
+    interface: ObjectInterface,
+    version: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IncomingGlobalDecision {
+    Advertise(GlobalAdvertisement),
+    Hide,
+}
+
 impl FilterRegistryHandler {
     pub fn new(
         policy: Rc<FilterPolicy>,
@@ -581,9 +594,12 @@ impl FilterRegistryHandler {
         }
     }
 
-    fn ensure_synthetic_clipboard_global(&mut self, slf: &Rc<WlRegistry>, reserved_name: u32) {
+    fn ensure_synthetic_clipboard_global(
+        &mut self,
+        reserved_name: u32,
+    ) -> Option<GlobalAdvertisement> {
         if self.synthetic_clipboard_name.is_some() {
-            return;
+            return None;
         }
         let name = self.allocate_synthetic_clipboard_name(reserved_name);
         let interface = ObjectInterface::WlDataDeviceManager;
@@ -597,7 +613,19 @@ impl FilterRegistryHandler {
                 synthetic_clipboard: true,
             },
         );
-        slf.send_global(name, interface, version);
+        self.diag
+            .borrow_mut()
+            .warn("synthetic-clipboard", "advertised", || {
+                format!(
+                    "[d2b-wlproxy] vm={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
+                    self.policy.vm_name
+                )
+            });
+        Some(GlobalAdvertisement {
+            name,
+            interface,
+            version,
+        })
     }
 
     fn allocate_synthetic_clipboard_name(&self, reserved_name: u32) -> u32 {
@@ -611,21 +639,28 @@ impl FilterRegistryHandler {
         }
         unreachable!("Wayland registry exhausted every u32 global name")
     }
-}
 
-impl WlRegistryHandler for FilterRegistryHandler {
-    fn handle_global(
+    fn prepare_global(
         &mut self,
-        slf: &Rc<WlRegistry>,
         name: u32,
         interface: ObjectInterface,
         version: u32,
-    ) {
+    ) -> (Option<GlobalAdvertisement>, IncomingGlobalDecision) {
+        let synthetic = self.ensure_synthetic_clipboard_global(name);
         let iface_name = interface.name();
-        self.ensure_synthetic_clipboard_global(slf, name);
+        if Some(name) == self.synthetic_clipboard_name {
+            self.hidden_globals.insert(name);
+            if self.policy.log_filtered_globals {
+                self.diag.borrow_mut().global_filtered(iface_name);
+            }
+            return (synthetic, IncomingGlobalDecision::Hide);
+        }
         if iface_name == "wl_data_device_manager" {
             self.hidden_globals.insert(name);
-            return;
+            if self.policy.log_filtered_globals {
+                self.diag.borrow_mut().global_filtered(iface_name);
+            }
+            return (synthetic, IncomingGlobalDecision::Hide);
         }
 
         let (action, _) = self.policy.lookup(iface_name);
@@ -635,7 +670,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
                 self.diag.borrow_mut().global_filtered(iface_name);
             }
             self.hidden_globals.insert(name);
-            return;
+            return (synthetic, IncomingGlobalDecision::Hide);
         };
 
         let adv_version = self.policy.advertised_version(iface_name, version);
@@ -647,15 +682,49 @@ impl WlRegistryHandler for FilterRegistryHandler {
                 synthetic_clipboard: false,
             },
         );
-        slf.send_global(name, interface, adv_version);
+        (
+            synthetic,
+            IncomingGlobalDecision::Advertise(GlobalAdvertisement {
+                name,
+                interface,
+                version: adv_version,
+            }),
+        )
+    }
+
+    fn prepare_global_remove(&mut self, name: u32) -> bool {
+        if Some(name) == self.synthetic_clipboard_name {
+            return false;
+        }
+        if self.hidden_globals.remove(&name) {
+            return false;
+        }
+        self.advertised_globals.remove(&name);
+        true
+    }
+}
+
+impl WlRegistryHandler for FilterRegistryHandler {
+    fn handle_global(
+        &mut self,
+        slf: &Rc<WlRegistry>,
+        name: u32,
+        interface: ObjectInterface,
+        version: u32,
+    ) {
+        let (synthetic, decision) = self.prepare_global(name, interface, version);
+        if let Some(global) = synthetic {
+            slf.send_global(global.name, global.interface, global.version);
+        }
+        if let IncomingGlobalDecision::Advertise(global) = decision {
+            slf.send_global(global.name, global.interface, global.version);
+        }
     }
 
     fn handle_global_remove(&mut self, slf: &Rc<WlRegistry>, name: u32) {
-        if self.hidden_globals.remove(&name) {
-            return;
+        if self.prepare_global_remove(name) {
+            slf.send_global_remove(name);
         }
-        self.advertised_globals.remove(&name);
-        slf.send_global_remove(name);
     }
 
     fn handle_bind(&mut self, slf: &Rc<WlRegistry>, name: u32, id: Rc<dyn Object>) {
@@ -667,7 +736,9 @@ impl WlRegistryHandler for FilterRegistryHandler {
             } else {
                 DropReason::BindDeniedUnadvertised
             };
-            self.diag.borrow_mut().bind_denied(reason, name);
+            self.diag
+                .borrow_mut()
+                .bind_denied(reason, name, id.interface().name());
             // The wl-proxy decoder has already registered the newly requested
             // client object ID before this handler runs. Since the bind is not
             // forwarded, keeping the client alive would leak that ID in the
@@ -1173,10 +1244,11 @@ mod tests {
         let handler = FilterRegistryHandler::new(policy(), diag.clone(), clipboard());
 
         for name in 0..6 {
-            handler
-                .diag
-                .borrow_mut()
-                .bind_denied(crate::diag::DropReason::BindDeniedUnadvertised, name);
+            handler.diag.borrow_mut().bind_denied(
+                crate::diag::DropReason::BindDeniedUnadvertised,
+                name,
+                "zwp_text_input_manager_v3",
+            );
         }
 
         let suppressed_before_flush = diag.borrow().suppressed_total_for_tests();
@@ -1234,6 +1306,70 @@ mod tests {
             handler.allocate_synthetic_clipboard_name(u32::MAX - 1),
             u32::MAX - 2
         );
+    }
+
+    #[test]
+    fn prepare_global_hides_late_host_collision_with_synthetic_clipboard_name() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let (synthetic, first) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
+        assert_eq!(
+            synthetic,
+            Some(GlobalAdvertisement {
+                name: u32::MAX,
+                interface: ObjectInterface::WlDataDeviceManager,
+                version: 3,
+            })
+        );
+        assert!(matches!(first, IncomingGlobalDecision::Advertise(_)));
+
+        let (synthetic, colliding) = handler.prepare_global(u32::MAX, ObjectInterface::WlSeat, 9);
+        assert_eq!(synthetic, None);
+        assert_eq!(colliding, IncomingGlobalDecision::Hide);
+        let advertised = handler
+            .advertised_globals
+            .get(&u32::MAX)
+            .expect("synthetic remains advertised");
+        assert_eq!(advertised.interface, ObjectInterface::WlDataDeviceManager);
+        assert!(advertised.synthetic_clipboard);
+        assert!(handler.hidden_globals.contains(&u32::MAX));
+    }
+
+    #[test]
+    fn prepare_global_remove_ignores_synthetic_clipboard_name() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let (_synthetic, _first) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
+
+        assert!(!handler.prepare_global_remove(u32::MAX));
+        assert!(
+            handler.advertised_globals.contains_key(&u32::MAX),
+            "synthetic clipboard global must remain advertised"
+        );
+    }
+
+    #[test]
+    fn prepare_global_hides_host_data_device_manager() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let (_synthetic, decision) =
+            handler.prepare_global(11, ObjectInterface::WlDataDeviceManager, 3);
+
+        assert_eq!(decision, IncomingGlobalDecision::Hide);
+        assert!(handler.hidden_globals.contains(&11));
+        assert!(!handler.advertised_globals.contains_key(&11));
+    }
+
+    #[test]
+    fn prepare_global_hides_text_input_v3() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let (_synthetic, decision) =
+            handler.prepare_global(12, ObjectInterface::ZwpTextInputManagerV3, 1);
+
+        assert_eq!(decision, IncomingGlobalDecision::Hide);
+        assert!(handler.hidden_globals.contains(&12));
+        assert!(!handler.advertised_globals.contains_key(&12));
     }
 
     #[test]

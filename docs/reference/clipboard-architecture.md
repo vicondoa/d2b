@@ -54,6 +54,15 @@ sufficient for per-VM `d2b-<vm>-wlproxy` ACLs or lifecycle cleanup.
 The bridge is local-only, validates peer credentials, and may use `SCM_RIGHTS`
 between d2b components. Transfer FDs never go to the picker.
 
+## Guest Wayland clipboard virtualization
+
+`d2b-wayland-proxy` always exposes a synthetic `wl_data_device_manager` to
+guest clients. It does this even when the host compositor omits the standard
+clipboard global, because the guest clipboard namespace is implemented by d2b
+and is not inherited from the host compositor. If the host does advertise its
+own `wl_data_device_manager`, the proxy hides that host global and keeps guest
+`wl_data_*` objects local to the virtual clipboard path.
+
 ## Niri and paste intent
 
 `d2b-clipd` connects directly to `$NIRI_SOCKET` and speaks Niri JSON IPC. It
