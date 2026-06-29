@@ -487,10 +487,7 @@ fn read_fd_to_vec(
             }
             Err(rustix::io::Errno::INTR) => {}
             Err(rustix::io::Errno::AGAIN) => {
-                if Instant::now() >= deadline {
-                    return Err(ReasonCode::SourceMaterializeTimeout);
-                }
-                std::thread::sleep(Duration::from_millis(5));
+                wait_readable(&fd, deadline).map_err(|_| ReasonCode::SourceMaterializeTimeout)?;
             }
             Err(_) => return Err(ReasonCode::FdClosed),
         }
@@ -887,14 +884,35 @@ fn read_bounded_line(
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err("timed out waiting for newline".to_owned());
-                }
-                std::thread::sleep(Duration::from_millis(5));
+                wait_readable(&stream, deadline)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.to_string()),
         }
+    }
+}
+
+fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<(), String> {
+    let now = Instant::now();
+    if now >= deadline {
+        return Err("timed out waiting for readability".to_owned());
+    }
+    let timeout = deadline
+        .saturating_duration_since(now)
+        .as_millis()
+        .min(i32::MAX as u128) as i32;
+    let mut fds = [PollFd::new(
+        fd,
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+    )];
+    match poll(&mut fds, timeout) {
+        Ok(0) => Err("timed out waiting for readability".to_owned()),
+        Ok(_) if fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP) => {
+            Err("fd closed while waiting for readability".to_owned())
+        }
+        Ok(_) => Ok(()),
+        Err(rustix::io::Errno::INTR) => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
