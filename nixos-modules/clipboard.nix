@@ -39,15 +39,23 @@ let
     vmName = vm;
     expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
   }) bridgeVms;
+  waylandUid = toString config.users.users.${site.waylandUser}.uid;
   clipdBridgeRootTmpfiles =
     lib.optionals (cfg.enable && bridgeVms != [ ]) (
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 ${site.waylandUser} root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 ${site.waylandUser} root -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 ${site.waylandUser} root -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge 0710 ${site.waylandUser} root -"
       ]
       ++ lib.concatMap (vm: [
-        "d ${cfg.runtime.bridgeRoot}/${toString (config.users.users.${site.waylandUser}.uid)}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
-        "z ${cfg.runtime.bridgeRoot}/${toString (config.users.users.${site.waylandUser}.uid)}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${vm} 0770 ${site.waylandUser} d2b-${vm}-wlproxy -"
+        "a+ ${cfg.runtime.bridgeRoot} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
+        "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
       ]) bridgeVms
     );
 

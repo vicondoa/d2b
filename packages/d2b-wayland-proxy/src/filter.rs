@@ -280,7 +280,19 @@ impl VirtualClipboardState {
         let now = Instant::now();
         match self.bridge_reconnect.state() {
             BridgeConnectionState::Disabled => return None,
-            BridgeConnectionState::Connected { .. } => self.bridge_reconnect.disconnected(),
+            BridgeConnectionState::Connected { .. } => {
+                self.bridge_reconnect.disconnected();
+                match self.bridge_reconnect.state() {
+                    BridgeConnectionState::Backoff { .. } => {
+                        self.schedule_bridge_retry();
+                        return None;
+                    }
+                    BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
+                    BridgeConnectionState::Disabled => return None,
+                    BridgeConnectionState::Connecting { .. } => {}
+                    BridgeConnectionState::Connected { .. } => return None,
+                }
+            }
             BridgeConnectionState::Backoff { .. } => {
                 if self.next_bridge_retry.is_some_and(|retry| retry > now) {
                     return None;
@@ -311,13 +323,14 @@ impl VirtualClipboardState {
                 self.next_bridge_retry = None;
                 self.bridge = Some(stream);
             }
-            Err(_error) => {
+            Err(error) => {
                 let vm = self.vm_name.clone();
+                let error = error.to_string();
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-bridge", "connect-failed", || {
                         format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-failed"
+                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-failed error={error}"
                         )
                     });
                 self.bridge_reconnect.connect_failed();

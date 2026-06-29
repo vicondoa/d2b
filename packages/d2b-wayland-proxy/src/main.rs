@@ -200,7 +200,7 @@ fn main() {
     // listen socket. Each accepted client gets its own upstream connection below.
     match build_state(&args.connect) {
         Ok(_) => {}
-        Err(_e) => {
+        Err(e) => {
             eprintln!(
                 "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
                 args.connect
@@ -315,12 +315,13 @@ fn accept_loop(
                         let client = match state.add_client(&fd) {
                             Ok(c) => c,
                             Err(e) => {
+                                let error = error_source_chain(&e);
                                 diag.borrow_mut().warn(
                                     "client-accept",
                                     "add-client-failed",
                                     || {
                                         format!(
-                                            "[d2b-wlproxy] vm={vm} event=client-accept reason=add-client-failed client={client_id}"
+                                            "[d2b-wlproxy] vm={vm} event=client-accept reason=add-client-failed client={client_id} error={error}"
                                         )
                                     },
                                 );
@@ -340,15 +341,20 @@ fn accept_loop(
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) if is_recoverable_accept_error(&e) => {
+                        let resource_exhausted = is_resource_exhaustion_accept_error(&e);
+                        let error = e.to_string();
                         diag.borrow_mut().warn(
                             "client-accept",
                             "recoverable-accept-error",
                             || {
                                 format!(
-                                    "[d2b-wlproxy] vm={vm} event=client-accept reason=recoverable-accept-error"
+                                    "[d2b-wlproxy] vm={vm} event=client-accept reason=recoverable-accept-error error={error}"
                                 )
                             },
                         );
+                        if resource_exhausted {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
                         break;
                     }
                     Err(e) => {
@@ -385,6 +391,11 @@ fn is_recoverable_accept_error(error: &io::Error) -> bool {
     }
 
     matches!(error.raw_os_error(), Some(libc::ECONNABORTED | libc::EINTR))
+        || is_resource_exhaustion_accept_error(error)
+}
+
+fn is_resource_exhaustion_accept_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
 }
 
 /// Renders an error together with its full `source()` chain on one line, e.g.
@@ -416,6 +427,15 @@ mod tests {
     fn aborted_accept_is_recoverable() {
         let err = io::Error::from_raw_os_error(libc::ECONNABORTED);
         assert!(is_recoverable_accept_error(&err));
+    }
+
+    #[test]
+    fn fd_exhaustion_accept_errors_are_recoverable() {
+        for errno in [libc::EMFILE, libc::ENFILE] {
+            let err = io::Error::from_raw_os_error(errno);
+            assert!(is_recoverable_accept_error(&err));
+            assert!(is_resource_exhaustion_accept_error(&err));
+        }
     }
 
     #[test]
