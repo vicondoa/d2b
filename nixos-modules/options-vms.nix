@@ -644,6 +644,11 @@ in
             defaults. Each entry is passed as `--allow-global` to the Wayland
             proxy. The proxy emits runtime advisory diagnostics when
             used; the operator is explicitly narrowing the security boundary.
+            Clipboard-boundary globals (standard clipboard, primary selection,
+            privileged data-control, and DnD) are owned by d2b's virtual
+            clipboard architecture and cannot be passed through; listing them
+            here is ignored by the proxy and emits the
+            `W-ALLOW-CLIPBOARD-BOUNDARY` runtime advisory diagnostic.
           '';
         };
 

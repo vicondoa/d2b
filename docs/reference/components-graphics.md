@@ -38,7 +38,7 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `d2b.vms.<vm>.graphics.waylandProxy.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side proxy runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
 | `d2b.vms.<vm>.graphics.waylandProxy.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side proxy runner. Logs byte prefixes capped at 256 bytes per message plus fd counts; use only for short-lived corruption debugging and turn it back off after capture. |
 | `d2b.vms.<vm>.graphics.waylandProxy.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
-| `d2b.vms.<vm>.graphics.waylandProxy.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
+| `d2b.vms.<vm>.graphics.waylandProxy.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. Clipboard-boundary globals cannot be passed through and emit `W-ALLOW-CLIPBOARD-BOUNDARY` instead. |
 | `d2b.vms.<vm>.graphics.waylandProxy.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
 | `d2b.vms.<vm>.graphics.waylandProxy.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
 | `d2b.vms.<vm>.graphics.waylandProxy.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
@@ -56,6 +56,11 @@ keep dmabuf feedback v4/v5 visible while hiding linear modifiers:
 ```nix
 d2b.vms.work.graphics.waylandProxy.dmabufDeny = [ "all:linear" ];
 ```
+
+`zwp_text_input_manager_v3` is denied by default. Guest IME/text-input
+protocol features remain disabled until the proxy can validate seat-bound
+requests safely, avoiding guest application crashes from invalid forwarded
+text-input requests under Niri-backed cross-domain Wayland.
 
 Site-level dependency:
 

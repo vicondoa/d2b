@@ -195,6 +195,9 @@ longer apply.
 - **Multi-output enumeration** works through the proxy; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
 - **Clipboard and DnD** are policy-owned by d2b. The standard clipboard
-  (`wl_data_device_manager`) is virtualized by `d2b-wayland-proxy`; primary
+  (`wl_data_device_manager`) is synthetically advertised by
+  `d2b-wayland-proxy` even when the host compositor omits that global. Primary
   selection, privileged clipboard-control globals, and DnD are explicitly
   denied by the proxy policy.
+- **Wayland text-input v3** (`zwp_text_input_manager_v3`) is denied by default.
+  Guest IME/text-input protocol features are disabled by default.

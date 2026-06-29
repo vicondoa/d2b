@@ -76,7 +76,7 @@ targets, and ACA sandboxes — is documented in
 - [Provider-managed sandboxes](./provider-managed-sandboxes.md) documents the
   Azure Container Apps adapter and its absent display/I/O capabilities.
 - [Graphics](./components-graphics.md) documents local Wayland forwarding.
-- [Clipboard architecture](./clipboard-architecture.md) documents the separate
+- [Clipboard architecture](../explanation/clipboard-architecture.md) documents the separate
   clipboard authority and picker split.
 - [Video](./components-video.md) documents the video sidecar.
 - [Audio](./components-audio.md) documents sound sidecar grants.

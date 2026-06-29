@@ -3,7 +3,7 @@
 > **Reference** for the advisory runtime diagnostics the d2b
 > Wayland proxy emits when operator configuration deviates from
 > the secure baseline or touches a rule d2b classifies as required
-> or high-risk.
+> high-risk, clipboard-boundary, or unclassified.
 
 > **Status:** live for
 > `d2b.vms.<vm>.graphics.waylandProxy.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
@@ -18,8 +18,8 @@ host-side proxy process when the VM starts.
 Secure defaults emit **zero** `waylandProxy` warnings. A clean
 configuration with no overrides produces no output from this catalog.
 
-The `W-*` names below are documentation anchors. The Rust policy engine
-currently emits human-readable `PolicyWarning` messages.
+The `W-*` names below are emitted in `d2b-wayland-proxy` policy-warning
+messages and are stable grep targets for operator diagnostics.
 
 ## Warning conditions
 
@@ -79,7 +79,6 @@ high risk and denies by default.
 |---|---|
 | Screen capture | Screen/image capture globals allow guest apps to capture the host display. |
 | Virtual input | Virtual keyboard and pointer globals allow guest apps to inject arbitrary host input events. |
-| Clipboard control | Privileged data-control globals allow guest apps to read or modify arbitrary host clipboard content. |
 | Desktop shell | Layer-shell and privileged shell-surface globals give guest apps elevated compositor privileges. |
 | Session control | Session lock, output power, output management, and workspace management globals give guest apps broad compositor control. |
 | Security context | Wayland security-context extension is disabled until a concrete safe use case is identified. |
@@ -111,6 +110,25 @@ security posture of an unreviewed protocol.
 document in the host configuration why the global is safe for this VM.
 Consider filing an issue or PR to have d2b classify the global so the
 warning is resolved upstream.
+
+---
+
+### W-ALLOW-CLIPBOARD-BOUNDARY
+
+**Trigger:** `allowGlobals` includes a global that d2b classifies as a
+clipboard-boundary global.
+
+**Affected globals:** standard clipboard, primary-selection, privileged
+data-control, and drag-and-drop globals.
+
+**Why it exists:** These globals are owned by d2b's virtual clipboard
+architecture. Operator `allowGlobals` entries for them are reported as ignored
+rather than forwarded to the host compositor, so guest clipboard and DnD objects
+cannot bypass d2b policy.
+
+**How to override intentionally:** There is no passthrough override for these
+globals. Use the d2b clipboard architecture or disable the Wayland proxy for the
+VM while accepting the loss of d2b's cross-domain Wayland protections.
 
 ## Warning vs. hard assertion
 

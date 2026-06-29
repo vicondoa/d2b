@@ -53,44 +53,76 @@ pub enum PolicyWarning {
     RequiredGlobalDenied { interface: String },
     AcceleratedRenderingDisabled { interface: String },
     HighRiskGlobalEnabled { interface: String },
-    ClipboardBoundaryBypassEnabled { interface: String },
+    ClipboardBoundaryOverrideIgnored { interface: String },
     AppIdPrefixNotVmPrefix { vm: String, prefix: String },
     TitlePrefixDisabled,
     UnclassifiedGlobalAllowed { interface: String },
 }
 
 impl PolicyWarning {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::RequiredGlobalDenied { .. } => "W-DENY-BASELINE",
+            Self::AcceleratedRenderingDisabled { .. } => "W-DENY-ACCEL",
+            Self::HighRiskGlobalEnabled { .. } => "W-ALLOW-HIGH-RISK",
+            Self::ClipboardBoundaryOverrideIgnored { .. } => "W-ALLOW-CLIPBOARD-BOUNDARY",
+            Self::AppIdPrefixNotVmPrefix { .. } => "W-APP-ID-PREFIX",
+            Self::TitlePrefixDisabled => "W-TITLE-PREFIX",
+            Self::UnclassifiedGlobalAllowed { .. } => "W-ALLOW-UNCLASSIFIED",
+        }
+    }
+
+    fn sort_key(&self) -> (&'static str, &str) {
+        match self {
+            Self::RequiredGlobalDenied { interface }
+            | Self::AcceleratedRenderingDisabled { interface }
+            | Self::HighRiskGlobalEnabled { interface }
+            | Self::ClipboardBoundaryOverrideIgnored { interface }
+            | Self::UnclassifiedGlobalAllowed { interface } => (self.code(), interface.as_str()),
+            Self::AppIdPrefixNotVmPrefix { prefix, .. } => (self.code(), prefix.as_str()),
+            Self::TitlePrefixDisabled => (self.code(), ""),
+        }
+    }
+
     /// Human-readable runtime advisory emitted by d2b-wayland-proxy.
     pub fn message(&self) -> String {
         match self {
             Self::RequiredGlobalDenied { interface } => format!(
-                "waylandProxy: required global `{interface}` is denied; graphics path may break"
+                "waylandProxy: [{}] required global `{interface}` is denied; graphics path may break",
+                self.code()
             ),
             Self::AcceleratedRenderingDisabled { interface } => format!(
-                "waylandProxy: accelerated-rendering global `{interface}` is denied; \
-                 apps may fall back to software rendering"
+                "waylandProxy: [{}] accelerated-rendering global `{interface}` is denied; \
+                 apps may fall back to software rendering",
+                self.code()
             ),
             Self::HighRiskGlobalEnabled { interface } => format!(
-                "waylandProxy: high-risk global `{interface}` is enabled; \
-                 this global has elevated access to host compositor state"
+                "waylandProxy: [{}] high-risk global `{interface}` is enabled; \
+                 this global has elevated access to host compositor state",
+                self.code()
             ),
-            Self::ClipboardBoundaryBypassEnabled { interface } => format!(
-                "waylandProxy: clipboard boundary global `{interface}` is enabled; \
-                 guest clipboard/DND objects may bypass d2b virtualization policy"
+            Self::ClipboardBoundaryOverrideIgnored { interface } => format!(
+                "waylandProxy: [{}] clipboard boundary global `{interface}` override ignored; \
+                 d2b enforces virtualized clipboard, primary-selection, and DND boundaries",
+                self.code()
             ),
             Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
-                "waylandProxy: appIdPrefix is `{prefix}` rather than the default \
+                "waylandProxy: [{}] appIdPrefix is `{prefix}` rather than the default \
                  `d2b.{vm}.`; generated niri border rules will not match unless \
-                 overridden too"
+                 overridden too",
+                self.code()
             ),
             Self::TitlePrefixDisabled => {
-                "waylandProxy: titlePrefix is empty; non-niri compositors lose VM \
-                 disambiguation"
-                    .to_owned()
+                format!(
+                    "waylandProxy: [{}] titlePrefix is empty; non-niri compositors lose VM \
+                     disambiguation",
+                    self.code()
+                )
             }
             Self::UnclassifiedGlobalAllowed { interface } => format!(
-                "waylandProxy: unclassified global `{interface}` is explicitly allowed; \
-                 d2b has not reviewed this protocol's security posture"
+                "waylandProxy: [{}] unclassified global `{interface}` is explicitly allowed; \
+                 d2b has not reviewed this protocol's security posture",
+                self.code()
             ),
         }
     }
@@ -205,7 +237,7 @@ impl FilterPolicy {
         let mut warnings: Vec<PolicyWarning> = Vec::new();
 
         // Check required baseline globals.
-        for (iface, entry) in &entries {
+        for (iface, entry) in &mut entries {
             if entry.classification == Classification::RequiredBaseline
                 && entry.action == GlobalAction::Deny
             {
@@ -230,9 +262,10 @@ impl FilterPolicy {
             if entry.classification == Classification::ClipboardBoundary
                 && entry.action == GlobalAction::Allow
             {
-                warnings.push(PolicyWarning::ClipboardBoundaryBypassEnabled {
+                warnings.push(PolicyWarning::ClipboardBoundaryOverrideIgnored {
                     interface: iface.clone(),
                 });
+                entry.action = GlobalAction::Deny;
             }
             if entry.classification == Classification::Unclassified
                 && entry.action == GlobalAction::Allow
@@ -253,6 +286,7 @@ impl FilterPolicy {
         if title_prefix.is_empty() {
             warnings.push(PolicyWarning::TitlePrefixDisabled);
         }
+        warnings.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
 
         Self {
             entries,
@@ -404,7 +438,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("zwp_pointer_constraints_v1", Allow, AppDefault);
     entry!("zwp_pointer_gestures_v1", Allow, AppDefault);
     entry!("zwp_tablet_manager_v2", Allow, AppDefault);
-    entry!("zwp_text_input_manager_v3", Allow, AppDefault);
+    entry!("zwp_text_input_manager_v3", Deny, AppDefault);
     entry!("zwp_input_timestamps_manager_v1", Allow, AppDefault);
     entry!(
         "zwp_keyboard_shortcuts_inhibit_manager_v1",
@@ -431,9 +465,9 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("zwp_virtual_keyboard_manager_v1", Deny, HighRisk);
     entry!("zwlr_virtual_pointer_manager_v1", Deny, HighRisk);
 
-    // --- clipboard-control (disabled by default, high-risk) ---
-    entry!("ext_data_control_manager_v1", Deny, HighRisk);
-    entry!("zwlr_data_control_manager_v1", Deny, HighRisk);
+    // --- clipboard-control (disabled by default, architecture-enforced boundary) ---
+    entry!("ext_data_control_manager_v1", Deny, ClipboardBoundary);
+    entry!("zwlr_data_control_manager_v1", Deny, ClipboardBoundary);
     entry!(
         "zwp_primary_selection_device_manager_v1",
         Deny,
@@ -517,7 +551,6 @@ mod tests {
         for iface in &[
             "zwlr_screencopy_manager_v1",
             "zwp_virtual_keyboard_manager_v1",
-            "ext_data_control_manager_v1",
             "zwlr_layer_shell_v1",
             "ext_session_lock_manager_v1",
         ] {
@@ -533,8 +566,11 @@ mod tests {
         let p = policy_for("work");
         for iface in &[
             "wl_data_device_manager",
+            "ext_data_control_manager_v1",
+            "zwlr_data_control_manager_v1",
             "zwp_primary_selection_device_manager_v1",
             "wp_primary_selection_device_manager_v1",
+            "wp_primary_selection_unstable_v1",
             "gtk_primary_selection_device_manager",
             "xdg_toplevel_drag_manager_v1",
         ] {
@@ -543,6 +579,15 @@ mod tests {
                 "clipboard boundary global `{iface}` must be denied until virtualized"
             );
         }
+    }
+
+    #[test]
+    fn unstable_text_input_global_is_denied_by_default() {
+        let p = policy_for("work");
+        assert!(
+            !p.is_allowed("zwp_text_input_manager_v3"),
+            "text-input v3 is denied until the proxy can validate seat-bound requests"
+        );
     }
 
     #[test]
@@ -630,17 +675,72 @@ mod tests {
     }
 
     #[test]
-    fn enable_clipboard_boundary_global_produces_warning() {
+    fn enable_clipboard_boundary_global_reports_ignored_override() {
+        let boundary_globals = [
+            "wl_data_device_manager",
+            "ext_data_control_manager_v1",
+            "zwlr_data_control_manager_v1",
+            "zwp_primary_selection_device_manager_v1",
+            "wp_primary_selection_device_manager_v1",
+            "wp_primary_selection_unstable_v1",
+            "gtk_primary_selection_device_manager",
+            "xdg_toplevel_drag_manager_v1",
+        ];
         let p = FilterPolicy::build(PolicyInput {
             vm_name: "work".to_owned(),
-            allow_globals: vec!["wl_data_device_manager".to_owned()],
+            allow_globals: boundary_globals
+                .iter()
+                .map(|iface| (*iface).to_owned())
+                .collect(),
             ..Default::default()
         });
-        assert!(p.warnings.iter().any(|w| matches!(
-            w,
-            PolicyWarning::ClipboardBoundaryBypassEnabled { interface }
-            if interface == "wl_data_device_manager"
-        )));
+        for iface in boundary_globals {
+            assert!(
+                p.warnings.iter().any(|w| matches!(
+                    w,
+                    PolicyWarning::ClipboardBoundaryOverrideIgnored { interface }
+                    if interface == iface
+                )),
+                "missing ignored-override warning for {iface}"
+            );
+            assert!(
+                !p.is_allowed(iface),
+                "clipboard-boundary allow override must be ignored for {iface}"
+            );
+        }
+    }
+
+    #[test]
+    fn warning_messages_include_stable_codes_and_order() {
+        let p = FilterPolicy::build(PolicyInput {
+            vm_name: "work".to_owned(),
+            deny_globals: vec!["wl_compositor".to_owned()],
+            allow_globals: vec![
+                "wl_data_device_manager".to_owned(),
+                "zwlr_screencopy_manager_v1".to_owned(),
+                "completely_unknown_v1".to_owned(),
+            ],
+            ..Default::default()
+        });
+        let messages = p
+            .warnings
+            .iter()
+            .map(PolicyWarning::message)
+            .collect::<Vec<_>>();
+        for code in [
+            "W-ALLOW-CLIPBOARD-BOUNDARY",
+            "W-ALLOW-HIGH-RISK",
+            "W-ALLOW-UNCLASSIFIED",
+            "W-DENY-BASELINE",
+        ] {
+            assert!(
+                messages.iter().any(|message| message.contains(code)),
+                "missing warning code {code} in {messages:?}"
+            );
+        }
+        let mut sorted = messages.clone();
+        sorted.sort();
+        assert_eq!(messages, sorted);
     }
 
     #[test]
