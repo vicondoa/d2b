@@ -41,7 +41,7 @@ pub fn fallback_ready(target_label: &str) -> Notification {
     Notification {
         summary: "d2b clipboard ready to paste".to_owned(),
         body: format!(
-            "Ready to paste: press Ctrl+V in {}.",
+            "Ready to paste: perform your paste action in {}.",
             sanitize_notification_text(target_label, 80)
         ),
     }
@@ -152,7 +152,7 @@ mod tests {
         let mut notifier = RecordingNotifier::default();
         emit_fallback_ready(&mut notifier, "Personal Firefox");
         assert_eq!(notifier.notifications.len(), 1);
-        assert!(notifier.notifications[0].body.contains("Ctrl+V"));
+        assert!(notifier.notifications[0].body.contains("paste action"));
     }
 
     #[test]

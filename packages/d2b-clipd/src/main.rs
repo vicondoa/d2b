@@ -16,8 +16,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_clipd::audit::{AuditDecision, AuditEvent, AuditQueue, AuditQueueConfig, bounded_mime};
+use d2b_clipd::audit::{
+    AuditDecision, AuditEvent, AuditQueue, AuditQueueConfig, MetricEvent, MetricName, MetricsQueue,
+    bounded_mime,
+};
 use d2b_clipd::fallback::{FallbackArming, FallbackState, FallbackTransition};
+use d2b_clipd::fd::{FdCapModel, classify_fd, validate_fd_cap};
 use d2b_clipd::framing::{
     OpenRequestFrameCaps, PICKER_TO_DAEMON_MAX_FRAME_BYTES, decode_frame, encode_frame,
 };
@@ -131,6 +135,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let mut audit_queue = AuditQueue::new(AuditQueueConfig {
         per_realm_quota: 1024,
     });
+    let mut metrics_queue = MetricsQueue::new(1024);
 
     // ── Control socket ───────────────────────────────────────────────────────
     let control_socket = control_socket_path()?;
@@ -166,6 +171,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         fallback: &mut fallback,
         notifier: &mut notifier,
         audit_queue: &mut audit_queue,
+        metrics_queue: &mut metrics_queue,
     };
     event_loop.run()
 }
@@ -234,6 +240,7 @@ struct EventLoop<'a> {
     fallback: &'a mut FallbackArming,
     notifier: &'a mut DesktopNotifier,
     audit_queue: &'a mut AuditQueue,
+    metrics_queue: &'a mut MetricsQueue,
 }
 
 impl EventLoop<'_> {
@@ -409,6 +416,7 @@ impl EventLoop<'_> {
                         supervisor: self.supervisor,
                         picker_command: &self.picker_command,
                         audit_queue: self.audit_queue,
+                        metrics_queue: self.metrics_queue,
                     };
                     match handle_bridge_stream(&mut stream, &mut context) {
                         BridgeStreamStatus::Done => {}
@@ -578,6 +586,20 @@ struct BridgePasteRequest {
 }
 
 fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream>) {
+    if validate_fd_cap(FdCapModel {
+        requested_cap: streams.len().saturating_add(1) as u64,
+        rlimit_nofile: 1024,
+        base_reserved: 64,
+        max_fds_per_recvmsg: 1,
+    })
+    .is_err()
+    {
+        log::warn!(
+            "d2b-clipd: bridge stream cap exceeded for vm={}",
+            bridge.vm_name
+        );
+        return;
+    }
     loop {
         match bridge.listener.accept() {
             Ok((stream, _)) => {
@@ -598,6 +620,16 @@ fn accept_bridge_streams(bridge: &BridgeListener, streams: &mut Vec<BridgeStream
                     read_buffer: Vec::new(),
                     received_fds: Vec::new(),
                 });
+                if validate_fd_cap(FdCapModel {
+                    requested_cap: streams.len().saturating_add(1) as u64,
+                    rlimit_nofile: 1024,
+                    base_reserved: 64,
+                    max_fds_per_recvmsg: 1,
+                })
+                .is_err()
+                {
+                    break;
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) => {
@@ -624,6 +656,7 @@ struct BridgeHandlerContext<'a> {
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &'a Option<PickerCommand>,
     audit_queue: &'a mut AuditQueue,
+    metrics_queue: &'a mut MetricsQueue,
 }
 
 fn handle_bridge_stream(
@@ -631,7 +664,23 @@ fn handle_bridge_stream(
     context: &mut BridgeHandlerContext<'_>,
 ) -> BridgeStreamStatus {
     match recv_bridge_frame(bridge) {
-        Ok(request) => handle_bridge_paste_request(request, context),
+        Ok(request) => {
+            handle_bridge_paste_request(request, context);
+            loop {
+                match recv_bridge_frame(bridge) {
+                    Ok(request) => handle_bridge_paste_request(request, context),
+                    Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
+                    Err(error) => {
+                        log::warn!(
+                            "d2b-clipd: bridge frame failed for vm={}: {}",
+                            bridge.vm_name,
+                            error.message()
+                        );
+                        return BridgeStreamStatus::Done;
+                    }
+                }
+            }
+        }
         Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
         Err(error) => {
             log::warn!(
@@ -763,6 +812,12 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, B
                     "bridge frame did not carry exact attribution".to_owned(),
                 ));
             }
+            if let Err(error) = classify_fd(&fd) {
+                drop(fd);
+                return Err(BridgeReadError::Invalid(format!(
+                    "bridge transfer fd rejected: {error}"
+                )));
+            }
             log::debug!(
                 "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
                 bounded_label(&stream.vm_name),
@@ -792,6 +847,10 @@ fn handle_bridge_paste_request(
     let request_id = format!("bridge-{vm_name}-{source_id}");
     if !is_mime_allowed(&mime_type) {
         drop(fd);
+        context.metrics_queue.enqueue_droppable(MetricEvent {
+            name: MetricName::PolicyDenied,
+            reason: Some(ReasonCode::MimeRejected),
+        });
         d2b_clipd::notifications::emit_user_visible_failure(
             context.notifier,
             ReasonCode::MimeRejected,
@@ -809,6 +868,7 @@ fn handle_bridge_paste_request(
             reason: ReasonCode::MimeRejected,
             timestamp_unix_ms: unix_millis(),
         });
+        let _ = context.audit_queue.drain_all();
         return;
     }
     let dest = FocusedWindowSnapshot {
@@ -830,6 +890,10 @@ fn handle_bridge_paste_request(
         timestamp_unix_ms: unix_millis(),
     }) {
         drop(fd);
+        context.metrics_queue.enqueue_droppable(MetricEvent {
+            name: MetricName::AuditQueueOverflow,
+            reason: Some(reason),
+        });
         log::warn!(
             "d2b-clipd: bridge audit queue failed for vm={}: {}",
             bounded_label(&vm_name),
@@ -837,6 +901,7 @@ fn handle_bridge_paste_request(
         );
         return;
     }
+    let _ = context.audit_queue.drain_all();
     match context
         .host_clipboard
         .accept_paste_fd_for_destination(fd, mime_type, dest.clone())
@@ -1860,6 +1925,40 @@ mod tests {
                 || err.message().contains("exact attribution")
         );
         drop(read_fd);
+    }
+
+    #[test]
+    fn bridge_frame_rejects_more_than_one_fd() {
+        let (sender, receiver) = UnixStream::pair().expect("bridge pair");
+        let (read_a, write_a) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe a");
+        let (read_b, write_b) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe b");
+        let frame = br#"{"type":"vm_paste_request","vm_name":"work","mime_type":"text/plain","source_id":7,"source_attribution":"exact_client"}
+"#;
+        let iov = [std::io::IoSlice::new(frame)];
+        let fds = [write_a.as_raw_fd(), write_b.as_raw_fd()];
+        let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
+        nix::sys::socket::sendmsg::<()>(
+            sender.as_raw_fd(),
+            &iov,
+            &cmsg,
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+            None,
+        )
+        .expect("sendmsg");
+        drop(write_a);
+        drop(write_b);
+        let mut stream = BridgeStream {
+            vm_name: "work".to_owned(),
+            stream: receiver,
+            read_buffer: Vec::new(),
+            received_fds: Vec::new(),
+        };
+        let err = recv_bridge_frame(&mut stream).expect_err("too many fds rejected");
+        assert!(err.message().contains("too many transfer fds"));
+        drop(read_a);
+        drop(read_b);
     }
 
     #[test]

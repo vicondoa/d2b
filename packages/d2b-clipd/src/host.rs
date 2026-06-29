@@ -149,11 +149,12 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             log::debug!("d2b-clipd: paste fd rejected (already holding one)");
             return Err(ReasonCode::FdCapExceeded);
         }
-        // Best-effort current focused window as destination.
+        // Refresh synchronously at the instant of the paste request; the
+        // asynchronous Niri event stream may lag behind the Wayland send event.
         let dest = self
             .attributor
-            .cache_mut()
-            .focused_window()
+            .on_host_selection_changed()
+            .window
             .unwrap_or_default();
         self.pending_paste = Some(PasteWriteFd::new(
             write_fd,

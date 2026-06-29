@@ -319,14 +319,16 @@ impl VirtualClipboardState {
         let delivered = self.ensure_bridge_connected().is_some_and(|bridge| {
             bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
         });
-        self.mark_bridge_disconnected();
         if delivered {
             return;
         }
-        let _ = self.ensure_bridge_connected().is_some_and(|bridge| {
+        self.mark_bridge_disconnected();
+        let retried = self.ensure_bridge_connected().is_some_and(|bridge| {
             bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
         });
-        self.mark_bridge_disconnected();
+        if !retried {
+            self.mark_bridge_disconnected();
+        }
     }
 
     fn mark_bridge_disconnected(&mut self) {

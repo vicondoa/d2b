@@ -64,32 +64,32 @@ impl PolicyWarning {
     pub fn message(&self) -> String {
         match self {
             Self::RequiredGlobalDenied { interface } => format!(
-                "waylandFilter: required global `{interface}` is denied; graphics path may break"
+                "waylandProxy: required global `{interface}` is denied; graphics path may break"
             ),
             Self::AcceleratedRenderingDisabled { interface } => format!(
-                "waylandFilter: accelerated-rendering global `{interface}` is denied; \
+                "waylandProxy: accelerated-rendering global `{interface}` is denied; \
                  apps may fall back to software rendering"
             ),
             Self::HighRiskGlobalEnabled { interface } => format!(
-                "waylandFilter: high-risk global `{interface}` is enabled; \
+                "waylandProxy: high-risk global `{interface}` is enabled; \
                  this global has elevated access to host compositor state"
             ),
             Self::ClipboardBoundaryBypassEnabled { interface } => format!(
-                "waylandFilter: clipboard boundary global `{interface}` is enabled; \
+                "waylandProxy: clipboard boundary global `{interface}` is enabled; \
                  guest clipboard/DND objects may bypass d2b virtualization policy"
             ),
             Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
-                "waylandFilter: appIdPrefix is `{prefix}` rather than the default \
+                "waylandProxy: appIdPrefix is `{prefix}` rather than the default \
                  `d2b.{vm}.`; generated niri border rules will not match unless \
                  overridden too"
             ),
             Self::TitlePrefixDisabled => {
-                "waylandFilter: titlePrefix is empty; non-niri compositors lose VM \
+                "waylandProxy: titlePrefix is empty; non-niri compositors lose VM \
                  disambiguation"
                     .to_owned()
             }
             Self::UnclassifiedGlobalAllowed { interface } => format!(
-                "waylandFilter: unclassified global `{interface}` is explicitly allowed; \
+                "waylandProxy: unclassified global `{interface}` is explicitly allowed; \
                  d2b has not reviewed this protocol's security posture"
             ),
         }

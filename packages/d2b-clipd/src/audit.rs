@@ -88,6 +88,14 @@ impl AuditQueue {
     pub fn len_for_realm(&self, realm: &str) -> usize {
         self.per_realm.get(realm).map_or(0, VecDeque::len)
     }
+
+    pub fn drain_all(&mut self) -> Vec<AuditEvent> {
+        let mut events = Vec::new();
+        for queue in self.per_realm.values_mut() {
+            events.extend(queue.drain(..));
+        }
+        events
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2334,6 +2334,11 @@ where
             return if is_host_usage { 3 } else { err.exit_code() };
         }
     };
+    if raw_args.get(1).and_then(|arg| arg.to_str()) == Some("clipboard")
+        && raw_args.get(2).and_then(|arg| arg.to_str()) == Some("picker")
+    {
+        print_stderr("d2b: `d2b clipboard picker` is deprecated; use `d2b clipboard arm`.\n");
+    }
 
     let context = match Context::from_env() {
         Ok(context) => context,
