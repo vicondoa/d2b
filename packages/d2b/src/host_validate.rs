@@ -798,7 +798,7 @@ mod tests {
         // other direction.
         let expected = [
             "w4Fu", "w5Fu", "w6Fu", "w7Fu", "w8Fu", "w9Fu", "p0", "p0Fu", "p1", "p2", "p3", "p4",
-            "p5", "p6", "p7",
+            "p5", "p6", "p7", "p0Cb",
         ];
         let got: Vec<&str> = WAVE_CATALOG.iter().map(|w| w.wave).collect();
         assert_eq!(got, expected);

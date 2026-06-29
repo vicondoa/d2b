@@ -33,9 +33,10 @@ pub enum HostClipboardEvent {
     /// Host selection changed.  `allowed_mimes` contains only MIME types from
     /// the policy allowlist.  `has_secret` indicates a password-manager hint.
     /// Call [`DataControlOffer::receive`] (then flush + drop write end) to get
-    /// the data.
+    /// the data.  `offer` is `None` when the selection has no allowed MIME
+    /// types (i.e. the content cannot be pasted).
     SelectionChanged {
-        offer: DataControlOffer,
+        offer: Option<DataControlOffer>,
         allowed_mimes: Vec<String>,
         has_secret: bool,
     },
@@ -248,18 +249,26 @@ impl WlState {
                 return;
             }
         };
-        let live = match self.live.remove(&id) {
-            Some(o) => o,
-            None => return,
-        };
+        // `live` may be absent in tests that directly drive WlState without a
+        // compositor, or in rare race conditions (offer destroyed before selection).
+        let live = self.live.remove(&id);
 
         let all_mimes: Vec<String> = pending.mimes.clone();
         let has_secret = has_secret_hint(all_mimes.iter().map(String::as_str));
         let allowed_mimes: Vec<String> =
             pending.mimes.into_iter().filter(|m| is_mime_allowed(m)).collect();
 
+        // Emit the event regardless so the host clipboard can track attribution
+        // and clear stale state.  offer is None when no allowed MIME types exist
+        // (content unpasteable) or when the live proxy is unavailable.
+        let offer = if allowed_mimes.is_empty() {
+            if let Some(o) = live { o.destroy(); }
+            None
+        } else {
+            live
+        };
         self.events.push(HostClipboardEvent::SelectionChanged {
-            offer: live,
+            offer,
             allowed_mimes,
             has_secret,
         });
@@ -648,16 +657,17 @@ mod tests {
     fn offer_with_no_allowed_mimes_still_emits_selection_changed() {
         let mut state = WlState::new();
         state.pending.insert(7, PendingOffer { mimes: vec!["application/octet-stream".to_owned()] });
-        // Simulate a zwlr proxy by using the protocol_id-based path via finalize_selection.
         state.finalize_selection(7);
-        // offer is gone from pending; event emitted with empty allowed_mimes.
+        // A SelectionChanged is emitted (attribution tracking) but offer is None
+        // (the content cannot be pasted since all MIME types are policy-denied).
         assert!(
             matches!(
                 state.events.as_slice(),
-                [HostClipboardEvent::SelectionChanged { allowed_mimes, .. }]
+                [HostClipboardEvent::SelectionChanged { offer: None, allowed_mimes, .. }]
                     if allowed_mimes.is_empty()
             ),
-            "event emitted even with no allowed mimes"
+            "expected SelectionChanged with offer=None for denied-mime selection; got {:?}",
+            state.events
         );
     }
 }
