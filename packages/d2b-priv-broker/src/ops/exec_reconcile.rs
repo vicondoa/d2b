@@ -1021,6 +1021,7 @@ fn run_usbip_driver_isolated(
                     attempt = attempt + 1,
                     elapsed_ms,
                     deadline_remaining_ms = remaining_ms,
+                    error = ?error,
                     "usbip driver helper retrying transient failure"
                 );
                 last_error = Some(error);
