@@ -39,7 +39,7 @@ use d2b_clipd::picker::{
 use d2b_clipd::policy::{ReasonCode, is_mime_allowed};
 use d2b_clipd::protocol::{
     AttributionQuality, Candidate, ClientHello, DaemonToPickerMessage, DestinationMetadata,
-    OpenRequest, PickerToDaemonMessage, RealmKind,
+    OpenRequest, PickerToDaemonMessage, PlacementHint, RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
 use rustix::event::{PollFd, PollFlags, poll};
@@ -2020,7 +2020,15 @@ fn picker_handshake(
         },
         requested_mime_type: requested_mime_type.to_owned(),
         expires_at_unix_ms: unix_millis().saturating_add(30_000),
-        placement_hints: None,
+        placement_hints: Some(PlacementHint {
+            pointer_x: None,
+            pointer_y: None,
+            output_width: None,
+            output_height: None,
+            overlay_width: Some(420),
+            overlay_height: Some(520),
+            output: dest.output_label.clone(),
+        }),
         candidates,
     }));
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
