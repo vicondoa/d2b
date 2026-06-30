@@ -533,6 +533,7 @@ impl EventLoop<'_> {
                             self.host_clipboard,
                             self.bridge_selection.as_ref(),
                             &mut self.published_selection,
+                            &mut self.bridge_streams,
                             self.current_host_entry.as_ref(),
                             &self.history,
                             self.notifier,
@@ -634,6 +635,7 @@ impl EventLoop<'_> {
                 ) {
                     Ok(selection) => {
                         self.published_selection = Some(selection);
+                        notify_bridge_selection_refresh(&mut self.bridge_streams);
                         log::info!(
                             "d2b-clipd: claimed host selection as discovery source mimes={}",
                             entry.data_by_mime.len()
@@ -660,6 +662,7 @@ impl EventLoop<'_> {
                 history: &mut self.history,
             };
             handle_bridge_copy_ready(ready, &mut context);
+            notify_bridge_selection_refresh(&mut self.bridge_streams);
         }
     }
 
@@ -1418,6 +1421,27 @@ fn handle_bridge_request(request: BridgeRequest, context: &mut BridgeHandlerCont
     }
 }
 
+fn notify_bridge_selection_refresh(streams: &mut [BridgeStream]) {
+    let frame = br#"{"type":"refresh_selection"}"#;
+    for stream in streams {
+        let mut bytes = Vec::with_capacity(frame.len() + 1);
+        bytes.extend_from_slice(frame);
+        bytes.push(b'\n');
+        match stream.stream.write_all(&bytes) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                log::debug!(
+                    "d2b-clipd: bridge refresh notify failed for vm={}: {}",
+                    bounded_label(&stream.vm_name),
+                    error
+                );
+            }
+        }
+    }
+}
+
 fn handle_bridge_copy_selection(
     request: BridgeCopySelectionRequest,
     context: &mut BridgeHandlerContext<'_>,
@@ -2082,6 +2106,7 @@ fn handle_picker_message(
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     bridge_selection: Option<&BridgeSelectionState>,
     published_selection: &mut Option<PublishedSelectionState>,
+    bridge_streams: &mut [BridgeStream],
     current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     notifier: &mut DesktopNotifier,
@@ -2109,6 +2134,7 @@ fn handle_picker_message(
                 published_selection,
             ) {
                 Ok(()) => {
+                    notify_bridge_selection_refresh(bridge_streams);
                     let _ = fallback.cancel_picker();
                     let _ = supervisor.cancel_active(ReasonCode::Allowed);
                     std::thread::spawn(|| {

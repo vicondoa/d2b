@@ -11,6 +11,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    io::Read,
     os::{fd::OwnedFd, unix::net::UnixStream},
     path::PathBuf,
     rc::{Rc, Weak},
@@ -142,6 +143,7 @@ pub struct VirtualClipboardState {
     diag: Rc<RefCell<DiagRateLimiter>>,
     bridge_path: Option<PathBuf>,
     bridge: Option<UnixStream>,
+    bridge_read_buffer: Vec<u8>,
     bridge_reconnect: BridgeReconnectMachine,
     next_bridge_retry: Option<Instant>,
     mime_policy: ClipboardMimePolicy,
@@ -187,6 +189,7 @@ impl VirtualClipboardState {
             diag,
             bridge_path: bridge_config.socket_path.clone(),
             bridge: None,
+            bridge_read_buffer: Vec::new(),
             bridge_reconnect: BridgeReconnectMachine::new(&bridge_config),
             next_bridge_retry: None,
             mime_policy: ClipboardMimePolicy::v1_defaults(),
@@ -493,8 +496,73 @@ impl VirtualClipboardState {
         }
     }
 
+    pub fn drain_bridge_messages(clipboard: &Rc<RefCell<Self>>) {
+        let mut refresh = false;
+        {
+            let mut state = clipboard.borrow_mut();
+            let vm = state.vm_name.clone();
+            let mut disconnected = false;
+            let mut read_bytes = Vec::new();
+            if let Some(bridge) = state.ensure_bridge_connected() {
+                loop {
+                    let mut buf = [0_u8; 512];
+                    match bridge.read(&mut buf) {
+                        Ok(0) => {
+                            disconnected = true;
+                            break;
+                        }
+                        Ok(n) => read_bytes.extend_from_slice(&buf[..n]),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) => {
+                            let error = bounded_error_detail(error.to_string());
+                            state.diag.borrow_mut().warn(
+                                "clipboard-bridge",
+                                "read-failed",
+                                || {
+                                    format!(
+                                        "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=read-failed error={error}"
+                                    )
+                                },
+                            );
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            state.bridge_read_buffer.extend_from_slice(&read_bytes);
+            while let Some(newline) = state
+                .bridge_read_buffer
+                .iter()
+                .position(|byte| *byte == b'\n')
+            {
+                let frame = state
+                    .bridge_read_buffer
+                    .drain(..=newline)
+                    .collect::<Vec<_>>();
+                if frame
+                    .windows(br#""type":"refresh_selection""#.len())
+                    .any(|window| window == br#""type":"refresh_selection""#)
+                {
+                    refresh = true;
+                }
+            }
+            if state.bridge_read_buffer.len() > 4096 {
+                state.bridge_read_buffer.clear();
+            }
+            if disconnected {
+                state.mark_bridge_disconnected();
+            }
+        }
+        if refresh {
+            broadcast_selection(clipboard);
+        }
+    }
+
     fn mark_bridge_disconnected(&mut self) {
         self.bridge.take();
+        self.bridge_read_buffer.clear();
         self.bridge_reconnect.disconnected();
         if matches!(
             self.bridge_reconnect.state(),

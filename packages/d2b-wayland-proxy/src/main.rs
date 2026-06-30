@@ -390,6 +390,7 @@ fn accept_loop(
                 break;
             }
         }
+        VirtualClipboardState::drain_bridge_messages(&clipboard);
 
         if last_diag_flush.elapsed() >= Duration::from_secs(60) {
             diag.borrow_mut().flush_suppressed();
