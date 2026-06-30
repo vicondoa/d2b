@@ -41,6 +41,10 @@ deprecations ship one minor release before removal.
   text-input v3 forwarding by default to avoid guest app crashes on invalid
   seat-bound requests. Clipboard-boundary allow overrides now remain denied
   and emit stable `W-*` diagnostics.
+- Clipboard paste selection offers no longer send drag-and-drop action events
+  for normal selections, fixing GTK/Firefox startup through the proxy; `d2b-clipd`
+  now requests the exact pending paste MIME from the picker and installs bridge
+  sockets with deterministic peer-connect permissions.
 
 ### Added
 
