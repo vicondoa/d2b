@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 command-fds = "0.3"
 env_logger = "0.11"
+html2text = "0.15.3"
 log = "0.4"
 nix = { version = "0.29", default-features = false, features = ["fs", "resource", "socket", "uio"] }
 notify-rust = "4"

@@ -798,7 +798,7 @@ impl ClipboardHistory {
         self.entries
             .iter()
             .filter_map(|entry| {
-                let bytes = compatible_mime_bytes(&entry.data_by_mime, requested_mime_type)?;
+                let bytes = compatible_mime_payload(&entry.data_by_mime, requested_mime_type)?;
                 Some(Candidate {
                     entry_id: entry.entry_id.clone(),
                     source_realm: entry.source_realm.clone(),
@@ -806,7 +806,7 @@ impl ClipboardHistory {
                     source_app: entry.source_app.clone(),
                     source_app_id: entry.source_app_id.clone(),
                     source_attribution: entry.source_attribution,
-                    preview_text: std::str::from_utf8(bytes)
+                    preview_text: std::str::from_utf8(&bytes)
                         .ok()
                         .map(|text| sanitize_notification_text(text, 256)),
                     content_type: requested_mime_type.to_owned(),
@@ -819,30 +819,43 @@ impl ClipboardHistory {
             .collect()
     }
 
-    fn bytes_for(&self, entry_id: &str, mime_type: &str) -> Option<&[u8]> {
+    fn bytes_for(&self, entry_id: &str, mime_type: &str) -> Option<Vec<u8>> {
         self.entries
             .iter()
             .find(|entry| entry.entry_id == entry_id)
-            .and_then(|entry| compatible_mime_bytes(&entry.data_by_mime, mime_type))
+            .and_then(|entry| compatible_mime_payload(&entry.data_by_mime, mime_type))
     }
 }
 
-fn compatible_mime_bytes<'a>(
-    data_by_mime: &'a BTreeMap<String, Vec<u8>>,
+fn compatible_mime_payload(
+    data_by_mime: &BTreeMap<String, Vec<u8>>,
     requested_mime: &str,
-) -> Option<&'a [u8]> {
+) -> Option<Vec<u8>> {
     if let Some(bytes) = data_by_mime.get(requested_mime) {
-        return Some(bytes.as_slice());
+        return Some(bytes.clone());
     }
     if !is_text_plain_mime(requested_mime) {
         return None;
     }
     for fallback in ["text/plain;charset=utf-8", "text/plain"] {
         if let Some(bytes) = data_by_mime.get(fallback) {
-            return Some(bytes.as_slice());
+            return Some(bytes.clone());
         }
     }
+    if let Some(bytes) = data_by_mime.get("text/html")
+        && let Some(text) = html_to_plain_text(bytes)
+    {
+        return Some(text.into_bytes());
+    }
     None
+}
+
+fn html_to_plain_text(bytes: &[u8]) -> Option<String> {
+    let text = html2text::config::plain_no_decorate()
+        .string_from_read(bytes, 120)
+        .ok()?;
+    let text = text.trim().to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 fn compatible_mime_name<'a>(
@@ -2134,14 +2147,14 @@ fn materialize_selected_entry_fd(
         .ok_or(ReasonCode::IntentMissing)?;
     if entry_id == CURRENT_HOST_ENTRY_ID {
         if let Some(bytes) = current_host_entry
-            .and_then(|entry| compatible_mime_bytes(&entry.data_by_mime, requested_mime))
+            .and_then(|entry| compatible_mime_payload(&entry.data_by_mime, requested_mime))
         {
             log::debug!(
                 "d2b-clipd: materializing current host entry mime={} bytes={}",
                 bounded_mime(requested_mime),
                 bytes.len()
             );
-            return pipe_from_bytes(bytes.to_vec());
+            return pipe_from_bytes(bytes);
         }
         log::debug!(
             "d2b-clipd: current host entry missing requested mime={}",
@@ -2155,11 +2168,11 @@ fn materialize_selected_entry_fd(
             bounded_mime(requested_mime),
             bytes.len()
         );
-        return pipe_from_bytes(bytes.to_vec());
+        return pipe_from_bytes(bytes);
     }
     if entry_id == CURRENT_BRIDGE_ENTRY_ID {
         let selection = bridge_selection.ok_or(ReasonCode::RequestExpired)?;
-        let bytes = compatible_mime_bytes(&selection.data_by_mime, requested_mime)
+        let bytes = compatible_mime_payload(&selection.data_by_mime, requested_mime)
             .ok_or(ReasonCode::MimeRejected)?;
         log::debug!(
             "d2b-clipd: materializing current VM entry vm={} mime={} bytes={}",
@@ -2167,7 +2180,7 @@ fn materialize_selected_entry_fd(
             bounded_mime(requested_mime),
             bytes.len()
         );
-        return pipe_from_bytes(bytes.to_vec());
+        return pipe_from_bytes(bytes);
     }
     if entry_id != CURRENT_HOST_ENTRY_ID {
         return Err(ReasonCode::PolicyDenied);
@@ -2535,7 +2548,7 @@ fn picker_candidates(
 ) -> Vec<Candidate> {
     let mut candidates = history.candidates(requested_mime_type);
     if let Some(entry) = current_host_entry
-        && let Some(bytes) = compatible_mime_bytes(&entry.data_by_mime, requested_mime_type)
+        && let Some(bytes) = compatible_mime_payload(&entry.data_by_mime, requested_mime_type)
     {
         candidates.retain(|candidate| candidate.entry_id != CURRENT_HOST_ENTRY_ID);
         candidates.insert(
@@ -2547,7 +2560,7 @@ fn picker_candidates(
                 source_app: entry.source_app.clone(),
                 source_app_id: entry.source_app_id.clone(),
                 source_attribution: entry.source_attribution,
-                preview_text: std::str::from_utf8(bytes)
+                preview_text: std::str::from_utf8(&bytes)
                     .ok()
                     .map(|text| sanitize_notification_text(text, 256)),
                 content_type: requested_mime_type.to_owned(),
@@ -3028,6 +3041,32 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
+
+    #[test]
+    fn compatible_mime_payload_converts_html_to_plain_text() {
+        let mut data = BTreeMap::new();
+        data.insert(
+            "text/html".to_owned(),
+            b"<p>Hello <strong>URL</strong> bar</p>".to_vec(),
+        );
+
+        let plain = compatible_mime_payload(&data, "text/plain").expect("plain fallback");
+        assert_eq!(String::from_utf8(plain).expect("utf8"), "Hello URL bar");
+
+        let charset =
+            compatible_mime_payload(&data, "text/plain;charset=utf-8").expect("charset fallback");
+        assert_eq!(String::from_utf8(charset).expect("utf8"), "Hello URL bar");
+    }
+
+    #[test]
+    fn compatible_mime_payload_prefers_exact_plain_over_html() {
+        let mut data = BTreeMap::new();
+        data.insert("text/html".to_owned(), b"<p>HTML</p>".to_vec());
+        data.insert("text/plain".to_owned(), b"plain".to_vec());
+
+        let plain = compatible_mime_payload(&data, "text/plain").expect("plain");
+        assert_eq!(plain, b"plain");
+    }
 
     #[test]
     fn parses_required_args() {
