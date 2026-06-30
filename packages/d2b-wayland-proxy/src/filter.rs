@@ -321,6 +321,12 @@ impl VirtualClipboardState {
             return;
         };
         let mime_types = stored.borrow().mime_types.clone();
+        log::info!(
+            "[d2b-wlproxy] vm={} clipboard: publish selection source={} mimes={}",
+            self.vm_name,
+            source.unique_id(),
+            mime_types.len()
+        );
         for mime_type in mime_types {
             if !matches!(
                 self.mime_policy.decide(self.route(), &mime_type),
@@ -356,6 +362,12 @@ impl VirtualClipboardState {
                 source_id: source.unique_id(),
                 kind: BridgeTransferKind::CopySelection,
             };
+            log::info!(
+                "[d2b-wlproxy] vm={} clipboard: handoff copy source={} mime={}",
+                self.vm_name,
+                source.unique_id(),
+                bounded_log_mime(&mime_type)
+            );
             self.handoff_via_bridge(&read_fd, &metadata);
             drop(read_fd);
         }
@@ -884,7 +896,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         });
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().register_source(id);
-            log::debug!(
+            log::info!(
                 "[d2b-wlproxy] vm={} clipboard: source created id={}",
                 self.vm_name,
                 id.unique_id(),
@@ -906,7 +918,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         });
         if let Some(clipboard) = self.clipboard.upgrade() {
             register_virtual_device(&clipboard, id);
-            log::debug!(
+            log::info!(
                 "[d2b-wlproxy] vm={} clipboard: device registered id={}",
                 self.vm_name,
                 id.unique_id(),
@@ -928,7 +940,7 @@ impl WlDataSourceHandler for VirtualDataSourceHandler {
     fn handle_offer(&mut self, slf: &Rc<WlDataSource>, mime_type: &str) {
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().add_source_mime(slf, mime_type);
-            log::debug!(
+            log::info!(
                 "[d2b-wlproxy] vm={} clipboard: source id={} announced mime={}",
                 self.vm_name,
                 slf.unique_id(),
@@ -993,7 +1005,7 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
         source: Option<&Rc<WlDataSource>>,
         _serial: u32,
     ) {
-        log::debug!(
+        log::info!(
             "[d2b-wlproxy] vm={} clipboard: set_selection source={}",
             self.vm_name,
             source.map_or(0, |s| s.unique_id()),

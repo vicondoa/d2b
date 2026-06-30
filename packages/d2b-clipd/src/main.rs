@@ -1208,6 +1208,13 @@ fn handle_bridge_copy_selection(
             return;
         }
     };
+    log::info!(
+        "d2b-clipd: bridge copy received vm={} source_id={} mime={} bytes={}",
+        bounded_label(&vm_name),
+        source_id,
+        bounded_mime(&mime_type),
+        bytes.len()
+    );
 
     let replace = context.bridge_selection.as_ref().is_none_or(|selection| {
         selection.vm_name != vm_name || selection.vm_source_id != source_id
