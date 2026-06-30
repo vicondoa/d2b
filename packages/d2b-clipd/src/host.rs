@@ -71,8 +71,10 @@ pub struct HostSelection {
 pub struct HostClipboard<P> {
     attributor: HostClipboardAttributor<P>,
     current_selection: Option<HostSelection>,
-    /// At most one paste request held open at a time.
-    pending_paste: Option<PasteWriteFd>,
+    /// FDs waiting for the active picker decision. A single compositor paste
+    /// can request several MIME variants; one picker Select must satisfy all
+    /// compatible write FDs rather than letting later requests observe EOF.
+    pending_paste: Vec<PasteWriteFd>,
     paste_fd_timeout: Duration,
 }
 
@@ -81,7 +83,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         Self {
             attributor,
             current_selection: None,
-            pending_paste: None,
+            pending_paste: Vec::new(),
             paste_fd_timeout,
         }
     }
@@ -149,13 +151,13 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         write_fd: OwnedFd,
         mime_type: String,
     ) -> Result<FocusedWindowSnapshot, ReasonCode> {
-        if self.pending_paste.is_some() {
+        if !self.pending_paste.is_empty() {
             // Drop the new fd immediately so the requester gets EOF.
             log::debug!("d2b-clipd: paste fd rejected (already holding one)");
             return Err(ReasonCode::FdCapExceeded);
         }
         let dest = self.focused_window_snapshot().unwrap_or_default();
-        self.pending_paste = Some(PasteWriteFd::new(
+        self.pending_paste.push(PasteWriteFd::new(
             write_fd,
             mime_type,
             dest.clone(),
@@ -170,17 +172,31 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         mime_type: String,
         dest: FocusedWindowSnapshot,
     ) -> Result<FocusedWindowSnapshot, ReasonCode> {
-        if self.pending_paste.is_some() {
+        if !self.pending_paste.is_empty() {
             log::debug!("d2b-clipd: paste fd rejected (already holding one)");
             return Err(ReasonCode::FdCapExceeded);
         }
-        self.pending_paste = Some(PasteWriteFd::new(
+        self.pending_paste.push(PasteWriteFd::new(
             write_fd,
             mime_type,
             dest.clone(),
             self.paste_fd_timeout,
         ));
         Ok(dest)
+    }
+
+    pub fn queue_paste_fd_for_destination(
+        &mut self,
+        write_fd: OwnedFd,
+        mime_type: String,
+        dest: FocusedWindowSnapshot,
+    ) {
+        self.pending_paste.push(PasteWriteFd::new(
+            write_fd,
+            mime_type,
+            dest,
+            self.paste_fd_timeout,
+        ));
     }
 
     /// Fulfil the pending paste with `data` bytes, then drop the fd.
@@ -190,25 +206,30 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
         data: &[u8],
         notifier: &mut impl Notifier,
     ) -> Result<(), ReasonCode> {
-        let paste = self.pending_paste.take().ok_or(ReasonCode::IntentMissing)?;
+        let pastes = self.take_pending_pastes();
+        if pastes.is_empty() {
+            return Err(ReasonCode::IntentMissing);
+        }
         let bytes = data.to_vec();
-        let mime = paste.mime_type.clone();
-        let deadline = paste.deadline;
         std::thread::Builder::new()
             .name("d2b-clipd-paste-write".to_owned())
             .spawn(move || {
-                match write_all_nonblocking(&paste.fd, &bytes, deadline) {
-                    Ok(()) => {
-                        log::debug!("d2b-clipd: paste write complete");
+                for paste in pastes {
+                    let mime = paste.mime_type.clone();
+                    let deadline = paste.deadline;
+                    match write_all_nonblocking(&paste.fd, &bytes, deadline) {
+                        Ok(()) => {
+                            log::debug!("d2b-clipd: paste write complete");
+                        }
+                        Err(error) => {
+                            log::debug!(
+                                "d2b-clipd: paste write failed for mime={}: {error}",
+                                crate::audit::bounded_mime(&mime)
+                            );
+                        }
                     }
-                    Err(error) => {
-                        log::debug!(
-                            "d2b-clipd: paste write failed for mime={}: {error}",
-                            crate::audit::bounded_mime(&mime)
-                        );
-                    }
+                    drop(paste.fd);
                 }
-                drop(paste.fd);
             })
             .map_err(|error| {
                 log::debug!("d2b-clipd: paste writer spawn failed: {error}");
@@ -221,12 +242,12 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     /// Check whether the pending paste fd has expired and close it if so.
     /// Returns the expired `PasteWriteFd` so the caller can emit an event.
     pub fn check_paste_timeout(&mut self, now: Instant) -> Option<PasteWriteFd> {
-        let expired = self
-            .pending_paste
-            .as_ref()
-            .is_some_and(|p| p.is_expired(now));
+        let expired = self.pending_paste.iter().any(|p| p.is_expired(now));
         if expired {
-            let paste = self.pending_paste.take().unwrap();
+            let paste = self.pending_paste.remove(0);
+            for extra in self.pending_paste.drain(..) {
+                extra.close_with_reason(ReasonCode::FdWriteTimeout);
+            }
             log::debug!(
                 "d2b-clipd: paste fd timed out for mime={}",
                 crate::audit::bounded_mime(&paste.mime_type)
@@ -240,7 +261,15 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
     /// Take the pending paste fd out of the state (for passing to a write
     /// helper task or fulfilling via a materialized entry).
     pub fn take_pending_paste(&mut self) -> Option<PasteWriteFd> {
-        self.pending_paste.take()
+        if self.pending_paste.is_empty() {
+            None
+        } else {
+            Some(self.pending_paste.remove(0))
+        }
+    }
+
+    pub fn take_pending_pastes(&mut self) -> Vec<PasteWriteFd> {
+        self.pending_paste.drain(..).collect()
     }
 
     /// Peek at the current selection.
@@ -250,11 +279,11 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
 
     /// Peek at the current paste fd.
     pub fn pending_paste(&self) -> Option<&PasteWriteFd> {
-        self.pending_paste.as_ref()
+        self.pending_paste.first()
     }
 
     pub fn pending_paste_deadline(&self) -> Option<Instant> {
-        self.pending_paste.as_ref().map(|paste| paste.deadline)
+        self.pending_paste.iter().map(|paste| paste.deadline).min()
     }
 
     /// Attribution quality of the current selection.
@@ -351,12 +380,12 @@ mod tests {
         assert!(hc.check_paste_timeout(Instant::now()).is_none());
 
         // Force expiry by using past deadline directly.
-        let paste = hc.pending_paste.as_mut().unwrap();
+        let paste = hc.pending_paste.first_mut().unwrap();
         paste.deadline = Instant::now() - Duration::from_millis(1);
 
         let expired = hc.check_paste_timeout(Instant::now()).expect("expired");
         assert_eq!(expired.mime_type, "text/plain");
-        assert!(hc.pending_paste.is_none());
+        assert!(hc.pending_paste.is_empty());
     }
 
     #[test]

@@ -1541,6 +1541,14 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     .host_clipboard
                     .refresh_focused_window_snapshot()
                     .unwrap_or_default();
+                if context.host_clipboard.pending_paste().is_some() {
+                    context.host_clipboard.queue_paste_fd_for_destination(
+                        fd,
+                        mime_type.clone(),
+                        dest,
+                    );
+                    return;
+                }
                 match context.host_clipboard.accept_paste_fd_for_destination(
                     fd,
                     mime_type.clone(),
@@ -1571,6 +1579,14 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 return;
             }
             // Host application requesting paste data.  Hold the write FD.
+            if let Some(existing) = context.host_clipboard.pending_paste() {
+                context.host_clipboard.queue_paste_fd_for_destination(
+                    fd,
+                    mime_type.clone(),
+                    existing.destination.clone(),
+                );
+                return;
+            }
             match context
                 .host_clipboard
                 .accept_paste_fd(fd, mime_type.clone())
