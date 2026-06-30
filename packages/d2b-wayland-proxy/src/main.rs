@@ -33,6 +33,7 @@ use d2b_wayland_proxy::{
 };
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
+use smallvec::{SmallVec, smallvec};
 
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 
@@ -285,18 +286,28 @@ fn accept_loop(
     let mut last_diag_flush = Instant::now();
     let mut listener_backoff_until: Option<Instant> = None;
     while state.is_not_destroyed() {
-        let (listener_ready, _state_ready) = {
+        let (listener_ready, _state_ready, bridge_ready) = {
             let now = Instant::now();
             let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
             if !listener_in_backoff {
                 listener_backoff_until = None;
             }
             let diag_timeout = Duration::from_secs(60).saturating_sub(last_diag_flush.elapsed());
-            let timeout = accept_poll_timeout_ms(diag_timeout, listener_backoff_until, now);
-            let mut poll_fds = [
+            let clipboard_ref = clipboard.borrow();
+            let timeout = accept_poll_timeout_ms(
+                diag_timeout,
+                listener_backoff_until,
+                clipboard_ref.bridge_retry_deadline(),
+                now,
+            );
+            let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
                 PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
+            let bridge_poll_index = poll_fds.len();
+            if let Some((bridge, flags)) = clipboard_ref.bridge_poll_stream_and_flags() {
+                poll_fds.push(PollFd::new(bridge, flags));
+            }
             match poll(&mut poll_fds, timeout) {
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
@@ -308,6 +319,9 @@ fn accept_loop(
             (
                 !listener_in_backoff && poll_fds[0].revents().contains(PollFlags::IN),
                 !poll_fds[1].revents().is_empty(),
+                poll_fds
+                    .get(bridge_poll_index)
+                    .is_some_and(|fd| !fd.revents().is_empty()),
             )
         };
 
@@ -390,7 +404,10 @@ fn accept_loop(
                 break;
             }
         }
-        VirtualClipboardState::drain_bridge_messages(&clipboard);
+        VirtualClipboardState::drive_bridge_io(&clipboard, bridge_ready);
+        if bridge_ready {
+            VirtualClipboardState::drain_bridge_messages(&clipboard);
+        }
 
         if last_diag_flush.elapsed() >= Duration::from_secs(60) {
             diag.borrow_mut().flush_suppressed();
@@ -432,13 +449,18 @@ fn listener_accept_poll_flags(in_backoff: bool) -> PollFlags {
 fn accept_poll_timeout_ms(
     diag_timeout: Duration,
     listener_backoff_until: Option<Instant>,
+    bridge_retry_until: Option<Instant>,
     now: Instant,
 ) -> i32 {
     let backoff_timeout = listener_backoff_until
         .map(|until| until.saturating_duration_since(now))
         .unwrap_or(diag_timeout);
+    let bridge_timeout = bridge_retry_until
+        .map(|until| until.saturating_duration_since(now))
+        .unwrap_or(diag_timeout);
     diag_timeout
         .min(backoff_timeout)
+        .min(bridge_timeout)
         .as_millis()
         .min(i32::MAX as u128) as i32
 }
@@ -494,8 +516,17 @@ mod tests {
             PollFlags::IN | PollFlags::ERR | PollFlags::HUP
         );
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), now),
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), None, now),
             50
+        );
+        assert_eq!(
+            accept_poll_timeout_ms(
+                Duration::from_secs(60),
+                Some(now + Duration::from_secs(5)),
+                Some(now + Duration::from_millis(25)),
+                now,
+            ),
+            25
         );
     }
 
@@ -507,7 +538,7 @@ mod tests {
             now
         ));
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), now),
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now),
             0
         );
     }

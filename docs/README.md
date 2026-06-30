@@ -71,9 +71,6 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   lifecycle capability boundaries.
-- [`explanation/clipboard-architecture.md`](./explanation/clipboard-architecture.md) —
-  trusted clipboard authority, picker split, Niri integration, and bridge
-  runtime path contract.
 - [`reference/clipboard-picker-protocol.md`](./reference/clipboard-picker-protocol.md) —
   versioned socketpair JSON protocol between `d2b-clipd` and the picker.
 - [`reference/clipboard-policy.md`](./reference/clipboard-policy.md) —
@@ -178,6 +175,9 @@ Understanding-oriented prose. The "why" behind the design choices.
 - [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) —
   persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and
   non-goals for persistent named guest shells.
+- [`explanation/clipboard-architecture.md`](./explanation/clipboard-architecture.md) —
+  trusted clipboard authority, picker split, Niri integration, and bridge
+  runtime path contract.
 - [`adr/README.md`](./adr/README.md) — architecture decision
   records for load-bearing design choices that complement the
   explanation narrative.

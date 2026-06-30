@@ -90,18 +90,12 @@ clipboard bridge, plus picker exits before selection completion. These warnings
 are operational signals only; clipboard transfer decisions and byte counts remain
 in the structured audit/metrics paths.
 
-`d2b-clip-debug` provides local Wayland probe commands for development and
-manual validation:
-
-```bash
-d2b-clip-debug wl-copy "hello from this Wayland session"
-d2b-clip-debug wl-paste text/plain
-```
-
-The probes use only the standard unprivileged Wayland clipboard protocol of the
-session they run inside. They do not talk to the picker protocol, do not receive
-privileged data-control globals, and do not bypass `d2b-clipd` for VM boundary
-transfers.
+`d2b-clip-debug` provides local Wayland probes for development and manual
+validation. The probes use only the standard unprivileged Wayland clipboard
+protocol of the session they run inside. They do not talk to the picker protocol,
+do not receive privileged data-control globals, and do not bypass `d2b-clipd`
+for VM boundary transfers. See the diagnostic commands in
+[`../how-to/configure-clipboard-picker.md`](../how-to/configure-clipboard-picker.md).
 
 ## Initial limitations
 

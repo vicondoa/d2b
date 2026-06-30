@@ -1,7 +1,7 @@
-use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use thiserror::Error;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -55,24 +55,7 @@ pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
         .map_err(|_| VirtualKeyboardError::MissingVirtualKeyboard)?;
     let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
 
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "d2b-clipd-keymap-{}-{nanos}.xkb",
-        std::process::id()
-    ));
-    let mut keymap = OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .write(true)
-        .open(&path)
-        .map_err(|error| VirtualKeyboardError::Keymap(error.to_string()))?;
-    keymap
-        .write_all(PASTE_KEYMAP)
-        .and_then(|_| keymap.flush())
-        .map_err(|error| VirtualKeyboardError::Keymap(error.to_string()))?;
+    let keymap = create_keymap_memfd()?;
 
     keyboard.keymap(
         1,
@@ -106,9 +89,19 @@ pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
     keyboard.key(0, 1, 0);
     keyboard.destroy();
     let _ = connection.flush();
-    let _ = std::fs::remove_file(path);
 
     Ok(())
+}
+
+fn create_keymap_memfd() -> Result<File, VirtualKeyboardError> {
+    let keymap_fd = rustix::fs::memfd_create("d2b-clipd-keymap", rustix::fs::MemfdFlags::CLOEXEC)
+        .map_err(|error| VirtualKeyboardError::Keymap(error.to_string()))?;
+    let mut keymap = File::from(keymap_fd);
+    keymap
+        .write_all(PASTE_KEYMAP)
+        .and_then(|_| keymap.flush())
+        .map_err(|error| VirtualKeyboardError::Keymap(error.to_string()))?;
+    Ok(keymap)
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for VirtualKeyboardState {
@@ -137,5 +130,20 @@ mod tests {
         assert!(keymap.contains("Control_L"));
         assert!(keymap.contains("[v, V]"));
         assert!(!keymap.contains("include \"evdev\""));
+    }
+
+    #[test]
+    fn keymap_fd_is_anonymous_memfd() {
+        use std::os::fd::AsRawFd;
+
+        let keymap = create_keymap_memfd().expect("memfd keymap");
+        let link =
+            std::fs::read_link(format!("/proc/self/fd/{}", keymap.as_raw_fd())).expect("fd link");
+
+        assert!(
+            link.to_string_lossy().contains("memfd:d2b-clipd-keymap"),
+            "expected anonymous memfd, got {}",
+            link.display()
+        );
     }
 }

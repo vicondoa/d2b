@@ -220,7 +220,8 @@ impl BridgeReconnectMachine {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffStatus {
     Delivered,
-    Failed,
+    Backpressure,
+    Failed(Option<nix::errno::Errno>),
 }
 
 /// Owns a local transfer FD until the bridge handoff attempt reaches a terminal
@@ -273,17 +274,33 @@ impl BridgeHandoff for UnixStream {
         let iov = [IoSlice::new(frame.as_bytes())];
         let fds = [raw_fd];
         let cmsg = [nix::sys::socket::ControlMessage::ScmRights(&fds)];
-        match nix::sys::socket::sendmsg::<()>(
-            self.as_raw_fd(),
-            &iov,
-            &cmsg,
-            nix::sys::socket::MsgFlags::MSG_NOSIGNAL | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
-            None,
-        ) {
-            Ok(n) if n == frame.len() => HandoffStatus::Delivered,
-            Ok(_) | Err(_) => HandoffStatus::Failed,
-        }
+        handoff_status_from_sendmsg_result(
+            nix::sys::socket::sendmsg::<()>(
+                self.as_raw_fd(),
+                &iov,
+                &cmsg,
+                nix::sys::socket::MsgFlags::MSG_NOSIGNAL | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+                None,
+            ),
+            frame.len(),
+        )
     }
+}
+
+fn handoff_status_from_sendmsg_result(
+    result: Result<usize, nix::errno::Errno>,
+    frame_len: usize,
+) -> HandoffStatus {
+    match result {
+        Ok(n) if n == frame_len => HandoffStatus::Delivered,
+        Err(error) if is_would_block_errno(error) => HandoffStatus::Backpressure,
+        Ok(_) => HandoffStatus::Failed(None),
+        Err(error) => HandoffStatus::Failed(Some(error)),
+    }
+}
+
+fn is_would_block_errno(error: nix::errno::Errno) -> bool {
+    error == nix::errno::Errno::EAGAIN
 }
 
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
@@ -449,7 +466,28 @@ mod tests {
 
     #[test]
     fn failed_handoff_closes_local_fd_copy() {
-        assert_peer_observes_local_close(HandoffStatus::Failed);
+        assert_peer_observes_local_close(HandoffStatus::Failed(Some(nix::errno::Errno::EPIPE)));
+    }
+
+    #[test]
+    fn backpressured_handoff_closes_local_fd_copy() {
+        assert_peer_observes_local_close(HandoffStatus::Backpressure);
+    }
+
+    #[test]
+    fn sendmsg_backpressure_is_not_fatal_handoff_failure() {
+        assert_eq!(
+            handoff_status_from_sendmsg_result(Err(nix::errno::Errno::EAGAIN), 128),
+            HandoffStatus::Backpressure
+        );
+        assert_eq!(
+            handoff_status_from_sendmsg_result(Ok(64), 128),
+            HandoffStatus::Failed(None)
+        );
+        assert_eq!(
+            handoff_status_from_sendmsg_result(Err(nix::errno::Errno::EPIPE), 128),
+            HandoffStatus::Failed(Some(nix::errno::Errno::EPIPE))
+        );
     }
 
     #[test]

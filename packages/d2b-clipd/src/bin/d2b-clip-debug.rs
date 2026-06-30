@@ -290,25 +290,44 @@ fn dispatch_once_until<State>(
             drop(guard);
             Err("timed out waiting for Wayland event".to_owned())
         }
-        Ok(_)
-            if poll_fd[0]
-                .revents()
-                .intersects(rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP) =>
-        {
-            drop(guard);
-            Err("Wayland connection closed while waiting for event".to_owned())
-        }
-        Ok(_) => {
-            guard.read().map_err(|e| format!("read wayland: {e}"))?;
-            queue
-                .dispatch_pending(state)
-                .map_err(|e| format!("dispatch pending: {e}"))
-        }
+        Ok(_) => match wayland_poll_action(poll_fd[0].revents()) {
+            WaylandPollAction::Read => {
+                guard.read().map_err(|e| format!("read wayland: {e}"))?;
+                queue
+                    .dispatch_pending(state)
+                    .map_err(|e| format!("dispatch pending: {e}"))
+            }
+            WaylandPollAction::Closed => {
+                drop(guard);
+                Err("Wayland connection closed while waiting for event".to_owned())
+            }
+            WaylandPollAction::Ignore => {
+                drop(guard);
+                Ok(0)
+            }
+        },
         Err(rustix::io::Errno::INTR) => Ok(0),
         Err(error) => {
             drop(guard);
             Err(format!("poll Wayland socket: {error}"))
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaylandPollAction {
+    Read,
+    Closed,
+    Ignore,
+}
+
+fn wayland_poll_action(revents: rustix::event::PollFlags) -> WaylandPollAction {
+    if revents.contains(rustix::event::PollFlags::IN) {
+        WaylandPollAction::Read
+    } else if revents.intersects(rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP) {
+        WaylandPollAction::Closed
+    } else {
+        WaylandPollAction::Ignore
     }
 }
 
@@ -386,5 +405,18 @@ fn wait_fd(
         }
         Err(rustix::io::Errno::INTR) => Ok(()),
         Err(error) => Err(format!("poll debug transfer fd: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_poll_action_prioritizes_read_before_hup() {
+        let action =
+            wayland_poll_action(rustix::event::PollFlags::IN | rustix::event::PollFlags::HUP);
+
+        assert_eq!(action, WaylandPollAction::Read);
     }
 }

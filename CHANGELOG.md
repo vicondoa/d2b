@@ -27,6 +27,9 @@ deprecations ship one minor release before removal.
   depend on host-local ACL overrides.
 - Console drainers now spawn on a daemon-owned Tokio runtime even when console
   attach requests are handled by synchronous public-socket worker threads.
+- Clipboard documentation now follows Diataxis placement more closely: the
+  architecture overview is indexed as Explanation, while `d2b-clip-debug`
+  diagnostic command examples live in the clipboard picker how-to.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
@@ -55,6 +58,19 @@ deprecations ship one minor release before removal.
   requests open the picker first and serve the replayed transfer immediately
   from the published selection instead of holding a Wayland transfer FD across
   picker interaction.
+- Clipboard bridge hardening now binds per-VM bridge sockets under a temporary
+  umask before starting background helper threads, uses anonymous memfds for
+  virtual-keyboard keymaps, closes bridge streams after partial refresh writes,
+  retains pending nonblocking bridge connects for `POLLOUT` completion, queues
+  bridge handoffs across transient send backpressure, bounds guest-controlled
+  proxy diagnostic label cardinality, and prunes stale host-backed virtual
+  offers.
+- VM clipboard history now aggregates all MIME variants for the same exact VM
+  source under an injective bridge entry id, and the bridge-published selection
+  echo guard no longer depends on a time window.
+- `d2b-clip-debug` and picker Wayland polling now process readable events
+  before hangup/error handling so final Wayland events are not dropped on
+  disconnect.
 
 ### Added
 

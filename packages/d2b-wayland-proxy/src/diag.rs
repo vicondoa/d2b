@@ -42,6 +42,25 @@ struct BucketState {
 const WINDOW: Duration = Duration::from_secs(60);
 const MAX_PER_WINDOW: u64 = 5;
 const DIAG_ERROR_MAX_BYTES: usize = 256;
+const DIAG_LABEL_MAX_BYTES: usize = 64;
+const MAX_BUCKETS: usize = 256;
+const OVERFLOW_LABEL: &str = "__overflow__";
+
+fn bounded_diag_label(label: &str) -> String {
+    let mut out = String::new();
+    for ch in label.chars() {
+        if out.len() + ch.len_utf8() > DIAG_LABEL_MAX_BYTES {
+            out.push_str("...");
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else {
+            out.push('?');
+        }
+    }
+    out
+}
 
 pub fn bounded_error_detail(error: impl Into<String>) -> String {
     let error = error
@@ -84,10 +103,22 @@ impl DiagRateLimiter {
     /// Returns `true` if the event was emitted (not suppressed), `false` if rate-limited.
     fn emit(&mut self, event: &'static str, label: &str, msg: impl FnOnce() -> String) -> bool {
         let now = Instant::now();
+        let bounded_label = bounded_diag_label(label);
+        self.prune_expired(now);
+        let label = if self.buckets.len() >= MAX_BUCKETS
+            && !self.buckets.contains_key(&RateKey {
+                vm: self.vm.clone(),
+                event,
+                label: bounded_label.clone(),
+            }) {
+            OVERFLOW_LABEL.to_owned()
+        } else {
+            bounded_label
+        };
         let key = RateKey {
             vm: self.vm.clone(),
             event,
-            label: label.to_owned(),
+            label: label.clone(),
         };
         let bucket = self.buckets.entry(key).or_insert_with(|| BucketState {
             count: 0,
@@ -105,6 +136,7 @@ impl DiagRateLimiter {
                     bucket.suppressed,
                 );
             }
+
             bucket.count = 0;
             bucket.suppressed = 0;
             bucket.window_start = now;
@@ -120,6 +152,12 @@ impl DiagRateLimiter {
         }
     }
 
+    fn prune_expired(&mut self, now: Instant) {
+        self.buckets.retain(|_, bucket| {
+            bucket.suppressed > 0 || now.duration_since(bucket.window_start) < WINDOW
+        });
+    }
+
     pub fn warn(&mut self, event: &'static str, label: &str, msg: impl FnOnce() -> String) -> bool {
         self.emit(event, label, msg)
     }
@@ -129,7 +167,8 @@ impl DiagRateLimiter {
     pub fn bind_denied(&mut self, reason: DropReason, registry_name: u32, interface: &str) {
         let reason_str = reason.as_str();
         let vm = self.vm.clone();
-        self.emit("bind-denied", interface, || {
+        let interface = bounded_diag_label(interface);
+        self.emit("bind-denied", &interface, || {
             format!(
                 "[d2b-wlproxy] vm={vm} event=bind-denied reason={reason_str} \
                  interface={interface} registry-name={registry_name}"
@@ -140,7 +179,8 @@ impl DiagRateLimiter {
     /// Log a global-filtered event (advertisement filtered; opt-in via `--log-filtered-globals`).
     pub fn global_filtered(&mut self, interface: &str) {
         let vm = self.vm.clone();
-        self.emit("global-filtered", interface, || {
+        let interface = bounded_diag_label(interface);
+        self.emit("global-filtered", &interface, || {
             format!("[d2b-wlproxy] vm={vm} event=global-filtered interface={interface}")
         });
     }
@@ -149,6 +189,7 @@ impl DiagRateLimiter {
     /// shutdown so a terminal burst does not disappear just because no later
     /// event arrived after the rate-limit window.
     pub fn flush_suppressed(&mut self) {
+        let now = Instant::now();
         for (key, bucket) in &mut self.buckets {
             if bucket.suppressed == 0 {
                 continue;
@@ -162,6 +203,7 @@ impl DiagRateLimiter {
             );
             bucket.suppressed = 0;
         }
+        self.prune_expired(now);
     }
 
     #[cfg(test)]
@@ -257,5 +299,24 @@ mod tests {
             "wl_data_device_manager",
         );
         assert_eq!(rl.suppressed_total_for_tests(), 1);
+    }
+
+    #[test]
+    fn rate_limiter_bounds_guest_controlled_label_cardinality() {
+        let mut rl = DiagRateLimiter::new("test-vm".to_owned());
+        for index in 0..(MAX_BUCKETS + 64) {
+            let label = format!("guest-controlled-interface-{index}");
+            let _ = rl.warn("bind-denied", &label, || "bounded".to_owned());
+        }
+
+        assert!(rl.buckets.len() <= MAX_BUCKETS + 1);
+        assert!(rl.buckets.keys().any(|key| key.label == OVERFLOW_LABEL));
+    }
+
+    #[test]
+    fn diagnostic_labels_are_bounded_and_control_free() {
+        let label = bounded_diag_label(&format!("{}{}", "x".repeat(128), "\nsecret"));
+        assert!(label.len() <= DIAG_LABEL_MAX_BYTES + "...".len());
+        assert!(!label.contains('\n'));
     }
 }

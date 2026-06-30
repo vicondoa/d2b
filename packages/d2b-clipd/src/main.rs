@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -111,23 +111,16 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     // ── Wayland data-control ─────────────────────────────────────────────────
     let mut data_control = DataControlClient::connect().map_err(|e| e.to_string())?;
 
-    // ── Niri IPC event stream thread ─────────────────────────────────────────
     let niri_socket: Option<PathBuf> = args
         .niri_socket
         .clone()
         .or_else(|| std::env::var("NIRI_SOCKET").ok().map(PathBuf::from));
     let (niri_tx, niri_rx) = mpsc::channel::<NiriMessage>();
-    if let Some(ref socket) = niri_socket {
-        spawn_niri_event_thread(socket.clone(), niri_tx);
-    } else {
-        log::warn!("d2b-clipd: NIRI_SOCKET not set; focused-window attribution unavailable");
-    }
 
     // ── Host clipboard state ─────────────────────────────────────────────────
     let niri_query = NiriQueryProvider::new(niri_socket);
     let attributor = HostClipboardAttributor::new(niri_query);
-    let mut host_clipboard: HostClipboard<NiriQueryProvider> =
-        HostClipboard::new(attributor, Duration::from_secs(30));
+    let mut host_clipboard: HostClipboard<NiriQueryProvider> = HostClipboard::new(attributor);
 
     // ── Picker supervisor ────────────────────────────────────────────────────
     let picker_command = picker.map(|p| PickerCommand {
@@ -155,6 +148,17 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         .set_nonblocking(true)
         .map_err(|e| format!("set_nonblocking: {e}"))?;
     let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_peers)?;
+
+    // ── Niri IPC event stream thread ─────────────────────────────────────────
+    let niri_socket = args
+        .niri_socket
+        .clone()
+        .or_else(|| std::env::var("NIRI_SOCKET").ok().map(PathBuf::from));
+    if let Some(ref socket) = niri_socket {
+        spawn_niri_event_thread(socket.clone(), niri_tx);
+    } else {
+        log::warn!("d2b-clipd: NIRI_SOCKET not set; focused-window attribution unavailable");
+    }
 
     log::info!(
         "d2b-clipd: ready (config={}, bridge_root={}, control={})",
@@ -569,13 +573,6 @@ impl EventLoop<'_> {
 
             // ── Periodic timeout checks ───────────────────────────────────────
             let now = Instant::now();
-            if let Some(expired) = self.host_clipboard.check_paste_timeout(now) {
-                log::debug!(
-                    "d2b-clipd: paste fd timed out (mime={})",
-                    bounded_mime(&expired.mime_type)
-                );
-                expired.close_with_reason(ReasonCode::FdWriteTimeout);
-            }
             if let Some(_reason) = self.supervisor.reap_expired(now) {
                 let _ = self.fallback.cancel_picker();
             }
@@ -590,7 +587,7 @@ impl EventLoop<'_> {
 
     fn poll_timeout_ms(&self) -> i32 {
         let now = Instant::now();
-        let mut next = self.host_clipboard.pending_paste_deadline();
+        let mut next: Option<Instant> = None;
         if let Some(deadline) = self.supervisor.deadline() {
             next = Some(next.map_or(deadline, |old| old.min(deadline)));
         }
@@ -784,7 +781,9 @@ struct BridgeSelectionState {
     vm_name: String,
     vm_source_id: u64,
     data_control_source_id: u64,
-    ignore_selection_changed_until: Option<Instant>,
+    history_entry_id: String,
+    timestamp_unix_ms: u64,
+    suppress_selection_echo: bool,
     source: Option<DataControlSource>,
     data_by_mime: BTreeMap<String, Vec<u8>>,
 }
@@ -823,10 +822,35 @@ struct ClipboardHistory {
 }
 
 impl ClipboardHistory {
-    fn push(&mut self, mut entry: ClipboardHistoryEntry) {
+    fn push(&mut self, entry: ClipboardHistoryEntry) {
         if entry.data_by_mime.is_empty() {
             return;
         }
+        self.push_front_bounded(entry);
+    }
+
+    fn upsert(&mut self, entry: ClipboardHistoryEntry) {
+        if entry.data_by_mime.is_empty() {
+            return;
+        }
+        if entry.entry_id.is_empty() {
+            self.push(entry);
+            return;
+        }
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|existing| existing.entry_id == entry.entry_id)
+        {
+            self.entries.remove(index);
+        }
+        self.entries.push_front(entry);
+        while self.entries.len() > HISTORY_MAX_ENTRIES {
+            self.entries.pop_back();
+        }
+    }
+
+    fn push_front_bounded(&mut self, mut entry: ClipboardHistoryEntry) {
         self.next_id = self.next_id.saturating_add(1);
         entry.entry_id = format!("history-{}", self.next_id);
         self.entries.push_front(entry);
@@ -836,8 +860,17 @@ impl ClipboardHistory {
     }
 
     fn candidates(&self, requested_mime_type: &str) -> Vec<Candidate> {
+        self.candidates_excluding(requested_mime_type, None)
+    }
+
+    fn candidates_excluding(
+        &self,
+        requested_mime_type: &str,
+        excluded_entry_id: Option<&str>,
+    ) -> Vec<Candidate> {
         self.entries
             .iter()
+            .filter(|entry| excluded_entry_id != Some(entry.entry_id.as_str()))
             .filter_map(|entry| {
                 let bytes = compatible_mime_payload(&entry.data_by_mime, requested_mime_type)?;
                 Some(Candidate {
@@ -889,6 +922,16 @@ fn compatible_mime_payload(
         return Some(text.into_bytes());
     }
     None
+}
+
+fn bridge_history_entry_id(vm_name: &str, source_id: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(vm_name.len().saturating_mul(2));
+    for byte in vm_name.as_bytes() {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    format!("bridge-{encoded}-{source_id}")
 }
 
 fn html_to_plain_text(bytes: &[u8]) -> Option<String> {
@@ -960,20 +1003,18 @@ fn install_bridge_listeners(
             std::fs::remove_file(&path)
                 .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
         }
+        // umask is process-wide: keep bridge listener installation in the
+        // single-threaded startup phase, before spawning background workers.
+        let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o111));
         let listener = UnixListener::bind(&path)
-            .map_err(|e| format!("bind bridge socket {}: {e}", path.display()))?;
-        nix::sys::stat::fchmod(
-            listener.as_raw_fd(),
-            nix::sys::stat::Mode::from_bits_truncate(0o666),
-        )
-        .map_err(|e| format!("chmod bridge socket {}: {e}", path.display()))?;
+            .map_err(|e| format!("bind bridge socket {}: {e}", path.display()));
+        nix::sys::stat::umask(old_umask);
+        let listener = listener?;
         let bound_meta = std::fs::symlink_metadata(&path)
             .map_err(|e| format!("stat bound bridge socket {}: {e}", path.display()))?;
         if !bound_meta.file_type().is_socket() {
-            return Err(format!("refusing to chmod non-socket {}", path.display()));
+            return Err(format!("refusing bound non-socket {}", path.display()));
         }
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
-            .map_err(|e| format!("chmod bridge socket path {}: {e}", path.display()))?;
         listener
             .set_nonblocking(true)
             .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
@@ -1421,14 +1462,46 @@ fn handle_bridge_request(request: BridgeRequest, context: &mut BridgeHandlerCont
     }
 }
 
-fn notify_bridge_selection_refresh(streams: &mut [BridgeStream]) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BridgeRefreshWriteOutcome {
+    Keep,
+    Drop,
+}
+
+fn bridge_refresh_write_outcome(
+    result: &std::io::Result<usize>,
+    frame_len: usize,
+) -> BridgeRefreshWriteOutcome {
+    match result {
+        Ok(written) if *written == frame_len => BridgeRefreshWriteOutcome::Keep,
+        Ok(_) => BridgeRefreshWriteOutcome::Drop,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) =>
+        {
+            BridgeRefreshWriteOutcome::Keep
+        }
+        Err(_) => BridgeRefreshWriteOutcome::Drop,
+    }
+}
+
+fn notify_bridge_selection_refresh(streams: &mut Vec<BridgeStream>) {
     let frame = br#"{"type":"refresh_selection"}"#;
-    for stream in streams {
+    streams.retain_mut(|stream| {
         let mut bytes = Vec::with_capacity(frame.len() + 1);
         bytes.extend_from_slice(frame);
         bytes.push(b'\n');
-        match stream.stream.write_all(&bytes) {
-            Ok(()) => {}
+        let result = stream.stream.write(&bytes);
+        match &result {
+            Ok(n) if *n == bytes.len() => {}
+            Ok(_) => {
+                log::debug!(
+                    "d2b-clipd: bridge refresh notify partial write for vm={}; closing stream",
+                    bounded_label(&stream.vm_name)
+                );
+            }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => {
@@ -1439,7 +1512,8 @@ fn notify_bridge_selection_refresh(streams: &mut [BridgeStream]) {
                 );
             }
         }
-    }
+        bridge_refresh_write_outcome(&result, bytes.len()) == BridgeRefreshWriteOutcome::Keep
+    });
 }
 
 fn handle_bridge_copy_selection(
@@ -1509,7 +1583,9 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             vm_name: vm_name.clone(),
             vm_source_id: source_id,
             data_control_source_id: 0,
-            ignore_selection_changed_until: None,
+            history_entry_id: bridge_history_entry_id(&vm_name, source_id),
+            timestamp_unix_ms: unix_millis(),
+            suppress_selection_echo: false,
             source: None,
             data_by_mime: BTreeMap::new(),
         });
@@ -1519,15 +1595,15 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         return;
     };
     selection.data_by_mime.insert(mime_type, bytes);
-    context.history.push(ClipboardHistoryEntry {
-        entry_id: String::new(),
+    context.history.upsert(ClipboardHistoryEntry {
+        entry_id: selection.history_entry_id.clone(),
         source_realm: selection.vm_name.clone(),
         source_realm_kind: RealmKind::Vm,
         source_app: Some(format!("{} VM", selection.vm_name)),
         source_app_id: Some(format!("d2b.{}", selection.vm_name)),
         source_attribution: AttributionQuality::ExactClient,
         data_by_mime: selection.data_by_mime.clone(),
-        timestamp_unix_ms: unix_millis(),
+        timestamp_unix_ms: selection.timestamp_unix_ms,
     });
     let mimes = selection.data_by_mime.keys().cloned().collect::<Vec<_>>();
     match context.data_control.create_source(&mimes) {
@@ -1554,8 +1630,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             }
             selection.source = Some(source);
             selection.data_control_source_id = source_id;
-            selection.ignore_selection_changed_until =
-                Some(Instant::now() + Duration::from_millis(750));
+            selection.suppress_selection_echo = true;
             log::debug!(
                 "d2b-clipd: bridge copy selection published vm={} mimes={}",
                 bounded_label(&selection.vm_name),
@@ -1592,12 +1667,7 @@ fn handle_bridge_paste_request(
             name: MetricName::PolicyDenied,
             reason: Some(ReasonCode::MimeRejected),
         });
-        d2b_clipd::notifications::emit_user_visible_failure(
-            context.notifier,
-            ReasonCode::MimeRejected,
-            "host",
-            &vm_name,
-        );
+        notify_bridge_paste_failure(context.notifier, ReasonCode::MimeRejected, "host", &vm_name);
         let _ = context.audit_queue.enqueue_fail_closed(AuditEvent {
             request_id,
             source_realm: "host".to_owned(),
@@ -1647,8 +1717,10 @@ fn handle_bridge_paste_request(
                     reason.as_str()
                 )
             });
+        notify_bridge_paste_failure(context.notifier, reason, "host", &vm_name);
         return;
     }
+
     let _ = context.audit_queue.drain_all();
     if let Some(selection) = context.published_selection.as_ref()
         && selection.mode == PublishedSelectionMode::Selected
@@ -1687,7 +1759,22 @@ fn handle_bridge_paste_request(
         context.supervisor,
         context.picker_command,
         context.accept_diag,
+        &mime_type,
         candidates,
+    );
+}
+
+fn notify_bridge_paste_failure<N: Notifier>(
+    notifier: &mut N,
+    reason: ReasonCode,
+    source_realm: &str,
+    destination_realm: &str,
+) {
+    d2b_clipd::notifications::emit_user_visible_failure(
+        notifier,
+        reason,
+        source_realm,
+        destination_realm,
     );
 }
 
@@ -1723,11 +1810,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 context.host_clipboard.on_host_selection_cleared();
                 return;
             }
-            if context.bridge_selection.as_ref().is_some_and(|selection| {
-                selection
-                    .ignore_selection_changed_until
-                    .is_some_and(|until| Instant::now() <= until)
-            }) {
+            if let Some(selection) = context.bridge_selection.as_mut()
+                && selection.suppress_selection_echo
+            {
+                selection.suppress_selection_echo = false;
                 context.host_clipboard.on_host_selection_cleared();
                 return;
             }
@@ -1839,6 +1925,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             context.supervisor,
                             context.picker_command,
                             context.accept_diag,
+                            &mime_type,
                             candidates,
                         );
                     }
@@ -1866,7 +1953,11 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     .unwrap_or_default();
                 drop(fd);
                 let mut candidates = picker_bridge_candidates(selection, &mime_type);
-                candidates.extend(context.history.candidates(&mime_type));
+                candidates.extend(
+                    context
+                        .history
+                        .candidates_excluding(&mime_type, Some(&selection.history_entry_id)),
+                );
                 log::info!(
                     "d2b-clipd: bridge selection paste request vm={} source_id={} mime={} dest_app={} dest_output={} candidates={}",
                     bounded_label(&selection.vm_name),
@@ -1884,6 +1975,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     context.supervisor,
                     context.picker_command,
                     context.accept_diag,
+                    &mime_type,
                     candidates,
                 );
                 return;
@@ -2103,10 +2195,10 @@ fn read_control_command_from_stream(
 fn handle_picker_message(
     message: PickerToDaemonMessage,
     data_control: &mut DataControlClient,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    _host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     bridge_selection: Option<&BridgeSelectionState>,
     published_selection: &mut Option<PublishedSelectionState>,
-    bridge_streams: &mut [BridgeStream],
+    bridge_streams: &mut Vec<BridgeStream>,
     current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     notifier: &mut DesktopNotifier,
@@ -2121,10 +2213,6 @@ fn handle_picker_message(
                 select.request_id,
                 bounded_label(&select.entry_id)
             );
-            while let Some(paste) = host_clipboard.take_pending_paste() {
-                paste.close_with_reason(ReasonCode::PickerTimeout);
-            }
-
             match publish_selected_entry_to_host(
                 data_control,
                 bridge_selection,
@@ -2158,9 +2246,6 @@ fn handle_picker_message(
         }
         PickerToDaemonMessage::Cancel(cancel) => {
             log::debug!("d2b-clipd: picker cancelled request {}", cancel.request_id);
-            if let Some(paste) = host_clipboard.take_pending_paste() {
-                paste.close_with_reason(ReasonCode::PickerTimeout);
-            }
             let _ = fallback.cancel_picker();
             let _ = supervisor.cancel_active(ReasonCode::PickerTimeout);
         }
@@ -2432,10 +2517,7 @@ fn handle_arm(
     ) {
         Ok(socket) => {
             // Drive picker handshake: read ClientHello, send OpenRequest.
-            let requested_mime = host_clipboard
-                .pending_paste()
-                .map(|paste| paste.mime_type.clone())
-                .unwrap_or_else(|| "text/plain".to_owned());
+            let requested_mime = "text/plain".to_owned();
             let candidates = picker_candidates(host_clipboard, None, history, &requested_mime);
             match picker_handshake(socket, &request_id, &dest, &requested_mime, candidates) {
                 Ok(picker_version) => {
@@ -2689,10 +2771,7 @@ fn open_picker_or_arm_fallback(
     current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
 ) {
-    let requested_mime = host_clipboard
-        .pending_paste()
-        .map(|paste| paste.mime_type.clone())
-        .unwrap_or_else(|| "text/plain".to_owned());
+    let requested_mime = "text/plain".to_owned();
     let candidates =
         picker_candidates(host_clipboard, current_host_entry, history, &requested_mime);
     open_picker_for_candidates(
@@ -2703,6 +2782,7 @@ fn open_picker_or_arm_fallback(
         supervisor,
         picker_command,
         accept_diag,
+        &requested_mime,
         candidates,
     );
 }
@@ -2715,6 +2795,7 @@ fn open_picker_for_candidates(
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
     accept_diag: &mut AcceptDiagnostics,
+    requested_mime: &str,
     candidates: Vec<Candidate>,
 ) {
     let can_open = picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle);
@@ -2729,12 +2810,8 @@ fn open_picker_for_candidates(
             Duration::from_secs(30),
         ) {
             Ok(socket) => {
-                let requested_mime = host_clipboard
-                    .pending_paste()
-                    .map(|paste| paste.mime_type.clone())
-                    .unwrap_or_else(|| "text/plain".to_owned());
                 if let Err(error) =
-                    picker_handshake(socket, &request_id, &dest, &requested_mime, candidates)
+                    picker_handshake(socket, &request_id, &dest, requested_mime, candidates)
                 {
                     accept_diag.warn("picker", "handshake-failed", || {
                         format!("d2b-clipd: picker handshake failed: {error}")
@@ -2765,12 +2842,9 @@ fn open_picker_for_candidates(
 fn arm_native_fallback(
     fallback: &mut FallbackArming,
     dest: FocusedWindowSnapshot,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    _host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     notifier: &mut impl Notifier,
 ) {
-    if let Some(paste) = host_clipboard.take_pending_paste() {
-        paste.close_with_reason(ReasonCode::PickerNotConfigured);
-    }
     if matches!(fallback.state(), FallbackState::Idle) {
         let _ = fallback.capture_target_before_picker(dest.clone());
     }
@@ -3069,7 +3143,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_clipd::notifications::RecordingNotifier;
     use std::os::fd::AsRawFd;
+    use std::sync::Mutex;
+
+    static UMASK_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn compatible_mime_payload_converts_html_to_plain_text() {
@@ -3139,7 +3217,9 @@ mod tests {
             vm_name: "personal-dev".to_owned(),
             vm_source_id: 7,
             data_control_source_id: 11,
-            ignore_selection_changed_until: None,
+            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            timestamp_unix_ms: 1_700_000_000_000,
+            suppress_selection_echo: false,
             source: None,
             data_by_mime,
         };
@@ -3150,6 +3230,61 @@ mod tests {
         assert_eq!(candidates[0].entry_id, CURRENT_BRIDGE_ENTRY_ID);
         assert_eq!(candidates[0].preview_text.as_deref(), Some("vm text"));
         assert_eq!(candidates[0].byte_count, Some(7));
+    }
+
+    #[test]
+    fn bridge_history_upsert_aggregates_mimes_without_duplicate_candidates() {
+        let mut history = ClipboardHistory::default();
+        let entry_id = bridge_history_entry_id("personal-dev", 7);
+        let mut first = BTreeMap::new();
+        first.insert("text/plain".to_owned(), b"plain".to_vec());
+        history.upsert(ClipboardHistoryEntry {
+            entry_id: entry_id.clone(),
+            source_realm: "personal-dev".to_owned(),
+            source_realm_kind: RealmKind::Vm,
+            source_app: Some("personal-dev VM".to_owned()),
+            source_app_id: Some("d2b.personal-dev".to_owned()),
+            source_attribution: AttributionQuality::ExactClient,
+            data_by_mime: first,
+            timestamp_unix_ms: 1,
+        });
+
+        let mut second = BTreeMap::new();
+        second.insert("text/plain".to_owned(), b"plain".to_vec());
+        second.insert("text/html".to_owned(), b"<b>plain</b>".to_vec());
+        history.upsert(ClipboardHistoryEntry {
+            entry_id: entry_id.clone(),
+            source_realm: "personal-dev".to_owned(),
+            source_realm_kind: RealmKind::Vm,
+            source_app: Some("personal-dev VM".to_owned()),
+            source_app_id: Some("d2b.personal-dev".to_owned()),
+            source_attribution: AttributionQuality::ExactClient,
+            data_by_mime: second,
+            timestamp_unix_ms: 1,
+        });
+
+        assert_eq!(history.entries.len(), 1);
+        assert!(
+            history
+                .entries
+                .front()
+                .expect("entry")
+                .data_by_mime
+                .contains_key("text/html")
+        );
+        assert!(
+            history
+                .candidates_excluding("text/plain", Some(&entry_id))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn bridge_history_entry_id_is_injective_for_punctuated_vm_names() {
+        assert_ne!(
+            bridge_history_entry_id("work_vm", 7),
+            bridge_history_entry_id("work-vm", 7)
+        );
     }
 
     #[test]
@@ -3275,6 +3410,7 @@ mod tests {
 
     #[test]
     fn bridge_listener_socket_is_connectable_by_peer_group() {
+        let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
         let root = std::env::temp_dir().join(format!(
             "d2b-clipd-bridge-test-{}-{}",
             std::process::id(),
@@ -3296,6 +3432,59 @@ mod tests {
         assert_eq!(mode, 0o666);
         drop(listeners);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bridge_listener_temporary_umask_is_restored() {
+        let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
+        let root = std::env::temp_dir().join(format!(
+            "d2b-clipd-bridge-umask-test-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        let peer = BridgePeerConfig {
+            vm_name: "work".to_owned(),
+            expected_uid: rustix::process::getuid().as_raw(),
+        };
+        let expected = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o027));
+        nix::sys::stat::umask(expected);
+
+        let old = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o027));
+        let listeners = install_bridge_listeners(&root, &[peer]).expect("install bridge listener");
+        let observed = nix::sys::stat::umask(old);
+
+        assert_eq!(observed.bits() & 0o777, 0o027);
+        drop(listeners);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bridge_refresh_partial_write_drops_stream() {
+        assert_eq!(
+            bridge_refresh_write_outcome(&Ok(3), br#"{"type":"refresh_selection"}"#.len() + 1),
+            BridgeRefreshWriteOutcome::Drop
+        );
+        assert_eq!(
+            bridge_refresh_write_outcome(
+                &Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+                br#"{"type":"refresh_selection"}"#.len() + 1,
+            ),
+            BridgeRefreshWriteOutcome::Keep
+        );
+    }
+
+    #[test]
+    fn bridge_paste_audit_failure_emits_user_visible_notification() {
+        let mut notifier = RecordingNotifier::default();
+
+        notify_bridge_paste_failure(&mut notifier, ReasonCode::AuditFailure, "host", "work");
+
+        assert_eq!(notifier.notifications.len(), 1);
+        assert_eq!(
+            notifier.notifications[0].summary,
+            "d2b clipboard paste blocked"
+        );
+        assert!(notifier.notifications[0].body.contains("audit queue"));
     }
 
     #[test]

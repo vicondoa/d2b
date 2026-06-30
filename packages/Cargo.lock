@@ -1136,6 +1136,7 @@ dependencies = [
  "log",
  "nix 0.29.0",
  "rustix 0.38.44",
+ "smallvec",
  "thiserror 2.0.18",
  "uapi",
  "wl-proxy",

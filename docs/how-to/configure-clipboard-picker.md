@@ -57,6 +57,19 @@ entry for the currently focused target. The user then performs a normal paste
 within the configured timeout. D2b does not synthesize Ctrl+V and the picker does
 not write to the clipboard.
 
+## Probe the session clipboard
+
+Use `d2b-clip-debug` from the Wayland session you want to inspect. It exercises
+only the standard unprivileged Wayland clipboard protocol:
+
+```bash
+d2b-clip-debug wl-copy "hello from this Wayland session"
+d2b-clip-debug wl-paste text/plain
+```
+
+These probes do not talk to the picker protocol, do not receive privileged
+data-control globals, and do not bypass `d2b-clipd` for VM boundary transfers.
+
 ## What the picker must not receive
 
 - no `NIRI_SOCKET`;
