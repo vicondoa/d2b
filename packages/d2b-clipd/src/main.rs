@@ -56,7 +56,6 @@ const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const ASYNC_MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const SELECTED_ENTRY_LATE_FD_GRACE: Duration = Duration::from_millis(750);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -2066,11 +2065,7 @@ fn handle_picker_message(
                 .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd))
                 {
                     Ok(()) => {
-                        let _ = fallback.arm_selected_entry(
-                            select.entry_id.clone(),
-                            Instant::now(),
-                            SELECTED_ENTRY_LATE_FD_GRACE,
-                        );
+                        let _ = fallback.cancel_picker();
                         let _ = supervisor.cancel_active(ReasonCode::Allowed);
                     }
                     Err(reason) => {
@@ -2310,7 +2305,7 @@ fn spawn_materialize_to_pending_paste(
                         let mime = paste.mime_type.clone();
                         let deadline = paste.deadline;
                         if !same_payload_mime(&requested_mime, &mime) {
-                            log::debug!(
+                            log::info!(
                                 "d2b-clipd: skipped queued paste fd for incompatible mime={}",
                                 bounded_mime(&mime)
                             );
@@ -2319,14 +2314,14 @@ fn spawn_materialize_to_pending_paste(
                         }
                         match write_all_nonblocking_fd(&paste.fd, &bytes, deadline) {
                             Ok(()) => {
-                                log::debug!(
+                                log::info!(
                                     "d2b-clipd: materialized paste write complete mime={} bytes={}",
                                     bounded_mime(&mime),
                                     bytes.len()
                                 );
                             }
                             Err(reason) => {
-                                log::debug!(
+                                log::info!(
                                     "d2b-clipd: materialized paste write failed for mime={}: {}",
                                     bounded_mime(&mime),
                                     reason.as_str()
@@ -2338,7 +2333,7 @@ fn spawn_materialize_to_pending_paste(
                 }
                 Err(reason) => {
                     for paste in pastes {
-                        log::debug!(
+                        log::info!(
                             "d2b-clipd: materialized paste read failed for mime={}: {}",
                             bounded_mime(&paste.mime_type),
                             reason.as_str()

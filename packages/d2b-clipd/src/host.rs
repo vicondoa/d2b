@@ -47,7 +47,7 @@ impl PasteWriteFd {
 
     /// Close the write fd (EOF to the requester) and log the timeout reason.
     pub fn close_with_reason(self, reason: ReasonCode) {
-        log::debug!("d2b-clipd: paste fd closed: {}", reason.as_str());
+        log::info!("d2b-clipd: paste fd closed: {}", reason.as_str());
         drop(self.fd);
     }
 }
@@ -248,7 +248,7 @@ impl<P: crate::niri::FocusedWindowProvider> HostClipboard<P> {
             for extra in self.pending_paste.drain(..) {
                 extra.close_with_reason(ReasonCode::FdWriteTimeout);
             }
-            log::debug!(
+            log::info!(
                 "d2b-clipd: paste fd timed out for mime={}",
                 crate::audit::bounded_mime(&paste.mime_type)
             );
