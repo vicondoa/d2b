@@ -11,8 +11,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    io,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::OwnedFd,
     os::unix::net::UnixStream,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -267,6 +266,12 @@ impl VirtualClipboardState {
             (offer.source.clone(), offer.source_id)
         };
         let Some(offer_source) = offer_source else {
+            log::info!(
+                "[d2b-wlproxy] vm={} clipboard: host-backed receive offer={} mime={}",
+                self.vm_name,
+                offer_source_id,
+                bounded_log_mime(mime_type)
+            );
             if !matches!(
                 self.mime_policy
                     .decide(ClipboardRoute::HostOrCrossRealm, mime_type),
@@ -430,7 +435,7 @@ impl VirtualClipboardState {
             BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
             BridgeConnectionState::Connecting { .. } => {}
         }
-        match connect_bridge_nonblocking(&path) {
+        match UnixStream::connect(&path) {
             Ok(stream) => {
                 if let Err(_error) = stream.set_nonblocking(true) {
                     let vm = self.vm_name.clone();
@@ -466,27 +471,6 @@ impl VirtualClipboardState {
             }
         }
 
-        fn connect_bridge_nonblocking(path: &std::path::Path) -> io::Result<UnixStream> {
-            use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
-
-            let fd = socket(
-                AddressFamily::Unix,
-                SockType::Stream,
-                SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
-                None,
-            )
-            .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
-            let addr = UnixAddr::new(path)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-            match connect(fd.as_raw_fd(), &addr) {
-                Ok(()) => Ok(UnixStream::from(fd)),
-                Err(nix::errno::Errno::EINPROGRESS) => {
-                    Err(io::Error::from(io::ErrorKind::WouldBlock))
-                }
-                Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
-            }
-        }
-
         self.bridge.as_mut()
     }
 
@@ -495,6 +479,12 @@ impl VirtualClipboardState {
             bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
         });
         if delivered {
+            log::info!(
+                "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
+                self.vm_name,
+                metadata.kind,
+                bounded_log_mime(&metadata.mime_type)
+            );
             return;
         }
         self.mark_bridge_disconnected();
@@ -509,6 +499,13 @@ impl VirtualClipboardState {
                 .warn("clipboard-bridge", "handoff-failed", || {
                     format!("[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-failed")
                 });
+        } else {
+            log::info!(
+                "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered-after-retry kind={:?} mime={}",
+                self.vm_name,
+                metadata.kind,
+                bounded_log_mime(&metadata.mime_type)
+            );
         }
     }
 
