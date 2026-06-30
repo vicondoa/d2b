@@ -1527,7 +1527,8 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             fd,
         } => {
             if let Some(selection) = context.bridge_selection.as_ref()
-                && selection.data_control_source_id == source_id
+                && (selection.data_control_source_id == source_id
+                    || selection.data_by_mime.contains_key(&mime_type))
             {
                 if !selection.data_by_mime.contains_key(&mime_type) {
                     log::warn!(
