@@ -522,7 +522,7 @@ in
         ExecStart = "${clipdExec} ${serviceArgs}";
         Restart = "on-failure";
         RestartSec = "2s";
-        UMask = "0000";
+        UMask = "0077";
         RuntimeDirectory = "d2b-clipd";
         RuntimeDirectoryMode = "0700";
         NoNewPrivileges = true;

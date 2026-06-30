@@ -1,12 +1,11 @@
 use std::{
-    fs::File,
-    io::{Read, Write},
+    io::Write,
     os::fd::AsFd,
     time::{Duration, Instant},
 };
 
 use wayland_client::{
-    Connection, Dispatch, Proxy, QueueHandle, delegate_noop, event_created_child,
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child,
     globals::{GlobalListContents, registry_queue_init},
     protocol::{
         wl_callback, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
@@ -18,28 +17,36 @@ const COPY_HOLD_TIMEOUT: Duration = Duration::from_secs(60);
 const PASTE_SELECTION_TIMEOUT: Duration = Duration::from_secs(5);
 const PASTE_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
+fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    if let Err(error) = run(std::env::args().skip(1)) {
+        eprintln!("d2b-clip-debug: {error}");
+        std::process::exit(2);
+    }
+}
+
+fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     let mut iter = args.into_iter();
     match iter.next().as_deref() {
         Some("wl-copy") => {
             let text = iter
                 .next()
-                .ok_or_else(|| "usage: d2b-clipd debug wl-copy <text>".to_owned())?;
+                .ok_or_else(|| "usage: d2b-clip-debug wl-copy <text>".to_owned())?;
             if iter.next().is_some() {
-                return Err("usage: d2b-clipd debug wl-copy <text>".to_owned());
+                return Err("usage: d2b-clip-debug wl-copy <text>".to_owned());
             }
             run_wl_copy(text)
         }
         Some("wl-paste") => {
             let mime = iter.next().unwrap_or_else(|| "text/plain".to_owned());
             if iter.next().is_some() {
-                return Err("usage: d2b-clipd debug wl-paste [mime]".to_owned());
+                return Err("usage: d2b-clip-debug wl-paste [mime]".to_owned());
             }
             run_wl_paste(mime)
         }
-        Some("--help" | "-h") | None => Err(
-            "usage: d2b-clipd debug wl-copy <text> | d2b-clipd debug wl-paste [mime]".to_owned(),
-        ),
+        Some("--help" | "-h") | None => {
+            Err("usage: d2b-clip-debug wl-copy <text> | d2b-clip-debug wl-paste [mime]".to_owned())
+        }
         Some(other) => Err(format!("unknown debug command: {other}")),
     }
 }
@@ -74,10 +81,8 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for CopyState {
         _qh: &QueueHandle<Self>,
     ) {
         if let wl_data_source::Event::Send { mime_type, fd } = event {
-            eprintln!("send {mime_type}");
-            let mut file = File::from(fd);
-            let _ = file.write_all(&state.token);
-            let _ = file.flush();
+            eprintln!("send {mime_type:?}");
+            let _ = write_all_fd_debug(&fd, &state.token, Instant::now() + Duration::from_secs(5));
         }
     }
 }
@@ -136,9 +141,7 @@ fn run_wl_copy(text: String) -> Result<(), String> {
     };
     let deadline = Instant::now() + COPY_HOLD_TIMEOUT;
     while Instant::now() < deadline {
-        queue
-            .blocking_dispatch(&mut state)
-            .map_err(|e| format!("dispatch: {e}"))?;
+        dispatch_once_until(&mut queue, &mut state, deadline)?;
     }
     Ok(())
 }
@@ -189,7 +192,7 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for PasteState {
     ) {
         match event {
             wl_data_offer::Event::Offer { mime_type } => {
-                eprintln!("offer {} {}", proxy.id().protocol_id(), mime_type);
+                eprintln!("offer {} {mime_type:?}", proxy.id().protocol_id());
                 state.mimes.push(mime_type);
             }
             wl_data_offer::Event::SourceActions { .. } | wl_data_offer::Event::Action { .. } => {}
@@ -234,9 +237,7 @@ fn run_wl_paste(mime: String) -> Result<(), String> {
     let mut state = PasteState::default();
     let deadline = Instant::now() + PASTE_SELECTION_TIMEOUT;
     while state.selected.is_none() && Instant::now() < deadline {
-        queue
-            .blocking_dispatch(&mut state)
-            .map_err(|e| format!("dispatch selection: {e}"))?;
+        dispatch_once_until(&mut queue, &mut state, deadline)?;
     }
     eprintln!("mimes={:?}", state.mimes);
     let offer = state.selected.ok_or_else(|| "no selection".to_owned())?;
@@ -247,19 +248,135 @@ fn run_wl_paste(mime: String) -> Result<(), String> {
     drop(write_fd);
     drop(offer);
 
-    let mut file = File::from(read_fd);
-    let mut bytes = Vec::new();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = file.read_to_end(&mut bytes).map(|_| bytes);
-        let _ = tx.send(result);
-    });
-    let bytes = rx
-        .recv_timeout(PASTE_READ_TIMEOUT)
-        .map_err(|_| "timed out reading paste pipe".to_owned())?
-        .map_err(|e| format!("read paste pipe: {e}"))?;
+    let bytes = read_fd_to_vec_debug(read_fd, Instant::now() + PASTE_READ_TIMEOUT)?;
     std::io::stdout()
         .write_all(&bytes)
         .map_err(|e| format!("write stdout: {e}"))?;
     Ok(())
+}
+
+fn dispatch_once_until<State>(
+    queue: &mut EventQueue<State>,
+    state: &mut State,
+    deadline: Instant,
+) -> Result<usize, String> {
+    let dispatched = queue
+        .dispatch_pending(state)
+        .map_err(|e| format!("dispatch pending: {e}"))?;
+    if dispatched > 0 {
+        return Ok(dispatched);
+    }
+    queue.flush().map_err(|e| format!("flush wayland: {e}"))?;
+    let Some(guard) = queue.prepare_read() else {
+        return Ok(0);
+    };
+    let now = Instant::now();
+    if now >= deadline {
+        drop(guard);
+        return Err("timed out waiting for Wayland event".to_owned());
+    }
+    let timeout = deadline
+        .saturating_duration_since(now)
+        .as_millis()
+        .min(i32::MAX as u128) as i32;
+    let mut poll_fd = [rustix::event::PollFd::from_borrowed_fd(
+        guard.connection_fd(),
+        rustix::event::PollFlags::IN
+            | rustix::event::PollFlags::ERR
+            | rustix::event::PollFlags::HUP,
+    )];
+    match rustix::event::poll(&mut poll_fd, timeout) {
+        Ok(0) => {
+            drop(guard);
+            Err("timed out waiting for Wayland event".to_owned())
+        }
+        Ok(_)
+            if poll_fd[0]
+                .revents()
+                .intersects(rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP) =>
+        {
+            drop(guard);
+            Err("Wayland connection closed while waiting for event".to_owned())
+        }
+        Ok(_) => {
+            guard.read().map_err(|e| format!("read wayland: {e}"))?;
+            queue
+                .dispatch_pending(state)
+                .map_err(|e| format!("dispatch pending: {e}"))
+        }
+        Err(rustix::io::Errno::INTR) => Ok(0),
+        Err(error) => {
+            drop(guard);
+            Err(format!("poll Wayland socket: {error}"))
+        }
+    }
+}
+
+fn read_fd_to_vec_debug(fd: std::os::fd::OwnedFd, deadline: Instant) -> Result<Vec<u8>, String> {
+    rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    loop {
+        let mut buf = [0_u8; 4096];
+        match rustix::io::read(&fd, &mut buf) {
+            Ok(0) => return Ok(out),
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::AGAIN) => {
+                wait_fd(&fd, rustix::event::PollFlags::IN, deadline)?;
+            }
+            Err(error) => return Err(format!("read paste pipe: {error}")),
+        }
+    }
+}
+
+fn write_all_fd_debug(
+    fd: &std::os::fd::OwnedFd,
+    mut data: &[u8],
+    deadline: Instant,
+) -> Result<(), String> {
+    rustix::io::ioctl_fionbio(fd.as_fd(), true).map_err(|e| e.to_string())?;
+    while !data.is_empty() {
+        match rustix::io::write(fd, data) {
+            Ok(0) => return Err("write returned zero".to_owned()),
+            Ok(n) => data = &data[n..],
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::AGAIN) => {
+                wait_fd(fd, rustix::event::PollFlags::OUT, deadline)?;
+            }
+            Err(error) => return Err(format!("write selection fd: {error}")),
+        }
+    }
+    Ok(())
+}
+
+fn wait_fd(
+    fd: &std::os::fd::OwnedFd,
+    interest: rustix::event::PollFlags,
+    deadline: Instant,
+) -> Result<(), String> {
+    let now = Instant::now();
+    if now >= deadline {
+        return Err("debug Wayland transfer timed out".to_owned());
+    }
+    let timeout = deadline
+        .saturating_duration_since(now)
+        .as_millis()
+        .min(i32::MAX as u128) as i32;
+    let mut poll_fd = [rustix::event::PollFd::new(
+        fd,
+        interest | rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP,
+    )];
+    match rustix::event::poll(&mut poll_fd, timeout) {
+        Ok(0) => Err("debug Wayland transfer timed out".to_owned()),
+        Ok(_)
+            if poll_fd[0]
+                .revents()
+                .intersects(rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP) =>
+        {
+            Err("debug Wayland transfer fd closed".to_owned())
+        }
+        Ok(_) => Ok(()),
+        Err(rustix::io::Errno::INTR) => Ok(()),
+        Err(error) => Err(format!("poll debug transfer fd: {error}")),
+    }
 }

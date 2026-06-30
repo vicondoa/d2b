@@ -11,8 +11,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    os::fd::OwnedFd,
-    os::unix::net::UnixStream,
+    os::{fd::OwnedFd, unix::net::UnixStream},
     path::PathBuf,
     rc::{Rc, Weak},
     time::Instant,
@@ -266,7 +265,7 @@ impl VirtualClipboardState {
             (offer.source.clone(), offer.source_id)
         };
         let Some(offer_source) = offer_source else {
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: host-backed receive offer={} mime={}",
                 self.vm_name,
                 offer_source_id,
@@ -353,7 +352,7 @@ impl VirtualClipboardState {
             return;
         };
         let mime_types = stored.borrow().mime_types.clone();
-        log::info!(
+        log::debug!(
             "[d2b-wlproxy] vm={} clipboard: publish selection source={} mimes={}",
             self.vm_name,
             source.unique_id(),
@@ -394,7 +393,7 @@ impl VirtualClipboardState {
                 source_id: source.unique_id(),
                 kind: BridgeTransferKind::CopySelection,
             };
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: handoff copy source={} mime={}",
                 self.vm_name,
                 source.unique_id(),
@@ -435,23 +434,8 @@ impl VirtualClipboardState {
             BridgeConnectionState::Disconnected => self.bridge_reconnect.start_connect(),
             BridgeConnectionState::Connecting { .. } => {}
         }
-        match UnixStream::connect(&path) {
+        match connect_bridge_nonblocking(&path) {
             Ok(stream) => {
-                if let Err(_error) = stream.set_nonblocking(true) {
-                    let vm = self.vm_name.clone();
-                    self.diag.borrow_mut().warn(
-                        "clipboard-bridge",
-                        "nonblocking-failed",
-                        || {
-                            format!(
-                                "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=nonblocking-failed"
-                            )
-                        },
-                    );
-                    self.bridge_reconnect.connect_failed();
-                    self.schedule_bridge_retry();
-                    return None;
-                }
                 self.bridge_reconnect.connect_succeeded();
                 self.next_bridge_retry = None;
                 self.bridge = Some(stream);
@@ -479,7 +463,7 @@ impl VirtualClipboardState {
             bridge.handoff_transfer_fd(fd, metadata) == crate::bridge::HandoffStatus::Delivered
         });
         if delivered {
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                 self.vm_name,
                 metadata.kind,
@@ -500,7 +484,7 @@ impl VirtualClipboardState {
                     format!("[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-failed")
                 });
         } else {
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered-after-retry kind={:?} mime={}",
                 self.vm_name,
                 metadata.kind,
@@ -732,7 +716,7 @@ impl FilterRegistryHandler {
                 synthetic_clipboard: true,
             },
         );
-        log::info!(
+        log::debug!(
             "[d2b-wlproxy] vm={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
             self.policy.vm_name
         );
@@ -951,7 +935,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         });
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().register_source(id);
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: source created id={}",
                 self.vm_name,
                 id.unique_id(),
@@ -973,7 +957,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         });
         if let Some(clipboard) = self.clipboard.upgrade() {
             register_virtual_device(&clipboard, id);
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: device registered id={}",
                 self.vm_name,
                 id.unique_id(),
@@ -995,7 +979,7 @@ impl WlDataSourceHandler for VirtualDataSourceHandler {
     fn handle_offer(&mut self, slf: &Rc<WlDataSource>, mime_type: &str) {
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().add_source_mime(slf, mime_type);
-            log::info!(
+            log::debug!(
                 "[d2b-wlproxy] vm={} clipboard: source id={} announced mime={}",
                 self.vm_name,
                 slf.unique_id(),
@@ -1060,7 +1044,7 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
         source: Option<&Rc<WlDataSource>>,
         _serial: u32,
     ) {
-        log::info!(
+        log::debug!(
             "[d2b-wlproxy] vm={} clipboard: set_selection source={}",
             self.vm_name,
             source.map_or(0, |s| s.unique_id()),
@@ -1225,6 +1209,29 @@ fn bind_matches_advertised_cap(
     requested_version: u32,
 ) -> bool {
     requested_interface == advertised.interface && requested_version <= advertised.version
+}
+
+fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
+    use nix::errno::Errno;
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(errno_to_io)?;
+    let addr = UnixAddr::new(path).map_err(errno_to_io)?;
+    match connect(fd.as_raw_fd(), &addr) {
+        Ok(()) | Err(Errno::EINPROGRESS) | Err(Errno::EAGAIN) => Ok(UnixStream::from(fd)),
+        Err(error) => Err(errno_to_io(error)),
+    }
+}
+
+fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(error as i32)
 }
 
 /// Minimal `ClientHandler` that logs disconnections for debugging.
