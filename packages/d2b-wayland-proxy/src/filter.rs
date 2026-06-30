@@ -584,19 +584,16 @@ fn send_selection_to_device(
     clipboard: &Rc<RefCell<VirtualClipboardState>>,
     device: &Rc<WlDataDevice>,
 ) {
-    let (vm_name, selection) = {
+    let (vm_name, selection, route, external_mimes) = {
         let state = clipboard.borrow();
-        (state.vm_name.clone(), state.selection.clone())
+        (
+            state.vm_name.clone(),
+            state.selection.clone(),
+            state.route(),
+            state.mime_policy.external_mimes(),
+        )
     };
-    let Some(source) = selection else {
-        let (mimes, route) = {
-            let state = clipboard.borrow();
-            (state.mime_policy.external_mimes(), state.route())
-        };
-        if !matches!(route, ClipboardRoute::HostOrCrossRealm) {
-            device.send_selection(None);
-            return;
-        }
+    if matches!(route, ClipboardRoute::HostOrCrossRealm) {
         let offer = device.new_send_data_offer();
         offer.set_forward_to_server(false);
         offer.set_handler(VirtualOfferHandler {
@@ -610,10 +607,14 @@ fn send_selection_to_device(
                 source_id: offer.unique_id(),
             })),
         );
-        for mime in mimes {
+        for mime in external_mimes {
             offer.send_offer(mime);
         }
         device.send_selection(Some(&offer));
+        return;
+    }
+    let Some(source) = selection else {
+        device.send_selection(None);
         return;
     };
     let mimes = source.borrow().mime_types.clone();
