@@ -24,6 +24,7 @@ pub const PICKER_ENV_ALLOWLIST: &[&str] = &[
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
+    "D2B_CLIP_PICKER_TEST_SELECT_FIRST",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
