@@ -368,14 +368,19 @@ fn wait_fd(
     )];
     match rustix::event::poll(&mut poll_fd, timeout) {
         Ok(0) => Err("debug Wayland transfer timed out".to_owned()),
-        Ok(_)
-            if poll_fd[0]
-                .revents()
-                .intersects(rustix::event::PollFlags::ERR | rustix::event::PollFlags::HUP) =>
-        {
-            Err("debug Wayland transfer fd closed".to_owned())
+        Ok(_) => {
+            let revents = poll_fd[0].revents();
+            if revents.contains(rustix::event::PollFlags::ERR) {
+                return Err("debug Wayland transfer fd errored".to_owned());
+            }
+            if revents.intersects(interest) {
+                return Ok(());
+            }
+            if revents.contains(rustix::event::PollFlags::HUP) {
+                return Err("debug Wayland transfer fd closed".to_owned());
+            }
+            Ok(())
         }
-        Ok(_) => Ok(()),
         Err(rustix::io::Errno::INTR) => Ok(()),
         Err(error) => Err(format!("poll debug transfer fd: {error}")),
     }
