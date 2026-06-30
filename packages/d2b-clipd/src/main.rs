@@ -173,6 +173,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         bridge_listeners,
         bridge_streams: Vec::new(),
         bridge_selection: None,
+        current_host_entry: None,
         history: ClipboardHistory::default(),
         history_tx,
         history_rx,
@@ -251,6 +252,7 @@ struct EventLoop<'a> {
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
     bridge_selection: Option<BridgeSelectionState>,
+    current_host_entry: Option<ClipboardHistoryEntry>,
     history: ClipboardHistory,
     history_tx: mpsc::Sender<ClipboardHistoryEntry>,
     history_rx: mpsc::Receiver<ClipboardHistoryEntry>,
@@ -411,6 +413,7 @@ impl EventLoop<'_> {
                     picker_command: &self.picker_command,
                     accept_diag: &mut self.accept_diag,
                     bridge_selection: &mut self.bridge_selection,
+                    current_host_entry: &mut self.current_host_entry,
                     history: &self.history,
                     history_tx: &self.history_tx,
                 };
@@ -504,6 +507,7 @@ impl EventLoop<'_> {
                         audit_queue: self.audit_queue,
                         metrics_queue: self.metrics_queue,
                         history: &mut self.history,
+                        current_host_entry: self.current_host_entry.as_ref(),
                         bridge_copy_tx: &self.bridge_copy_tx,
                     };
                     match handle_bridge_stream(&mut stream, &mut context) {
@@ -525,6 +529,7 @@ impl EventLoop<'_> {
                             self.data_control,
                             self.host_clipboard,
                             self.bridge_selection.as_ref(),
+                            self.current_host_entry.as_ref(),
                             &self.history,
                             self.notifier,
                             self.fallback,
@@ -614,6 +619,11 @@ impl EventLoop<'_> {
 
     fn drain_async_materialization(&mut self) {
         while let Ok(entry) = self.history_rx.try_recv() {
+            if entry.source_realm_kind == RealmKind::Host {
+                let mut current = entry.clone();
+                current.entry_id = CURRENT_HOST_ENTRY_ID.to_owned();
+                self.current_host_entry = Some(current);
+            }
             self.history.push(entry);
         }
         while let Ok(ready) = self.bridge_copy_rx.try_recv() {
@@ -1040,6 +1050,7 @@ struct BridgeHandlerContext<'a> {
     audit_queue: &'a mut AuditQueue,
     metrics_queue: &'a mut MetricsQueue,
     history: &'a mut ClipboardHistory,
+    current_host_entry: Option<&'a ClipboardHistoryEntry>,
     bridge_copy_tx: &'a mpsc::Sender<BridgeCopyReady>,
 }
 
@@ -1525,6 +1536,9 @@ fn handle_bridge_paste_request(
                 context.fallback,
                 context.host_clipboard,
                 context.data_control,
+                None,
+                context.current_host_entry,
+                context.history,
                 context.notifier,
             ) {
                 open_picker_or_arm_fallback(
@@ -1535,6 +1549,7 @@ fn handle_bridge_paste_request(
                     context.supervisor,
                     context.picker_command,
                     context.accept_diag,
+                    context.current_host_entry,
                     context.history,
                 );
             }
@@ -1561,6 +1576,7 @@ struct WaylandEventContext<'a> {
     picker_command: &'a Option<PickerCommand>,
     accept_diag: &'a mut AcceptDiagnostics,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
+    current_host_entry: &'a mut Option<ClipboardHistoryEntry>,
     history: &'a ClipboardHistory,
     history_tx: &'a mpsc::Sender<ClipboardHistoryEntry>,
 }
@@ -1582,6 +1598,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if context.bridge_selection.is_some() {
                 *context.bridge_selection = None;
             }
+            *context.current_host_entry = None;
             if let Some(offer_ref) = offer.as_ref() {
                 let window = context.host_clipboard.focused_window_snapshot();
                 let entry = ClipboardHistoryEntry {
@@ -1699,6 +1716,9 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         context.fallback,
                         context.host_clipboard,
                         context.data_control,
+                        context.bridge_selection.as_ref(),
+                        context.current_host_entry.as_ref(),
+                        context.history,
                         context.notifier,
                     ) {
                         open_picker_or_arm_fallback(
@@ -1709,6 +1729,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             context.supervisor,
                             context.picker_command,
                             context.accept_diag,
+                            context.current_host_entry.as_ref(),
                             context.history,
                         );
                     }
@@ -1906,6 +1927,7 @@ fn handle_picker_message(
     data_control: &mut DataControlClient,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     bridge_selection: Option<&BridgeSelectionState>,
+    current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
@@ -1923,13 +1945,18 @@ fn handle_picker_message(
                     host_clipboard,
                     data_control,
                     bridge_selection,
+                    current_host_entry,
                     history,
                     &select.entry_id,
                 )
                 .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd))
                 {
                     Ok(()) => {
-                        let _ = fallback.cancel_picker();
+                        let _ = fallback.arm_selected_entry(
+                            select.entry_id.clone(),
+                            Instant::now(),
+                            Duration::from_secs(10),
+                        );
                         let _ = supervisor.cancel_active(ReasonCode::Allowed);
                     }
                     Err(reason) => {
@@ -1978,6 +2005,9 @@ fn fulfill_armed_fallback(
     fallback: &mut FallbackArming,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     data_control: &mut DataControlClient,
+    bridge_selection: Option<&BridgeSelectionState>,
+    current_host_entry: Option<&ClipboardHistoryEntry>,
+    history: &ClipboardHistory,
     notifier: &mut DesktopNotifier,
 ) -> bool {
     let FallbackState::Armed {
@@ -2001,16 +2031,14 @@ fn fulfill_armed_fallback(
     let result = materialize_selected_entry_fd(
         host_clipboard,
         data_control,
-        None,
-        &ClipboardHistory::default(),
+        bridge_selection,
+        current_host_entry,
+        history,
         &entry_id,
     )
     .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd));
     match result {
-        Ok(()) => {
-            let _ = fallback.cancel_picker();
-            true
-        }
+        Ok(()) => true,
         Err(reason) => {
             if let Some(paste) = host_clipboard.take_pending_paste() {
                 paste.close_with_reason(reason);
@@ -2047,6 +2075,7 @@ fn materialize_selected_entry_fd(
     host_clipboard: &HostClipboard<NiriQueryProvider>,
     data_control: &mut DataControlClient,
     bridge_selection: Option<&BridgeSelectionState>,
+    current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     entry_id: &str,
 ) -> Result<std::os::fd::OwnedFd, ReasonCode> {
@@ -2054,6 +2083,14 @@ fn materialize_selected_entry_fd(
         .pending_paste()
         .map(|paste| paste.mime_type.as_str())
         .ok_or(ReasonCode::IntentMissing)?;
+    if entry_id == CURRENT_HOST_ENTRY_ID {
+        if let Some(bytes) = current_host_entry
+            .and_then(|entry| entry.data_by_mime.get(requested_mime))
+            .map(Vec::as_slice)
+        {
+            return pipe_from_bytes(bytes.to_vec());
+        }
+    }
     if let Some(bytes) = history.bytes_for(entry_id, requested_mime) {
         return pipe_from_bytes(bytes.to_vec());
     }
@@ -2316,7 +2353,7 @@ fn handle_arm(
                 .pending_paste()
                 .map(|paste| paste.mime_type.clone())
                 .unwrap_or_else(|| "text/plain".to_owned());
-            let candidates = picker_candidates(host_clipboard, history, &requested_mime);
+            let candidates = picker_candidates(host_clipboard, None, history, &requested_mime);
             match picker_handshake(socket, &request_id, &dest, &requested_mime, candidates) {
                 Ok(picker_version) => {
                     log::debug!("d2b-clipd: picker opened (version={picker_version})");
@@ -2407,10 +2444,36 @@ fn picker_handshake(
 
 fn picker_candidates(
     host_clipboard: &HostClipboard<NiriQueryProvider>,
+    current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     requested_mime_type: &str,
 ) -> Vec<Candidate> {
     let mut candidates = history.candidates(requested_mime_type);
+    if let Some(entry) = current_host_entry
+        && let Some(bytes) = entry.data_by_mime.get(requested_mime_type)
+    {
+        candidates.retain(|candidate| candidate.entry_id != CURRENT_HOST_ENTRY_ID);
+        candidates.insert(
+            0,
+            Candidate {
+                entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
+                source_realm: entry.source_realm.clone(),
+                source_realm_kind: entry.source_realm_kind,
+                source_app: entry.source_app.clone(),
+                source_app_id: entry.source_app_id.clone(),
+                source_attribution: entry.source_attribution,
+                preview_text: std::str::from_utf8(bytes)
+                    .ok()
+                    .map(|text| sanitize_notification_text(text, 256)),
+                content_type: requested_mime_type.to_owned(),
+                timestamp_unix_ms: entry.timestamp_unix_ms,
+                thumbnail_png_base64: None,
+                byte_count: Some(bytes.len() as u64),
+                confirmation_required: false,
+            },
+        );
+        return candidates;
+    }
     let Some(selection) = host_clipboard.current_selection() else {
         return candidates;
     };
@@ -2512,13 +2575,15 @@ fn open_picker_or_arm_fallback(
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
     accept_diag: &mut AcceptDiagnostics,
+    current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
 ) {
     let requested_mime = host_clipboard
         .pending_paste()
         .map(|paste| paste.mime_type.clone())
         .unwrap_or_else(|| "text/plain".to_owned());
-    let candidates = picker_candidates(host_clipboard, history, &requested_mime);
+    let candidates =
+        picker_candidates(host_clipboard, current_host_entry, history, &requested_mime);
     open_picker_for_candidates(
         fallback,
         dest,
