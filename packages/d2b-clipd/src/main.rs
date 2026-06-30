@@ -1734,6 +1734,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     Ok(dest) => {
                         let mut candidates = picker_bridge_candidates(selection, &mime_type);
                         candidates.extend(context.history.candidates(&mime_type));
+                        log::info!(
+                            "d2b-clipd: bridge selection paste request vm={} source_id={} mime={} dest_app={} dest_output={} candidates={}",
+                            bounded_label(&selection.vm_name),
+                            selection.vm_source_id,
+                            bounded_mime(&mime_type),
+                            bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                            bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                            summarize_candidates(&candidates)
+                        );
                         open_picker_for_candidates(
                             context.fallback,
                             dest,
@@ -1999,7 +2008,7 @@ fn handle_picker_message(
 ) {
     match message {
         PickerToDaemonMessage::Select(select) => {
-            log::debug!(
+            log::info!(
                 "d2b-clipd: picker selected entry for request {} entry={}",
                 select.request_id,
                 bounded_label(&select.entry_id)
@@ -2149,20 +2158,20 @@ fn materialize_selected_entry_fd(
         if let Some(bytes) = current_host_entry
             .and_then(|entry| compatible_mime_payload(&entry.data_by_mime, requested_mime))
         {
-            log::debug!(
+            log::info!(
                 "d2b-clipd: materializing current host entry mime={} bytes={}",
                 bounded_mime(requested_mime),
                 bytes.len()
             );
             return pipe_from_bytes(bytes);
         }
-        log::debug!(
+        log::info!(
             "d2b-clipd: current host entry missing requested mime={}",
             bounded_mime(requested_mime)
         );
     }
     if let Some(bytes) = history.bytes_for(entry_id, requested_mime) {
-        log::debug!(
+        log::info!(
             "d2b-clipd: materializing history entry id={} mime={} bytes={}",
             bounded_label(entry_id),
             bounded_mime(requested_mime),
@@ -2174,7 +2183,7 @@ fn materialize_selected_entry_fd(
         let selection = bridge_selection.ok_or(ReasonCode::RequestExpired)?;
         let bytes = compatible_mime_payload(&selection.data_by_mime, requested_mime)
             .ok_or(ReasonCode::MimeRejected)?;
-        log::debug!(
+        log::info!(
             "d2b-clipd: materializing current VM entry vm={} mime={} bytes={}",
             bounded_label(&selection.vm_name),
             bounded_mime(requested_mime),
@@ -2511,22 +2520,19 @@ fn picker_handshake(
         candidates,
     }));
     if let DaemonToPickerMessage::OpenRequest(request) = &request {
-        log::debug!(
-            "d2b-clipd: picker open request id={} requested_mime={} candidates={}",
+        log::info!(
+            "d2b-clipd: picker open request id={} requested_mime={} dest_app={} dest_output={} candidates={}",
             bounded_label(&request.request_id),
             bounded_mime(&request.requested_mime_type),
-            request
-                .candidates
-                .iter()
-                .take(8)
-                .map(|candidate| format!(
-                    "{}:{}:{}",
-                    bounded_label(&candidate.entry_id),
-                    bounded_label(&candidate.source_realm),
-                    candidate.source_realm_kind as u8
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
+            bounded_label(request.destination.app_id.as_deref().unwrap_or("unknown")),
+            bounded_label(
+                request
+                    .placement_hints
+                    .as_ref()
+                    .and_then(|hints| hints.output.as_deref())
+                    .unwrap_or("unknown")
+            ),
+            summarize_candidates(&request.candidates)
         );
     }
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
@@ -2642,6 +2648,22 @@ fn picker_bridge_candidates(
         byte_count: Some(bytes.len() as u64),
         confirmation_required: false,
     }]
+}
+
+fn summarize_candidates(candidates: &[Candidate]) -> String {
+    candidates
+        .iter()
+        .take(8)
+        .map(|candidate| {
+            format!(
+                "{}:{}:{}",
+                bounded_label(&candidate.entry_id),
+                bounded_label(&candidate.source_realm),
+                candidate.source_realm_kind as u8
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn protocol_attribution(quality: d2b_clipd::policy::AttributionQuality) -> AttributionQuality {
@@ -2873,6 +2895,18 @@ impl d2b_clipd::niri::FocusedWindowProvider for NiriQueryProvider {
             Some(Duration::from_secs(2)),
         )?;
         client.query_focused_window()
+    }
+
+    fn query_workspaces(&mut self) -> Result<Vec<d2b_clipd::niri::NiriWorkspace>, NiriIpcError> {
+        let Some(ref socket) = self.socket else {
+            return Ok(Vec::new());
+        };
+        let mut client = NiriJsonClient::connect(
+            socket,
+            d2b_clipd::niri::DEFAULT_NIRI_MAX_LINE_BYTES,
+            Some(Duration::from_secs(2)),
+        )?;
+        client.query_workspaces()
     }
 }
 

@@ -92,6 +92,10 @@ impl NiriJsonClient {
         self.request(&NiriRequest::FocusedWindow)
     }
 
+    pub fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        self.request(&NiriRequest::Workspaces)
+    }
+
     pub fn read_event(&mut self) -> Result<NiriEvent, NiriIpcError> {
         let line = read_bounded_ndjson_line(&mut self.stream, self.max_line_bytes)?;
         serde_json::from_str(&line).map_err(|err| NiriIpcError::Json(err.to_string()))
@@ -101,6 +105,10 @@ impl NiriJsonClient {
 impl FocusedWindowProvider for NiriJsonClient {
     fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
         NiriJsonClient::query_focused_window(self)
+    }
+
+    fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        NiriJsonClient::query_workspaces(self)
     }
 }
 
@@ -406,6 +414,10 @@ impl NiriStateCache {
 
 pub trait FocusedWindowProvider {
     fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError>;
+
+    fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +461,11 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
     }
 
     pub fn refresh_from_provider(&mut self) -> HostSelectionAttribution {
+        if let Ok(workspaces) = self.provider.query_workspaces() {
+            let _ = self
+                .cache
+                .apply_event(NiriEvent::WorkspacesChanged { workspaces });
+        }
         match self.provider.query_focused_window() {
             Ok(window) => HostSelectionAttribution {
                 window: self.cache.update_focused_window(window),
@@ -602,11 +619,20 @@ mod tests {
     #[derive(Debug)]
     struct FakeFocusedWindowProvider {
         responses: Vec<Result<Option<NiriWindow>, NiriIpcError>>,
+        workspace_responses: Vec<Result<Vec<NiriWorkspace>, NiriIpcError>>,
     }
 
     impl FocusedWindowProvider for FakeFocusedWindowProvider {
         fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
             self.responses.remove(0)
+        }
+
+        fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+            if self.workspace_responses.is_empty() {
+                Ok(Vec::new())
+            } else {
+                self.workspace_responses.remove(0)
+            }
         }
     }
 
@@ -619,6 +645,7 @@ mod tests {
                 title: Some("docs".to_owned()),
                 ..NiriWindow::default()
             }))],
+            workspace_responses: Vec::new(),
         };
         let mut attributor = HostClipboardAttributor::new(provider);
 
@@ -631,9 +658,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_refresh_resolves_output_from_queried_workspaces() {
+        let provider = FakeFocusedWindowProvider {
+            responses: vec![Ok(Some(NiriWindow {
+                id: Some(9),
+                app_id: Some("firefox".to_owned()),
+                title: Some("url".to_owned()),
+                workspace_id: Some(3),
+                ..NiriWindow::default()
+            }))],
+            workspace_responses: vec![Ok(vec![NiriWorkspace {
+                id: Some(3),
+                output_label: Some("DP-3".to_owned()),
+                ..NiriWorkspace::default()
+            }])],
+        };
+        let mut attributor = HostClipboardAttributor::new(provider);
+
+        let attribution = attributor.refresh_from_provider();
+
+        assert_eq!(
+            attribution
+                .window
+                .and_then(|window| window.output_label)
+                .as_deref(),
+            Some("DP-3")
+        );
+    }
+
+    #[test]
     fn provider_failure_returns_cache_stale_guess() {
         let provider = FakeFocusedWindowProvider {
             responses: vec![Err(NiriIpcError::Io("disconnected".to_owned()))],
+            workspace_responses: Vec::new(),
         };
         let mut attributor = HostClipboardAttributor::new(provider);
         attributor
