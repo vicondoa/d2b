@@ -598,6 +598,7 @@ fn send_selection_to_device(
             return;
         }
         let offer = device.new_send_data_offer();
+        offer.set_forward_to_server(false);
         offer.set_handler(VirtualOfferHandler {
             clipboard: Rc::downgrade(clipboard),
             vm_name: vm_name.clone(),
@@ -612,11 +613,13 @@ fn send_selection_to_device(
         for mime in mimes {
             offer.send_offer(mime);
         }
+        send_offer_actions(&offer);
         device.send_selection(Some(&offer));
         return;
     };
     let mimes = source.borrow().mime_types.clone();
     let offer = device.new_send_data_offer();
+    offer.set_forward_to_server(false);
     offer.set_handler(VirtualOfferHandler {
         clipboard: Rc::downgrade(clipboard),
         vm_name: vm_name.clone(),
@@ -635,7 +638,17 @@ fn send_selection_to_device(
     for mime in mimes {
         offer.send_offer(&mime);
     }
+    send_offer_actions(&offer);
     device.send_selection(Some(&offer));
+}
+
+fn send_offer_actions(offer: &Rc<WlDataOffer>) {
+    use wl_proxy::protocols::wayland::wl_data_device_manager::WlDataDeviceManagerDndAction;
+
+    // Version 3 clients expect source_actions/action before selection. We only
+    // support copy semantics and deny drag-and-drop elsewhere.
+    offer.send_source_actions(WlDataDeviceManagerDndAction::COPY);
+    offer.send_action(WlDataDeviceManagerDndAction::COPY);
 }
 
 fn bounded_log_mime(mime: &str) -> String {
