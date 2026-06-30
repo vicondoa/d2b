@@ -792,7 +792,7 @@ struct PublishedSelectionState {
     _source: DataControlSource,
     data_by_mime: BTreeMap<String, Vec<u8>>,
     mode: PublishedSelectionMode,
-    ignore_selection_changed_until: Option<Instant>,
+    suppress_selection_echo: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1694,11 +1694,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if context
                 .published_selection
                 .as_ref()
-                .is_some_and(|selection| {
-                    selection
-                        .ignore_selection_changed_until
-                        .is_some_and(|until| Instant::now() <= until)
-                })
+                .is_some_and(|selection| selection.suppress_selection_echo)
             {
                 context.host_clipboard.on_host_selection_cleared();
                 return;
@@ -2196,7 +2192,7 @@ fn publish_data_control_selection(
         _source: source,
         data_by_mime,
         mode,
-        ignore_selection_changed_until: Some(Instant::now() + Duration::from_millis(750)),
+        suppress_selection_echo: true,
     })
 }
 
