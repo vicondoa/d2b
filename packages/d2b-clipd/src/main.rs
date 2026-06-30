@@ -1589,11 +1589,32 @@ fn handle_bridge_paste_request(
         return;
     }
     let _ = context.audit_queue.drain_all();
-    match context
-        .host_clipboard
-        .accept_paste_fd_for_destination(fd, mime_type, dest.clone())
-    {
+    match context.host_clipboard.accept_paste_fd_for_destination(
+        fd,
+        mime_type.clone(),
+        dest.clone(),
+    ) {
         Ok(dest) => {
+            let requested_mime = context
+                .host_clipboard
+                .pending_paste()
+                .map(|paste| paste.mime_type.clone())
+                .unwrap_or_else(|| mime_type.clone());
+            let candidates = picker_candidates(
+                context.host_clipboard,
+                context.current_host_entry,
+                context.history,
+                &requested_mime,
+            );
+            log::info!(
+                "d2b-clipd: bridge paste request vm={} source_id={} mime={} dest_app={} dest_output={} candidates={}",
+                bounded_label(&vm_name),
+                source_id,
+                bounded_mime(&requested_mime),
+                bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                summarize_candidates(&candidates)
+            );
             if !fulfill_armed_fallback(
                 context.fallback,
                 context.host_clipboard,
@@ -1685,6 +1706,26 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     entry,
                 );
             }
+            log::info!(
+                "d2b-clipd: host selection changed mimes={} attribution_app={} attribution_output={}",
+                allowed_mimes.len(),
+                bounded_label(
+                    context
+                        .host_clipboard
+                        .focused_window_snapshot()
+                        .and_then(|window| window.app_id)
+                        .as_deref()
+                        .unwrap_or("unknown")
+                ),
+                bounded_label(
+                    context
+                        .host_clipboard
+                        .focused_window_snapshot()
+                        .and_then(|window| window.output_label)
+                        .as_deref()
+                        .unwrap_or("unknown")
+                )
+            );
             // A new native selection supersedes any armed fallback.
             let _ = context.fallback.on_native_selection_changed();
             context

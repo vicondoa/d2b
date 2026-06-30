@@ -89,11 +89,21 @@ impl NiriJsonClient {
     }
 
     pub fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
-        self.request(&NiriRequest::FocusedWindow)
+        let value: Value = self.request(&NiriRequest::FocusedWindow)?;
+        let payload = value.get("FocusedWindow").cloned().unwrap_or(value);
+        if payload.is_null() {
+            Ok(None)
+        } else {
+            serde_json::from_value(payload)
+                .map(Some)
+                .map_err(|err| NiriIpcError::Json(err.to_string()))
+        }
     }
 
     pub fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
-        self.request(&NiriRequest::Workspaces)
+        let value: Value = self.request(&NiriRequest::Workspaces)?;
+        let payload = value.get("Workspaces").cloned().unwrap_or(value);
+        serde_json::from_value(payload).map_err(|err| NiriIpcError::Json(err.to_string()))
     }
 
     pub fn read_event(&mut self) -> Result<NiriEvent, NiriIpcError> {
@@ -607,6 +617,64 @@ mod tests {
             .expect("focused window");
         server_thread.join().expect("server thread");
         assert_eq!(focused.app_id.as_deref(), Some("foot"));
+    }
+
+    #[test]
+    fn direct_client_unwraps_niri_variant_payloads() {
+        let (client, mut server) = UnixStream::pair().expect("socketpair");
+        let server_thread = thread::spawn(move || {
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0_u8; 1];
+                server.read_exact(&mut byte).expect("read request");
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            assert_eq!(request, b"\"FocusedWindow\"\n");
+            server
+                .write_all(br#"{"Ok":{"FocusedWindow":{"id":7,"app_id":"foot","title":"shell","workspace_id":3}}}"#)
+                .expect("write response");
+            server.write_all(b"\n").expect("write newline");
+        });
+        let mut client = NiriJsonClient::from_stream(client, 256);
+
+        let focused = client
+            .query_focused_window()
+            .expect("focused response")
+            .expect("focused window");
+        server_thread.join().expect("server thread");
+        assert_eq!(focused.app_id.as_deref(), Some("foot"));
+        assert_eq!(focused.workspace_id, Some(3));
+    }
+
+    #[test]
+    fn direct_client_unwraps_niri_workspaces_payload() {
+        let (client, mut server) = UnixStream::pair().expect("socketpair");
+        let server_thread = thread::spawn(move || {
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0_u8; 1];
+                server.read_exact(&mut byte).expect("read request");
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            assert_eq!(request, b"\"Workspaces\"\n");
+            server
+                .write_all(br#"{"Ok":{"Workspaces":[{"id":3,"output":"DP-3","is_focused":true}]}}"#)
+                .expect("write response");
+            server.write_all(b"\n").expect("write newline");
+        });
+        let mut client = NiriJsonClient::from_stream(client, 256);
+
+        let workspaces = client.query_workspaces().expect("workspaces response");
+        server_thread.join().expect("server thread");
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, Some(3));
+        assert_eq!(workspaces[0].output_label.as_deref(), Some("DP-3"));
     }
 
     #[test]
