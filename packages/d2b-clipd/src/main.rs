@@ -1497,6 +1497,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .as_ref()
                 .is_some_and(|selection| selection.data_control_source_id != 0)
             {
+                context.host_clipboard.on_host_selection_cleared();
                 return;
             }
             if let Some(offer_ref) = offer.as_ref() {
@@ -1534,8 +1535,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             fd,
         } => {
             if let Some(selection) = context.bridge_selection.as_ref()
-                && (selection.data_control_source_id == source_id
-                    || selection.data_by_mime.contains_key(&mime_type))
+                && selection.data_control_source_id == source_id
             {
                 if !selection.data_by_mime.contains_key(&mime_type) {
                     log::warn!(
@@ -1905,7 +1905,7 @@ fn fulfill_armed_fallback(
         &ClipboardHistory::default(),
         &entry_id,
     )
-        .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd));
+    .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd));
     match result {
         Ok(()) => {
             let _ = fallback.cancel_picker();
@@ -2026,30 +2026,45 @@ fn spawn_materialize_to_pending_paste(
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     read_fd: std::os::fd::OwnedFd,
 ) -> Result<(), ReasonCode> {
-    let paste = host_clipboard
-        .take_pending_paste()
-        .ok_or(ReasonCode::IntentMissing)?;
-    let mime = paste.mime_type.clone();
-    let deadline = paste.deadline;
+    let pastes = host_clipboard.take_pending_pastes();
+    if pastes.is_empty() {
+        return Err(ReasonCode::IntentMissing);
+    }
     std::thread::Builder::new()
         .name("d2b-clipd-materialize-write".to_owned())
-        .spawn(move || {
-            match read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT)
-                .and_then(|bytes| write_all_nonblocking_fd(&paste.fd, &bytes, deadline))
-            {
-                Ok(()) => {
-                    log::debug!("d2b-clipd: materialized paste write complete");
+        .spawn(
+            move || match read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT) {
+                Ok(bytes) => {
+                    for paste in pastes {
+                        let mime = paste.mime_type.clone();
+                        let deadline = paste.deadline;
+                        match write_all_nonblocking_fd(&paste.fd, &bytes, deadline) {
+                            Ok(()) => {
+                                log::debug!("d2b-clipd: materialized paste write complete");
+                            }
+                            Err(reason) => {
+                                log::debug!(
+                                    "d2b-clipd: materialized paste write failed for mime={}: {}",
+                                    bounded_mime(&mime),
+                                    reason.as_str()
+                                );
+                            }
+                        }
+                        drop(paste.fd);
+                    }
                 }
                 Err(reason) => {
-                    log::debug!(
-                        "d2b-clipd: materialized paste write failed for mime={}: {}",
-                        bounded_mime(&mime),
-                        reason.as_str()
-                    );
+                    for paste in pastes {
+                        log::debug!(
+                            "d2b-clipd: materialized paste read failed for mime={}: {}",
+                            bounded_mime(&paste.mime_type),
+                            reason.as_str()
+                        );
+                        drop(paste.fd);
+                    }
                 }
-            }
-            drop(paste.fd);
-        })
+            },
+        )
         .map_err(|_| ReasonCode::FdWriteTimeout)?;
     Ok(())
 }
@@ -2271,22 +2286,25 @@ fn picker_candidates(
         return candidates;
     }
     let window = selection.attribution.window.as_ref();
-    candidates.insert(0, Candidate {
-        entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
-        source_realm: "Host".to_owned(),
-        source_realm_kind: RealmKind::Host,
-        source_app: window
-            .and_then(|window| window.title.clone())
-            .or_else(|| Some("Host clipboard".to_owned())),
-        source_app_id: window.and_then(|window| window.app_id.clone()),
-        source_attribution: protocol_attribution(selection.attribution.quality),
-        preview_text: None,
-        content_type: requested_mime_type.to_owned(),
-        timestamp_unix_ms: unix_millis(),
-        thumbnail_png_base64: None,
-        byte_count: None,
-        confirmation_required: false,
-    });
+    candidates.insert(
+        0,
+        Candidate {
+            entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
+            source_realm: "Host".to_owned(),
+            source_realm_kind: RealmKind::Host,
+            source_app: window
+                .and_then(|window| window.title.clone())
+                .or_else(|| Some("Host clipboard".to_owned())),
+            source_app_id: window.and_then(|window| window.app_id.clone()),
+            source_attribution: protocol_attribution(selection.attribution.quality),
+            preview_text: None,
+            content_type: requested_mime_type.to_owned(),
+            timestamp_unix_ms: unix_millis(),
+            thumbnail_png_base64: None,
+            byte_count: None,
+            confirmation_required: false,
+        },
+    );
     candidates
 }
 
@@ -2947,6 +2965,57 @@ mod tests {
             }
         }
         assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn spawn_materialize_to_pending_paste_fulfills_queued_fds() {
+        let mut host_clipboard = HostClipboard::new(
+            HostClipboardAttributor::new(NiriQueryProvider::new(None)),
+            Duration::from_secs(30),
+        );
+        let (first_write, mut first_read) = UnixStream::pair().expect("first paste pair");
+        let (second_write, mut second_read) = UnixStream::pair().expect("second paste pair");
+        let destination = FocusedWindowSnapshot::default();
+        host_clipboard
+            .accept_paste_fd_for_destination(
+                first_write.into(),
+                "text/plain".to_owned(),
+                destination.clone(),
+            )
+            .expect("accept first paste");
+        host_clipboard.queue_paste_fd_for_destination(
+            second_write.into(),
+            "text/plain;charset=utf-8".to_owned(),
+            destination,
+        );
+        let (read_fd, write_fd) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
+        rustix::io::write(&write_fd, b"queued").expect("write source");
+        drop(write_fd);
+
+        spawn_materialize_to_pending_paste(&mut host_clipboard, read_fd).expect("spawn");
+        assert!(host_clipboard.pending_paste().is_none());
+
+        for reader in [&mut first_read, &mut second_read] {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut out = Vec::new();
+            loop {
+                let mut buf = [0_u8; 16];
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => out.extend_from_slice(&buf[..n]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for queued paste bytes"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("read queued paste failed: {error}"),
+                }
+            }
+            assert_eq!(out, b"queued");
+        }
     }
 
     #[test]
