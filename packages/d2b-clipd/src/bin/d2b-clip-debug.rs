@@ -377,6 +377,9 @@ fn wait_fd(
                 return Ok(());
             }
             if revents.contains(rustix::event::PollFlags::HUP) {
+                if interest.contains(rustix::event::PollFlags::IN) {
+                    return Ok(());
+                }
                 return Err("debug Wayland transfer fd closed".to_owned());
             }
             Ok(())
