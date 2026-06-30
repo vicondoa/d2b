@@ -798,7 +798,7 @@ impl ClipboardHistory {
         self.entries
             .iter()
             .filter_map(|entry| {
-                let bytes = entry.data_by_mime.get(requested_mime_type)?;
+                let bytes = compatible_mime_bytes(&entry.data_by_mime, requested_mime_type)?;
                 Some(Candidate {
                     entry_id: entry.entry_id.clone(),
                     source_realm: entry.source_realm.clone(),
@@ -823,8 +823,50 @@ impl ClipboardHistory {
         self.entries
             .iter()
             .find(|entry| entry.entry_id == entry_id)
-            .and_then(|entry| entry.data_by_mime.get(mime_type).map(Vec::as_slice))
+            .and_then(|entry| compatible_mime_bytes(&entry.data_by_mime, mime_type))
     }
+}
+
+fn compatible_mime_bytes<'a>(
+    data_by_mime: &'a BTreeMap<String, Vec<u8>>,
+    requested_mime: &str,
+) -> Option<&'a [u8]> {
+    if let Some(bytes) = data_by_mime.get(requested_mime) {
+        return Some(bytes.as_slice());
+    }
+    if !is_text_plain_mime(requested_mime) {
+        return None;
+    }
+    for fallback in ["text/plain;charset=utf-8", "text/plain"] {
+        if let Some(bytes) = data_by_mime.get(fallback) {
+            return Some(bytes.as_slice());
+        }
+    }
+    None
+}
+
+fn compatible_mime_name<'a>(
+    available_mimes: &'a [String],
+    requested_mime: &str,
+) -> Option<&'a str> {
+    if let Some(mime) = available_mimes
+        .iter()
+        .find(|mime| mime.as_str() == requested_mime)
+    {
+        return Some(mime.as_str());
+    }
+    if !is_text_plain_mime(requested_mime) {
+        return None;
+    }
+    for fallback in ["text/plain;charset=utf-8", "text/plain"] {
+        if let Some(mime) = available_mimes
+            .iter()
+            .find(|mime| mime.as_str() == fallback)
+        {
+            return Some(mime.as_str());
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -2092,8 +2134,7 @@ fn materialize_selected_entry_fd(
         .ok_or(ReasonCode::IntentMissing)?;
     if entry_id == CURRENT_HOST_ENTRY_ID {
         if let Some(bytes) = current_host_entry
-            .and_then(|entry| entry.data_by_mime.get(requested_mime))
-            .map(Vec::as_slice)
+            .and_then(|entry| compatible_mime_bytes(&entry.data_by_mime, requested_mime))
         {
             log::debug!(
                 "d2b-clipd: materializing current host entry mime={} bytes={}",
@@ -2118,9 +2159,7 @@ fn materialize_selected_entry_fd(
     }
     if entry_id == CURRENT_BRIDGE_ENTRY_ID {
         let selection = bridge_selection.ok_or(ReasonCode::RequestExpired)?;
-        let bytes = selection
-            .data_by_mime
-            .get(requested_mime)
+        let bytes = compatible_mime_bytes(&selection.data_by_mime, requested_mime)
             .ok_or(ReasonCode::MimeRejected)?;
         log::debug!(
             "d2b-clipd: materializing current VM entry vm={} mime={} bytes={}",
@@ -2128,7 +2167,7 @@ fn materialize_selected_entry_fd(
             bounded_mime(requested_mime),
             bytes.len()
         );
-        return pipe_from_bytes(bytes.clone());
+        return pipe_from_bytes(bytes.to_vec());
     }
     if entry_id != CURRENT_HOST_ENTRY_ID {
         return Err(ReasonCode::PolicyDenied);
@@ -2137,16 +2176,11 @@ fn materialize_selected_entry_fd(
         .current_selection()
         .ok_or(ReasonCode::RequestExpired)?;
     let offer = selection.offer.as_ref().ok_or(ReasonCode::PolicyDenied)?;
-    if !selection
-        .allowed_mimes
-        .iter()
-        .any(|mime| mime == requested_mime)
-    {
-        return Err(ReasonCode::MimeRejected);
-    }
+    let receive_mime = compatible_mime_name(&selection.allowed_mimes, requested_mime)
+        .ok_or(ReasonCode::MimeRejected)?;
     let (read_fd, write_fd) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
         .map_err(|_| ReasonCode::FdClosed)?;
-    offer.receive(requested_mime.to_owned(), &write_fd);
+    offer.receive(receive_mime.to_owned(), &write_fd);
     data_control
         .flush()
         .map_err(|_| ReasonCode::BridgeUnavailable)?;
@@ -2501,7 +2535,7 @@ fn picker_candidates(
 ) -> Vec<Candidate> {
     let mut candidates = history.candidates(requested_mime_type);
     if let Some(entry) = current_host_entry
-        && let Some(bytes) = entry.data_by_mime.get(requested_mime_type)
+        && let Some(bytes) = compatible_mime_bytes(&entry.data_by_mime, requested_mime_type)
     {
         candidates.retain(|candidate| candidate.entry_id != CURRENT_HOST_ENTRY_ID);
         candidates.insert(
@@ -2531,11 +2565,7 @@ fn picker_candidates(
     if selection.offer.is_none() || selection.allowed_mimes.is_empty() {
         return candidates;
     }
-    if !selection
-        .allowed_mimes
-        .iter()
-        .any(|mime| mime == requested_mime_type)
-    {
+    if compatible_mime_name(&selection.allowed_mimes, requested_mime_type).is_none() {
         return candidates;
     }
     if let Some(host_index) = candidates
