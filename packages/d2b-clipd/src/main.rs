@@ -1937,8 +1937,9 @@ fn handle_picker_message(
     match message {
         PickerToDaemonMessage::Select(select) => {
             log::debug!(
-                "d2b-clipd: picker selected entry for request {}",
-                select.request_id
+                "d2b-clipd: picker selected entry for request {} entry={}",
+                select.request_id,
+                bounded_label(&select.entry_id)
             );
             if host_clipboard.pending_paste().is_some() {
                 match materialize_selected_entry_fd(
@@ -2431,6 +2432,25 @@ fn picker_handshake(
         }),
         candidates,
     }));
+    if let DaemonToPickerMessage::OpenRequest(request) = &request {
+        log::debug!(
+            "d2b-clipd: picker open request id={} requested_mime={} candidates={}",
+            bounded_label(&request.request_id),
+            bounded_mime(&request.requested_mime_type),
+            request
+                .candidates
+                .iter()
+                .take(8)
+                .map(|candidate| format!(
+                    "{}:{}:{}",
+                    bounded_label(&candidate.entry_id),
+                    bounded_label(&candidate.source_realm),
+                    candidate.source_realm_kind as u8
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
         .map_err(|e| format!("encode open_request: {e}"))?;
     socket
