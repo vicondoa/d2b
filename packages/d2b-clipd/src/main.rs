@@ -755,7 +755,7 @@ struct BridgeSelectionState {
     vm_name: String,
     vm_source_id: u64,
     data_control_source_id: u64,
-    ignore_next_selection_changed: bool,
+    ignore_selection_changed_until: Option<Instant>,
     source: Option<DataControlSource>,
     data_by_mime: BTreeMap<String, Vec<u8>>,
 }
@@ -1387,7 +1387,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             vm_name: vm_name.clone(),
             vm_source_id: source_id,
             data_control_source_id: 0,
-            ignore_next_selection_changed: false,
+            ignore_selection_changed_until: None,
             source: None,
             data_by_mime: BTreeMap::new(),
         });
@@ -1432,7 +1432,8 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             }
             selection.source = Some(source);
             selection.data_control_source_id = source_id;
-            selection.ignore_next_selection_changed = true;
+            selection.ignore_selection_changed_until =
+                Some(Instant::now() + Duration::from_millis(750));
             log::debug!(
                 "d2b-clipd: bridge copy selection published vm={} mimes={}",
                 bounded_label(&selection.vm_name),
@@ -1588,10 +1589,11 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             allowed_mimes,
             has_secret,
         } => {
-            if let Some(selection) = context.bridge_selection.as_mut()
-                && selection.ignore_next_selection_changed
-            {
-                selection.ignore_next_selection_changed = false;
+            if context.bridge_selection.as_ref().is_some_and(|selection| {
+                selection
+                    .ignore_selection_changed_until
+                    .is_some_and(|until| Instant::now() <= until)
+            }) {
                 context.host_clipboard.on_host_selection_cleared();
                 return;
             }
