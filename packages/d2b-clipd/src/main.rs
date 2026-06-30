@@ -49,6 +49,7 @@ const CONTROL_MAX_FRAME_BYTES: usize = 1024;
 const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
+const CURRENT_BRIDGE_ENTRY_ID: &str = "current-vm-selection";
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
@@ -503,6 +504,7 @@ impl EventLoop<'_> {
                             message,
                             self.data_control,
                             self.host_clipboard,
+                            self.bridge_selection.as_ref(),
                             self.notifier,
                             self.fallback,
                             self.supervisor,
@@ -1424,30 +1426,45 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if let Some(selection) = context.bridge_selection.as_ref()
                 && selection.data_control_source_id == source_id
             {
-                if let Some(bytes) = selection.data_by_mime.get(&mime_type) {
-                    match write_all_nonblocking_fd(
-                        &fd,
-                        bytes,
-                        Instant::now() + BOUNDED_READ_TIMEOUT,
-                    ) {
-                        Ok(()) => log::debug!(
-                            "d2b-clipd: bridge selection served mime={} bytes={}",
-                            bounded_mime(&mime_type),
-                            bytes.len()
-                        ),
-                        Err(reason) => log::debug!(
-                            "d2b-clipd: bridge selection write failed mime={}: {}",
-                            bounded_mime(&mime_type),
-                            reason.as_str()
-                        ),
-                    }
-                } else {
-                    log::debug!(
+                if !selection.data_by_mime.contains_key(&mime_type) {
+                    log::warn!(
                         "d2b-clipd: bridge selection missing requested mime={}",
                         bounded_mime(&mime_type)
                     );
+                    drop(fd);
+                    return;
                 }
-                drop(fd);
+                let dest = context
+                    .host_clipboard
+                    .refresh_focused_window_snapshot()
+                    .unwrap_or_default();
+                match context.host_clipboard.accept_paste_fd_for_destination(
+                    fd,
+                    mime_type.clone(),
+                    dest.clone(),
+                ) {
+                    Ok(dest) => {
+                        let candidates = picker_bridge_candidates(selection, &mime_type);
+                        open_picker_for_candidates(
+                            context.fallback,
+                            dest,
+                            context.host_clipboard,
+                            context.notifier,
+                            context.supervisor,
+                            context.picker_command,
+                            context.accept_diag,
+                            candidates,
+                        );
+                    }
+                    Err(reason) => {
+                        d2b_clipd::notifications::emit_user_visible_failure(
+                            context.notifier,
+                            reason,
+                            &selection.vm_name,
+                            "host",
+                        );
+                    }
+                }
                 return;
             }
             // Host application requesting paste data.  Hold the write FD.
@@ -1660,6 +1677,7 @@ fn handle_picker_message(
     message: PickerToDaemonMessage,
     data_control: &mut DataControlClient,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    bridge_selection: Option<&BridgeSelectionState>,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
@@ -1672,8 +1690,13 @@ fn handle_picker_message(
                 select.request_id
             );
             if host_clipboard.pending_paste().is_some() {
-                match materialize_selected_entry_fd(host_clipboard, data_control, &select.entry_id)
-                    .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd))
+                match materialize_selected_entry_fd(
+                    host_clipboard,
+                    data_control,
+                    bridge_selection,
+                    &select.entry_id,
+                )
+                .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd))
                 {
                     Ok(()) => {
                         let _ = fallback.cancel_picker();
@@ -1745,7 +1768,7 @@ fn fulfill_armed_fallback(
     if reject_background_probe_if_target_mismatch(&target, host_clipboard) {
         return true;
     }
-    let result = materialize_selected_entry_fd(host_clipboard, data_control, &entry_id)
+    let result = materialize_selected_entry_fd(host_clipboard, data_control, None, &entry_id)
         .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd));
     match result {
         Ok(()) => {
@@ -1787,8 +1810,25 @@ fn reject_background_probe_if_target_mismatch(
 fn materialize_selected_entry_fd(
     host_clipboard: &HostClipboard<NiriQueryProvider>,
     data_control: &mut DataControlClient,
+    bridge_selection: Option<&BridgeSelectionState>,
     entry_id: &str,
 ) -> Result<std::os::fd::OwnedFd, ReasonCode> {
+    let requested_mime = host_clipboard
+        .pending_paste()
+        .map(|paste| paste.mime_type.as_str())
+        .ok_or(ReasonCode::IntentMissing)?;
+    if entry_id == CURRENT_BRIDGE_ENTRY_ID {
+        let selection = bridge_selection.ok_or(ReasonCode::RequestExpired)?;
+        let bytes = selection
+            .data_by_mime
+            .get(requested_mime)
+            .ok_or(ReasonCode::MimeRejected)?;
+        let (read_fd, write_fd) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .map_err(|_| ReasonCode::FdClosed)?;
+        write_all_nonblocking_fd(&write_fd, bytes, Instant::now() + BOUNDED_READ_TIMEOUT)?;
+        drop(write_fd);
+        return Ok(read_fd);
+    }
     if entry_id != CURRENT_HOST_ENTRY_ID {
         return Err(ReasonCode::PolicyDenied);
     }
@@ -1796,10 +1836,6 @@ fn materialize_selected_entry_fd(
         .current_selection()
         .ok_or(ReasonCode::RequestExpired)?;
     let offer = selection.offer.as_ref().ok_or(ReasonCode::PolicyDenied)?;
-    let requested_mime = host_clipboard
-        .pending_paste()
-        .map(|paste| paste.mime_type.as_str())
-        .ok_or(ReasonCode::IntentMissing)?;
     if !selection
         .allowed_mimes
         .iter()
@@ -2081,6 +2117,36 @@ fn picker_candidates(
     }]
 }
 
+fn picker_bridge_candidates(
+    selection: &BridgeSelectionState,
+    requested_mime_type: &str,
+) -> Vec<Candidate> {
+    if !selection.data_by_mime.contains_key(requested_mime_type) {
+        return Vec::new();
+    }
+    vec![Candidate {
+        entry_id: CURRENT_BRIDGE_ENTRY_ID.to_owned(),
+        source_realm: selection.vm_name.clone(),
+        source_realm_kind: RealmKind::Vm,
+        source_app: Some(format!("{} VM", selection.vm_name)),
+        source_app_id: Some(format!("d2b.{}", selection.vm_name)),
+        source_attribution: AttributionQuality::ExactClient,
+        preview_text: selection
+            .data_by_mime
+            .get(requested_mime_type)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .map(|text| sanitize_notification_text(text, 256)),
+        content_type: requested_mime_type.to_owned(),
+        timestamp_unix_ms: unix_millis(),
+        thumbnail_png_base64: None,
+        byte_count: selection
+            .data_by_mime
+            .get(requested_mime_type)
+            .map(|bytes| bytes.len() as u64),
+        confirmation_required: false,
+    }]
+}
+
 fn protocol_attribution(quality: d2b_clipd::policy::AttributionQuality) -> AttributionQuality {
     match quality {
         d2b_clipd::policy::AttributionQuality::ExactClient => AttributionQuality::ExactClient,
@@ -2107,6 +2173,33 @@ fn open_picker_or_arm_fallback(
     picker_command: &Option<PickerCommand>,
     accept_diag: &mut AcceptDiagnostics,
 ) {
+    let requested_mime = host_clipboard
+        .pending_paste()
+        .map(|paste| paste.mime_type.clone())
+        .unwrap_or_else(|| "text/plain".to_owned());
+    let candidates = picker_candidates(host_clipboard, &requested_mime);
+    open_picker_for_candidates(
+        fallback,
+        dest,
+        host_clipboard,
+        notifier,
+        supervisor,
+        picker_command,
+        accept_diag,
+        candidates,
+    );
+}
+
+fn open_picker_for_candidates(
+    fallback: &mut FallbackArming,
+    dest: FocusedWindowSnapshot,
+    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
+    notifier: &mut impl Notifier,
+    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &Option<PickerCommand>,
+    accept_diag: &mut AcceptDiagnostics,
+    candidates: Vec<Candidate>,
+) {
     let can_open = picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle);
     if can_open {
         let _ = fallback.capture_target_before_picker(dest.clone());
@@ -2123,7 +2216,6 @@ fn open_picker_or_arm_fallback(
                     .pending_paste()
                     .map(|paste| paste.mime_type.clone())
                     .unwrap_or_else(|| "text/plain".to_owned());
-                let candidates = picker_candidates(host_clipboard, &requested_mime);
                 if let Err(error) =
                     picker_handshake(socket, &request_id, &dest, &requested_mime, candidates)
                 {
