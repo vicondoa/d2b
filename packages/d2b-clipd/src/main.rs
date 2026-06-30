@@ -627,6 +627,27 @@ impl EventLoop<'_> {
                 let mut current = entry.clone();
                 current.entry_id = CURRENT_HOST_ENTRY_ID.to_owned();
                 self.current_host_entry = Some(current);
+                match publish_data_control_selection(
+                    self.data_control,
+                    entry.data_by_mime.clone(),
+                    PublishedSelectionMode::Discovery,
+                ) {
+                    Ok(selection) => {
+                        self.published_selection = Some(selection);
+                        log::info!(
+                            "d2b-clipd: claimed host selection as discovery source mimes={}",
+                            entry.data_by_mime.len()
+                        );
+                    }
+                    Err(reason) => {
+                        self.accept_diag.warn("host", "claim-selection-failed", || {
+                            format!(
+                                "d2b-clipd: host selection claim failed: {}",
+                                reason.as_str()
+                            )
+                        });
+                    }
+                }
             }
             self.history.push(entry);
         }
@@ -770,7 +791,14 @@ struct PublishedSelectionState {
     data_control_source_id: u64,
     _source: DataControlSource,
     data_by_mime: BTreeMap<String, Vec<u8>>,
+    mode: PublishedSelectionMode,
     ignore_selection_changed_until: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishedSelectionMode {
+    Discovery,
+    Selected,
 }
 
 #[derive(Debug, Clone)]
@@ -1749,14 +1777,50 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if let Some(selection) = context.published_selection.as_ref()
                 && selection.data_control_source_id == source_id
             {
-                if let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type) {
-                    spawn_write_bytes_to_fd(fd, mime_type, bytes);
-                } else {
-                    log::info!(
-                        "d2b-clipd: published selection missing requested mime={}",
-                        bounded_mime(&mime_type)
-                    );
-                    drop(fd);
+                match selection.mode {
+                    PublishedSelectionMode::Selected => {
+                        if let Some(bytes) =
+                            compatible_mime_payload(&selection.data_by_mime, &mime_type)
+                        {
+                            spawn_write_bytes_to_fd(fd, mime_type, bytes);
+                        } else {
+                            log::info!(
+                                "d2b-clipd: published selection missing requested mime={}",
+                                bounded_mime(&mime_type)
+                            );
+                            drop(fd);
+                        }
+                    }
+                    PublishedSelectionMode::Discovery => {
+                        drop(fd);
+                        let dest = context
+                            .host_clipboard
+                            .refresh_focused_window_snapshot()
+                            .unwrap_or_default();
+                        let candidates = picker_candidates(
+                            context.host_clipboard,
+                            context.current_host_entry.as_ref(),
+                            context.history,
+                            &mime_type,
+                        );
+                        log::info!(
+                            "d2b-clipd: discovery source paste request mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
+                            bounded_mime(&mime_type),
+                            bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                            bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                            summarize_candidates(&candidates)
+                        );
+                        open_picker_for_candidates(
+                            context.fallback,
+                            dest,
+                            context.host_clipboard,
+                            context.notifier,
+                            context.supervisor,
+                            context.picker_command,
+                            context.accept_diag,
+                            candidates,
+                        );
+                    }
                 }
                 return;
             }
@@ -2093,6 +2157,29 @@ fn publish_selected_entry_to_host(
 ) -> Result<(), ReasonCode> {
     let data_by_mime =
         selected_entry_data_by_mime(bridge_selection, current_host_entry, history, entry_id)?;
+    let selection = publish_data_control_selection(
+        data_control,
+        data_by_mime,
+        PublishedSelectionMode::Selected,
+    )?;
+    let mimes_len = selection.data_by_mime.len();
+    *published_selection = Some(selection);
+    log::info!(
+        "d2b-clipd: published selected entry id={} mimes={} for instant paste",
+        bounded_label(entry_id),
+        mimes_len
+    );
+    Ok(())
+}
+
+fn publish_data_control_selection(
+    data_control: &mut DataControlClient,
+    data_by_mime: BTreeMap<String, Vec<u8>>,
+    mode: PublishedSelectionMode,
+) -> Result<PublishedSelectionState, ReasonCode> {
+    if data_by_mime.is_empty() {
+        return Err(ReasonCode::RequestExpired);
+    }
     let mimes = preferred_mime_order(&data_by_mime);
     let (source, source_id) = data_control
         .create_source(&mimes)
@@ -2103,18 +2190,13 @@ fn publish_selected_entry_to_host(
     data_control
         .flush()
         .map_err(|_| ReasonCode::BridgeUnavailable)?;
-    *published_selection = Some(PublishedSelectionState {
+    Ok(PublishedSelectionState {
         data_control_source_id: source_id,
         _source: source,
         data_by_mime,
+        mode,
         ignore_selection_changed_until: Some(Instant::now() + Duration::from_millis(750)),
-    });
-    log::info!(
-        "d2b-clipd: published selected entry id={} mimes={} for instant paste",
-        bounded_label(entry_id),
-        mimes.len()
-    );
-    Ok(())
+    })
 }
 
 fn selected_entry_data_by_mime(
