@@ -504,6 +504,7 @@ in
       text = configJson;
       mode = "0644";
     };
+    environment.systemPackages = lib.optional (cfg.clipd.package != null) cfg.clipd.package;
 
     systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
 

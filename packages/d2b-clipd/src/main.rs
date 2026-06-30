@@ -55,6 +55,7 @@ const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const ASYNC_MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -605,9 +606,10 @@ impl EventLoop<'_> {
             deadline
                 .saturating_duration_since(now)
                 .as_millis()
+                .min(ASYNC_MATERIALIZE_POLL_INTERVAL.as_millis())
                 .min(i32::MAX as u128) as i32
         })
-        .unwrap_or(5000)
+        .unwrap_or(ASYNC_MATERIALIZE_POLL_INTERVAL.as_millis() as i32)
     }
 
     fn drain_async_materialization(&mut self) {
