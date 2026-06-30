@@ -1492,6 +1492,13 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             allowed_mimes,
             has_secret,
         } => {
+            if context
+                .bridge_selection
+                .as_ref()
+                .is_some_and(|selection| selection.data_control_source_id != 0)
+            {
+                return;
+            }
             if let Some(offer_ref) = offer.as_ref() {
                 let data_by_mime =
                     materialize_offer_mimes(context.data_control, offer_ref, &allowed_mimes);
