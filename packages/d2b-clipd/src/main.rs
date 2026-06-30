@@ -1947,8 +1947,12 @@ fn handle_arm(
     ) {
         Ok(socket) => {
             // Drive picker handshake: read ClientHello, send OpenRequest.
-            let candidates = picker_candidates(host_clipboard);
-            match picker_handshake(socket, &request_id, &dest, candidates) {
+            let requested_mime = host_clipboard
+                .pending_paste()
+                .map(|paste| paste.mime_type.clone())
+                .unwrap_or_else(|| "text/plain".to_owned());
+            let candidates = picker_candidates(host_clipboard, &requested_mime);
+            match picker_handshake(socket, &request_id, &dest, &requested_mime, candidates) {
                 Ok(picker_version) => {
                     log::debug!("d2b-clipd: picker opened (version={picker_version})");
                     Ok("picker opened".to_owned())
@@ -1981,6 +1985,7 @@ fn picker_handshake(
     socket: &UnixStream,
     request_id: &str,
     dest: &FocusedWindowSnapshot,
+    requested_mime_type: &str,
     candidates: Vec<Candidate>,
 ) -> Result<String, String> {
     let hello_buf = read_bounded_line(
@@ -2011,7 +2016,7 @@ fn picker_handshake(
             output: dest.output_label.clone(),
             attribution: AttributionQuality::FocusedWindowGuess,
         },
-        requested_mime_type: "text/plain".to_owned(),
+        requested_mime_type: requested_mime_type.to_owned(),
         expires_at_unix_ms: unix_millis().saturating_add(30_000),
         placement_hints: None,
         candidates,
@@ -2027,11 +2032,21 @@ fn picker_handshake(
     Ok(picker_version)
 }
 
-fn picker_candidates(host_clipboard: &HostClipboard<NiriQueryProvider>) -> Vec<Candidate> {
+fn picker_candidates(
+    host_clipboard: &HostClipboard<NiriQueryProvider>,
+    requested_mime_type: &str,
+) -> Vec<Candidate> {
     let Some(selection) = host_clipboard.current_selection() else {
         return Vec::new();
     };
     if selection.offer.is_none() || selection.allowed_mimes.is_empty() {
+        return Vec::new();
+    }
+    if !selection
+        .allowed_mimes
+        .iter()
+        .any(|mime| mime == requested_mime_type)
+    {
         return Vec::new();
     }
     let window = selection.attribution.window.as_ref();
@@ -2045,11 +2060,7 @@ fn picker_candidates(host_clipboard: &HostClipboard<NiriQueryProvider>) -> Vec<C
         source_app_id: window.and_then(|window| window.app_id.clone()),
         source_attribution: protocol_attribution(selection.attribution.quality),
         preview_text: None,
-        content_type: selection
-            .allowed_mimes
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "text/plain".to_owned()),
+        content_type: requested_mime_type.to_owned(),
         timestamp_unix_ms: unix_millis(),
         thumbnail_png_base64: None,
         byte_count: None,
@@ -2095,8 +2106,14 @@ fn open_picker_or_arm_fallback(
             Duration::from_secs(30),
         ) {
             Ok(socket) => {
-                let candidates = picker_candidates(host_clipboard);
-                if let Err(error) = picker_handshake(socket, &request_id, &dest, candidates) {
+                let requested_mime = host_clipboard
+                    .pending_paste()
+                    .map(|paste| paste.mime_type.clone())
+                    .unwrap_or_else(|| "text/plain".to_owned());
+                let candidates = picker_candidates(host_clipboard, &requested_mime);
+                if let Err(error) =
+                    picker_handshake(socket, &request_id, &dest, &requested_mime, candidates)
+                {
                     accept_diag.warn("picker", "handshake-failed", || {
                         format!("d2b-clipd: picker handshake failed: {error}")
                     });
