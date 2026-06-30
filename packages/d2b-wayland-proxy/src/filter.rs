@@ -645,6 +645,10 @@ fn send_selection_to_device(
 fn send_offer_actions(offer: &Rc<WlDataOffer>) {
     use wl_proxy::protocols::wayland::wl_data_device_manager::WlDataDeviceManagerDndAction;
 
+    if offer.version() < 3 {
+        return;
+    }
+
     // Version 3 clients expect source_actions/action before selection. We only
     // support copy semantics and deny drag-and-drop elsewhere.
     offer.send_source_actions(WlDataDeviceManagerDndAction::COPY);
