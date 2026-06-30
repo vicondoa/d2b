@@ -1627,6 +1627,7 @@ fn handle_bridge_paste_request(
     }
     let _ = context.audit_queue.drain_all();
     if let Some(selection) = context.published_selection.as_ref()
+        && selection.mode == PublishedSelectionMode::Selected
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::info!(
