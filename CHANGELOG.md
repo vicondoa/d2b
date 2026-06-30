@@ -45,6 +45,11 @@ deprecations ship one minor release before removal.
   for normal selections, fixing GTK/Firefox startup through the proxy; `d2b-clipd`
   now requests the exact pending paste MIME from the picker and installs bridge
   sockets with deterministic peer-connect permissions.
+- `d2b-clipd` now clears stale host-selection state when it observes its own
+  bridge-published VM selection, matches bridge send requests by source id
+  instead of MIME alone, and fulfills all queued Wayland paste FDs after one
+  picker selection so VM-to-host and VM-to-VM pastes cannot resolve to EOF after
+  the picker selects an item.
 
 ### Added
 
@@ -107,6 +112,9 @@ deprecations ship one minor release before removal.
   bounded helper task instead of blocking the daemon event loop, and bridge /
   picker failures emit content-free, rate-limited warnings such as
   `connect-failed`, `handoff-failed`, and picker-closed-before-selection.
+- Added explicit `d2b-clipd debug wl-copy <text>` and
+  `d2b-clipd debug wl-paste [mime]` Wayland probe subcommands for local
+  clipboard validation without relying on session-only helper binaries.
 - Staged the console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,

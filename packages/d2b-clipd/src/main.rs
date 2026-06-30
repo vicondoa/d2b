@@ -45,6 +45,8 @@ use d2b_clipd::wayland::{DataControlClient, DataControlSource, HostClipboardEven
 use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
+mod debug_wayland;
+
 const CONTROL_MAX_FRAME_BYTES: usize = 1024;
 const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -77,7 +79,11 @@ fn main() {
 }
 
 fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
-    let args = parse_args(args_iter)?;
+    let args_vec = args_iter.into_iter().collect::<Vec<_>>();
+    if args_vec.first().is_some_and(|arg| arg == "debug") {
+        return debug_wayland::run(args_vec.into_iter().skip(1));
+    }
+    let args = parse_args(args_vec)?;
 
     let config_text = std::fs::read_to_string(&args.config)
         .map_err(|e| format!("failed to read config {}: {e}", args.config.display()))?;
@@ -2711,7 +2717,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--oneshot" => oneshot = true,
             "--help" | "-h" => {
                 return Err("usage: d2b-clipd --config <path> --bridge-root <path> \
-                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"
+                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]\n\
+                     debug: d2b-clipd debug wl-copy <text> | d2b-clipd debug wl-paste [mime]"
                     .to_owned());
             }
             other => return Err(format!("unknown argument: {other}")),
