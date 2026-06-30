@@ -633,6 +633,7 @@ impl EventLoop<'_> {
                 data_control: self.data_control,
                 accept_diag: &mut self.accept_diag,
                 bridge_selection: &mut self.bridge_selection,
+                current_host_entry: &mut self.current_host_entry,
                 history: &mut self.history,
             };
             handle_bridge_copy_ready(ready, &mut context);
@@ -1068,6 +1069,7 @@ struct BridgeCopyReadyContext<'a> {
     data_control: &'a mut DataControlClient,
     accept_diag: &'a mut AcceptDiagnostics,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
+    current_host_entry: &'a mut Option<ClipboardHistoryEntry>,
     history: &'a mut ClipboardHistory,
 }
 
@@ -1381,6 +1383,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         bounded_mime(&mime_type),
         bytes.len()
     );
+    *context.current_host_entry = None;
 
     let replace = context.bridge_selection.as_ref().is_none_or(|selection| {
         selection.vm_name != vm_name || selection.vm_source_id != source_id
