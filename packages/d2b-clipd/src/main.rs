@@ -2424,6 +2424,12 @@ fn picker_candidates(
     {
         return candidates;
     }
+    if candidates
+        .first()
+        .is_some_and(|candidate| candidate.source_realm_kind == RealmKind::Host)
+    {
+        return candidates;
+    }
     let window = selection.attribution.window.as_ref();
     candidates.insert(
         0,
