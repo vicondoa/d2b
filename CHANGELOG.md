@@ -50,6 +50,11 @@ deprecations ship one minor release before removal.
   instead of MIME alone, and fulfills all queued Wayland paste FDs after one
   picker selection so VM-to-host and VM-to-VM pastes cannot resolve to EOF after
   the picker selects an item.
+- Clipboard picker selection now publishes the selected entry as a fresh
+  d2b-owned host selection and triggers paste replay, while VM destination paste
+  requests open the picker first and serve the replayed transfer immediately
+  from the published selection instead of holding a Wayland transfer FD across
+  picker interaction.
 
 ### Added
 
