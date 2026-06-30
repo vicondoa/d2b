@@ -253,6 +253,13 @@ pub struct BridgeTransferMetadata {
     pub vm_name: String,
     pub mime_type: String,
     pub source_id: u64,
+    pub kind: BridgeTransferKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeTransferKind {
+    PasteRequest,
+    CopySelection,
 }
 
 impl BridgeHandoff for UnixStream {
@@ -280,8 +287,13 @@ impl BridgeHandoff for UnixStream {
 }
 
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
+    let frame_type = match metadata.kind {
+        BridgeTransferKind::PasteRequest => "vm_paste_request",
+        BridgeTransferKind::CopySelection => "vm_copy_selection",
+    };
     format!(
-        "{{\"type\":\"vm_paste_request\",\"vm_name\":\"{}\",\"mime_type\":\"{}\",\"source_id\":{},\"source_attribution\":\"exact_client\"}}\n",
+        "{{\"type\":\"{}\",\"vm_name\":\"{}\",\"mime_type\":\"{}\",\"source_id\":{},\"source_attribution\":\"exact_client\"}}\n",
+        frame_type,
         json_escape(&metadata.vm_name),
         json_escape(&metadata.mime_type),
         metadata.source_id
@@ -449,6 +461,7 @@ mod tests {
             vm_name: "work".to_owned(),
             mime_type: "text/plain".to_owned(),
             source_id: 7,
+            kind: BridgeTransferKind::PasteRequest,
         };
 
         assert_eq!(
@@ -484,5 +497,18 @@ mod tests {
         assert!(frame.contains("\"vm_name\":\"work\""));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
+    }
+
+    #[test]
+    fn bridge_handoff_can_encode_vm_copy_selection() {
+        let metadata = BridgeTransferMetadata {
+            vm_name: "work".to_owned(),
+            mime_type: "text/html".to_owned(),
+            source_id: 9,
+            kind: BridgeTransferKind::CopySelection,
+        };
+        let frame = bridge_frame(&metadata);
+        assert!(frame.contains("\"type\":\"vm_copy_selection\""));
+        assert!(frame.contains("\"mime_type\":\"text/html\""));
     }
 }

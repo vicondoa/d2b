@@ -51,7 +51,7 @@ use wl_proxy::{
 use crate::{
     bridge::{
         BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
-        BridgeTransferMetadata,
+        BridgeTransferKind, BridgeTransferMetadata,
     },
     clipboard::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
@@ -278,6 +278,7 @@ impl VirtualClipboardState {
                     vm_name: self.vm_name.clone(),
                     mime_type: mime_type.to_owned(),
                     source_id: source.unique_id(),
+                    kind: BridgeTransferKind::PasteRequest,
                 };
                 self.handoff_via_bridge(fd, &metadata);
             }
@@ -309,6 +310,54 @@ impl VirtualClipboardState {
             ClipboardRoute::HostOrCrossRealm
         } else {
             ClipboardRoute::SameVm
+        }
+    }
+
+    fn publish_selection_to_bridge(&mut self, source: Option<&Rc<WlDataSource>>) {
+        let Some(source) = source else {
+            return;
+        };
+        let Some(stored) = self.sources.get(&source.unique_id()).cloned() else {
+            return;
+        };
+        let mime_types = stored.borrow().mime_types.clone();
+        for mime_type in mime_types {
+            if !matches!(
+                self.mime_policy.decide(self.route(), &mime_type),
+                MimeDecision::MaterializeViaBridge
+            ) {
+                continue;
+            }
+            let (read_fd, write_fd) = match rustix::pipe::pipe_with(
+                rustix::pipe::PipeFlags::CLOEXEC,
+            ) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    let vm = self.vm_name.clone();
+                    let error = bounded_error_detail(error.to_string());
+                    self.diag.borrow_mut().warn(
+                            "clipboard-bridge",
+                            "copy-pipe-failed",
+                            || {
+                                format!(
+                                    "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=copy-pipe-failed error={error}"
+                                )
+                            },
+                        );
+                    continue;
+                }
+            };
+            let write_fd = Rc::new(write_fd);
+            source.send_send(&mime_type, &write_fd);
+            drop(write_fd);
+            let metadata = BridgeTransferMetadata {
+                vm_name: self.vm_name.clone(),
+                mime_type: mime_type.clone(),
+                source_id: source.unique_id(),
+                kind: BridgeTransferKind::CopySelection,
+            };
+            self.handoff_via_bridge(&read_fd, &metadata);
+            drop(read_fd);
         }
     }
 
@@ -951,6 +1000,7 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
         );
         if let Some(clipboard) = self.clipboard.upgrade() {
             set_virtual_selection(&clipboard, source);
+            clipboard.borrow_mut().publish_selection_to_bridge(source);
         }
     }
 

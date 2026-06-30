@@ -41,7 +41,7 @@ use d2b_clipd::protocol::{
     AttributionQuality, Candidate, ClientHello, DaemonToPickerMessage, DestinationMetadata,
     OpenRequest, PickerToDaemonMessage, RealmKind,
 };
-use d2b_clipd::wayland::{DataControlClient, HostClipboardEvent};
+use d2b_clipd::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
 use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
@@ -167,6 +167,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         control_streams: Vec::new(),
         bridge_listeners,
         bridge_streams: Vec::new(),
+        bridge_selection: None,
         accept_diag: AcceptDiagnostics::default(),
         control_accept_backoff_until: None,
         bridge_accept_backoff_until: None,
@@ -239,6 +240,7 @@ struct EventLoop<'a> {
     control_streams: Vec<ControlStream>,
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
+    bridge_selection: Option<BridgeSelectionState>,
     accept_diag: AcceptDiagnostics,
     control_accept_backoff_until: Option<Instant>,
     bridge_accept_backoff_until: Option<Instant>,
@@ -391,6 +393,7 @@ impl EventLoop<'_> {
                     supervisor: self.supervisor,
                     picker_command: &self.picker_command,
                     accept_diag: &mut self.accept_diag,
+                    bridge_selection: &mut self.bridge_selection,
                 };
                 handle_wayland_event(event, &mut context);
             }
@@ -480,6 +483,7 @@ impl EventLoop<'_> {
                         accept_diag: &mut self.accept_diag,
                         audit_queue: self.audit_queue,
                         metrics_queue: self.metrics_queue,
+                        bridge_selection: &mut self.bridge_selection,
                     };
                     match handle_bridge_stream(&mut stream, &mut context) {
                         BridgeStreamStatus::Done => {}
@@ -689,6 +693,27 @@ enum BridgeFrame {
         source_id: u64,
         source_attribution: BridgeAttribution,
     },
+    VmCopySelection {
+        vm_name: String,
+        mime_type: String,
+        source_id: u64,
+        source_attribution: BridgeAttribution,
+    },
+}
+
+#[derive(Debug)]
+struct BridgeSelectionState {
+    vm_name: String,
+    vm_source_id: u64,
+    data_control_source_id: u64,
+    source: Option<DataControlSource>,
+    data_by_mime: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Debug)]
+enum BridgeRequest {
+    Paste(BridgePasteRequest),
+    Copy(BridgeCopySelectionRequest),
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -749,6 +774,14 @@ fn bridge_socket_path(root: &Path, uid: u32, vm: &str) -> Result<PathBuf, String
 
 #[derive(Debug)]
 struct BridgePasteRequest {
+    vm_name: String,
+    mime_type: String,
+    source_id: u64,
+    fd: OwnedFd,
+}
+
+#[derive(Debug)]
+struct BridgeCopySelectionRequest {
     vm_name: String,
     mime_type: String,
     source_id: u64,
@@ -890,6 +923,7 @@ struct BridgeHandlerContext<'a> {
     accept_diag: &'a mut AcceptDiagnostics,
     audit_queue: &'a mut AuditQueue,
     metrics_queue: &'a mut MetricsQueue,
+    bridge_selection: &'a mut Option<BridgeSelectionState>,
 }
 
 fn handle_bridge_stream(
@@ -898,10 +932,10 @@ fn handle_bridge_stream(
 ) -> BridgeStreamStatus {
     match recv_bridge_frame(bridge) {
         Ok(request) => {
-            handle_bridge_paste_request(request, context);
+            handle_bridge_request(request, context);
             loop {
                 match recv_bridge_frame(bridge) {
-                    Ok(request) => handle_bridge_paste_request(request, context),
+                    Ok(request) => handle_bridge_request(request, context),
                     Err(BridgeReadError::Incomplete) => return BridgeStreamStatus::Incomplete,
                     Err(error) => {
                         context.accept_diag.warn("bridge", "frame-failed", || {
@@ -959,7 +993,7 @@ impl BridgeReadError {
     }
 }
 
-fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
+fn recv_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, BridgeReadError> {
     loop {
         if stream.read_buffer.contains(&b'\n') {
             return parse_bridge_frame(stream);
@@ -1042,7 +1076,7 @@ fn validate_bridge_fd_queue(
     Ok(())
 }
 
-fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, BridgeReadError> {
+fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, BridgeReadError> {
     let newline = stream
         .read_buffer
         .iter()
@@ -1057,45 +1091,181 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgePasteRequest, B
             mime_type,
             source_id,
             source_attribution,
-        } => {
-            if stream.received_fds.is_empty() {
-                return Err(BridgeReadError::Invalid(
-                    "bridge frame did not include transfer fd".to_owned(),
-                ));
-            };
-            let fd = stream.received_fds.remove(0);
-            if vm_name != stream.vm_name {
-                drop(fd);
-                return Err(BridgeReadError::Invalid(format!(
-                    "bridge vm mismatch: expected {}, got {vm_name}",
-                    stream.vm_name
-                )));
+        } => parse_bridge_transfer(
+            stream,
+            vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+            false,
+        ),
+        BridgeFrame::VmCopySelection {
+            vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+        } => parse_bridge_transfer(
+            stream,
+            vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+            true,
+        ),
+    }
+}
+
+fn parse_bridge_transfer(
+    stream: &mut BridgeStream,
+    vm_name: String,
+    mime_type: String,
+    source_id: u64,
+    source_attribution: BridgeAttribution,
+    copy_selection: bool,
+) -> Result<BridgeRequest, BridgeReadError> {
+    if stream.received_fds.is_empty() {
+        return Err(BridgeReadError::Invalid(
+            "bridge frame did not include transfer fd".to_owned(),
+        ));
+    };
+    let fd = stream.received_fds.remove(0);
+    if vm_name != stream.vm_name {
+        drop(fd);
+        return Err(BridgeReadError::Invalid(format!(
+            "bridge vm mismatch: expected {}, got {vm_name}",
+            stream.vm_name
+        )));
+    }
+    if source_attribution != BridgeAttribution::ExactClient {
+        drop(fd);
+        return Err(BridgeReadError::Invalid(
+            "bridge frame did not carry exact attribution".to_owned(),
+        ));
+    }
+    if let Err(error) = classify_fd(&fd) {
+        drop(fd);
+        return Err(BridgeReadError::Invalid(format!(
+            "bridge transfer fd rejected: {error}"
+        )));
+    }
+    log::debug!(
+        "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
+        bounded_label(&stream.vm_name),
+        source_id,
+        bounded_mime(&mime_type)
+    );
+    stream.frame_deadline = Instant::now() + STREAM_FRAME_IDLE_TIMEOUT;
+    if copy_selection {
+        Ok(BridgeRequest::Copy(BridgeCopySelectionRequest {
+            vm_name,
+            mime_type,
+            source_id,
+            fd,
+        }))
+    } else {
+        Ok(BridgeRequest::Paste(BridgePasteRequest {
+            vm_name,
+            mime_type,
+            source_id,
+            fd,
+        }))
+    }
+}
+
+fn handle_bridge_request(request: BridgeRequest, context: &mut BridgeHandlerContext<'_>) {
+    match request {
+        BridgeRequest::Paste(request) => handle_bridge_paste_request(request, context),
+        BridgeRequest::Copy(request) => handle_bridge_copy_selection(request, context),
+    }
+}
+
+fn handle_bridge_copy_selection(
+    request: BridgeCopySelectionRequest,
+    context: &mut BridgeHandlerContext<'_>,
+) {
+    let BridgeCopySelectionRequest {
+        vm_name,
+        mime_type,
+        source_id,
+        fd,
+    } = request;
+    if !is_mime_allowed(&mime_type) {
+        drop(fd);
+        return;
+    }
+    let bytes = match read_fd_to_vec(fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            context
+                .accept_diag
+                .warn("bridge", "copy-materialize-failed", || {
+                    format!(
+                        "d2b-clipd: bridge copy materialize failed for vm={}: {}",
+                        bounded_label(&vm_name),
+                        reason.as_str()
+                    )
+                });
+            return;
+        }
+    };
+
+    let replace = context.bridge_selection.as_ref().is_none_or(|selection| {
+        selection.vm_name != vm_name || selection.vm_source_id != source_id
+    });
+    if replace {
+        *context.bridge_selection = Some(BridgeSelectionState {
+            vm_name: vm_name.clone(),
+            vm_source_id: source_id,
+            data_control_source_id: 0,
+            source: None,
+            data_by_mime: BTreeMap::new(),
+        });
+    }
+
+    let Some(selection) = context.bridge_selection.as_mut() else {
+        return;
+    };
+    selection.data_by_mime.insert(mime_type, bytes);
+    let mimes = selection.data_by_mime.keys().cloned().collect::<Vec<_>>();
+    match context.data_control.create_source(&mimes) {
+        Ok((source, source_id)) => {
+            if let Err(error) = context.data_control.set_selection(&source) {
+                context
+                    .accept_diag
+                    .warn("bridge", "copy-set-selection-failed", || {
+                        format!(
+                            "d2b-clipd: bridge copy set selection failed for vm={}: {error}",
+                            bounded_label(&selection.vm_name)
+                        )
+                    });
+                return;
             }
-            if source_attribution != BridgeAttribution::ExactClient {
-                drop(fd);
-                return Err(BridgeReadError::Invalid(
-                    "bridge frame did not carry exact attribution".to_owned(),
-                ));
+            if let Err(error) = context.data_control.flush() {
+                context.accept_diag.warn("bridge", "copy-flush-failed", || {
+                    format!(
+                        "d2b-clipd: bridge copy flush failed for vm={}: {error}",
+                        bounded_label(&selection.vm_name)
+                    )
+                });
+                return;
             }
-            if let Err(error) = classify_fd(&fd) {
-                drop(fd);
-                return Err(BridgeReadError::Invalid(format!(
-                    "bridge transfer fd rejected: {error}"
-                )));
-            }
+            selection.source = Some(source);
+            selection.data_control_source_id = source_id;
             log::debug!(
-                "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
-                bounded_label(&stream.vm_name),
-                source_id,
-                bounded_mime(&mime_type)
+                "d2b-clipd: bridge copy selection published vm={} mimes={}",
+                bounded_label(&selection.vm_name),
+                selection.data_by_mime.len()
             );
-            stream.frame_deadline = Instant::now() + STREAM_FRAME_IDLE_TIMEOUT;
-            Ok(BridgePasteRequest {
-                vm_name,
-                mime_type,
-                source_id,
-                fd,
-            })
+        }
+        Err(error) => {
+            context
+                .accept_diag
+                .warn("bridge", "copy-source-create-failed", || {
+                    format!(
+                        "d2b-clipd: bridge copy source create failed for vm={}: {error}",
+                        bounded_label(&selection.vm_name)
+                    )
+                });
         }
     }
 }
@@ -1215,6 +1385,7 @@ struct WaylandEventContext<'a> {
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &'a Option<PickerCommand>,
     accept_diag: &'a mut AcceptDiagnostics,
+    bridge_selection: &'a mut Option<BridgeSelectionState>,
 }
 
 fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventContext<'_>) {
@@ -1234,10 +1405,39 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             context.host_clipboard.on_host_selection_cleared();
         }
         HostClipboardEvent::SourceSendRequest {
-            source_id: _,
+            source_id,
             mime_type,
             fd,
         } => {
+            if let Some(selection) = context.bridge_selection.as_ref()
+                && selection.data_control_source_id == source_id
+            {
+                if let Some(bytes) = selection.data_by_mime.get(&mime_type) {
+                    match write_all_nonblocking_fd(
+                        &fd,
+                        bytes,
+                        Instant::now() + BOUNDED_READ_TIMEOUT,
+                    ) {
+                        Ok(()) => log::debug!(
+                            "d2b-clipd: bridge selection served mime={} bytes={}",
+                            bounded_mime(&mime_type),
+                            bytes.len()
+                        ),
+                        Err(reason) => log::debug!(
+                            "d2b-clipd: bridge selection write failed mime={}: {}",
+                            bounded_mime(&mime_type),
+                            reason.as_str()
+                        ),
+                    }
+                } else {
+                    log::debug!(
+                        "d2b-clipd: bridge selection missing requested mime={}",
+                        bounded_mime(&mime_type)
+                    );
+                }
+                drop(fd);
+                return;
+            }
             // Host application requesting paste data.  Hold the write FD.
             match context
                 .host_clipboard
@@ -2448,11 +2648,15 @@ mod tests {
             received_fds: Vec::new(),
             frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
-        let request = recv_bridge_frame(&mut stream).expect("bridge frame");
-        assert_eq!(request.vm_name, "work");
-        assert_eq!(request.mime_type, "text/plain");
-        assert_eq!(request.source_id, 7);
-        drop(request.fd);
+        match recv_bridge_frame(&mut stream).expect("bridge frame") {
+            BridgeRequest::Paste(request) => {
+                assert_eq!(request.vm_name, "work");
+                assert_eq!(request.mime_type, "text/plain");
+                assert_eq!(request.source_id, 7);
+                drop(request.fd);
+            }
+            other => panic!("expected paste request, got {other:?}"),
+        }
         drop(read_fd);
     }
 
@@ -2576,7 +2780,10 @@ mod tests {
             received_fds: Vec::new(),
             frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
         };
-        let request = recv_bridge_frame(&mut stream).expect("first frame");
+        let request = match recv_bridge_frame(&mut stream).expect("first frame") {
+            BridgeRequest::Paste(request) => request,
+            other => panic!("expected paste request, got {other:?}"),
+        };
         assert_eq!(request.source_id, 7);
         assert_eq!(stream.received_fds.len(), 1);
         assert_eq!(stream.read_buffer, b"{");
