@@ -56,6 +56,7 @@ const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const ASYNC_MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const SELECTED_ENTRY_LATE_FD_GRACE: Duration = Duration::from_millis(750);
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -506,6 +507,7 @@ impl EventLoop<'_> {
                         accept_diag: &mut self.accept_diag,
                         audit_queue: self.audit_queue,
                         metrics_queue: self.metrics_queue,
+                        bridge_selection: self.bridge_selection.as_ref(),
                         history: &mut self.history,
                         current_host_entry: self.current_host_entry.as_ref(),
                         bridge_copy_tx: &self.bridge_copy_tx,
@@ -1049,6 +1051,7 @@ struct BridgeHandlerContext<'a> {
     accept_diag: &'a mut AcceptDiagnostics,
     audit_queue: &'a mut AuditQueue,
     metrics_queue: &'a mut MetricsQueue,
+    bridge_selection: Option<&'a BridgeSelectionState>,
     history: &'a mut ClipboardHistory,
     current_host_entry: Option<&'a ClipboardHistoryEntry>,
     bridge_copy_tx: &'a mpsc::Sender<BridgeCopyReady>,
@@ -1537,7 +1540,7 @@ fn handle_bridge_paste_request(
                 context.fallback,
                 context.host_clipboard,
                 context.data_control,
-                None,
+                context.bridge_selection,
                 context.current_host_entry,
                 context.history,
                 context.notifier,
@@ -1958,7 +1961,7 @@ fn handle_picker_message(
                         let _ = fallback.arm_selected_entry(
                             select.entry_id.clone(),
                             Instant::now(),
-                            Duration::from_secs(10),
+                            SELECTED_ENTRY_LATE_FD_GRACE,
                         );
                         let _ = supervisor.cancel_active(ReasonCode::Allowed);
                     }
@@ -2028,8 +2031,9 @@ fn fulfill_armed_fallback(
     if host_clipboard.pending_paste().is_none() {
         return false;
     }
-    if reject_background_probe_if_target_mismatch(&target, host_clipboard) {
-        return true;
+    if armed_target_mismatch(&target, host_clipboard) {
+        let _ = fallback.cancel_picker();
+        return false;
     }
     let result = materialize_selected_entry_fd(
         host_clipboard,
@@ -2058,7 +2062,7 @@ fn fulfill_armed_fallback(
     }
 }
 
-fn reject_background_probe_if_target_mismatch(
+fn armed_target_mismatch(
     target: &FocusedWindowSnapshot,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
 ) -> bool {
@@ -2067,9 +2071,6 @@ fn reject_background_probe_if_target_mismatch(
     };
     if target.same_target(&paste.destination) {
         return false;
-    }
-    if let Some(paste) = host_clipboard.take_pending_paste() {
-        paste.close_with_reason(ReasonCode::BackgroundProbe);
     }
     true
 }
@@ -3538,7 +3539,7 @@ mod tests {
             HostClipboardAttributor::new(NiriQueryProvider::new(None)),
             Duration::from_secs(30),
         );
-        let (write_sock, mut read_sock) = UnixStream::pair().expect("pair");
+        let (write_sock, read_sock) = UnixStream::pair().expect("pair");
         host_clipboard
             .accept_paste_fd_for_destination(
                 write_sock.into(),
@@ -3559,12 +3560,8 @@ mod tests {
             workspace_id: None,
             output_label: None,
         };
-        assert!(reject_background_probe_if_target_mismatch(
-            &target,
-            &mut host_clipboard
-        ));
-        assert!(host_clipboard.pending_paste().is_none());
-        let mut byte = [0_u8; 1];
-        assert_eq!(read_sock.read(&mut byte).expect("eof"), 0);
+        assert!(armed_target_mismatch(&target, &mut host_clipboard));
+        assert!(host_clipboard.pending_paste().is_some());
+        let _ = read_sock;
     }
 }
