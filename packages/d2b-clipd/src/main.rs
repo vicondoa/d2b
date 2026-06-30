@@ -6,7 +6,7 @@
 //!
 //! No raw clipboard contents are ever logged.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -50,6 +50,7 @@ const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
 const CURRENT_BRIDGE_ENTRY_ID: &str = "current-vm-selection";
+const HISTORY_MAX_ENTRIES: usize = 20;
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
@@ -169,6 +170,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         bridge_listeners,
         bridge_streams: Vec::new(),
         bridge_selection: None,
+        history: ClipboardHistory::default(),
         accept_diag: AcceptDiagnostics::default(),
         control_accept_backoff_until: None,
         bridge_accept_backoff_until: None,
@@ -242,6 +244,7 @@ struct EventLoop<'a> {
     bridge_listeners: Vec<BridgeListener>,
     bridge_streams: Vec<BridgeStream>,
     bridge_selection: Option<BridgeSelectionState>,
+    history: ClipboardHistory,
     accept_diag: AcceptDiagnostics,
     control_accept_backoff_until: Option<Instant>,
     bridge_accept_backoff_until: Option<Instant>,
@@ -395,6 +398,7 @@ impl EventLoop<'_> {
                     picker_command: &self.picker_command,
                     accept_diag: &mut self.accept_diag,
                     bridge_selection: &mut self.bridge_selection,
+                    history: &mut self.history,
                 };
                 handle_wayland_event(event, &mut context);
             }
@@ -485,6 +489,7 @@ impl EventLoop<'_> {
                         audit_queue: self.audit_queue,
                         metrics_queue: self.metrics_queue,
                         bridge_selection: &mut self.bridge_selection,
+                        history: &mut self.history,
                     };
                     match handle_bridge_stream(&mut stream, &mut context) {
                         BridgeStreamStatus::Done => {}
@@ -505,6 +510,7 @@ impl EventLoop<'_> {
                             self.data_control,
                             self.host_clipboard,
                             self.bridge_selection.as_ref(),
+                            &self.history,
                             self.notifier,
                             self.fallback,
                             self.supervisor,
@@ -710,6 +716,70 @@ struct BridgeSelectionState {
     data_control_source_id: u64,
     source: Option<DataControlSource>,
     data_by_mime: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+struct ClipboardHistoryEntry {
+    entry_id: String,
+    source_realm: String,
+    source_realm_kind: RealmKind,
+    source_app: Option<String>,
+    source_app_id: Option<String>,
+    source_attribution: AttributionQuality,
+    data_by_mime: BTreeMap<String, Vec<u8>>,
+    timestamp_unix_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct ClipboardHistory {
+    entries: VecDeque<ClipboardHistoryEntry>,
+    next_id: u64,
+}
+
+impl ClipboardHistory {
+    fn push(&mut self, mut entry: ClipboardHistoryEntry) {
+        if entry.data_by_mime.is_empty() {
+            return;
+        }
+        self.next_id = self.next_id.saturating_add(1);
+        entry.entry_id = format!("history-{}", self.next_id);
+        self.entries.push_front(entry);
+        while self.entries.len() > HISTORY_MAX_ENTRIES {
+            self.entries.pop_back();
+        }
+    }
+
+    fn candidates(&self, requested_mime_type: &str) -> Vec<Candidate> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let bytes = entry.data_by_mime.get(requested_mime_type)?;
+                Some(Candidate {
+                    entry_id: entry.entry_id.clone(),
+                    source_realm: entry.source_realm.clone(),
+                    source_realm_kind: entry.source_realm_kind,
+                    source_app: entry.source_app.clone(),
+                    source_app_id: entry.source_app_id.clone(),
+                    source_attribution: entry.source_attribution,
+                    preview_text: std::str::from_utf8(bytes)
+                        .ok()
+                        .map(|text| sanitize_notification_text(text, 256)),
+                    content_type: requested_mime_type.to_owned(),
+                    timestamp_unix_ms: entry.timestamp_unix_ms,
+                    thumbnail_png_base64: None,
+                    byte_count: Some(bytes.len() as u64),
+                    confirmation_required: false,
+                })
+            })
+            .collect()
+    }
+
+    fn bytes_for(&self, entry_id: &str, mime_type: &str) -> Option<&[u8]> {
+        self.entries
+            .iter()
+            .find(|entry| entry.entry_id == entry_id)
+            .and_then(|entry| entry.data_by_mime.get(mime_type).map(Vec::as_slice))
+    }
 }
 
 #[derive(Debug)]
@@ -928,6 +998,7 @@ struct BridgeHandlerContext<'a> {
     audit_queue: &'a mut AuditQueue,
     metrics_queue: &'a mut MetricsQueue,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
+    history: &'a mut ClipboardHistory,
 }
 
 fn handle_bridge_stream(
@@ -1237,6 +1308,16 @@ fn handle_bridge_copy_selection(
         return;
     };
     selection.data_by_mime.insert(mime_type, bytes);
+    context.history.push(ClipboardHistoryEntry {
+        entry_id: String::new(),
+        source_realm: selection.vm_name.clone(),
+        source_realm_kind: RealmKind::Vm,
+        source_app: Some(format!("{} VM", selection.vm_name)),
+        source_app_id: Some(format!("d2b.{}", selection.vm_name)),
+        source_attribution: AttributionQuality::ExactClient,
+        data_by_mime: selection.data_by_mime.clone(),
+        timestamp_unix_ms: unix_millis(),
+    });
     let mimes = selection.data_by_mime.keys().cloned().collect::<Vec<_>>();
     match context.data_control.create_source(&mimes) {
         Ok((source, source_id)) => {
@@ -1375,6 +1456,7 @@ fn handle_bridge_paste_request(
                     context.supervisor,
                     context.picker_command,
                     context.accept_diag,
+                    context.history,
                 );
             }
         }
@@ -1400,6 +1482,7 @@ struct WaylandEventContext<'a> {
     picker_command: &'a Option<PickerCommand>,
     accept_diag: &'a mut AcceptDiagnostics,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
+    history: &'a mut ClipboardHistory,
 }
 
 fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventContext<'_>) {
@@ -1409,6 +1492,26 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             allowed_mimes,
             has_secret,
         } => {
+            if let Some(offer_ref) = offer.as_ref() {
+                let data_by_mime =
+                    materialize_offer_mimes(context.data_control, offer_ref, &allowed_mimes);
+                if !data_by_mime.is_empty() {
+                    let window = context.host_clipboard.focused_window_snapshot();
+                    context.history.push(ClipboardHistoryEntry {
+                        entry_id: String::new(),
+                        source_realm: "Host".to_owned(),
+                        source_realm_kind: RealmKind::Host,
+                        source_app: window
+                            .as_ref()
+                            .and_then(|window| window.title.clone())
+                            .or_else(|| Some("Host clipboard".to_owned())),
+                        source_app_id: window.as_ref().and_then(|window| window.app_id.clone()),
+                        source_attribution: AttributionQuality::FocusedWindowGuess,
+                        data_by_mime,
+                        timestamp_unix_ms: unix_millis(),
+                    });
+                }
+            }
             // A new native selection supersedes any armed fallback.
             let _ = context.fallback.on_native_selection_changed();
             context
@@ -1492,6 +1595,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             context.supervisor,
                             context.picker_command,
                             context.accept_diag,
+                            context.history,
                         );
                     }
                 }
@@ -1678,6 +1782,7 @@ fn handle_picker_message(
     data_control: &mut DataControlClient,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     bridge_selection: Option<&BridgeSelectionState>,
+    history: &ClipboardHistory,
     notifier: &mut DesktopNotifier,
     fallback: &mut FallbackArming,
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
@@ -1694,6 +1799,7 @@ fn handle_picker_message(
                     host_clipboard,
                     data_control,
                     bridge_selection,
+                    history,
                     &select.entry_id,
                 )
                 .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd))
@@ -1768,7 +1874,13 @@ fn fulfill_armed_fallback(
     if reject_background_probe_if_target_mismatch(&target, host_clipboard) {
         return true;
     }
-    let result = materialize_selected_entry_fd(host_clipboard, data_control, None, &entry_id)
+    let result = materialize_selected_entry_fd(
+        host_clipboard,
+        data_control,
+        None,
+        &ClipboardHistory::default(),
+        &entry_id,
+    )
         .and_then(|read_fd| spawn_materialize_to_pending_paste(host_clipboard, read_fd));
     match result {
         Ok(()) => {
@@ -1811,12 +1923,20 @@ fn materialize_selected_entry_fd(
     host_clipboard: &HostClipboard<NiriQueryProvider>,
     data_control: &mut DataControlClient,
     bridge_selection: Option<&BridgeSelectionState>,
+    history: &ClipboardHistory,
     entry_id: &str,
 ) -> Result<std::os::fd::OwnedFd, ReasonCode> {
     let requested_mime = host_clipboard
         .pending_paste()
         .map(|paste| paste.mime_type.as_str())
         .ok_or(ReasonCode::IntentMissing)?;
+    if let Some(bytes) = history.bytes_for(entry_id, requested_mime) {
+        let (read_fd, write_fd) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .map_err(|_| ReasonCode::FdClosed)?;
+        write_all_nonblocking_fd(&write_fd, bytes, Instant::now() + BOUNDED_READ_TIMEOUT)?;
+        drop(write_fd);
+        return Ok(read_fd);
+    }
     if entry_id == CURRENT_BRIDGE_ENTRY_ID {
         let selection = bridge_selection.ok_or(ReasonCode::RequestExpired)?;
         let bytes = selection
@@ -1851,6 +1971,31 @@ fn materialize_selected_entry_fd(
         .map_err(|_| ReasonCode::BridgeUnavailable)?;
     drop(write_fd);
     Ok(read_fd)
+}
+
+fn materialize_offer_mimes(
+    data_control: &mut DataControlClient,
+    offer: &d2b_clipd::wayland::DataControlOffer,
+    allowed_mimes: &[String],
+) -> BTreeMap<String, Vec<u8>> {
+    let mut data_by_mime = BTreeMap::new();
+    for mime in allowed_mimes {
+        let Ok((read_fd, write_fd)) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+        else {
+            continue;
+        };
+        offer.receive(mime.clone(), &write_fd);
+        if data_control.flush().is_err() {
+            drop(write_fd);
+            drop(read_fd);
+            continue;
+        }
+        drop(write_fd);
+        if let Ok(bytes) = read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT) {
+            data_by_mime.insert(mime.clone(), bytes);
+        }
+    }
+    data_by_mime
 }
 
 fn spawn_materialize_to_pending_paste(
@@ -1992,7 +2137,8 @@ fn handle_arm(
                 .pending_paste()
                 .map(|paste| paste.mime_type.clone())
                 .unwrap_or_else(|| "text/plain".to_owned());
-            let candidates = picker_candidates(host_clipboard, &requested_mime);
+            let empty_history = ClipboardHistory::default();
+            let candidates = picker_candidates(host_clipboard, &empty_history, &requested_mime);
             match picker_handshake(socket, &request_id, &dest, &requested_mime, candidates) {
                 Ok(picker_version) => {
                     log::debug!("d2b-clipd: picker opened (version={picker_version})");
@@ -2083,23 +2229,25 @@ fn picker_handshake(
 
 fn picker_candidates(
     host_clipboard: &HostClipboard<NiriQueryProvider>,
+    history: &ClipboardHistory,
     requested_mime_type: &str,
 ) -> Vec<Candidate> {
+    let mut candidates = history.candidates(requested_mime_type);
     let Some(selection) = host_clipboard.current_selection() else {
-        return Vec::new();
+        return candidates;
     };
     if selection.offer.is_none() || selection.allowed_mimes.is_empty() {
-        return Vec::new();
+        return candidates;
     }
     if !selection
         .allowed_mimes
         .iter()
         .any(|mime| mime == requested_mime_type)
     {
-        return Vec::new();
+        return candidates;
     }
     let window = selection.attribution.window.as_ref();
-    vec![Candidate {
+    candidates.insert(0, Candidate {
         entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
         source_realm: "Host".to_owned(),
         source_realm_kind: RealmKind::Host,
@@ -2114,7 +2262,8 @@ fn picker_candidates(
         thumbnail_png_base64: None,
         byte_count: None,
         confirmation_required: false,
-    }]
+    });
+    candidates
 }
 
 fn picker_bridge_candidates(
@@ -2172,12 +2321,13 @@ fn open_picker_or_arm_fallback(
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
     accept_diag: &mut AcceptDiagnostics,
+    history: &ClipboardHistory,
 ) {
     let requested_mime = host_clipboard
         .pending_paste()
         .map(|paste| paste.mime_type.clone())
         .unwrap_or_else(|| "text/plain".to_owned());
-    let candidates = picker_candidates(host_clipboard, &requested_mime);
+    let candidates = picker_candidates(host_clipboard, history, &requested_mime);
     open_picker_for_candidates(
         fallback,
         dest,
