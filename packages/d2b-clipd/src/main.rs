@@ -1702,7 +1702,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if let Some(selection) = context.bridge_selection.as_ref()
                 && selection.data_control_source_id == source_id
             {
-                if !selection.data_by_mime.contains_key(&mime_type) {
+                if compatible_mime_payload(&selection.data_by_mime, &mime_type).is_none() {
                     context
                         .accept_diag
                         .warn("bridge", "selection-missing-mime", || {
@@ -2581,17 +2581,23 @@ fn picker_candidates(
     if compatible_mime_name(&selection.allowed_mimes, requested_mime_type).is_none() {
         return candidates;
     }
-    if let Some(host_index) = candidates
-        .iter()
-        .position(|candidate| candidate.source_realm_kind == RealmKind::Host)
-    {
-        if host_index != 0 {
-            let candidate = candidates.remove(host_index);
-            candidates.insert(0, candidate);
-        }
-        return candidates;
-    }
     let window = selection.attribution.window.as_ref();
+    insert_live_host_candidate(
+        &mut candidates,
+        window,
+        selection.attribution.quality,
+        requested_mime_type,
+    );
+    candidates
+}
+
+fn insert_live_host_candidate(
+    candidates: &mut Vec<Candidate>,
+    window: Option<&FocusedWindowSnapshot>,
+    attribution: d2b_clipd::policy::AttributionQuality,
+    requested_mime_type: &str,
+) {
+    candidates.retain(|candidate| candidate.entry_id != CURRENT_HOST_ENTRY_ID);
     candidates.insert(
         0,
         Candidate {
@@ -2602,7 +2608,7 @@ fn picker_candidates(
                 .and_then(|window| window.title.clone())
                 .or_else(|| Some("Host clipboard".to_owned())),
             source_app_id: window.and_then(|window| window.app_id.clone()),
-            source_attribution: protocol_attribution(selection.attribution.quality),
+            source_attribution: protocol_attribution(attribution),
             preview_text: None,
             content_type: requested_mime_type.to_owned(),
             timestamp_unix_ms: unix_millis(),
@@ -2611,16 +2617,15 @@ fn picker_candidates(
             confirmation_required: false,
         },
     );
-    candidates
 }
 
 fn picker_bridge_candidates(
     selection: &BridgeSelectionState,
     requested_mime_type: &str,
 ) -> Vec<Candidate> {
-    if !selection.data_by_mime.contains_key(requested_mime_type) {
+    let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, requested_mime_type) else {
         return Vec::new();
-    }
+    };
     vec![Candidate {
         entry_id: CURRENT_BRIDGE_ENTRY_ID.to_owned(),
         source_realm: selection.vm_name.clone(),
@@ -2628,18 +2633,13 @@ fn picker_bridge_candidates(
         source_app: Some(format!("{} VM", selection.vm_name)),
         source_app_id: Some(format!("d2b.{}", selection.vm_name)),
         source_attribution: AttributionQuality::ExactClient,
-        preview_text: selection
-            .data_by_mime
-            .get(requested_mime_type)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        preview_text: std::str::from_utf8(&bytes)
+            .ok()
             .map(|text| sanitize_notification_text(text, 256)),
         content_type: requested_mime_type.to_owned(),
         timestamp_unix_ms: unix_millis(),
         thumbnail_png_base64: None,
-        byte_count: selection
-            .data_by_mime
-            .get(requested_mime_type)
-            .map(|bytes| bytes.len() as u64),
+        byte_count: Some(bytes.len() as u64),
         confirmation_required: false,
     }]
 }
@@ -3066,6 +3066,61 @@ mod tests {
 
         let plain = compatible_mime_payload(&data, "text/plain").expect("plain");
         assert_eq!(plain, b"plain");
+    }
+
+    #[test]
+    fn live_host_candidate_stays_ahead_of_older_host_history() {
+        let mut candidates = vec![Candidate {
+            entry_id: "history-1".to_owned(),
+            source_realm: "Host".to_owned(),
+            source_realm_kind: RealmKind::Host,
+            source_app: Some("old copy".to_owned()),
+            source_app_id: Some("old.app".to_owned()),
+            source_attribution: AttributionQuality::FocusedWindowGuess,
+            preview_text: Some("old".to_owned()),
+            content_type: "text/plain".to_owned(),
+            timestamp_unix_ms: 1,
+            thumbnail_png_base64: None,
+            byte_count: Some(3),
+            confirmation_required: false,
+        }];
+        let window = FocusedWindowSnapshot {
+            app_id: Some("firefox".to_owned()),
+            title: Some("new copy target".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+
+        insert_live_host_candidate(
+            &mut candidates,
+            Some(&window),
+            d2b_clipd::policy::AttributionQuality::FocusedWindowGuess,
+            "text/plain;charset=utf-8",
+        );
+
+        assert_eq!(candidates[0].entry_id, CURRENT_HOST_ENTRY_ID);
+        assert_eq!(candidates[0].source_app.as_deref(), Some("new copy target"));
+        assert_eq!(candidates[1].entry_id, "history-1");
+    }
+
+    #[test]
+    fn current_vm_candidate_accepts_text_plain_aliases() {
+        let mut data_by_mime = BTreeMap::new();
+        data_by_mime.insert("text/plain".to_owned(), b"vm text".to_vec());
+        let selection = BridgeSelectionState {
+            vm_name: "personal-dev".to_owned(),
+            vm_source_id: 7,
+            data_control_source_id: 11,
+            ignore_selection_changed_until: None,
+            source: None,
+            data_by_mime,
+        };
+
+        let candidates = picker_bridge_candidates(&selection, "text/plain;charset=utf-8");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].entry_id, CURRENT_BRIDGE_ENTRY_ID);
+        assert_eq!(candidates[0].preview_text.as_deref(), Some("vm text"));
+        assert_eq!(candidates[0].byte_count, Some(7));
     }
 
     #[test]
