@@ -2095,10 +2095,25 @@ fn materialize_selected_entry_fd(
             .and_then(|entry| entry.data_by_mime.get(requested_mime))
             .map(Vec::as_slice)
         {
+            log::debug!(
+                "d2b-clipd: materializing current host entry mime={} bytes={}",
+                bounded_mime(requested_mime),
+                bytes.len()
+            );
             return pipe_from_bytes(bytes.to_vec());
         }
+        log::debug!(
+            "d2b-clipd: current host entry missing requested mime={}",
+            bounded_mime(requested_mime)
+        );
     }
     if let Some(bytes) = history.bytes_for(entry_id, requested_mime) {
+        log::debug!(
+            "d2b-clipd: materializing history entry id={} mime={} bytes={}",
+            bounded_label(entry_id),
+            bounded_mime(requested_mime),
+            bytes.len()
+        );
         return pipe_from_bytes(bytes.to_vec());
     }
     if entry_id == CURRENT_BRIDGE_ENTRY_ID {
@@ -2107,6 +2122,12 @@ fn materialize_selected_entry_fd(
             .data_by_mime
             .get(requested_mime)
             .ok_or(ReasonCode::MimeRejected)?;
+        log::debug!(
+            "d2b-clipd: materializing current VM entry vm={} mime={} bytes={}",
+            bounded_label(&selection.vm_name),
+            bounded_mime(requested_mime),
+            bytes.len()
+        );
         return pipe_from_bytes(bytes.clone());
     }
     if entry_id != CURRENT_HOST_ENTRY_ID {
@@ -2201,7 +2222,11 @@ fn spawn_materialize_to_pending_paste(
                         }
                         match write_all_nonblocking_fd(&paste.fd, &bytes, deadline) {
                             Ok(()) => {
-                                log::debug!("d2b-clipd: materialized paste write complete");
+                                log::debug!(
+                                    "d2b-clipd: materialized paste write complete mime={} bytes={}",
+                                    bounded_mime(&mime),
+                                    bytes.len()
+                                );
                             }
                             Err(reason) => {
                                 log::debug!(
