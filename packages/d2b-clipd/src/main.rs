@@ -1316,13 +1316,16 @@ fn handle_bridge_paste_request(
         let _ = context.audit_queue.drain_all();
         return;
     }
-    let dest = FocusedWindowSnapshot {
-        id: None,
-        app_id: Some(format!("d2b.{vm_name}")),
-        title: Some(format!("{vm_name} VM")),
-        workspace_id: None,
-        output_label: None,
-    };
+    let dest = context
+        .host_clipboard
+        .refresh_focused_window_snapshot()
+        .unwrap_or_else(|| FocusedWindowSnapshot {
+            id: None,
+            app_id: Some(format!("d2b.{vm_name}")),
+            title: Some(format!("{vm_name} VM")),
+            workspace_id: None,
+            output_label: None,
+        });
     if let Err(reason) = context.audit_queue.enqueue_fail_closed(AuditEvent {
         request_id: request_id.clone(),
         source_realm: "host".to_owned(),
