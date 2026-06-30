@@ -749,6 +749,8 @@ fn install_bridge_listeners(
         }
         let listener = UnixListener::bind(&path)
             .map_err(|e| format!("bind bridge socket {}: {e}", path.display()))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+            .map_err(|e| format!("chmod bridge socket {}: {e}", path.display()))?;
         listener
             .set_nonblocking(true)
             .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
@@ -2556,6 +2558,31 @@ mod tests {
         let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_millis(5))
             .expect_err("timeout");
         assert!(err.contains("timed out"));
+    }
+
+    #[test]
+    fn bridge_listener_socket_is_connectable_by_peer_group() {
+        let root = std::env::temp_dir().join(format!(
+            "d2b-clipd-bridge-test-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        let peer = BridgePeerConfig {
+            vm_name: "work".to_owned(),
+            expected_uid: rustix::process::getuid().as_raw(),
+        };
+        let listeners = install_bridge_listeners(&root, &[peer]).expect("install bridge listener");
+        assert_eq!(listeners.len(), 1);
+        let path = bridge_socket_path(&root, rustix::process::getuid().as_raw(), "work")
+            .expect("bridge socket path");
+        let mode = std::fs::symlink_metadata(&path)
+            .expect("socket metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o666);
+        drop(listeners);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
