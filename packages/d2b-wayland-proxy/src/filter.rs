@@ -174,7 +174,8 @@ impl VirtualSource {
 
 #[derive(Debug)]
 struct VirtualOffer {
-    source: Rc<RefCell<VirtualSource>>,
+    source: Option<Rc<RefCell<VirtualSource>>>,
+    source_id: u64,
 }
 
 impl VirtualClipboardState {
@@ -261,7 +262,28 @@ impl VirtualClipboardState {
         let Some(offer) = self.offers.get(&offer.unique_id()).cloned() else {
             return;
         };
-        let Some(source) = offer.borrow().source.borrow().source.upgrade() else {
+        let (offer_source, offer_source_id) = {
+            let offer = offer.borrow();
+            (offer.source.clone(), offer.source_id)
+        };
+        let Some(offer_source) = offer_source else {
+            if !matches!(
+                self.mime_policy
+                    .decide(ClipboardRoute::HostOrCrossRealm, mime_type),
+                MimeDecision::MaterializeViaBridge
+            ) {
+                return;
+            }
+            let metadata = BridgeTransferMetadata {
+                vm_name: self.vm_name.clone(),
+                mime_type: mime_type.to_owned(),
+                source_id: offer_source_id,
+                kind: BridgeTransferKind::PasteRequest,
+            };
+            self.handoff_via_bridge(fd, &metadata);
+            return;
+        };
+        let Some(source) = offer_source.borrow().source.upgrade() else {
             // Source was already destroyed; the fd will drop and the receiver
             // will see EOF. Log so operators can see clipboard data loss events.
             log::debug!(
@@ -293,8 +315,13 @@ impl VirtualClipboardState {
     fn scrub_dead_clipboard_refs(&mut self) {
         self.sources
             .retain(|_, source| source.borrow().source.upgrade().is_some());
-        self.offers
-            .retain(|_, offer| offer.borrow().source.borrow().source.upgrade().is_some());
+        self.offers.retain(|_, offer| {
+            offer
+                .borrow()
+                .source
+                .as_ref()
+                .is_none_or(|source| source.borrow().source.upgrade().is_some())
+        });
         self.devices.retain(|device| device.upgrade().is_some());
         if self
             .selection
@@ -565,7 +592,30 @@ fn send_selection_to_device(
         (state.vm_name.clone(), state.selection.clone())
     };
     let Some(source) = selection else {
-        device.send_selection(None);
+        let (mimes, route) = {
+            let state = clipboard.borrow();
+            (state.mime_policy.external_mimes(), state.route())
+        };
+        if !matches!(route, ClipboardRoute::HostOrCrossRealm) {
+            device.send_selection(None);
+            return;
+        }
+        let offer = device.new_send_data_offer();
+        offer.set_handler(VirtualOfferHandler {
+            clipboard: Rc::downgrade(clipboard),
+            vm_name: vm_name.clone(),
+        });
+        clipboard.borrow_mut().offers.insert(
+            offer.unique_id(),
+            Rc::new(RefCell::new(VirtualOffer {
+                source: None,
+                source_id: offer.unique_id(),
+            })),
+        );
+        for mime in mimes {
+            offer.send_offer(mime);
+        }
+        device.send_selection(Some(&offer));
         return;
     };
     let mimes = source.borrow().mime_types.clone();
@@ -577,7 +627,12 @@ fn send_selection_to_device(
     clipboard.borrow_mut().offers.insert(
         offer.unique_id(),
         Rc::new(RefCell::new(VirtualOffer {
-            source: source.clone(),
+            source: Some(source.clone()),
+            source_id: source
+                .borrow()
+                .source
+                .upgrade()
+                .map_or(0, |source| source.unique_id()),
         })),
     );
     for mime in mimes {
@@ -1248,7 +1303,8 @@ mod tests {
         clipboard.offers.insert(
             2,
             Rc::new(RefCell::new(VirtualOffer {
-                source: source.clone(),
+                source: Some(source.clone()),
+                source_id: 1,
             })),
         );
         clipboard.selection = Some(source);

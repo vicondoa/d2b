@@ -105,6 +105,12 @@ impl ClipboardMimePolicy {
             ClipboardRoute::HostOrCrossRealm => MimeDecision::Deny,
         }
     }
+
+    pub fn external_mimes(&self) -> Vec<&'static str> {
+        let mut mimes = self.external_allowlist.iter().copied().collect::<Vec<_>>();
+        mimes.sort_unstable();
+        mimes
+    }
 }
 
 #[cfg(test)]
