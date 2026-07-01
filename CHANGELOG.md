@@ -72,6 +72,10 @@ deprecations ship one minor release before removal.
   disconnect.
 - The flake's `d2b-clipd` package now installs only the daemon binary, keeping
   diagnostic probe binaries out of the daemon package closure.
+- `d2b-clipd` now emits an accurate user-visible reason when virtual-keyboard
+  paste replay fails, avoids high-cardinality `key=value` fields in routine
+  bridge logs, and sends bridge refreshes with fail-closed backpressure handling
+  on newly accepted proxy streams.
 
 ### Added
 

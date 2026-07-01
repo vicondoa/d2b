@@ -38,6 +38,7 @@ pub enum ReasonCode {
     MaterializationRateLimited,
     MemoryCapExceeded,
     AuditFailure,
+    VirtualKeyboardFailed,
 }
 
 impl ReasonCode {
@@ -61,6 +62,7 @@ impl ReasonCode {
             Self::MaterializationRateLimited => "materialization_rate_limited",
             Self::MemoryCapExceeded => "memory_cap_exceeded",
             Self::AuditFailure => "audit_failure",
+            Self::VirtualKeyboardFailed => "virtual_keyboard_failed",
         }
     }
 }
@@ -126,6 +128,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ReasonCode::FdCapExceeded).expect("json"),
             "\"fd_cap_exceeded\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ReasonCode::VirtualKeyboardFailed).expect("json"),
+            "\"virtual_keyboard_failed\""
         );
     }
 }

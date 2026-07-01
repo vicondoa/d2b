@@ -1436,7 +1436,7 @@ fn parse_bridge_transfer(
         )));
     }
     log::debug!(
-        "d2b-clipd: received VM bridge paste request vm={} source_id={} mime={}",
+        "d2b-clipd: received VM bridge paste request vm={} source_id:{} mime={}",
         bounded_label(&stream.vm_name),
         source_id,
         bounded_mime(&mime_type)
@@ -2248,7 +2248,7 @@ fn handle_picker_message(
                             let mut notifier = DesktopNotifier;
                             d2b_clipd::notifications::emit_user_visible_failure(
                                 &mut notifier,
-                                ReasonCode::PickerCrashed,
+                                ReasonCode::VirtualKeyboardFailed,
                                 "clipboard",
                                 "host",
                             );
