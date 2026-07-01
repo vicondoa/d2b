@@ -2648,7 +2648,7 @@ fn handle_arm(
     picker_command: &Option<PickerCommand>,
     host_clipboard: &mut HostClipboard<NiriQueryProvider>,
     fallback: &mut FallbackArming,
-    notifier: &mut DesktopNotifier,
+    notifier: &mut impl Notifier,
     accept_diag: &mut AcceptDiagnostics,
     history: &ClipboardHistory,
 ) -> Result<String, String> {
@@ -3318,6 +3318,56 @@ mod tests {
     use std::sync::Mutex;
 
     static UMASK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn helper_thread_permits_are_bounded() {
+        HELPER_THREADS.store(0, Ordering::Release);
+        let mut permits = Vec::new();
+        for _ in 0..MAX_HELPER_THREADS {
+            permits.push(try_acquire_helper_thread().expect("permit within cap"));
+        }
+
+        let err = match try_acquire_helper_thread() {
+            Ok(_) => panic!("cap must reject extra helper"),
+            Err(reason) => reason,
+        };
+        assert_eq!(err, ReasonCode::FdCapExceeded);
+
+        drop(permits.pop());
+        let permit = try_acquire_helper_thread().expect("released permit should be reusable");
+        drop(permit);
+        drop(permits);
+        assert_eq!(HELPER_THREADS.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn handle_arm_reports_typed_error_when_picker_missing() {
+        let mut supervisor = PickerSupervisor::new(CommandPickerSpawner);
+        let picker_command = None;
+        let mut host_clipboard = HostClipboard::new(d2b_clipd::niri::HostClipboardAttributor::new(
+            NiriQueryProvider::new(None),
+        ));
+        let mut fallback = FallbackArming::default();
+        let mut notifier = RecordingNotifier::default();
+        let mut accept_diag = AcceptDiagnostics::default();
+        let history = ClipboardHistory::default();
+
+        let err = handle_arm(
+            &mut supervisor,
+            &picker_command,
+            &mut host_clipboard,
+            &mut fallback,
+            &mut notifier,
+            &mut accept_diag,
+            &history,
+        )
+        .expect_err("missing picker must fail");
+
+        assert_eq!(err, ReasonCode::PickerNotConfigured.as_str());
+        assert!(matches!(fallback.state(), FallbackState::Idle));
+        assert_eq!(notifier.notifications.len(), 1);
+        assert!(notifier.notifications[0].body.contains("clipboard picker"));
+    }
 
     #[test]
     fn compatible_mime_payload_converts_html_to_plain_text() {
