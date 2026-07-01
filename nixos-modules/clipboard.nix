@@ -8,7 +8,7 @@ let
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
-  systemdExecArg = arg: builtins.replaceStrings [ "%" ] [ "%%" ] (lib.escapeShellArg arg);
+  systemdExecArg = arg: builtins.replaceStrings [ "%" "$" ] [ "%%" "$$" ] (lib.escapeShellArg arg);
   systemdExecArgs = args: lib.concatMapStringsSep " " systemdExecArg args;
 
   clipdExec =
@@ -398,7 +398,7 @@ in
 
     runtime = {
       bridgeRoot = lib.mkOption {
-        type = lib.types.strMatching "^/run/d2b/clipd(/[A-Za-z0-9_.-]+)*$";
+        type = lib.types.strMatching "^/run/d2b/clipd(/[A-Za-z0-9_-]+)*$";
         default = "/run/d2b/clipd";
         description = ''
           Broker-provisioned root for per-user/per-VM clipboard bridge
@@ -426,6 +426,13 @@ in
           or d2b.site.clipboard.clipd.executablePath. The d2b-clipd crate is
           wired by package reference here rather than implemented by this Nix
           module.
+        '';
+      }
+      {
+        assertion = !(lib.hasInfix "/." cfg.runtime.bridgeRoot);
+        message = ''
+          d2b.site.clipboard.runtime.bridgeRoot must not contain dot path
+          segments. Use a broker-owned absolute path under /run/d2b/clipd.
         '';
       }
       {
@@ -523,8 +530,6 @@ in
         Restart = "on-failure";
         RestartSec = "2s";
         UMask = "0077";
-        RuntimeDirectory = "d2b-clipd";
-        RuntimeDirectoryMode = "0700";
         NoNewPrivileges = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;

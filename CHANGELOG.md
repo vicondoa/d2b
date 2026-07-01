@@ -76,6 +76,9 @@ deprecations ship one minor release before removal.
   paste replay fails, avoids high-cardinality `key=value` fields in routine
   bridge logs, and sends bridge refreshes with fail-closed backpressure handling
   on newly accepted proxy streams.
+- Clipboard audit and metric queues now flush metadata-only events instead of
+  silently discarding them, and the clipboard user service escapes systemd
+  specifiers while rejecting dot-segment bridge roots.
 
 ### Added
 

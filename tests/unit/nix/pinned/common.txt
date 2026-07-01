@@ -117,11 +117,14 @@ bundle-artifacts/nested-table-field-name-collisions-are-not-rows
 bundle-artifacts/nested-tables-are-not-artifact-rows
 bundle-artifacts/root-group-compat
 bundle-artifacts/storage-json-central-etc
+clipboard/bridge-root-allows-safe-child
+clipboard/bridge-root-rejects-dot-segment
 clipboard/config-records-bridge-template
 clipboard/config-records-socketpair-picker
 clipboard/disabled-no-user-service
 clipboard/enabled-user-service
 clipboard/etc-config-mode
+clipboard/execstart-escapes-systemd-percent-and-dollar
 clipboard/execstart-uses-package-and-config
 clipboard/invalid-frame-cap-fails
 clipboard/invalid-mime-cap-fails
@@ -133,8 +136,8 @@ clipboard/no-static-clipd-tmpfiles
 clipboard/picker-required-fails-without-picker
 clipboard/user-service-assert-environment
 clipboard/user-service-graphical-target
+clipboard/user-service-has-no-runtime-directory
 clipboard/user-service-restart-hardening
-clipboard/user-service-runtime-directory
 d2bd-startup-smoke/broker-after-tmpfiles
 d2bd-startup-smoke/broker-caps-exact-canonical-set
 d2bd-startup-smoke/broker-group

@@ -582,6 +582,8 @@ impl EventLoop<'_> {
             }
             self.reap_idle_streams(now);
             self.accept_diag.flush_suppressed();
+            flush_audit_events(self.audit_queue);
+            flush_metric_events(self.metrics_queue);
         }
     }
 
@@ -1707,9 +1709,9 @@ fn handle_bridge_paste_request(
                     )
                 });
             notify_bridge_paste_failure(context.notifier, reason, "host", "bridge");
-        } else {
-            let _ = context.audit_queue.drain_all();
         }
+        flush_audit_events(context.audit_queue);
+        flush_metric_events(context.metrics_queue);
         return;
     }
     let dest = context
@@ -1751,7 +1753,8 @@ fn handle_bridge_paste_request(
         return;
     }
 
-    let _ = context.audit_queue.drain_all();
+    flush_audit_events(context.audit_queue);
+    flush_metric_events(context.metrics_queue);
     if let Some(selection) = context.published_selection.as_ref()
         && selection.mode == PublishedSelectionMode::Selected
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
@@ -1805,6 +1808,35 @@ fn notify_bridge_paste_failure<N: Notifier>(
         source_realm,
         destination_realm,
     );
+}
+
+fn flush_audit_events(audit_queue: &mut AuditQueue) {
+    for event in audit_queue.drain_all() {
+        match serde_json::to_string(&event) {
+            Ok(json) => log::info!("d2b-clipd: audit_event {json}"),
+            Err(error) => log::warn!("d2b-clipd: audit event encode failed: {error}"),
+        }
+    }
+}
+
+fn flush_metric_events(metrics_queue: &mut MetricsQueue) {
+    let dropped = metrics_queue.take_dropped_count();
+    if dropped > 0 {
+        let event = MetricEvent {
+            name: MetricName::DroppedDiagnostic,
+            reason: None,
+        };
+        match serde_json::to_string(&event) {
+            Ok(json) => log::warn!("d2b-clipd: metric_event {json} dropped_count:{dropped}"),
+            Err(error) => log::warn!("d2b-clipd: metric event encode failed: {error}"),
+        }
+    }
+    for event in metrics_queue.drain_all() {
+        match serde_json::to_string(&event) {
+            Ok(json) => log::debug!("d2b-clipd: metric_event {json}"),
+            Err(error) => log::warn!("d2b-clipd: metric event encode failed: {error}"),
+        }
+    }
 }
 
 // ─── Wayland event handler ────────────────────────────────────────────────────
@@ -3520,6 +3552,46 @@ mod tests {
             "d2b clipboard paste blocked"
         );
         assert!(notifier.notifications[0].body.contains("audit queue"));
+    }
+
+    #[test]
+    fn audit_flush_drains_visible_events() {
+        let mut queue = AuditQueue::new(AuditQueueConfig { per_realm_quota: 4 });
+        queue
+            .enqueue_fail_closed(AuditEvent {
+                request_id: "req".to_owned(),
+                source_realm: "host".to_owned(),
+                destination_realm: "work".to_owned(),
+                mime_type: "text/plain".to_owned(),
+                byte_count: 0,
+                decision: AuditDecision::Allow,
+                attribution: d2b_clipd::policy::AttributionQuality::ExactClient,
+                reason: ReasonCode::Allowed,
+                timestamp_unix_ms: 1,
+            })
+            .expect("enqueue");
+
+        flush_audit_events(&mut queue);
+
+        assert_eq!(queue.len_for_realm("host"), 0);
+    }
+
+    #[test]
+    fn metric_flush_emits_dropped_diagnostic_and_drains_queue() {
+        let mut queue = MetricsQueue::new(1);
+        queue.enqueue_droppable(MetricEvent {
+            name: MetricName::PickerOpened,
+            reason: None,
+        });
+        queue.enqueue_droppable(MetricEvent {
+            name: MetricName::PickerTimeout,
+            reason: Some(ReasonCode::PickerTimeout),
+        });
+
+        flush_metric_events(&mut queue);
+
+        assert_eq!(queue.take_dropped_count(), 0);
+        assert!(queue.is_empty());
     }
 
     #[test]

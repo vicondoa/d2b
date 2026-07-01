@@ -155,6 +155,10 @@ impl MetricsQueue {
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
+
+    pub fn drain_all(&mut self) -> Vec<MetricEvent> {
+        self.queue.drain(..).collect()
+    }
 }
 
 #[cfg(test)]
