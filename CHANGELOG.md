@@ -86,6 +86,12 @@ deprecations ship one minor release before removal.
 - VM-origin copies now stay inside d2b's bridge/history state until an explicit
   host or VM paste request opens the picker, so copy operations no longer publish
   a host data-control discovery source that applications can probe.
+- Clipboard discovery sources now suppress their own compositor selection echoes
+  for every focused destination, preventing copy-time host entries and ensuring
+  the picker opens only from the later paste request.
+- Clipboard paste requests into a VM now direct-serve only the one-shot
+  user-selected replay publication, so later VM-destination pastes open the
+  picker instead of silently reusing stale published selection state.
 
 ### Added
 

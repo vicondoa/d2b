@@ -670,8 +670,10 @@ impl EventLoop<'_> {
         }
         while let Ok(ready) = self.bridge_copy_rx.try_recv() {
             let mut context = BridgeCopyReadyContext {
+                data_control: self.data_control,
                 accept_diag: &mut self.accept_diag,
                 bridge_selection: &mut self.bridge_selection,
+                published_selection: &mut self.published_selection,
                 current_host_entry: &mut self.current_host_entry,
                 history: &mut self.history,
             };
@@ -809,7 +811,18 @@ struct PublishedSelectionState {
     data_control_source_id: u64,
     _source: DataControlSource,
     data_by_mime: BTreeMap<String, Vec<u8>>,
+    mode: PublishedSelectionMode,
     suppress_selection_echo: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishedSelectionMode {
+    Discovery,
+    Selected,
+}
+
+fn published_selection_can_serve_bridge_paste(mode: PublishedSelectionMode) -> bool {
+    mode == PublishedSelectionMode::Selected
 }
 
 #[derive(Debug, Clone)]
@@ -1215,8 +1228,10 @@ struct BridgeCopyReady {
 }
 
 struct BridgeCopyReadyContext<'a> {
+    data_control: &'a mut DataControlClient,
     accept_diag: &'a mut AcceptDiagnostics,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
+    published_selection: &'a mut Option<PublishedSelectionState>,
     current_host_entry: &'a mut Option<ClipboardHistoryEntry>,
     history: &'a mut ClipboardHistory,
 }
@@ -1645,8 +1660,41 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         data_by_mime: selection.data_by_mime.clone(),
         timestamp_unix_ms: selection.timestamp_unix_ms,
     });
+    match publish_data_control_selection(
+        context.data_control,
+        selection.data_by_mime.clone(),
+        PublishedSelectionMode::Discovery,
+    ) {
+        Ok(published) => {
+            selection.data_control_source_id = published.data_control_source_id;
+            selection.suppress_selection_echo = true;
+            *context.published_selection = Some(published);
+            if let Err(error) = context.data_control.flush() {
+                *context.published_selection = None;
+                context.accept_diag.warn("bridge", "copy-flush-failed", || {
+                    format!(
+                        "d2b-clipd: bridge copy flush failed for vm={}: {error}",
+                        bounded_label(&selection.vm_name)
+                    )
+                });
+                return;
+            }
+        }
+        Err(reason) => {
+            context
+                .accept_diag
+                .warn("bridge", "copy-source-create-failed", || {
+                    format!(
+                        "d2b-clipd: bridge copy source create failed for vm={}: {}",
+                        bounded_label(&selection.vm_name),
+                        reason.as_str()
+                    )
+                });
+            return;
+        }
+    }
     log::debug!(
-        "d2b-clipd: bridge copy recorded vm={} mimes={}",
+        "d2b-clipd: bridge copy discovery source recorded vm={} mimes={}",
         bounded_label(&selection.vm_name),
         selection.data_by_mime.len()
     );
@@ -1740,7 +1788,11 @@ fn handle_bridge_paste_request(
 
     flush_audit_events(context.audit_queue);
     flush_metric_events(context.metrics_queue);
-    if let Some(selection) = context.published_selection.as_ref()
+    if context
+        .published_selection
+        .as_ref()
+        .is_some_and(|selection| published_selection_can_serve_bridge_paste(selection.mode))
+        && let Some(selection) = context.published_selection.take()
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::debug!(
@@ -1851,6 +1903,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 log::debug!("d2b-clipd: ignored unattributed host selection");
                 return;
             }
+            if focused_window
+                .as_ref()
+                .and_then(|window| window.app_id.as_deref())
+                .is_some_and(is_forwarded_vm_app_id)
+            {
+                context.host_clipboard.on_host_selection_cleared();
+                log::debug!("d2b-clipd: ignored forwarded VM host-selection echo");
+                return;
+            }
             if should_suppress_bridge_selection_echo(
                 focused_window.as_ref(),
                 context.bridge_selection.as_ref(),
@@ -1867,11 +1928,11 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 log::debug!("d2b-clipd: ignored source-VM selection echo");
                 return;
             }
-            if context
-                .published_selection
-                .as_ref()
-                .is_some_and(|selection| selection.suppress_selection_echo)
-            {
+            if should_suppress_published_selection_echo(
+                focused_window.as_ref(),
+                context.published_selection.as_ref(),
+                context.bridge_selection.as_ref(),
+            ) {
                 context.host_clipboard.on_host_selection_cleared();
                 return;
             }
@@ -1942,14 +2003,114 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if let Some(selection) = context.published_selection.as_ref()
                 && selection.data_control_source_id == source_id
             {
-                if let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type) {
-                    spawn_write_bytes_to_fd(fd, mime_type, bytes);
-                } else {
-                    log::info!(
-                        "d2b-clipd: published selection missing requested mime={}",
-                        bounded_mime(&mime_type)
-                    );
-                    drop(fd);
+                match selection.mode {
+                    PublishedSelectionMode::Selected => {
+                        if let Some(bytes) =
+                            compatible_mime_payload(&selection.data_by_mime, &mime_type)
+                        {
+                            spawn_write_bytes_to_fd(fd, mime_type, bytes);
+                        } else {
+                            log::info!(
+                                "d2b-clipd: published selection missing requested mime={}",
+                                bounded_mime(&mime_type)
+                            );
+                            drop(fd);
+                        }
+                    }
+                    PublishedSelectionMode::Discovery => {
+                        drop(fd);
+                        let dest = context
+                            .host_clipboard
+                            .refresh_focused_window_snapshot()
+                            .unwrap_or_default();
+                        if should_drop_discovery_source_send(
+                            Some(&dest),
+                            context.bridge_selection.as_ref(),
+                        ) {
+                            log::debug!(
+                                "d2b-clipd: ignored discovery source probe mime={}",
+                                bounded_mime(&mime_type)
+                            );
+                            return;
+                        }
+                        let mut candidates = picker_bridge_candidates_for_published(
+                            context.bridge_selection.as_ref(),
+                            &selection.data_by_mime,
+                            &mime_type,
+                        );
+                        let current_vm = context
+                            .bridge_selection
+                            .as_ref()
+                            .map(|selection| selection.vm_name.as_str());
+                        candidates.extend(
+                            context
+                                .history
+                                .candidates_excluding(
+                                    &mime_type,
+                                    context
+                                        .bridge_selection
+                                        .as_ref()
+                                        .map(|selection| selection.history_entry_id.as_str()),
+                                )
+                                .into_iter()
+                                .filter(|candidate| {
+                                    !matches!(
+                                        (current_vm, candidate.source_realm_kind),
+                                        (Some(vm), RealmKind::Vm) if candidate.source_realm == vm
+                                    )
+                                }),
+                        );
+                        if let Some(current_host_entry) = context.current_host_entry.as_ref()
+                            && let Some(bytes) = compatible_mime_payload(
+                                &current_host_entry.data_by_mime,
+                                &mime_type,
+                            )
+                            && candidates.first().is_none_or(|candidate| {
+                                current_host_entry.timestamp_unix_ms >= candidate.timestamp_unix_ms
+                            })
+                        {
+                            candidates.insert(
+                                0,
+                                Candidate {
+                                    entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
+                                    source_realm: current_host_entry.source_realm.clone(),
+                                    source_realm_kind: current_host_entry.source_realm_kind,
+                                    source_app: current_host_entry.source_app.clone(),
+                                    source_app_id: current_host_entry.source_app_id.clone(),
+                                    source_attribution: current_host_entry.source_attribution,
+                                    preview_text: std::str::from_utf8(&bytes)
+                                        .ok()
+                                        .map(|text| sanitize_notification_text(text, 256)),
+                                    content_type: mime_type.clone(),
+                                    timestamp_unix_ms: current_host_entry.timestamp_unix_ms,
+                                    thumbnail_png_base64: None,
+                                    byte_count: Some(bytes.len() as u64),
+                                    confirmation_required: false,
+                                },
+                            );
+                        }
+                        log::info!(
+                            "d2b-clipd: discovery source paste request mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
+                            bounded_mime(&mime_type),
+                            bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                            bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                            summarize_candidates(&candidates)
+                        );
+                        let mut picker_context = PickerOpenContext {
+                            fallback: &mut *context.fallback,
+                            host_clipboard: &mut *context.host_clipboard,
+                            notifier: &mut *context.notifier,
+                            supervisor: &mut *context.supervisor,
+                            picker_command: context.picker_command,
+                            accept_diag: &mut *context.accept_diag,
+                        };
+                        open_picker_for_candidates(
+                            &mut picker_context,
+                            dest,
+                            &mime_type,
+                            candidates,
+                        );
+                    }
                 }
                 return;
             }
@@ -1985,7 +2146,12 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 candidates.extend(
                     context
                         .history
-                        .candidates_excluding(&mime_type, Some(&selection.history_entry_id)),
+                        .candidates_excluding(&mime_type, Some(&selection.history_entry_id))
+                        .into_iter()
+                        .filter(|candidate| {
+                            !(candidate.source_realm_kind == RealmKind::Vm
+                                && candidate.source_realm == selection.vm_name)
+                        }),
                 );
                 log::debug!(
                     "d2b-clipd: bridge selection paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
@@ -2012,6 +2178,13 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .host_clipboard
                 .refresh_focused_window_snapshot()
                 .unwrap_or_default();
+            if dest.app_id.as_deref().is_some_and(is_forwarded_vm_app_id) {
+                log::debug!(
+                    "d2b-clipd: ignored unknown d2b source probe from forwarded VM app mime={}",
+                    bounded_mime(&mime_type)
+                );
+                return;
+            }
             if focused_window_matches_bridge_source(Some(&dest), context.bridge_selection.as_ref())
             {
                 log::debug!(
@@ -2304,7 +2477,11 @@ fn publish_selected_entry_to_host(
 ) -> Result<(), ReasonCode> {
     let data_by_mime =
         selected_entry_data_by_mime(bridge_selection, current_host_entry, history, entry_id)?;
-    let selection = publish_data_control_selection(data_control, data_by_mime)?;
+    let selection = publish_data_control_selection(
+        data_control,
+        data_by_mime,
+        PublishedSelectionMode::Selected,
+    )?;
     let mimes_len = selection.data_by_mime.len();
     *published_selection = Some(selection);
     if data_control.flush().is_err() {
@@ -2322,6 +2499,7 @@ fn publish_selected_entry_to_host(
 fn publish_data_control_selection(
     data_control: &mut DataControlClient,
     data_by_mime: BTreeMap<String, Vec<u8>>,
+    mode: PublishedSelectionMode,
 ) -> Result<PublishedSelectionState, ReasonCode> {
     if data_by_mime.is_empty() {
         return Err(ReasonCode::RequestExpired);
@@ -2337,6 +2515,7 @@ fn publish_data_control_selection(
         data_control_source_id: source_id,
         _source: source,
         data_by_mime,
+        mode,
         suppress_selection_echo: true,
     })
 }
@@ -2800,6 +2979,50 @@ fn picker_bridge_candidates(
     }]
 }
 
+fn picker_bridge_candidates_for_published(
+    bridge_selection: Option<&BridgeSelectionState>,
+    data_by_mime: &BTreeMap<String, Vec<u8>>,
+    requested_mime_type: &str,
+) -> Vec<Candidate> {
+    let Some(bytes) = compatible_mime_payload(data_by_mime, requested_mime_type) else {
+        return Vec::new();
+    };
+    let (entry_id, source_realm, source_app, source_app_id, timestamp_unix_ms) =
+        if let Some(selection) = bridge_selection {
+            (
+                CURRENT_BRIDGE_ENTRY_ID.to_owned(),
+                selection.vm_name.clone(),
+                Some(format!("{} VM", selection.vm_name)),
+                Some(format!("d2b.{}", selection.vm_name)),
+                selection.timestamp_unix_ms,
+            )
+        } else {
+            (
+                "published-selection".to_owned(),
+                "d2b".to_owned(),
+                Some("d2b clipboard".to_owned()),
+                Some("d2b.clipboard".to_owned()),
+                unix_millis(),
+            )
+        };
+    vec![Candidate {
+        entry_id,
+        source_realm,
+        source_realm_kind: RealmKind::Vm,
+        source_app,
+        source_app_id,
+        source_attribution: AttributionQuality::ExactClient,
+        preview_text: std::str::from_utf8(&bytes)
+            .ok()
+            .map(|text| sanitize_notification_text(text, 256)),
+        content_type: requested_mime_type.to_owned(),
+        timestamp_unix_ms,
+        thumbnail_png_base64: None,
+        byte_count: Some(bytes.len() as u64),
+        confirmation_required: false,
+    }]
+}
+
 fn summarize_candidates(candidates: &[Candidate]) -> String {
     candidates
         .iter()
@@ -3152,6 +3375,10 @@ fn focused_app_matches_vm(app_id: Option<&str>, vm_name: &str) -> bool {
     app_id == format!("d2b.{vm_name}") || app_id.starts_with(&format!("d2b.{vm_name}."))
 }
 
+fn is_forwarded_vm_app_id(app_id: &str) -> bool {
+    app_id.starts_with("d2b.") && app_id.len() > "d2b.".len()
+}
+
 fn focused_window_matches_bridge_source(
     window: Option<&FocusedWindowSnapshot>,
     bridge_selection: Option<&BridgeSelectionState>,
@@ -3163,6 +3390,28 @@ fn focused_window_matches_bridge_source(
         window.and_then(|window| window.app_id.as_deref()),
         &selection.vm_name,
     )
+}
+
+fn should_suppress_published_selection_echo(
+    _window: Option<&FocusedWindowSnapshot>,
+    published_selection: Option<&PublishedSelectionState>,
+    _bridge_selection: Option<&BridgeSelectionState>,
+) -> bool {
+    let Some(selection) = published_selection else {
+        return false;
+    };
+    should_suppress_published_selection_echo_state(selection.suppress_selection_echo)
+}
+
+fn should_suppress_published_selection_echo_state(suppress_selection_echo: bool) -> bool {
+    suppress_selection_echo
+}
+
+fn should_drop_discovery_source_send(
+    window: Option<&FocusedWindowSnapshot>,
+    bridge_selection: Option<&BridgeSelectionState>,
+) -> bool {
+    window.is_none() || focused_window_matches_bridge_source(window, bridge_selection)
 }
 
 fn should_suppress_bridge_selection_echo(
@@ -3290,6 +3539,15 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_vm_app_ids_are_detected_for_echo_suppression() {
+        assert!(is_forwarded_vm_app_id("d2b.personal-dev.firefox"));
+        assert!(is_forwarded_vm_app_id("d2b.work-ssd"));
+        assert!(!is_forwarded_vm_app_id("firefox"));
+        assert!(!is_forwarded_vm_app_id("d2b"));
+        assert!(!is_forwarded_vm_app_id("d2browser"));
+    }
+
+    #[test]
     fn focused_window_matching_suppresses_source_vm_echoes_only() {
         let selection = BridgeSelectionState {
             vm_name: "personal-dev".to_owned(),
@@ -3360,6 +3618,22 @@ mod tests {
         assert!(!should_suppress_bridge_selection_echo(
             Some(&source_vm_window),
             Some(&selection)
+        ));
+    }
+
+    #[test]
+    fn published_selection_echo_is_always_suppressed_once() {
+        assert!(should_suppress_published_selection_echo_state(true));
+        assert!(!should_suppress_published_selection_echo_state(false));
+    }
+
+    #[test]
+    fn bridge_paste_direct_serve_requires_user_selected_publication() {
+        assert!(published_selection_can_serve_bridge_paste(
+            PublishedSelectionMode::Selected
+        ));
+        assert!(!published_selection_can_serve_bridge_paste(
+            PublishedSelectionMode::Discovery
         ));
     }
 

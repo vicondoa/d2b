@@ -281,6 +281,7 @@ fn accept_loop(
         diag.clone(),
         clipboard.clone(),
     ));
+    VirtualClipboardState::drive_bridge_io(&clipboard, false);
 
     let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
