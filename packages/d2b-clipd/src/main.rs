@@ -1917,6 +1917,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             allowed_mimes,
             has_secret,
         } => {
+            let focused_window = context.host_clipboard.focused_window_snapshot();
+            if focused_window_matches_bridge_source(
+                focused_window.as_ref(),
+                context.bridge_selection.as_ref(),
+            ) {
+                context.host_clipboard.on_host_selection_cleared();
+                log::debug!("d2b-clipd: ignored source-VM selection echo");
+                return;
+            }
             if context
                 .published_selection
                 .as_ref()
@@ -1940,16 +1949,17 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             }
             *context.current_host_entry = None;
             if let Some(offer_ref) = offer.as_ref() {
-                let window = context.host_clipboard.focused_window_snapshot();
                 let entry = ClipboardHistoryEntry {
                     entry_id: String::new(),
                     source_realm: "Host".to_owned(),
                     source_realm_kind: RealmKind::Host,
-                    source_app: window
+                    source_app: focused_window
                         .as_ref()
                         .and_then(|window| window.title.clone())
                         .or_else(|| Some("Host clipboard".to_owned())),
-                    source_app_id: window.as_ref().and_then(|window| window.app_id.clone()),
+                    source_app_id: focused_window
+                        .as_ref()
+                        .and_then(|window| window.app_id.clone()),
                     source_attribution: AttributionQuality::FocusedWindowGuess,
                     data_by_mime: BTreeMap::new(),
                     timestamp_unix_ms: unix_millis(),
@@ -1966,19 +1976,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 "d2b-clipd: host selection changed mimes={} attribution_app={} attribution_output={}",
                 allowed_mimes.len(),
                 bounded_label(
-                    context
-                        .host_clipboard
-                        .focused_window_snapshot()
-                        .and_then(|window| window.app_id)
-                        .as_deref()
+                    focused_window
+                        .as_ref()
+                        .and_then(|window| window.app_id.as_deref())
                         .unwrap_or("unknown")
                 ),
                 bounded_label(
-                    context
-                        .host_clipboard
-                        .focused_window_snapshot()
-                        .and_then(|window| window.output_label)
-                        .as_deref()
+                    focused_window
+                        .as_ref()
+                        .and_then(|window| window.output_label.as_deref())
                         .unwrap_or("unknown")
                 )
             );
@@ -2109,6 +2115,14 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .host_clipboard
                 .refresh_focused_window_snapshot()
                 .unwrap_or_default();
+            if focused_window_matches_bridge_source(Some(&dest), context.bridge_selection.as_ref())
+            {
+                log::debug!(
+                    "d2b-clipd: ignored unknown d2b source probe from source VM mime={}",
+                    bounded_mime(&mime_type)
+                );
+                return;
+            }
             log::info!(
                 "d2b-clipd: source send from unknown d2b source_id:{} mime={} opens picker",
                 source_id,
@@ -3274,6 +3288,19 @@ fn focused_app_matches_vm(app_id: Option<&str>, vm_name: &str) -> bool {
     app_id == format!("d2b.{vm_name}") || app_id.starts_with(&format!("d2b.{vm_name}."))
 }
 
+fn focused_window_matches_bridge_source(
+    window: Option<&FocusedWindowSnapshot>,
+    bridge_selection: Option<&BridgeSelectionState>,
+) -> bool {
+    let Some(selection) = bridge_selection else {
+        return false;
+    };
+    focused_app_matches_vm(
+        window.and_then(|window| window.app_id.as_deref()),
+        &selection.vm_name,
+    )
+}
+
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -3382,6 +3409,41 @@ mod tests {
         assert!(!focused_app_matches_vm(
             Some("d2b.personal-devil.firefox"),
             "personal-dev"
+        ));
+    }
+
+    #[test]
+    fn focused_window_matching_suppresses_source_vm_echoes_only() {
+        let selection = BridgeSelectionState {
+            vm_name: "personal-dev".to_owned(),
+            vm_source_id: 7,
+            data_control_source_id: 11,
+            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            timestamp_unix_ms: 1,
+            suppress_selection_echo: false,
+            source: None,
+            data_by_mime: BTreeMap::new(),
+        };
+        let source_vm_window = FocusedWindowSnapshot {
+            app_id: Some("d2b.personal-dev.firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+        let host_window = FocusedWindowSnapshot {
+            app_id: Some("firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+
+        assert!(focused_window_matches_bridge_source(
+            Some(&source_vm_window),
+            Some(&selection)
+        ));
+        assert!(!focused_window_matches_bridge_source(
+            Some(&host_window),
+            Some(&selection)
+        ));
+        assert!(!focused_window_matches_bridge_source(
+            Some(&source_vm_window),
+            None
         ));
     }
 
