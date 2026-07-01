@@ -2030,14 +2030,27 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             &selection.data_by_mime,
                             &mime_type,
                         );
+                        let current_vm = context
+                            .bridge_selection
+                            .as_ref()
+                            .map(|selection| selection.vm_name.as_str());
                         candidates.extend(
-                            context.history.candidates_excluding(
-                                &mime_type,
-                                context
-                                    .bridge_selection
-                                    .as_ref()
-                                    .map(|selection| selection.history_entry_id.as_str()),
-                            ),
+                            context
+                                .history
+                                .candidates_excluding(
+                                    &mime_type,
+                                    context
+                                        .bridge_selection
+                                        .as_ref()
+                                        .map(|selection| selection.history_entry_id.as_str()),
+                                )
+                                .into_iter()
+                                .filter(|candidate| {
+                                    !matches!(
+                                        (current_vm, candidate.source_realm_kind),
+                                        (Some(vm), RealmKind::Vm) if candidate.source_realm == vm
+                                    )
+                                }),
                         );
                         if let Some(current_host_entry) = context.current_host_entry.as_ref()
                             && let Some(bytes) = compatible_mime_payload(
@@ -2125,7 +2138,12 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 candidates.extend(
                     context
                         .history
-                        .candidates_excluding(&mime_type, Some(&selection.history_entry_id)),
+                        .candidates_excluding(&mime_type, Some(&selection.history_entry_id))
+                        .into_iter()
+                        .filter(|candidate| {
+                            !(candidate.source_realm_kind == RealmKind::Vm
+                                && candidate.source_realm == selection.vm_name)
+                        }),
                 );
                 log::debug!(
                     "d2b-clipd: bridge selection paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
