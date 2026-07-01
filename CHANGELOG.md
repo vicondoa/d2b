@@ -89,6 +89,9 @@ deprecations ship one minor release before removal.
 - Clipboard discovery sources now suppress their own compositor selection echoes
   for every focused destination, preventing copy-time host entries and ensuring
   the picker opens only from the later paste request.
+- Clipboard paste requests into a VM now direct-serve only the one-shot
+  user-selected replay publication, so later VM-destination pastes open the
+  picker instead of silently reusing stale published selection state.
 
 ### Added
 
