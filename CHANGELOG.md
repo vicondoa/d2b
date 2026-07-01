@@ -83,6 +83,9 @@ deprecations ship one minor release before removal.
   flushing Wayland events, so VM-origin copies are not misclassified as unknown
   host paste requests, and suppresses source-VM selection echoes so copying
   inside a VM does not open a spurious picker or create empty host entries.
+- VM-origin copies now stay inside d2b's bridge/history state until an explicit
+  host or VM paste request opens the picker, so copy operations no longer publish
+  a host data-control discovery source that applications can probe.
 
 ### Added
 

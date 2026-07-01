@@ -660,40 +660,16 @@ impl EventLoop<'_> {
                 let mut current = entry.clone();
                 current.entry_id = CURRENT_HOST_ENTRY_ID.to_owned();
                 self.current_host_entry = Some(current);
-                match publish_data_control_selection(
-                    self.data_control,
-                    entry.data_by_mime.clone(),
-                    PublishedSelectionMode::Discovery,
-                ) {
-                    Ok(selection) => {
-                        self.published_selection = Some(selection);
-                        if let Err(error) = self.data_control.flush() {
-                            self.accept_diag
-                                .warn("host", "claim-selection-flush-failed", || {
-                                    format!("d2b-clipd: host selection claim flush failed: {error}")
-                                });
-                        }
-                        notify_bridge_selection_refresh(&mut self.bridge_streams);
-                        log::info!(
-                            "d2b-clipd: claimed host selection as discovery source mimes={}",
-                            entry.data_by_mime.len()
-                        );
-                    }
-                    Err(reason) => {
-                        self.accept_diag.warn("host", "claim-selection-failed", || {
-                            format!(
-                                "d2b-clipd: host selection claim failed: {}",
-                                reason.as_str()
-                            )
-                        });
-                    }
-                }
+                notify_bridge_selection_refresh(&mut self.bridge_streams);
+                log::info!(
+                    "d2b-clipd: recorded host selection mimes={}",
+                    entry.data_by_mime.len()
+                );
             }
             self.history.push(entry);
         }
         while let Ok(ready) = self.bridge_copy_rx.try_recv() {
             let mut context = BridgeCopyReadyContext {
-                data_control: self.data_control,
                 accept_diag: &mut self.accept_diag,
                 bridge_selection: &mut self.bridge_selection,
                 current_host_entry: &mut self.current_host_entry,
@@ -825,7 +801,6 @@ struct BridgeSelectionState {
     history_entry_id: String,
     timestamp_unix_ms: u64,
     suppress_selection_echo: bool,
-    source: Option<DataControlSource>,
     data_by_mime: BTreeMap<String, Vec<u8>>,
 }
 
@@ -834,14 +809,7 @@ struct PublishedSelectionState {
     data_control_source_id: u64,
     _source: DataControlSource,
     data_by_mime: BTreeMap<String, Vec<u8>>,
-    mode: PublishedSelectionMode,
     suppress_selection_echo: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublishedSelectionMode {
-    Discovery,
-    Selected,
 }
 
 #[derive(Debug, Clone)]
@@ -1247,7 +1215,6 @@ struct BridgeCopyReady {
 }
 
 struct BridgeCopyReadyContext<'a> {
-    data_control: &'a mut DataControlClient,
     accept_diag: &'a mut AcceptDiagnostics,
     bridge_selection: &'a mut Option<BridgeSelectionState>,
     current_host_entry: &'a mut Option<ClipboardHistoryEntry>,
@@ -1658,8 +1625,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             data_control_source_id: 0,
             history_entry_id: bridge_history_entry_id(&vm_name, source_id),
             timestamp_unix_ms: unix_millis(),
-            suppress_selection_echo: false,
-            source: None,
+            suppress_selection_echo: true,
             data_by_mime: BTreeMap::new(),
         });
     }
@@ -1667,6 +1633,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
     let Some(selection) = context.bridge_selection.as_mut() else {
         return;
     };
+    selection.suppress_selection_echo = true;
     selection.data_by_mime.insert(mime_type, bytes);
     context.history.upsert(ClipboardHistoryEntry {
         entry_id: selection.history_entry_id.clone(),
@@ -1678,49 +1645,11 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         data_by_mime: selection.data_by_mime.clone(),
         timestamp_unix_ms: selection.timestamp_unix_ms,
     });
-    let mimes = selection.data_by_mime.keys().cloned().collect::<Vec<_>>();
-    match context.data_control.create_source(&mimes) {
-        Ok((source, source_id)) => {
-            if let Err(error) = context.data_control.set_selection(&source) {
-                context
-                    .accept_diag
-                    .warn("bridge", "copy-set-selection-failed", || {
-                        format!(
-                            "d2b-clipd: bridge copy set selection failed for vm={}: {error}",
-                            bounded_label(&selection.vm_name)
-                        )
-                    });
-                return;
-            }
-            selection.source = Some(source);
-            selection.data_control_source_id = source_id;
-            selection.suppress_selection_echo = true;
-            if let Err(error) = context.data_control.flush() {
-                context.accept_diag.warn("bridge", "copy-flush-failed", || {
-                    format!(
-                        "d2b-clipd: bridge copy flush failed for vm={}: {error}",
-                        bounded_label(&selection.vm_name)
-                    )
-                });
-                return;
-            }
-            log::debug!(
-                "d2b-clipd: bridge copy selection published vm={} mimes={}",
-                bounded_label(&selection.vm_name),
-                selection.data_by_mime.len()
-            );
-        }
-        Err(error) => {
-            context
-                .accept_diag
-                .warn("bridge", "copy-source-create-failed", || {
-                    format!(
-                        "d2b-clipd: bridge copy source create failed for vm={}: {error}",
-                        bounded_label(&selection.vm_name)
-                    )
-                });
-        }
-    }
+    log::debug!(
+        "d2b-clipd: bridge copy recorded vm={} mimes={}",
+        bounded_label(&selection.vm_name),
+        selection.data_by_mime.len()
+    );
 }
 
 fn handle_bridge_paste_request(
@@ -1812,7 +1741,6 @@ fn handle_bridge_paste_request(
     flush_audit_events(context.audit_queue);
     flush_metric_events(context.metrics_queue);
     if let Some(selection) = context.published_selection.as_ref()
-        && selection.mode == PublishedSelectionMode::Selected
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::debug!(
@@ -1917,7 +1845,20 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             allowed_mimes,
             has_secret,
         } => {
-            let focused_window = context.host_clipboard.focused_window_snapshot();
+            let focused_window = context.host_clipboard.refresh_focused_window_snapshot();
+            if focused_window.is_none() {
+                context.host_clipboard.on_host_selection_cleared();
+                log::debug!("d2b-clipd: ignored unattributed host selection");
+                return;
+            }
+            if should_suppress_bridge_selection_echo(
+                focused_window.as_ref(),
+                context.bridge_selection.as_ref(),
+            ) {
+                context.host_clipboard.on_host_selection_cleared();
+                log::debug!("d2b-clipd: suppressed source-VM selection echo");
+                return;
+            }
             if focused_window_matches_bridge_source(
                 focused_window.as_ref(),
                 context.bridge_selection.as_ref(),
@@ -1934,12 +1875,8 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 context.host_clipboard.on_host_selection_cleared();
                 return;
             }
-            if let Some(selection) = context.bridge_selection.as_mut()
-                && selection.suppress_selection_echo
-            {
+            if let Some(selection) = context.bridge_selection.as_mut() {
                 selection.suppress_selection_echo = false;
-                context.host_clipboard.on_host_selection_cleared();
-                return;
             }
             if context.bridge_selection.is_some() {
                 *context.bridge_selection = None;
@@ -2005,54 +1942,14 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             if let Some(selection) = context.published_selection.as_ref()
                 && selection.data_control_source_id == source_id
             {
-                match selection.mode {
-                    PublishedSelectionMode::Selected => {
-                        if let Some(bytes) =
-                            compatible_mime_payload(&selection.data_by_mime, &mime_type)
-                        {
-                            spawn_write_bytes_to_fd(fd, mime_type, bytes);
-                        } else {
-                            log::info!(
-                                "d2b-clipd: published selection missing requested mime={}",
-                                bounded_mime(&mime_type)
-                            );
-                            drop(fd);
-                        }
-                    }
-                    PublishedSelectionMode::Discovery => {
-                        drop(fd);
-                        let dest = context
-                            .host_clipboard
-                            .refresh_focused_window_snapshot()
-                            .unwrap_or_default();
-                        let candidates = picker_candidates(
-                            context.host_clipboard,
-                            context.current_host_entry.as_ref(),
-                            context.history,
-                            &mime_type,
-                        );
-                        log::info!(
-                            "d2b-clipd: discovery source paste request mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
-                            bounded_mime(&mime_type),
-                            bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
-                            bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
-                            summarize_candidates(&candidates)
-                        );
-                        let mut picker_context = PickerOpenContext {
-                            fallback: &mut *context.fallback,
-                            host_clipboard: &mut *context.host_clipboard,
-                            notifier: &mut *context.notifier,
-                            supervisor: &mut *context.supervisor,
-                            picker_command: context.picker_command,
-                            accept_diag: &mut *context.accept_diag,
-                        };
-                        open_picker_for_candidates(
-                            &mut picker_context,
-                            dest,
-                            &mime_type,
-                            candidates,
-                        );
-                    }
+                if let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type) {
+                    spawn_write_bytes_to_fd(fd, mime_type, bytes);
+                } else {
+                    log::info!(
+                        "d2b-clipd: published selection missing requested mime={}",
+                        bounded_mime(&mime_type)
+                    );
+                    drop(fd);
                 }
                 return;
             }
@@ -2123,24 +2020,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 );
                 return;
             }
-            log::info!(
-                "d2b-clipd: source send from unknown d2b source_id:{} mime={} opens picker",
+            log::debug!(
+                "d2b-clipd: ignored unknown d2b source_id:{} mime={}",
                 source_id,
                 bounded_mime(&mime_type)
-            );
-            let mut picker_context = PickerOpenContext {
-                fallback: &mut *context.fallback,
-                host_clipboard: &mut *context.host_clipboard,
-                notifier: &mut *context.notifier,
-                supervisor: &mut *context.supervisor,
-                picker_command: context.picker_command,
-                accept_diag: &mut *context.accept_diag,
-            };
-            open_picker_or_arm_fallback(
-                &mut picker_context,
-                dest,
-                context.current_host_entry.as_ref(),
-                context.history,
             );
         }
         HostClipboardEvent::SourceCancelled { source_id } => {
@@ -2421,11 +2304,7 @@ fn publish_selected_entry_to_host(
 ) -> Result<(), ReasonCode> {
     let data_by_mime =
         selected_entry_data_by_mime(bridge_selection, current_host_entry, history, entry_id)?;
-    let selection = publish_data_control_selection(
-        data_control,
-        data_by_mime,
-        PublishedSelectionMode::Selected,
-    )?;
+    let selection = publish_data_control_selection(data_control, data_by_mime)?;
     let mimes_len = selection.data_by_mime.len();
     *published_selection = Some(selection);
     if data_control.flush().is_err() {
@@ -2443,7 +2322,6 @@ fn publish_selected_entry_to_host(
 fn publish_data_control_selection(
     data_control: &mut DataControlClient,
     data_by_mime: BTreeMap<String, Vec<u8>>,
-    mode: PublishedSelectionMode,
 ) -> Result<PublishedSelectionState, ReasonCode> {
     if data_by_mime.is_empty() {
         return Err(ReasonCode::RequestExpired);
@@ -2459,7 +2337,6 @@ fn publish_data_control_selection(
         data_control_source_id: source_id,
         _source: source,
         data_by_mime,
-        mode,
         suppress_selection_echo: true,
     })
 }
@@ -2825,6 +2702,9 @@ fn picker_candidates(
     let mut candidates = history.candidates(requested_mime_type);
     if let Some(entry) = current_host_entry
         && let Some(bytes) = compatible_mime_payload(&entry.data_by_mime, requested_mime_type)
+        && candidates
+            .first()
+            .is_none_or(|candidate| entry.timestamp_unix_ms >= candidate.timestamp_unix_ms)
     {
         candidates.retain(|candidate| candidate.entry_id != CURRENT_HOST_ENTRY_ID);
         candidates.insert(
@@ -2960,22 +2840,6 @@ struct PickerOpenContext<'a> {
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &'a Option<PickerCommand>,
     accept_diag: &'a mut AcceptDiagnostics,
-}
-
-fn open_picker_or_arm_fallback(
-    context: &mut PickerOpenContext<'_>,
-    dest: FocusedWindowSnapshot,
-    current_host_entry: Option<&ClipboardHistoryEntry>,
-    history: &ClipboardHistory,
-) {
-    let requested_mime = "text/plain".to_owned();
-    let candidates = picker_candidates(
-        context.host_clipboard,
-        current_host_entry,
-        history,
-        &requested_mime,
-    );
-    open_picker_for_candidates(context, dest, &requested_mime, candidates);
 }
 
 fn open_picker_for_candidates(
@@ -3301,6 +3165,19 @@ fn focused_window_matches_bridge_source(
     )
 }
 
+fn should_suppress_bridge_selection_echo(
+    window: Option<&FocusedWindowSnapshot>,
+    bridge_selection: Option<&BridgeSelectionState>,
+) -> bool {
+    let Some(selection) = bridge_selection else {
+        return false;
+    };
+    if !selection.suppress_selection_echo {
+        return false;
+    }
+    window.is_none() || focused_window_matches_bridge_source(window, bridge_selection)
+}
+
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -3421,7 +3298,6 @@ mod tests {
             history_entry_id: bridge_history_entry_id("personal-dev", 7),
             timestamp_unix_ms: 1,
             suppress_selection_echo: false,
-            source: None,
             data_by_mime: BTreeMap::new(),
         };
         let source_vm_window = FocusedWindowSnapshot {
@@ -3444,6 +3320,46 @@ mod tests {
         assert!(!focused_window_matches_bridge_source(
             Some(&source_vm_window),
             None
+        ));
+    }
+
+    #[test]
+    fn bridge_selection_echo_suppression_persists_for_source_vm_or_unknown_focus() {
+        let mut selection = BridgeSelectionState {
+            vm_name: "personal-dev".to_owned(),
+            vm_source_id: 7,
+            data_control_source_id: 11,
+            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            timestamp_unix_ms: 1,
+            suppress_selection_echo: true,
+            data_by_mime: BTreeMap::new(),
+        };
+        let source_vm_window = FocusedWindowSnapshot {
+            app_id: Some("d2b.personal-dev.firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+        let host_window = FocusedWindowSnapshot {
+            app_id: Some("firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+
+        assert!(should_suppress_bridge_selection_echo(
+            Some(&source_vm_window),
+            Some(&selection)
+        ));
+        assert!(should_suppress_bridge_selection_echo(
+            None,
+            Some(&selection)
+        ));
+        assert!(!should_suppress_bridge_selection_echo(
+            Some(&host_window),
+            Some(&selection)
+        ));
+
+        selection.suppress_selection_echo = false;
+        assert!(!should_suppress_bridge_selection_echo(
+            Some(&source_vm_window),
+            Some(&selection)
         ));
     }
 
@@ -3537,6 +3453,45 @@ mod tests {
     }
 
     #[test]
+    fn newer_vm_history_stays_ahead_of_stale_current_host_candidate() {
+        let mut history = ClipboardHistory::default();
+        let mut vm_data = BTreeMap::new();
+        vm_data.insert("text/plain".to_owned(), b"vm-new".to_vec());
+        history.upsert(ClipboardHistoryEntry {
+            entry_id: "bridge-vm-new".to_owned(),
+            source_realm: "personal-dev".to_owned(),
+            source_realm_kind: RealmKind::Vm,
+            source_app: Some("personal-dev VM".to_owned()),
+            source_app_id: Some("d2b.personal-dev".to_owned()),
+            source_attribution: AttributionQuality::ExactClient,
+            data_by_mime: vm_data,
+            timestamp_unix_ms: 20,
+        });
+
+        let mut host_data = BTreeMap::new();
+        host_data.insert("text/plain".to_owned(), b"host-old".to_vec());
+        let current_host = ClipboardHistoryEntry {
+            entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
+            source_realm: "Host".to_owned(),
+            source_realm_kind: RealmKind::Host,
+            source_app: Some("old host".to_owned()),
+            source_app_id: Some("firefox".to_owned()),
+            source_attribution: AttributionQuality::FocusedWindowGuess,
+            data_by_mime: host_data,
+            timestamp_unix_ms: 10,
+        };
+        let host_clipboard = HostClipboard::new(d2b_clipd::niri::HostClipboardAttributor::new(
+            NiriQueryProvider::new(None),
+        ));
+
+        let candidates =
+            picker_candidates(&host_clipboard, Some(&current_host), &history, "text/plain");
+
+        assert_eq!(candidates[0].entry_id, "bridge-vm-new");
+        assert_eq!(candidates[0].source_realm_kind, RealmKind::Vm);
+    }
+
+    #[test]
     fn current_vm_candidate_accepts_text_plain_aliases() {
         let mut data_by_mime = BTreeMap::new();
         data_by_mime.insert("text/plain".to_owned(), b"vm text".to_vec());
@@ -3547,7 +3502,6 @@ mod tests {
             history_entry_id: bridge_history_entry_id("personal-dev", 7),
             timestamp_unix_ms: 1_700_000_000_000,
             suppress_selection_echo: false,
-            source: None,
             data_by_mime,
         };
 
