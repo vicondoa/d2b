@@ -71,6 +71,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/display-io-capabilities.md`](./reference/display-io-capabilities.md) —
   display, clipboard, audio, USB/HID, GPU, video, and provider display
   lifecycle capability boundaries.
+- [`explanation/clipboard-architecture.md`](./explanation/clipboard-architecture.md) —
+  trusted clipboard authority, picker split, Niri integration, and bridge
+  runtime path contract.
 - [`reference/clipboard-picker-protocol.md`](./reference/clipboard-picker-protocol.md) —
   versioned socketpair JSON protocol between `d2b-clipd` and the picker.
 - [`reference/clipboard-policy.md`](./reference/clipboard-policy.md) —
