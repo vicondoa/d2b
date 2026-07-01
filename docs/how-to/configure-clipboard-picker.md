@@ -53,9 +53,9 @@ d2b.site.clipboard = {
 
 Bind `d2b.site.clipboard.niri.fallback.command` (default:
 `d2b clipboard arm`) in niri. The command opens the picker and arms the chosen
-entry for the currently focused target. The user then performs a normal paste
-within the configured timeout. D2b does not synthesize Ctrl+V and the picker does
-not write to the clipboard.
+entry for the currently focused target. After selection, `d2b-clipd` publishes
+the chosen payload as a d2b-owned host selection and triggers the paste replay;
+the picker itself still never writes to the clipboard.
 
 ## Probe the session clipboard
 

@@ -135,11 +135,11 @@ Rows are ordered by VM name because the historical bash implementation iterated 
 
 **Synopsis:** `d2b clipboard arm [--human | --json]`
 
-Opens the d2b clipboard picker for the current host-focused Niri target
-or, when the picker cannot be launched or its handshake fails, arms the
-native two-step paste fallback. The fallback does not synthesize input:
-after a successful arm response, the operator performs the normal app
-paste action before the short `d2b-clipd` fallback deadline expires.
+Opens the d2b clipboard picker for the current host-focused Niri target.
+After the operator selects an item, `d2b-clipd` publishes that item as a
+d2b-owned host selection and triggers paste replay for the focused target.
+If the picker cannot be launched or its handshake fails, `d2b-clipd` reports a
+typed failure instead of silently writing clipboard data.
 
 **Flags**
 
@@ -159,7 +159,7 @@ The CLI connects to `$XDG_RUNTIME_DIR/d2b-clipd/clipd.sock`, sends one bounded
 arm request, and applies five-second read and write deadlines to the
 control socket so a wedged `d2b-clipd` cannot hang the terminal. The
 daemon owns all clipboard state and transfer FDs; this command only asks
-the daemon to open the picker or arm native paste.
+the daemon to open the picker for d2b-owned paste replay.
 
 **Human examples**
 
@@ -167,7 +167,7 @@ the daemon to open the picker or arm native paste.
 $ d2b clipboard arm
 picker opened
 $ d2b clipboard arm
-fallback armed
+picker_not_configured
 ```
 
 **`--json` examples**

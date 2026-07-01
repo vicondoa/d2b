@@ -295,7 +295,7 @@ in
       fallbackArmingSeconds = lib.mkOption {
         type = lib.types.ints.between 1 30;
         default = 5;
-        description = "Timeout for explicit fallback arming before the native paste request arrives.";
+        description = "Timeout for the explicit paste action to publish and replay the selected item.";
       };
     };
 
@@ -306,8 +306,8 @@ in
         description = "Maximum picker-to-daemon JSON line size.";
       };
       clipdToPickerMaxFrameBytes = lib.mkOption {
-        type = lib.types.ints.between 4096 1048576;
-        default = 262144;
+        type = lib.types.ints.between 4096 67108864;
+        default = 23553408;
         description = "Maximum daemon-to-picker JSON line size.";
       };
       bridgeMaxFrameBytes = lib.mkOption {
@@ -337,7 +337,7 @@ in
         default = "disabled";
         description = ''
           Trusted host paste-intent source. `disabled` keeps host cross-realm
-          native-paste popups off unless the explicit fallback is enabled.
+          native-paste popups off unless the explicit d2b paste action is enabled.
         '';
       };
       fallback = {
@@ -345,15 +345,15 @@ in
           type = lib.types.bool;
           default = false;
           description = ''
-            Enable the explicit two-step fallback: a d2b-owned action opens the
-            picker, then the user performs the normal app paste within
-            `ttl.fallbackArmingSeconds`.
+            Enable the explicit d2b-owned paste action: a Niri binding opens the
+            picker for the focused target, then d2b-clipd publishes the selected
+            item and requests paste replay before `ttl.fallbackArmingSeconds`.
           '';
         };
         command = lib.mkOption {
           type = lib.types.str;
           default = "d2b clipboard arm";
-          description = "Command operators bind in niri for the explicit fallback action.";
+          description = "Command operators bind in niri for the explicit paste action.";
         };
         notification = lib.mkOption {
           type = lib.types.bool;

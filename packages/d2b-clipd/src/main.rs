@@ -13,7 +13,10 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_clipd::audit::{
@@ -31,7 +34,8 @@ use d2b_clipd::niri::{
     NiriRequest,
 };
 use d2b_clipd::notifications::{
-    DesktopNotifier, Notifier, emit_fallback_ready, sanitize_notification_text,
+    DesktopNotifier, Notifier, emit_fallback_ready, emit_user_visible_failure,
+    sanitize_notification_text,
 };
 use d2b_clipd::picker::{
     CommandPickerSpawner, PickerCommand, PickerPoll, PickerState, PickerSupervisor,
@@ -52,10 +56,39 @@ const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
 const CURRENT_BRIDGE_ENTRY_ID: &str = "current-vm-selection";
 const HISTORY_MAX_ENTRIES: usize = 20;
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HELPER_THREADS: usize = 16;
 const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const ASYNC_MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+static HELPER_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+struct HelperThreadPermit;
+
+impl Drop for HelperThreadPermit {
+    fn drop(&mut self) {
+        HELPER_THREADS.fetch_sub(1, Ordering::Release);
+    }
+}
+
+fn try_acquire_helper_thread() -> Result<HelperThreadPermit, ReasonCode> {
+    let mut current = HELPER_THREADS.load(Ordering::Acquire);
+    loop {
+        if current >= MAX_HELPER_THREADS {
+            return Err(ReasonCode::FdCapExceeded);
+        }
+        match HELPER_THREADS.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(HelperThreadPermit),
+            Err(next) => current = next,
+        }
+    }
+}
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -470,16 +503,16 @@ impl EventLoop<'_> {
             for index in control_stream_ready.into_iter().rev() {
                 if index < self.control_streams.len() {
                     let mut stream = self.control_streams.swap_remove(index);
-                    match handle_control_stream(
-                        &mut stream,
-                        self.supervisor,
-                        &self.picker_command,
-                        self.host_clipboard,
-                        self.fallback,
-                        self.notifier,
-                        &mut self.accept_diag,
-                        &self.history,
-                    ) {
+                    let mut context = ControlHandlerContext {
+                        supervisor: self.supervisor,
+                        picker_command: &self.picker_command,
+                        host_clipboard: self.host_clipboard,
+                        fallback: self.fallback,
+                        notifier: self.notifier,
+                        accept_diag: &mut self.accept_diag,
+                        history: &self.history,
+                    };
+                    match handle_control_stream(&mut stream, &mut context) {
                         ControlStreamStatus::Done => {}
                         ControlStreamStatus::Incomplete => self.control_streams.push(stream),
                     }
@@ -531,20 +564,20 @@ impl EventLoop<'_> {
                         .supervisor
                         .poll_active(PICKER_TO_DAEMON_MAX_FRAME_BYTES)
                     {
-                        Ok(PickerPoll::Message(message)) => handle_picker_message(
-                            message,
-                            self.data_control,
-                            self.host_clipboard,
-                            self.bridge_selection.as_ref(),
-                            &mut self.published_selection,
-                            &mut self.bridge_streams,
-                            self.current_host_entry.as_ref(),
-                            &self.history,
-                            self.notifier,
-                            self.fallback,
-                            self.supervisor,
-                            &mut self.accept_diag,
-                        ),
+                        Ok(PickerPoll::Message(message)) => {
+                            let mut context = PickerMessageContext {
+                                data_control: self.data_control,
+                                bridge_selection: self.bridge_selection.as_ref(),
+                                published_selection: &mut self.published_selection,
+                                bridge_streams: &mut self.bridge_streams,
+                                current_host_entry: self.current_host_entry.as_ref(),
+                                history: &self.history,
+                                notifier: self.notifier,
+                                fallback: self.fallback,
+                                supervisor: self.supervisor,
+                            };
+                            handle_picker_message(message, &mut context);
+                        }
                         Ok(PickerPoll::Closed) => {
                             self.accept_diag
                                 .warn("picker", "closed-before-selection", || {
@@ -578,7 +611,7 @@ impl EventLoop<'_> {
             }
             self.supervisor.reap_terminated(now);
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
-                log::debug!("d2b-clipd: fallback armed state cleared: {r:?}");
+                log::debug!("d2b-clipd: paste action state cleared: {r:?}");
             }
             self.reap_idle_streams(now);
             self.accept_diag.flush_suppressed();
@@ -1494,7 +1527,7 @@ fn bridge_refresh_write_outcome(
 }
 
 fn notify_bridge_selection_refresh(streams: &mut Vec<BridgeStream>) {
-    streams.retain_mut(|stream| notify_bridge_stream_selection_refresh(stream));
+    streams.retain_mut(notify_bridge_stream_selection_refresh);
 }
 
 fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
@@ -1549,9 +1582,23 @@ fn handle_bridge_copy_selection(
         return;
     }
     let tx = context.bridge_copy_tx.clone();
-    let _ = std::thread::Builder::new()
+    let permit = match try_acquire_helper_thread() {
+        Ok(permit) => permit,
+        Err(reason) => {
+            let _ = tx.send(BridgeCopyReady {
+                vm_name,
+                mime_type,
+                source_id,
+                result: Err(reason),
+            });
+            drop(fd);
+            return;
+        }
+    };
+    if let Err(error) = std::thread::Builder::new()
         .name("d2b-clipd-bridge-copy-read".to_owned())
         .spawn(move || {
+            let _permit = permit;
             let result = read_fd_to_vec(fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT);
             let _ = tx.send(BridgeCopyReady {
                 vm_name,
@@ -1559,7 +1606,10 @@ fn handle_bridge_copy_selection(
                 source_id,
                 result,
             });
-        });
+        })
+    {
+        log::error!("d2b-clipd: failed to spawn bridge copy reader: {error}");
+    }
 }
 
 fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyReadyContext<'_>) {
@@ -1783,17 +1833,15 @@ fn handle_bridge_paste_request(
         bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
         summarize_candidates(&candidates)
     );
-    open_picker_for_candidates(
-        context.fallback,
-        dest,
-        context.host_clipboard,
-        context.notifier,
-        context.supervisor,
-        context.picker_command,
-        context.accept_diag,
-        &mime_type,
-        candidates,
-    );
+    let mut picker_context = PickerOpenContext {
+        fallback: &mut *context.fallback,
+        host_clipboard: &mut *context.host_clipboard,
+        notifier: &mut *context.notifier,
+        supervisor: &mut *context.supervisor,
+        picker_command: context.picker_command,
+        accept_diag: &mut *context.accept_diag,
+    };
+    open_picker_for_candidates(&mut picker_context, dest, &mime_type, candidates);
 }
 
 fn notify_bridge_paste_failure<N: Notifier>(
@@ -1978,14 +2026,17 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
                             summarize_candidates(&candidates)
                         );
+                        let mut picker_context = PickerOpenContext {
+                            fallback: &mut *context.fallback,
+                            host_clipboard: &mut *context.host_clipboard,
+                            notifier: &mut *context.notifier,
+                            supervisor: &mut *context.supervisor,
+                            picker_command: context.picker_command,
+                            accept_diag: &mut *context.accept_diag,
+                        };
                         open_picker_for_candidates(
-                            context.fallback,
+                            &mut picker_context,
                             dest,
-                            context.host_clipboard,
-                            context.notifier,
-                            context.supervisor,
-                            context.picker_command,
-                            context.accept_diag,
                             &mime_type,
                             candidates,
                         );
@@ -2028,17 +2079,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
                     summarize_candidates(&candidates)
                 );
-                open_picker_for_candidates(
-                    context.fallback,
-                    dest,
-                    context.host_clipboard,
-                    context.notifier,
-                    context.supervisor,
-                    context.picker_command,
-                    context.accept_diag,
-                    &mime_type,
-                    candidates,
-                );
+                let mut picker_context = PickerOpenContext {
+                    fallback: &mut *context.fallback,
+                    host_clipboard: &mut *context.host_clipboard,
+                    notifier: &mut *context.notifier,
+                    supervisor: &mut *context.supervisor,
+                    picker_command: context.picker_command,
+                    accept_diag: &mut *context.accept_diag,
+                };
+                open_picker_for_candidates(&mut picker_context, dest, &mime_type, candidates);
                 return;
             }
             drop(fd);
@@ -2051,14 +2100,17 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 source_id,
                 bounded_mime(&mime_type)
             );
+            let mut picker_context = PickerOpenContext {
+                fallback: &mut *context.fallback,
+                host_clipboard: &mut *context.host_clipboard,
+                notifier: &mut *context.notifier,
+                supervisor: &mut *context.supervisor,
+                picker_command: context.picker_command,
+                accept_diag: &mut *context.accept_diag,
+            };
             open_picker_or_arm_fallback(
-                context.fallback,
+                &mut picker_context,
                 dest,
-                context.host_clipboard,
-                context.notifier,
-                context.supervisor,
-                context.picker_command,
-                context.accept_diag,
                 context.current_host_entry.as_ref(),
                 context.history,
             );
@@ -2101,26 +2153,30 @@ enum ControlStreamStatus {
     Incomplete,
 }
 
+struct ControlHandlerContext<'a> {
+    supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &'a Option<PickerCommand>,
+    host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
+    fallback: &'a mut FallbackArming,
+    notifier: &'a mut DesktopNotifier,
+    accept_diag: &'a mut AcceptDiagnostics,
+    history: &'a ClipboardHistory,
+}
+
 fn handle_control_stream(
     control: &mut ControlStream,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    fallback: &mut FallbackArming,
-    notifier: &mut DesktopNotifier,
-    accept_diag: &mut AcceptDiagnostics,
-    history: &ClipboardHistory,
+    context: &mut ControlHandlerContext<'_>,
 ) -> ControlStreamStatus {
     match read_control_command_from_stream(control) {
         Ok(ControlCommand::Arm) => {
             let response = handle_arm(
-                supervisor,
-                picker_command,
-                host_clipboard,
-                fallback,
-                notifier,
-                accept_diag,
-                history,
+                context.supervisor,
+                context.picker_command,
+                context.host_clipboard,
+                context.fallback,
+                context.notifier,
+                context.accept_diag,
+                context.history,
             );
             let body = match response {
                 Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
@@ -2253,20 +2309,19 @@ fn read_control_command_from_stream(
     }
 }
 
-fn handle_picker_message(
-    message: PickerToDaemonMessage,
-    data_control: &mut DataControlClient,
-    _host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    bridge_selection: Option<&BridgeSelectionState>,
-    published_selection: &mut Option<PublishedSelectionState>,
-    bridge_streams: &mut Vec<BridgeStream>,
-    current_host_entry: Option<&ClipboardHistoryEntry>,
-    history: &ClipboardHistory,
-    notifier: &mut DesktopNotifier,
-    fallback: &mut FallbackArming,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    _accept_diag: &mut AcceptDiagnostics,
-) {
+struct PickerMessageContext<'a> {
+    data_control: &'a mut DataControlClient,
+    bridge_selection: Option<&'a BridgeSelectionState>,
+    published_selection: &'a mut Option<PublishedSelectionState>,
+    bridge_streams: &'a mut Vec<BridgeStream>,
+    current_host_entry: Option<&'a ClipboardHistoryEntry>,
+    history: &'a ClipboardHistory,
+    notifier: &'a mut DesktopNotifier,
+    fallback: &'a mut FallbackArming,
+    supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
+}
+
+fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMessageContext<'_>) {
     match message {
         PickerToDaemonMessage::Select(select) => {
             log::info!(
@@ -2275,47 +2330,52 @@ fn handle_picker_message(
                 bounded_label(&select.entry_id)
             );
             match publish_selected_entry_to_host(
-                data_control,
-                bridge_selection,
-                current_host_entry,
-                history,
+                context.data_control,
+                context.bridge_selection,
+                context.current_host_entry,
+                context.history,
                 &select.entry_id,
-                published_selection,
+                context.published_selection,
             ) {
                 Ok(()) => {
-                    notify_bridge_selection_refresh(bridge_streams);
-                    let _ = fallback.cancel_picker();
-                    let _ = supervisor.cancel_active(ReasonCode::Allowed);
-                    std::thread::spawn(|| {
-                        std::thread::sleep(Duration::from_millis(20));
-                        if let Err(error) = d2b_clipd::virtual_keyboard::paste_ctrl_v() {
-                            log::warn!("d2b-clipd: host instant paste failed: {error}");
-                            let mut notifier = DesktopNotifier;
-                            d2b_clipd::notifications::emit_user_visible_failure(
-                                &mut notifier,
-                                ReasonCode::VirtualKeyboardFailed,
-                                "clipboard",
-                                "host",
-                            );
-                        }
-                    });
+                    notify_bridge_selection_refresh(context.bridge_streams);
+                    let _ = context.fallback.cancel_picker();
+                    let _ = context.supervisor.cancel_active(ReasonCode::Allowed);
+                    if let Err(error) = std::thread::Builder::new()
+                        .name("d2b-clipd-paste-replay".to_owned())
+                        .spawn(|| {
+                            std::thread::sleep(Duration::from_millis(20));
+                            if let Err(error) = d2b_clipd::virtual_keyboard::paste_ctrl_v() {
+                                log::warn!("d2b-clipd: host instant paste failed: {error}");
+                                let mut notifier = DesktopNotifier;
+                                d2b_clipd::notifications::emit_user_visible_failure(
+                                    &mut notifier,
+                                    ReasonCode::VirtualKeyboardFailed,
+                                    "clipboard",
+                                    "host",
+                                );
+                            }
+                        })
+                    {
+                        log::error!("d2b-clipd: failed to spawn paste replay worker: {error}");
+                    }
                 }
                 Err(reason) => {
                     d2b_clipd::notifications::emit_user_visible_failure(
-                        notifier,
+                        context.notifier,
                         reason,
                         "clipboard",
                         "host",
                     );
-                    let _ = fallback.cancel_picker();
-                    let _ = supervisor.cancel_active(reason);
+                    let _ = context.fallback.cancel_picker();
+                    let _ = context.supervisor.cancel_active(reason);
                 }
             }
         }
         PickerToDaemonMessage::Cancel(cancel) => {
             log::debug!("d2b-clipd: picker cancelled request {}", cancel.request_id);
-            let _ = fallback.cancel_picker();
-            let _ = supervisor.cancel_active(ReasonCode::PickerTimeout);
+            let _ = context.fallback.cancel_picker();
+            let _ = context.supervisor.cancel_active(ReasonCode::PickerTimeout);
         }
         PickerToDaemonMessage::ClientHello(_) => {
             log::debug!("d2b-clipd: ignored duplicate picker client_hello");
@@ -2441,9 +2501,17 @@ fn materialize_offer_mimes_async(
     if reads.is_empty() {
         return;
     }
-    let _ = std::thread::Builder::new()
+    let permit = match try_acquire_helper_thread() {
+        Ok(permit) => permit,
+        Err(reason) => {
+            log::warn!("d2b-clipd: host copy reader denied: {}", reason.as_str());
+            return;
+        }
+    };
+    if let Err(error) = std::thread::Builder::new()
         .name("d2b-clipd-host-copy-read".to_owned())
         .spawn(move || {
+            let _permit = permit;
             for (mime, read_fd) in reads {
                 if let Ok(bytes) =
                     read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT)
@@ -2454,13 +2522,29 @@ fn materialize_offer_mimes_async(
             if !entry.data_by_mime.is_empty() {
                 let _ = tx.send(entry);
             }
-        });
+        })
+    {
+        log::error!("d2b-clipd: failed to spawn host copy reader: {error}");
+    }
 }
 
 fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8>) {
-    let _ = std::thread::Builder::new()
+    let permit = match try_acquire_helper_thread() {
+        Ok(permit) => permit,
+        Err(reason) => {
+            log::info!(
+                "d2b-clipd: published paste write denied mime={}: {}",
+                bounded_mime(&mime),
+                reason.as_str()
+            );
+            drop(fd);
+            return;
+        }
+    };
+    if let Err(error) = std::thread::Builder::new()
         .name("d2b-clipd-published-write".to_owned())
         .spawn(move || {
+            let _permit = permit;
             match write_all_nonblocking_fd(&fd, &bytes, Instant::now() + BOUNDED_READ_TIMEOUT) {
                 Ok(()) => log::debug!(
                     "d2b-clipd: published paste write complete mime={}",
@@ -2473,7 +2557,10 @@ fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8
                 ),
             }
             drop(fd);
-        });
+        })
+    {
+        log::error!("d2b-clipd: failed to spawn published paste writer: {error}");
+    }
 }
 
 fn is_text_plain_mime(mime: &str) -> bool {
@@ -2554,8 +2641,8 @@ fn write_all_nonblocking_fd(
 }
 
 /// `d2b clipboard arm` sends `{"type":"arm"}` to this socket.
-/// We open the picker (if configured) and arm the native-paste fallback for
-/// the current focused window.
+/// We open the picker for the current focused window; the daemon owns the
+/// eventual selection publication and paste replay.
 fn handle_arm(
     supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
     picker_command: &Option<PickerCommand>,
@@ -2597,18 +2684,28 @@ fn handle_arm(
                     });
                     let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
                     let _ = fallback.cancel_picker();
-                    arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
-                    Ok("fallback armed".to_owned())
+                    emit_user_visible_failure(
+                        notifier,
+                        ReasonCode::PickerCrashed,
+                        "clipboard",
+                        dest.app_id.as_deref().unwrap_or("host"),
+                    );
+                    Err(ReasonCode::PickerCrashed.as_str().to_owned())
                 }
             }
         }
         Err(e) => {
             accept_diag.warn("picker", "launch-failed", || {
-                format!("d2b-clipd: picker launch failed: {e}; arming native fallback")
+                format!("d2b-clipd: picker launch failed: {e}")
             });
             let _ = fallback.cancel_picker();
-            arm_native_fallback(fallback, dest.clone(), host_clipboard, notifier);
-            Ok("fallback armed".to_owned())
+            emit_user_visible_failure(
+                notifier,
+                ReasonCode::PickerNotConfigured,
+                "clipboard",
+                dest.app_id.as_deref().unwrap_or("host"),
+            );
+            Err(ReasonCode::PickerNotConfigured.as_str().to_owned())
         }
     }
 }
@@ -2827,52 +2924,46 @@ fn protocol_attribution(quality: d2b_clipd::policy::AttributionQuality) -> Attri
 
 // ─── Picker / fallback helpers ────────────────────────────────────────────────
 
+struct PickerOpenContext<'a> {
+    fallback: &'a mut FallbackArming,
+    host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
+    notifier: &'a mut DesktopNotifier,
+    supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
+    picker_command: &'a Option<PickerCommand>,
+    accept_diag: &'a mut AcceptDiagnostics,
+}
+
 fn open_picker_or_arm_fallback(
-    fallback: &mut FallbackArming,
+    context: &mut PickerOpenContext<'_>,
     dest: FocusedWindowSnapshot,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    notifier: &mut impl Notifier,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    accept_diag: &mut AcceptDiagnostics,
     current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
 ) {
     let requested_mime = "text/plain".to_owned();
-    let candidates =
-        picker_candidates(host_clipboard, current_host_entry, history, &requested_mime);
-    open_picker_for_candidates(
-        fallback,
-        dest,
-        host_clipboard,
-        notifier,
-        supervisor,
-        picker_command,
-        accept_diag,
+    let candidates = picker_candidates(
+        context.host_clipboard,
+        current_host_entry,
+        history,
         &requested_mime,
-        candidates,
     );
+    open_picker_for_candidates(context, dest, &requested_mime, candidates);
 }
 
 fn open_picker_for_candidates(
-    fallback: &mut FallbackArming,
+    context: &mut PickerOpenContext<'_>,
     dest: FocusedWindowSnapshot,
-    host_clipboard: &mut HostClipboard<NiriQueryProvider>,
-    notifier: &mut impl Notifier,
-    supervisor: &mut PickerSupervisor<CommandPickerSpawner>,
-    picker_command: &Option<PickerCommand>,
-    accept_diag: &mut AcceptDiagnostics,
     requested_mime: &str,
     candidates: Vec<Candidate>,
 ) {
-    let can_open = picker_command.is_some() && matches!(supervisor.state(), PickerState::Idle);
+    let can_open =
+        context.picker_command.is_some() && matches!(context.supervisor.state(), PickerState::Idle);
     if can_open {
-        let _ = fallback.capture_target_before_picker(dest.clone());
+        let _ = context.fallback.capture_target_before_picker(dest.clone());
         let ambient: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
         let request_id = format!("paste-{}", unix_millis());
-        match supervisor.launch(
+        match context.supervisor.launch(
             request_id.clone(),
-            picker_command.clone(),
+            context.picker_command.clone(),
             &ambient,
             Duration::from_secs(30),
         ) {
@@ -2880,12 +2971,17 @@ fn open_picker_for_candidates(
                 if let Err(error) =
                     picker_handshake(socket, &request_id, &dest, requested_mime, candidates)
                 {
-                    accept_diag.warn("picker", "handshake-failed", || {
+                    context.accept_diag.warn("picker", "handshake-failed", || {
                         format!("d2b-clipd: picker handshake failed: {error}")
                     });
-                    let _ = supervisor.cancel_active(ReasonCode::PickerCrashed);
-                    let _ = fallback.cancel_picker();
-                    arm_native_fallback(fallback, dest, host_clipboard, notifier);
+                    let _ = context.supervisor.cancel_active(ReasonCode::PickerCrashed);
+                    let _ = context.fallback.cancel_picker();
+                    arm_native_fallback(
+                        context.fallback,
+                        dest,
+                        context.host_clipboard,
+                        context.notifier,
+                    );
                 } else {
                     log::debug!(
                         "d2b-clipd: picker opened for paste to {}",
@@ -2894,15 +2990,25 @@ fn open_picker_for_candidates(
                 }
             }
             Err(e) => {
-                accept_diag.warn("picker", "launch-failed", || {
+                context.accept_diag.warn("picker", "launch-failed", || {
                     format!("d2b-clipd: picker launch failed ({e}); falling back to native paste")
                 });
-                let _ = fallback.cancel_picker();
-                arm_native_fallback(fallback, dest, host_clipboard, notifier);
+                let _ = context.fallback.cancel_picker();
+                arm_native_fallback(
+                    context.fallback,
+                    dest,
+                    context.host_clipboard,
+                    context.notifier,
+                );
             }
         }
     } else {
-        arm_native_fallback(fallback, dest, host_clipboard, notifier);
+        arm_native_fallback(
+            context.fallback,
+            dest,
+            context.host_clipboard,
+            context.notifier,
+        );
     }
 }
 
@@ -2923,10 +3029,7 @@ fn arm_native_fallback(
     if matches!(transition, FallbackTransition::Armed) {
         let label = dest.app_id.as_deref().unwrap_or("host application");
         emit_fallback_ready(notifier, label);
-        log::debug!(
-            "d2b-clipd: fallback armed for {}; user should press Ctrl+V",
-            bounded_label(label)
-        );
+        log::debug!("d2b-clipd: paste action armed for {}", bounded_label(label));
     }
 }
 

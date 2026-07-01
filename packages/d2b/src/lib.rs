@@ -172,7 +172,7 @@ enum NativeCommand {
     /// (`guestConfigFile`): pull the operator's in-VM edits to a
     /// host-side staging file, diff them, and approve them.
     Config(ConfigArgs),
-    /// Clipboard authority operations (two-step fallback paste arming via d2b-clipd).
+    /// Clipboard authority operations (picker-driven paste replay via d2b-clipd).
     Clipboard(ClipboardArgs),
 }
 
@@ -499,10 +499,10 @@ struct ClipboardArgs {
 
 #[derive(Debug, Subcommand)]
 enum ClipboardCommand {
-    /// Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V).
+    /// Open the picker and request paste replay for the focused target.
     ///
-    /// Opens the d2b-clip-picker, waits for a selection, then arms d2b-clipd
-    /// to satisfy the next native paste request from the current focused window.
+    /// Opens the d2b-clip-picker, waits for a selection, then asks d2b-clipd
+    /// to publish the selected payload and trigger paste replay.
     /// Requires d2b-clipd to be running.
     #[command(alias = "picker")]
     Arm(ClipboardArmArgs),

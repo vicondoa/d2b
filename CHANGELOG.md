@@ -114,11 +114,11 @@ deprecations ship one minor release before removal.
   picker package/path configuration with no bundled GPL input, bridge runtime
   path policy, eval assertions, and reference docs for the authority split,
   picker protocol, and policy caps.
-- Added `d2b clipboard arm` CLI subcommand for the two-step fallback
-  paste arming workflow; it sends an arm request to the running `d2b-clipd`
+- Added `d2b clipboard arm` CLI subcommand for the explicit picker-driven
+  paste action; it sends an arm request to the running `d2b-clipd`
   control socket with bounded read/write deadlines, reports structured
-  `--json` failures, and treats picker launch/handshake failure as success
-  only when `d2b-clipd` arms the native paste fallback.
+  `--json` failures, and treats picker launch/handshake failure as a typed
+  daemon failure rather than success-shaped clipboard writes.
 - Added clipboard test gates: scaffold-detection test asserting `d2b-clipd`
   uses no `thread::park()` stub; picker handshake integration test
   (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
