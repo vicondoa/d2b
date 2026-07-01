@@ -36,7 +36,7 @@ is smaller than the per-item cap, when a MIME cap exceeds the per-item cap, or
 when asymmetric protocol frame caps are invalid.
 
 `d2b.site.clipboard.ttl.*` declares history, picker request, paste intent,
-pending-FD, and fallback arming timeouts.
+pending-FD, and explicit paste action timeouts.
 
 ## Lifecycle cleanup
 

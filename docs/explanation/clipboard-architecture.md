@@ -74,11 +74,11 @@ not block on synchronous compositor IPC.
 
 Host cross-realm native paste requires a trusted no-patch Niri hook or future
 upstream-equivalent IPC event. Focus alone is not paste intent. When that hook is
-unavailable, operators can enable the explicit fallback: a d2b-owned keybind
-opens the picker when one is configured, or directly arms the current
-d2b-owned selection when no picker is configured, then the user performs a
-normal paste within a short timeout. D2b never compensates by using
-virtual-keyboard injection.
+unavailable, operators can enable the explicit d2b paste action: a d2b-owned
+keybind opens the picker for the focused target, then `d2b-clipd` publishes the
+selected item as the d2b-owned host selection and triggers paste replay. Picker
+launch or handshake failures are reported as typed failures; the picker still
+never writes a clipboard or receives transfer FDs.
 
 ## Diagnostics
 

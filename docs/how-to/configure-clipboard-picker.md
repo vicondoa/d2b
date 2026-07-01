@@ -39,10 +39,10 @@ D2b does not include a default picker flake input. Install the separate
 If niri is declared through NixOS, use `programs.niri.enable = true` instead of
 `d2b.site.clipboard.niri.external = true`.
 
-## Explicit fallback keybind
+## Explicit paste action keybind
 
 When no trusted no-patch Niri paste-intent hook is available, keep native host
-cross-realm popups disabled and use the explicit fallback:
+cross-realm popups disabled and use the explicit d2b paste action:
 
 ```nix
 d2b.site.clipboard = {
@@ -52,8 +52,8 @@ d2b.site.clipboard = {
 ```
 
 Bind `d2b.site.clipboard.niri.fallback.command` (default:
-`d2b clipboard arm`) in niri. The command opens the picker and arms the chosen
-entry for the currently focused target. After selection, `d2b-clipd` publishes
+`d2b clipboard arm`) in niri. The command opens the picker for the currently
+focused target. After selection, `d2b-clipd` publishes
 the chosen payload as a d2b-owned host selection and triggers the paste replay;
 the picker itself still never writes to the clipboard.
 
