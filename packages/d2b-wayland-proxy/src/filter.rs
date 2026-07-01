@@ -145,7 +145,6 @@ pub struct VirtualClipboardState {
     diag: Rc<RefCell<DiagRateLimiter>>,
     bridge_path: Option<PathBuf>,
     bridge: Option<UnixStream>,
-    pending_bridge: Option<UnixStream>,
     bridge_read_buffer: Vec<u8>,
     bridge_reconnect: BridgeReconnectMachine,
     next_bridge_retry: Option<Instant>,
@@ -206,7 +205,6 @@ impl VirtualClipboardState {
             diag,
             bridge_path: bridge_config.socket_path.clone(),
             bridge: None,
-            pending_bridge: None,
             bridge_read_buffer: Vec::new(),
             bridge_reconnect: BridgeReconnectMachine::new(&bridge_config),
             next_bridge_retry: None,
@@ -431,9 +429,6 @@ impl VirtualClipboardState {
         if self.bridge.is_some() {
             return self.bridge.as_mut();
         }
-        if self.pending_bridge.is_some() {
-            return None;
-        }
         let path = self.bridge_path.clone()?;
         let now = Instant::now();
         match self.bridge_reconnect.state() {
@@ -461,14 +456,10 @@ impl VirtualClipboardState {
             BridgeConnectionState::Connecting { .. } => {}
         }
         match connect_bridge_nonblocking(&path) {
-            Ok(BridgeConnectAttempt::Connected(stream)) => {
+            Ok(stream) => {
                 self.bridge_reconnect.connect_succeeded();
                 self.next_bridge_retry = None;
                 self.bridge = Some(stream);
-            }
-            Ok(BridgeConnectAttempt::Pending(stream)) => {
-                self.pending_bridge = Some(stream);
-                self.next_bridge_retry = None;
             }
             Err(error) => {
                 let vm = self.vm_name.clone();
@@ -620,62 +611,8 @@ impl VirtualClipboardState {
         }
     }
 
-    fn complete_pending_bridge_connect(&mut self) {
-        let Some(stream) = self.pending_bridge.take() else {
-            return;
-        };
-        self.finish_pending_bridge_connect(stream, socket_error);
-    }
-
-    fn finish_pending_bridge_connect(
-        &mut self,
-        stream: UnixStream,
-        socket_error: impl FnOnce(&UnixStream) -> std::io::Result<i32>,
-    ) {
-        match socket_error(&stream) {
-            Ok(0) => {
-                self.bridge_reconnect.connect_succeeded();
-                self.next_bridge_retry = None;
-                self.bridge = Some(stream);
-            }
-            Ok(error) => {
-                let vm = self.vm_name.clone();
-                let error =
-                    bounded_error_detail(std::io::Error::from_raw_os_error(error).to_string());
-                self.diag
-                    .borrow_mut()
-                    .warn("clipboard-bridge", "connect-failed", || {
-                        format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-failed error={error}"
-                        )
-                    });
-                self.bridge_reconnect.connect_failed();
-                self.schedule_bridge_retry();
-            }
-            Err(error) => {
-                let vm = self.vm_name.clone();
-                let error = bounded_error_detail(error.to_string());
-                self.diag
-                    .borrow_mut()
-                    .warn("clipboard-bridge", "connect-check-failed", || {
-                        format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-check-failed error={error}"
-                        )
-                    });
-                self.bridge_reconnect.connect_failed();
-                self.schedule_bridge_retry();
-            }
-        }
-    }
-
     pub fn drive_bridge_io(clipboard: &Rc<RefCell<Self>>, bridge_ready: bool) {
         let mut state = clipboard.borrow_mut();
-        if bridge_ready {
-            state.complete_pending_bridge_connect();
-        }
-        if state.pending_bridge.is_some() {
-            return;
-        }
         if state.pending_bridge_handoffs.is_empty() {
             if state.bridge.is_none() {
                 state.ensure_bridge_connected();
@@ -709,19 +646,11 @@ impl VirtualClipboardState {
     }
 
     #[cfg(test)]
-    fn has_pending_bridge_for_tests(&self) -> bool {
-        self.pending_bridge.is_some()
-    }
-
-    #[cfg(test)]
     fn has_connected_bridge_for_tests(&self) -> bool {
         self.bridge.is_some()
     }
 
     pub fn bridge_poll_stream_and_flags(&self) -> Option<(&UnixStream, PollFlags)> {
-        if let Some(stream) = self.pending_bridge.as_ref() {
-            return Some((stream, PollFlags::OUT));
-        }
         self.bridge
             .as_ref()
             .map(|stream| (stream, self.pending_bridge_poll_flags()))
@@ -1520,13 +1449,7 @@ fn bind_matches_advertised_cap(
     requested_interface == advertised.interface && requested_version <= advertised.version
 }
 
-#[derive(Debug)]
-enum BridgeConnectAttempt {
-    Connected(UnixStream),
-    Pending(UnixStream),
-}
-
-fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<BridgeConnectAttempt> {
+fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
     use std::os::fd::AsRawFd;
 
@@ -1538,25 +1461,8 @@ fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<BridgeConnectAt
     )
     .map_err(errno_to_io)?;
     let addr = UnixAddr::new(path).map_err(errno_to_io)?;
-    let result = connect(fd.as_raw_fd(), &addr);
-    bridge_connect_result(fd, result)
-}
-
-fn bridge_connect_result(
-    fd: std::os::fd::OwnedFd,
-    result: Result<(), nix::errno::Errno>,
-) -> std::io::Result<BridgeConnectAttempt> {
-    match result {
-        Ok(()) => Ok(BridgeConnectAttempt::Connected(UnixStream::from(fd))),
-        Err(nix::errno::Errno::EINPROGRESS) => {
-            Ok(BridgeConnectAttempt::Pending(UnixStream::from(fd)))
-        }
-        Err(error) => Err(errno_to_io(error)),
-    }
-}
-
-fn socket_error(stream: &UnixStream) -> std::io::Result<i32> {
-    nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::SocketError)
+    connect(fd.as_raw_fd(), &addr)
+        .map(|()| UnixStream::from(fd))
         .map_err(errno_to_io)
 }
 
@@ -1672,34 +1578,19 @@ mod tests {
     }
 
     #[test]
-    fn nonblocking_bridge_connect_retains_only_inprogress_for_pollout() {
-        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
-
-        let fd = socket(
-            AddressFamily::Unix,
-            SockType::Stream,
-            SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .expect("socket");
-        let attempt = bridge_connect_result(fd, Err(nix::errno::Errno::EINPROGRESS))
-            .expect("pending connect");
-        assert!(matches!(attempt, BridgeConnectAttempt::Pending(_)));
-
-        let fd = socket(
-            AddressFamily::Unix,
-            SockType::Stream,
-            SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .expect("socket");
-        let error = bridge_connect_result(fd, Err(nix::errno::Errno::EAGAIN))
-            .expect_err("AF_UNIX backlog exhaustion should back off");
-        assert_eq!(error.raw_os_error(), Some(nix::errno::Errno::EAGAIN as i32));
+    fn nonblocking_bridge_connect_errors_trigger_backoff() {
+        assert_eq!(
+            errno_to_io(nix::errno::Errno::EAGAIN).raw_os_error(),
+            Some(nix::errno::Errno::EAGAIN as i32)
+        );
+        assert_eq!(
+            errno_to_io(nix::errno::Errno::EINPROGRESS).raw_os_error(),
+            Some(nix::errno::Errno::EINPROGRESS as i32)
+        );
     }
 
     #[test]
-    fn bridge_handoff_is_queued_when_connect_is_pending() {
+    fn bridge_handoff_is_queued_when_bridge_unavailable() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut clipboard = VirtualClipboardState::new(
             "work".to_owned(),
@@ -1713,8 +1604,6 @@ mod tests {
             )
             .expect("bridge config"),
         );
-        let (pending, _peer) = UnixStream::pair().expect("pending bridge pair");
-        clipboard.pending_bridge = Some(pending);
         let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
         let fd: OwnedFd = fd.into();
         let metadata = BridgeTransferMetadata {
@@ -1726,62 +1615,7 @@ mod tests {
 
         clipboard.handoff_via_bridge(&fd, &metadata);
 
-        assert!(clipboard.has_pending_bridge_for_tests());
         assert_eq!(clipboard.pending_handoff_count_for_tests(), 1);
-    }
-
-    #[test]
-    fn drive_bridge_io_ready_completes_pending_connect() {
-        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut clipboard = VirtualClipboardState::new(
-            "work".to_owned(),
-            diag,
-            BridgeConfig::from_parts(
-                Some(PathBuf::from("/tmp/d2b-connect-fail-test.sock")),
-                std::path::Path::new("/run/d2b/clipd"),
-                None,
-                "work",
-                BridgeReconnectPolicy::default(),
-            )
-            .expect("bridge config"),
-        );
-        let (pending, _peer) = UnixStream::pair().expect("pending bridge pair");
-        clipboard.pending_bridge = Some(pending);
-        clipboard.bridge_reconnect.start_connect();
-        let clipboard = Rc::new(RefCell::new(clipboard));
-
-        VirtualClipboardState::drive_bridge_io(&clipboard, true);
-
-        let clipboard = clipboard.borrow();
-        assert!(!clipboard.has_pending_bridge_for_tests());
-        assert!(clipboard.has_connected_bridge_for_tests());
-        assert!(clipboard.bridge_retry_deadline().is_none());
-    }
-
-    #[test]
-    fn failed_pending_connect_schedules_retry() {
-        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut clipboard = VirtualClipboardState::new(
-            "work".to_owned(),
-            diag,
-            BridgeConfig::from_parts(
-                Some(PathBuf::from("/tmp/d2b-connect-fail-test.sock")),
-                std::path::Path::new("/run/d2b/clipd"),
-                None,
-                "work",
-                BridgeReconnectPolicy::default(),
-            )
-            .expect("bridge config"),
-        );
-        let (pending, _peer) = UnixStream::pair().expect("pending bridge pair");
-        clipboard.pending_bridge = Some(pending);
-        clipboard.bridge_reconnect.start_connect();
-        let stream = clipboard.pending_bridge.take().expect("pending bridge");
-
-        clipboard.finish_pending_bridge_connect(stream, |_| Ok(libc::ECONNREFUSED));
-
-        assert!(!clipboard.has_pending_bridge_for_tests());
-        assert!(!clipboard.has_connected_bridge_for_tests());
         assert!(clipboard.bridge_retry_deadline().is_some());
     }
 
@@ -1861,35 +1695,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_bridge_connected_preserves_pending_connect_socket() {
-        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut clipboard = VirtualClipboardState::new(
-            "work".to_owned(),
-            diag,
-            BridgeConfig::from_parts(
-                Some(PathBuf::from("/tmp/d2b-should-not-connect.sock")),
-                std::path::Path::new("/run/d2b/clipd"),
-                None,
-                "work",
-                BridgeReconnectPolicy::default(),
-            )
-            .expect("bridge config"),
-        );
-        let (pending, _peer) = UnixStream::pair().expect("pending bridge pair");
-        clipboard.pending_bridge = Some(pending);
-        clipboard.bridge_reconnect.start_connect();
-
-        assert!(clipboard.ensure_bridge_connected().is_none());
-        assert!(clipboard.has_pending_bridge_for_tests());
-        assert!(!clipboard.has_connected_bridge_for_tests());
-        let clipboard = Rc::new(RefCell::new(clipboard));
-        VirtualClipboardState::drive_bridge_io(&clipboard, false);
-        let clipboard = clipboard.borrow();
-        assert!(clipboard.has_pending_bridge_for_tests());
-        assert!(!clipboard.has_connected_bridge_for_tests());
-    }
-
-    #[test]
     fn queued_handoff_failure_preserves_queue_and_respects_backoff() {
         let root = std::env::temp_dir().join(format!(
             "d2b-wlproxy-reconnect-test-{}-{}",
@@ -1945,7 +1750,6 @@ mod tests {
 
         assert_eq!(clipboard.pending_handoff_count_for_tests(), 2);
         assert!(!clipboard.has_connected_bridge_for_tests());
-        assert!(!clipboard.has_pending_bridge_for_tests());
         assert!(clipboard.bridge_retry_deadline().is_some());
         drop(listener);
         let _ = std::fs::remove_dir_all(root);

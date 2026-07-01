@@ -1104,7 +1104,9 @@ fn accept_bridge_streams(
                     received_fds: Vec::new(),
                     frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
                 };
-                notify_bridge_stream_selection_refresh(&mut stream);
+                if !notify_bridge_stream_selection_refresh(&mut stream) {
+                    continue;
+                }
                 streams.push(stream);
                 if validate_fd_cap(FdCapModel {
                     requested_cap: streams.len().saturating_add(1) as u64,
@@ -1483,7 +1485,7 @@ fn bridge_refresh_write_outcome(
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
             ) =>
         {
-            BridgeRefreshWriteOutcome::Keep
+            BridgeRefreshWriteOutcome::Drop
         }
         Err(_) => BridgeRefreshWriteOutcome::Drop,
     }
@@ -1507,8 +1509,18 @@ fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
                 bounded_label(&stream.vm_name)
             );
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            log::debug!(
+                "d2b-clipd: bridge refresh notify backpressured for vm={}; closing stream",
+                bounded_label(&stream.vm_name)
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            log::debug!(
+                "d2b-clipd: bridge refresh notify interrupted for vm={}; closing stream",
+                bounded_label(&stream.vm_name)
+            );
+        }
         Err(error) => {
             log::debug!(
                 "d2b-clipd: bridge refresh notify failed for vm={}: {}",
@@ -1570,8 +1582,8 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             return;
         }
     };
-    log::info!(
-        "d2b-clipd: bridge copy received vm={} source_id={} mime={} bytes={}",
+    log::debug!(
+        "d2b-clipd: bridge copy received vm={} source_id:{} mime={} bytes:{}",
         bounded_label(&vm_name),
         source_id,
         bounded_mime(&mime_type),
@@ -1730,8 +1742,8 @@ fn handle_bridge_paste_request(
         && selection.mode == PublishedSelectionMode::Selected
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
-        log::info!(
-            "d2b-clipd: bridge paste served from published selection vm={} mime={} bytes={}",
+        log::debug!(
+            "d2b-clipd: bridge paste served from published selection vm={} mime={} bytes:{}",
             bounded_label(&vm_name),
             bounded_mime(&mime_type),
             bytes.len()
@@ -1746,8 +1758,8 @@ fn handle_bridge_paste_request(
         context.history,
         &mime_type,
     );
-    log::info!(
-        "d2b-clipd: bridge paste request vm={} source_id={} mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
+    log::debug!(
+        "d2b-clipd: bridge paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
         bounded_label(&vm_name),
         source_id,
         bounded_mime(&mime_type),
@@ -1962,8 +1974,8 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         .history
                         .candidates_excluding(&mime_type, Some(&selection.history_entry_id)),
                 );
-                log::info!(
-                    "d2b-clipd: bridge selection paste request vm={} source_id={} mime={} dest_app={} dest_output={} candidates={}",
+                log::debug!(
+                    "d2b-clipd: bridge selection paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
                     bounded_label(&selection.vm_name),
                     selection.vm_source_id,
                     bounded_mime(&mime_type),
@@ -2233,6 +2245,13 @@ fn handle_picker_message(
                         std::thread::sleep(Duration::from_millis(20));
                         if let Err(error) = d2b_clipd::virtual_keyboard::paste_ctrl_v() {
                             log::warn!("d2b-clipd: host instant paste failed: {error}");
+                            let mut notifier = DesktopNotifier;
+                            d2b_clipd::notifications::emit_user_visible_failure(
+                                &mut notifier,
+                                ReasonCode::PickerCrashed,
+                                "clipboard",
+                                "host",
+                            );
                         }
                     });
                 }
@@ -2398,8 +2417,8 @@ fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8
         .name("d2b-clipd-published-write".to_owned())
         .spawn(move || {
             match write_all_nonblocking_fd(&fd, &bytes, Instant::now() + BOUNDED_READ_TIMEOUT) {
-                Ok(()) => log::info!(
-                    "d2b-clipd: published paste write complete mime={} bytes={}",
+                Ok(()) => log::debug!(
+                    "d2b-clipd: published paste write complete mime={} bytes:{}",
                     bounded_mime(&mime),
                     bytes.len()
                 ),
@@ -3473,7 +3492,7 @@ mod tests {
                 &Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
                 br#"{"type":"refresh_selection"}"#.len() + 1,
             ),
-            BridgeRefreshWriteOutcome::Keep
+            BridgeRefreshWriteOutcome::Drop
         );
     }
 

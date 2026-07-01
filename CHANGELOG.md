@@ -61,10 +61,9 @@ deprecations ship one minor release before removal.
 - Clipboard bridge hardening now binds per-VM bridge sockets under a temporary
   umask before starting background helper threads, uses anonymous memfds for
   virtual-keyboard keymaps, closes bridge streams after partial refresh writes,
-  retains pending nonblocking bridge connects for `POLLOUT` completion, queues
-  bridge handoffs across transient send backpressure, bounds guest-controlled
-  proxy diagnostic label cardinality, and prunes stale host-backed virtual
-  offers.
+  backs off failed nonblocking bridge connects, queues bridge handoffs across
+  transient send backpressure, bounds guest-controlled proxy diagnostic label
+  cardinality, and prunes stale host-backed virtual offers.
 - VM clipboard history now aggregates all MIME variants for the same exact VM
   source under an injective bridge entry id, and the bridge-published selection
   echo guard no longer depends on a time window.
