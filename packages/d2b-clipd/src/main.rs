@@ -821,6 +821,10 @@ enum PublishedSelectionMode {
     Selected,
 }
 
+fn published_selection_can_serve_bridge_paste(mode: PublishedSelectionMode) -> bool {
+    mode == PublishedSelectionMode::Selected
+}
+
 #[derive(Debug, Clone)]
 struct ClipboardHistoryEntry {
     entry_id: String,
@@ -1784,7 +1788,11 @@ fn handle_bridge_paste_request(
 
     flush_audit_events(context.audit_queue);
     flush_metric_events(context.metrics_queue);
-    if let Some(selection) = context.published_selection.as_ref()
+    if context
+        .published_selection
+        .as_ref()
+        .is_some_and(|selection| published_selection_can_serve_bridge_paste(selection.mode))
+        && let Some(selection) = context.published_selection.take()
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::debug!(
@@ -3617,6 +3625,16 @@ mod tests {
     fn published_selection_echo_is_always_suppressed_once() {
         assert!(should_suppress_published_selection_echo_state(true));
         assert!(!should_suppress_published_selection_echo_state(false));
+    }
+
+    #[test]
+    fn bridge_paste_direct_serve_requires_user_selected_publication() {
+        assert!(published_selection_can_serve_bridge_paste(
+            PublishedSelectionMode::Selected
+        ));
+        assert!(!published_selection_can_serve_bridge_paste(
+            PublishedSelectionMode::Discovery
+        ));
     }
 
     #[test]
