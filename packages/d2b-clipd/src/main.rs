@@ -3318,9 +3318,11 @@ mod tests {
     use std::sync::Mutex;
 
     static UMASK_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static HELPER_THREAD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn helper_thread_permits_are_bounded() {
+        let _guard = HELPER_THREAD_TEST_LOCK.lock().expect("helper thread lock");
         HELPER_THREADS.store(0, Ordering::Release);
         let mut permits = Vec::new();
         for _ in 0..MAX_HELPER_THREADS {
