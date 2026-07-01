@@ -8,7 +8,8 @@ let
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
-  optionalArg = cond: arg: lib.optionalString cond " ${arg}";
+  systemdExecArg = arg: builtins.replaceStrings [ "%" ] [ "%%" ] (lib.escapeShellArg arg);
+  systemdExecArgs = args: lib.concatMapStringsSep " " systemdExecArg args;
 
   clipdExec =
     if cfg.clipd.executablePath != null then cfg.clipd.executablePath
@@ -89,9 +90,9 @@ let
   } + "\n";
 
   serviceArgs =
-    "--config /etc/d2b/clipboard.json"
-    + optionalArg (pickerExec != null) "--picker ${lib.escapeShellArg pickerExec}"
-    + " --bridge-root ${lib.escapeShellArg cfg.runtime.bridgeRoot}";
+    [ "--config" "/etc/d2b/clipboard.json" ]
+    ++ lib.optionals (pickerExec != null) [ "--picker" pickerExec ]
+    ++ [ "--bridge-root" cfg.runtime.bridgeRoot ];
 in
 {
   options.d2b.site.clipboard = {
@@ -397,7 +398,7 @@ in
 
     runtime = {
       bridgeRoot = lib.mkOption {
-        type = lib.types.strMatching "^/run/d2b/clipd(/.*)?$";
+        type = lib.types.strMatching "^/run/d2b/clipd(/[A-Za-z0-9_.-]+)*$";
         default = "/run/d2b/clipd";
         description = ''
           Broker-provisioned root for per-user/per-VM clipboard bridge
@@ -518,7 +519,7 @@ in
         ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${clipdExec} ${serviceArgs}";
+        ExecStart = systemdExecArgs ([ clipdExec ] ++ serviceArgs);
         Restart = "on-failure";
         RestartSec = "2s";
         UMask = "0077";

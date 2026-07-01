@@ -1583,11 +1583,10 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         }
     };
     log::debug!(
-        "d2b-clipd: bridge copy received vm={} source_id:{} mime={} bytes:{}",
+        "d2b-clipd: bridge copy received vm={} source_id:{} mime={}",
         bounded_label(&vm_name),
         source_id,
-        bounded_mime(&mime_type),
-        bytes.len()
+        bounded_mime(&mime_type)
     );
     *context.current_host_entry = None;
 
@@ -1684,7 +1683,7 @@ fn handle_bridge_paste_request(
             reason: Some(ReasonCode::MimeRejected),
         });
         notify_bridge_paste_failure(context.notifier, ReasonCode::MimeRejected, "host", &vm_name);
-        let _ = context.audit_queue.enqueue_fail_closed(AuditEvent {
+        if let Err(reason) = context.audit_queue.enqueue_fail_closed(AuditEvent {
             request_id,
             source_realm: "host".to_owned(),
             destination_realm: vm_name,
@@ -1694,8 +1693,23 @@ fn handle_bridge_paste_request(
             attribution: d2b_clipd::policy::AttributionQuality::ExactClient,
             reason: ReasonCode::MimeRejected,
             timestamp_unix_ms: unix_millis(),
-        });
-        let _ = context.audit_queue.drain_all();
+        }) {
+            context.metrics_queue.enqueue_droppable(MetricEvent {
+                name: MetricName::AuditQueueOverflow,
+                reason: Some(reason),
+            });
+            context
+                .accept_diag
+                .warn("bridge", "audit-queue-failed", || {
+                    format!(
+                        "d2b-clipd: bridge deny audit queue failed: {}",
+                        reason.as_str()
+                    )
+                });
+            notify_bridge_paste_failure(context.notifier, reason, "host", "bridge");
+        } else {
+            let _ = context.audit_queue.drain_all();
+        }
         return;
     }
     let dest = context
@@ -1743,10 +1757,9 @@ fn handle_bridge_paste_request(
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::debug!(
-            "d2b-clipd: bridge paste served from published selection vm={} mime={} bytes:{}",
+            "d2b-clipd: bridge paste served from published selection vm={} mime={}",
             bounded_label(&vm_name),
-            bounded_mime(&mime_type),
-            bytes.len()
+            bounded_mime(&mime_type)
         );
         spawn_write_bytes_to_fd(fd, mime_type, bytes);
         return;
@@ -2002,7 +2015,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .refresh_focused_window_snapshot()
                 .unwrap_or_default();
             log::info!(
-                "d2b-clipd: source send from unknown d2b source={} mime={} opens picker",
+                "d2b-clipd: source send from unknown d2b source_id:{} mime={} opens picker",
                 source_id,
                 bounded_mime(&mime_type)
             );
@@ -2418,9 +2431,8 @@ fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8
         .spawn(move || {
             match write_all_nonblocking_fd(&fd, &bytes, Instant::now() + BOUNDED_READ_TIMEOUT) {
                 Ok(()) => log::debug!(
-                    "d2b-clipd: published paste write complete mime={} bytes:{}",
-                    bounded_mime(&mime),
-                    bytes.len()
+                    "d2b-clipd: published paste write complete mime={}",
+                    bounded_mime(&mime)
                 ),
                 Err(reason) => log::info!(
                     "d2b-clipd: published paste write failed mime={}: {}",
