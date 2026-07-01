@@ -71,6 +71,8 @@ deprecations ship one minor release before removal.
 - `d2b-clip-debug` and picker Wayland polling now process readable events
   before hangup/error handling so final Wayland events are not dropped on
   disconnect.
+- The flake's `d2b-clipd` package now installs only the daemon binary, keeping
+  diagnostic probe binaries out of the daemon package closure.
 
 ### Added
 

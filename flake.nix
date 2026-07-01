@@ -243,7 +243,7 @@
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
         d2b-clipd = rustWorkspace {
           pname = "d2b-clipd";
-          cargoBuildFlags = [ "--package" "d2b-clipd" ];
+          cargoBuildFlags = [ "--package" "d2b-clipd" "--bin" "d2b-clipd" ];
           doCheck = false;
         };
 
