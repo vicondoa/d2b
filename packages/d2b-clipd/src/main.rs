@@ -3367,22 +3367,18 @@ fn focused_window_matches_bridge_source(
 }
 
 fn should_suppress_published_selection_echo(
-    window: Option<&FocusedWindowSnapshot>,
+    _window: Option<&FocusedWindowSnapshot>,
     published_selection: Option<&PublishedSelectionState>,
-    bridge_selection: Option<&BridgeSelectionState>,
+    _bridge_selection: Option<&BridgeSelectionState>,
 ) -> bool {
     let Some(selection) = published_selection else {
         return false;
     };
-    if !selection.suppress_selection_echo {
-        return false;
-    }
-    match selection.mode {
-        PublishedSelectionMode::Selected => true,
-        PublishedSelectionMode::Discovery => {
-            should_suppress_bridge_selection_echo(window, bridge_selection)
-        }
-    }
+    should_suppress_published_selection_echo_state(selection.suppress_selection_echo)
+}
+
+fn should_suppress_published_selection_echo_state(suppress_selection_echo: bool) -> bool {
+    suppress_selection_echo
 }
 
 fn should_drop_discovery_source_send(
@@ -3597,6 +3593,12 @@ mod tests {
             Some(&source_vm_window),
             Some(&selection)
         ));
+    }
+
+    #[test]
+    fn published_selection_echo_is_always_suppressed_once() {
+        assert!(should_suppress_published_selection_echo_state(true));
+        assert!(!should_suppress_published_selection_echo_state(false));
     }
 
     #[test]
