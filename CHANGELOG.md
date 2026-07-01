@@ -79,6 +79,9 @@ deprecations ship one minor release before removal.
 - Clipboard audit and metric queues now flush metadata-only events instead of
   silently discarding them, and the clipboard user service escapes systemd
   specifiers while rejecting dot-segment bridge roots.
+- Clipboard replay now records d2b-owned data-control source ids before
+  flushing Wayland events, so VM-origin copies are not misclassified as unknown
+  host paste requests and do not open a spurious picker in the source VM.
 
 ### Added
 

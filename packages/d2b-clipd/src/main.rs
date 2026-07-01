@@ -667,6 +667,12 @@ impl EventLoop<'_> {
                 ) {
                     Ok(selection) => {
                         self.published_selection = Some(selection);
+                        if let Err(error) = self.data_control.flush() {
+                            self.accept_diag
+                                .warn("host", "claim-selection-flush-failed", || {
+                                    format!("d2b-clipd: host selection claim flush failed: {error}")
+                                });
+                        }
                         notify_bridge_selection_refresh(&mut self.bridge_streams);
                         log::info!(
                             "d2b-clipd: claimed host selection as discovery source mimes={}",
@@ -1686,6 +1692,9 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
                     });
                 return;
             }
+            selection.source = Some(source);
+            selection.data_control_source_id = source_id;
+            selection.suppress_selection_echo = true;
             if let Err(error) = context.data_control.flush() {
                 context.accept_diag.warn("bridge", "copy-flush-failed", || {
                     format!(
@@ -1695,9 +1704,6 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
                 });
                 return;
             }
-            selection.source = Some(source);
-            selection.data_control_source_id = source_id;
-            selection.suppress_selection_echo = true;
             log::debug!(
                 "d2b-clipd: bridge copy selection published vm={} mimes={}",
                 bounded_label(&selection.vm_name),
@@ -2064,6 +2070,14 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     .refresh_focused_window_snapshot()
                     .unwrap_or_default();
                 drop(fd);
+                if focused_app_matches_vm(dest.app_id.as_deref(), &selection.vm_name) {
+                    log::debug!(
+                        "d2b-clipd: ignored bridge source probe from source vm={} mime={}",
+                        bounded_label(&selection.vm_name),
+                        bounded_mime(&mime_type)
+                    );
+                    return;
+                }
                 let mut candidates = picker_bridge_candidates(selection, &mime_type);
                 candidates.extend(
                     context
@@ -2400,6 +2414,10 @@ fn publish_selected_entry_to_host(
     )?;
     let mimes_len = selection.data_by_mime.len();
     *published_selection = Some(selection);
+    if data_control.flush().is_err() {
+        *published_selection = None;
+        return Err(ReasonCode::BridgeUnavailable);
+    }
     log::info!(
         "d2b-clipd: published selected entry id={} mimes={} for instant paste",
         bounded_label(entry_id),
@@ -2422,9 +2440,6 @@ fn publish_data_control_selection(
         .map_err(|_| ReasonCode::BridgeUnavailable)?;
     data_control
         .set_selection(&source)
-        .map_err(|_| ReasonCode::BridgeUnavailable)?;
-    data_control
-        .flush()
         .map_err(|_| ReasonCode::BridgeUnavailable)?;
     Ok(PublishedSelectionState {
         data_control_source_id: source_id,
@@ -3252,6 +3267,13 @@ fn bounded_label(label: &str) -> String {
     sanitize_notification_text(label, 80)
 }
 
+fn focused_app_matches_vm(app_id: Option<&str>, vm_name: &str) -> bool {
+    let Some(app_id) = app_id else {
+        return false;
+    };
+    app_id == format!("d2b.{vm_name}") || app_id.starts_with(&format!("d2b.{vm_name}."))
+}
+
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -3340,6 +3362,27 @@ mod tests {
         drop(permit);
         drop(permits);
         assert_eq!(HELPER_THREADS.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn focused_app_matching_identifies_source_vm_windows_only() {
+        assert!(focused_app_matches_vm(
+            Some("d2b.personal-dev.firefox"),
+            "personal-dev"
+        ));
+        assert!(focused_app_matches_vm(
+            Some("d2b.personal-dev"),
+            "personal-dev"
+        ));
+        assert!(!focused_app_matches_vm(Some("firefox"), "personal-dev"));
+        assert!(!focused_app_matches_vm(
+            Some("d2b.work-ssd.firefox"),
+            "personal-dev"
+        ));
+        assert!(!focused_app_matches_vm(
+            Some("d2b.personal-devil.firefox"),
+            "personal-dev"
+        ));
     }
 
     #[test]
