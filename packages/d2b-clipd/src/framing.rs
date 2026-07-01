@@ -17,7 +17,7 @@ impl Default for OpenRequestFrameCaps {
         Self {
             max_candidates: 64,
             max_preview_bytes: 2048,
-            max_thumbnail_bytes: 0,
+            max_thumbnail_bytes: 256 * 1024,
             max_metadata_bytes: 1024,
         }
     }

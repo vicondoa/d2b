@@ -39,10 +39,10 @@ D2b does not include a default picker flake input. Install the separate
 If niri is declared through NixOS, use `programs.niri.enable = true` instead of
 `d2b.site.clipboard.niri.external = true`.
 
-## Explicit fallback keybind
+## Explicit paste action keybind
 
 When no trusted no-patch Niri paste-intent hook is available, keep native host
-cross-realm popups disabled and use the explicit fallback:
+cross-realm popups disabled and use the explicit d2b paste action:
 
 ```nix
 d2b.site.clipboard = {
@@ -52,10 +52,23 @@ d2b.site.clipboard = {
 ```
 
 Bind `d2b.site.clipboard.niri.fallback.command` (default:
-`d2b clipboard arm`) in niri. The command opens the picker and arms the chosen
-entry for the currently focused target. The user then performs a normal paste
-within the configured timeout. D2b does not synthesize Ctrl+V and the picker does
-not write to the clipboard.
+`d2b clipboard arm`) in niri. The command opens the picker for the currently
+focused target. After selection, `d2b-clipd` publishes
+the chosen payload as a d2b-owned host selection and triggers the paste replay;
+the picker itself still never writes to the clipboard.
+
+## Probe the session clipboard
+
+Use `d2b-clip-debug` from the Wayland session you want to inspect. It exercises
+only the standard unprivileged Wayland clipboard protocol:
+
+```bash
+d2b-clip-debug wl-copy "hello from this Wayland session"
+d2b-clip-debug wl-paste text/plain
+```
+
+These probes do not talk to the picker protocol, do not receive privileged
+data-control globals, and do not bypass `d2b-clipd` for VM boundary transfers.
 
 ## What the picker must not receive
 

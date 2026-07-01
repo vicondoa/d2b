@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 command-fds = "0.3"
 env_logger = "0.11"
+html2text = "0.15.3"
 log = "0.4"
 nix = { version = "0.29", default-features = false, features = ["fs", "resource", "socket", "uio"] }
 notify-rust = "4"
@@ -21,4 +22,5 @@ serde_json.workspace = true
 thiserror = "2"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

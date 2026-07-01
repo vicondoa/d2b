@@ -89,7 +89,21 @@ impl NiriJsonClient {
     }
 
     pub fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
-        self.request(&NiriRequest::FocusedWindow)
+        let value: Value = self.request(&NiriRequest::FocusedWindow)?;
+        let payload = value.get("FocusedWindow").cloned().unwrap_or(value);
+        if payload.is_null() {
+            Ok(None)
+        } else {
+            serde_json::from_value(payload)
+                .map(Some)
+                .map_err(|err| NiriIpcError::Json(err.to_string()))
+        }
+    }
+
+    pub fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        let value: Value = self.request(&NiriRequest::Workspaces)?;
+        let payload = value.get("Workspaces").cloned().unwrap_or(value);
+        serde_json::from_value(payload).map_err(|err| NiriIpcError::Json(err.to_string()))
     }
 
     pub fn read_event(&mut self) -> Result<NiriEvent, NiriIpcError> {
@@ -101,6 +115,10 @@ impl NiriJsonClient {
 impl FocusedWindowProvider for NiriJsonClient {
     fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
         NiriJsonClient::query_focused_window(self)
+    }
+
+    fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        NiriJsonClient::query_workspaces(self)
     }
 }
 
@@ -406,6 +424,10 @@ impl NiriStateCache {
 
 pub trait FocusedWindowProvider {
     fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError>;
+
+    fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +471,11 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
     }
 
     pub fn refresh_from_provider(&mut self) -> HostSelectionAttribution {
+        if let Ok(workspaces) = self.provider.query_workspaces() {
+            let _ = self
+                .cache
+                .apply_event(NiriEvent::WorkspacesChanged { workspaces });
+        }
         match self.provider.query_focused_window() {
             Ok(window) => HostSelectionAttribution {
                 window: self.cache.update_focused_window(window),
@@ -593,6 +620,64 @@ mod tests {
     }
 
     #[test]
+    fn direct_client_unwraps_niri_variant_payloads() {
+        let (client, mut server) = UnixStream::pair().expect("socketpair");
+        let server_thread = thread::spawn(move || {
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0_u8; 1];
+                server.read_exact(&mut byte).expect("read request");
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            assert_eq!(request, b"\"FocusedWindow\"\n");
+            server
+                .write_all(br#"{"Ok":{"FocusedWindow":{"id":7,"app_id":"foot","title":"shell","workspace_id":3}}}"#)
+                .expect("write response");
+            server.write_all(b"\n").expect("write newline");
+        });
+        let mut client = NiriJsonClient::from_stream(client, 256);
+
+        let focused = client
+            .query_focused_window()
+            .expect("focused response")
+            .expect("focused window");
+        server_thread.join().expect("server thread");
+        assert_eq!(focused.app_id.as_deref(), Some("foot"));
+        assert_eq!(focused.workspace_id, Some(3));
+    }
+
+    #[test]
+    fn direct_client_unwraps_niri_workspaces_payload() {
+        let (client, mut server) = UnixStream::pair().expect("socketpair");
+        let server_thread = thread::spawn(move || {
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0_u8; 1];
+                server.read_exact(&mut byte).expect("read request");
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            assert_eq!(request, b"\"Workspaces\"\n");
+            server
+                .write_all(br#"{"Ok":{"Workspaces":[{"id":3,"output":"DP-3","is_focused":true}]}}"#)
+                .expect("write response");
+            server.write_all(b"\n").expect("write newline");
+        });
+        let mut client = NiriJsonClient::from_stream(client, 256);
+
+        let workspaces = client.query_workspaces().expect("workspaces response");
+        server_thread.join().expect("server thread");
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, Some(3));
+        assert_eq!(workspaces[0].output_label.as_deref(), Some("DP-3"));
+    }
+
+    #[test]
     fn bounded_niri_line_rejects_overlong_response_before_json() {
         let mut bytes = std::io::Cursor::new(b"{not-json-but-too-long}\n".to_vec());
         let err = read_bounded_ndjson_line(&mut bytes, 4).expect_err("overlong");
@@ -602,11 +687,20 @@ mod tests {
     #[derive(Debug)]
     struct FakeFocusedWindowProvider {
         responses: Vec<Result<Option<NiriWindow>, NiriIpcError>>,
+        workspace_responses: Vec<Result<Vec<NiriWorkspace>, NiriIpcError>>,
     }
 
     impl FocusedWindowProvider for FakeFocusedWindowProvider {
         fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError> {
             self.responses.remove(0)
+        }
+
+        fn query_workspaces(&mut self) -> Result<Vec<NiriWorkspace>, NiriIpcError> {
+            if self.workspace_responses.is_empty() {
+                Ok(Vec::new())
+            } else {
+                self.workspace_responses.remove(0)
+            }
         }
     }
 
@@ -619,6 +713,7 @@ mod tests {
                 title: Some("docs".to_owned()),
                 ..NiriWindow::default()
             }))],
+            workspace_responses: Vec::new(),
         };
         let mut attributor = HostClipboardAttributor::new(provider);
 
@@ -631,9 +726,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_refresh_resolves_output_from_queried_workspaces() {
+        let provider = FakeFocusedWindowProvider {
+            responses: vec![Ok(Some(NiriWindow {
+                id: Some(9),
+                app_id: Some("firefox".to_owned()),
+                title: Some("url".to_owned()),
+                workspace_id: Some(3),
+                ..NiriWindow::default()
+            }))],
+            workspace_responses: vec![Ok(vec![NiriWorkspace {
+                id: Some(3),
+                output_label: Some("DP-3".to_owned()),
+                ..NiriWorkspace::default()
+            }])],
+        };
+        let mut attributor = HostClipboardAttributor::new(provider);
+
+        let attribution = attributor.refresh_from_provider();
+
+        assert_eq!(
+            attribution
+                .window
+                .and_then(|window| window.output_label)
+                .as_deref(),
+            Some("DP-3")
+        );
+    }
+
+    #[test]
     fn provider_failure_returns_cache_stale_guess() {
         let provider = FakeFocusedWindowProvider {
             responses: vec![Err(NiriIpcError::Io("disconnected".to_owned()))],
+            workspace_responses: Vec::new(),
         };
         let mut attributor = HostClipboardAttributor::new(provider);
         attributor

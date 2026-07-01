@@ -136,24 +136,16 @@ application's normal paste operation, host cross-realm picker popups remain
 disabled by default or require an explicit d2b-owned paste action. D2b must not
 fall back to Cursor Clip-style virtual-keyboard injection.
 
-The explicit fallback, when enabled, is a two-step native-paste workflow. A Niri
-keybind such as `Mod+Shift+V` invokes a d2b clipboard command that opens the
-picker and arms the selected entry for the current host-focused target. The user
-then performs the normal application paste within a short timeout. `d2b-clipd`
-writes into that later native transfer FD. The fallback does not synthesize
-input and the picker still never writes a clipboard. The UI must explicitly
-guide the user after arming, for example with a content-free
-`Ready to paste: press Ctrl+V` banner or notification.
-If focus changes before the native paste request arrives, the armed fallback
-state is cleared, except for the expected picker-to-target focus restoration:
-`d2b-clipd` captures the intended target before showing the picker and ignores
-the focus event that returns to that target after picker close. This fallback
-still has a residual Wayland limitation: without a trusted no-patch Niri
-paste-intent hook, the host data-control source cannot prove the exact requesting
-client. The timeout stays short and the hook remains the fully probe-resistant
-path.
-The armed fallback state is also cleared if a new native clipboard selection
-change occurs before paste, because the user may have copied something else.
+The original fallback design considered a deferred native-paste workflow where a
+Niri keybind opened the picker, armed the selected entry, and waited for the user
+to perform a later native paste action. The current implementation supersedes
+that fallback for host picker invocation: after a picker selection, `d2b-clipd`
+publishes the selected entry as the d2b-owned host selection and triggers paste
+replay for the focused target. The picker still never writes a clipboard or
+receives transfer file descriptors; only `d2b-clipd` owns clipboard publication
+and paste replay. Host destination attribution remains `FocusedWindowGuess`
+because the host compositor integration still cannot generally prove the exact
+Wayland client that consumes the data.
 
 VM lifecycle cleanup is not inferred only from proxy disconnects. `d2b-clipd`
 must receive explicit VM lifecycle events from `d2bd` or an equivalent

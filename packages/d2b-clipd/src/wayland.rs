@@ -373,6 +373,10 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for WlStat
             _ => {}
         }
     }
+
+    wayland_client::event_created_child!(WlState, ext_data_control_device_v1::ExtDataControlDeviceV1, [
+        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ext_data_control_offer_v1::ExtDataControlOfferV1, ())
+    ]);
 }
 
 // ─── ext_data_control_offer_v1 ───────────────────────────────────────────────
@@ -445,6 +449,10 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()> for WlSt
             _ => {}
         }
     }
+
+    wayland_client::event_created_child!(WlState, zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, [
+        zwlr_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, ())
+    ]);
 }
 
 // ─── zwlr_data_control_offer_v1 ──────────────────────────────────────────────

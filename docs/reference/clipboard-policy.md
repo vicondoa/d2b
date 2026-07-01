@@ -36,7 +36,7 @@ is smaller than the per-item cap, when a MIME cap exceeds the per-item cap, or
 when asymmetric protocol frame caps are invalid.
 
 `d2b.site.clipboard.ttl.*` declares history, picker request, paste intent,
-pending-FD, and fallback arming timeouts.
+pending-FD, and explicit paste action timeouts.
 
 ## Lifecycle cleanup
 
@@ -57,3 +57,12 @@ request id, app title, arbitrary app id, URL, preview, or raw MIME outside the
 closed allowlist. Formal audit delivery is fail-closed for the associated
 transfer; droppable diagnostics and metrics may be coalesced or dropped with a
 counter.
+
+## Diagnostic probes
+
+`d2b-clip-debug` is an operator/developer diagnostic binary. It uses only the
+standard unprivileged Wayland clipboard protocol of the session it runs inside.
+The probes do not talk to the picker protocol, do not receive privileged
+data-control globals, and do not bypass `d2b-clipd` for VM boundary transfers.
+See [Configure a clipboard picker](../how-to/configure-clipboard-picker.md) for
+manual probe commands.

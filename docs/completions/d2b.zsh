@@ -1731,7 +1731,7 @@ _d2b_commands() {
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
 'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
-'clipboard:Clipboard authority operations (two-step fallback paste arming via d2b-clipd)' \
+'clipboard:Clipboard authority operations (picker-driven paste replay via d2b-clipd)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b commands' commands "$@"
@@ -1852,7 +1852,7 @@ _d2b__subcmd__build_commands() {
 (( $+functions[_d2b__subcmd__clipboard_commands] )) ||
 _d2b__subcmd__clipboard_commands() {
     local commands; commands=(
-'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+'arm:Open the picker and request paste replay for the focused target' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b clipboard commands' commands "$@"
@@ -1865,7 +1865,7 @@ _d2b__subcmd__clipboard__subcmd__arm_commands() {
 (( $+functions[_d2b__subcmd__clipboard__subcmd__help_commands] )) ||
 _d2b__subcmd__clipboard__subcmd__help_commands() {
     local commands; commands=(
-'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+'arm:Open the picker and request paste replay for the focused target' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b clipboard help commands' commands "$@"
@@ -2010,7 +2010,7 @@ _d2b__subcmd__help_commands() {
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
 'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
-'clipboard:Clipboard authority operations (two-step fallback paste arming via d2b-clipd)' \
+'clipboard:Clipboard authority operations (picker-driven paste replay via d2b-clipd)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b help commands' commands "$@"
@@ -2075,7 +2075,7 @@ _d2b__subcmd__help__subcmd__build_commands() {
 (( $+functions[_d2b__subcmd__help__subcmd__clipboard_commands] )) ||
 _d2b__subcmd__help__subcmd__clipboard_commands() {
     local commands; commands=(
-'arm:Arm the fallback two-step paste workflow (Mod+Shift+V → Ctrl+V)' \
+'arm:Open the picker and request paste replay for the focused target' \
     )
     _describe -t commands 'd2b help clipboard commands' commands "$@"
 }

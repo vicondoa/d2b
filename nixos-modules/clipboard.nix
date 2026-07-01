@@ -8,7 +8,8 @@ let
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
-  optionalArg = cond: arg: lib.optionalString cond " ${arg}";
+  systemdExecArg = arg: builtins.replaceStrings [ "%" "$" ] [ "%%" "$$" ] (lib.escapeShellArg arg);
+  systemdExecArgs = args: lib.concatMapStringsSep " " systemdExecArg args;
 
   clipdExec =
     if cfg.clipd.executablePath != null then cfg.clipd.executablePath
@@ -89,9 +90,9 @@ let
   } + "\n";
 
   serviceArgs =
-    "--config /etc/d2b/clipboard.json"
-    + optionalArg (pickerExec != null) "--picker ${lib.escapeShellArg pickerExec}"
-    + " --bridge-root ${lib.escapeShellArg cfg.runtime.bridgeRoot}";
+    [ "--config" "/etc/d2b/clipboard.json" ]
+    ++ lib.optionals (pickerExec != null) [ "--picker" pickerExec ]
+    ++ [ "--bridge-root" cfg.runtime.bridgeRoot ];
 in
 {
   options.d2b.site.clipboard = {
@@ -294,7 +295,7 @@ in
       fallbackArmingSeconds = lib.mkOption {
         type = lib.types.ints.between 1 30;
         default = 5;
-        description = "Timeout for explicit fallback arming before the native paste request arrives.";
+        description = "Timeout for the explicit paste action to publish and replay the selected item.";
       };
     };
 
@@ -305,8 +306,8 @@ in
         description = "Maximum picker-to-daemon JSON line size.";
       };
       clipdToPickerMaxFrameBytes = lib.mkOption {
-        type = lib.types.ints.between 4096 1048576;
-        default = 262144;
+        type = lib.types.ints.between 4096 67108864;
+        default = 23553408;
         description = "Maximum daemon-to-picker JSON line size.";
       };
       bridgeMaxFrameBytes = lib.mkOption {
@@ -336,7 +337,7 @@ in
         default = "disabled";
         description = ''
           Trusted host paste-intent source. `disabled` keeps host cross-realm
-          native-paste popups off unless the explicit fallback is enabled.
+          native-paste popups off unless the explicit d2b paste action is enabled.
         '';
       };
       fallback = {
@@ -344,15 +345,15 @@ in
           type = lib.types.bool;
           default = false;
           description = ''
-            Enable the explicit two-step fallback: a d2b-owned action opens the
-            picker, then the user performs the normal app paste within
-            `ttl.fallbackArmingSeconds`.
+            Enable the explicit d2b-owned paste action: a Niri binding opens the
+            picker for the focused target, then d2b-clipd publishes the selected
+            item and requests paste replay before `ttl.fallbackArmingSeconds`.
           '';
         };
         command = lib.mkOption {
           type = lib.types.str;
           default = "d2b clipboard arm";
-          description = "Command operators bind in niri for the explicit fallback action.";
+          description = "Command operators bind in niri for the explicit paste action.";
         };
         notification = lib.mkOption {
           type = lib.types.bool;
@@ -397,7 +398,7 @@ in
 
     runtime = {
       bridgeRoot = lib.mkOption {
-        type = lib.types.strMatching "^/run/d2b/clipd(/.*)?$";
+        type = lib.types.strMatching "^/run/d2b/clipd(/[A-Za-z0-9_-]+)*$";
         default = "/run/d2b/clipd";
         description = ''
           Broker-provisioned root for per-user/per-VM clipboard bridge
@@ -425,6 +426,13 @@ in
           or d2b.site.clipboard.clipd.executablePath. The d2b-clipd crate is
           wired by package reference here rather than implemented by this Nix
           module.
+        '';
+      }
+      {
+        assertion = !(lib.hasInfix "/." cfg.runtime.bridgeRoot);
+        message = ''
+          d2b.site.clipboard.runtime.bridgeRoot must not contain dot path
+          segments. Use a broker-owned absolute path under /run/d2b/clipd.
         '';
       }
       {
@@ -504,7 +512,6 @@ in
       text = configJson;
       mode = "0644";
     };
-
     systemd.tmpfiles.rules = clipdBridgeRootTmpfiles;
 
     systemd.user.services.d2b-clipd = {
@@ -519,12 +526,10 @@ in
         ++ lib.optional cfg.niri.enable "NIRI_SOCKET";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${clipdExec} ${serviceArgs}";
+        ExecStart = systemdExecArgs ([ clipdExec ] ++ serviceArgs);
         Restart = "on-failure";
         RestartSec = "2s";
-        UMask = "0000";
-        RuntimeDirectory = "d2b-clipd";
-        RuntimeDirectoryMode = "0700";
+        UMask = "0077";
         NoNewPrivileges = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;

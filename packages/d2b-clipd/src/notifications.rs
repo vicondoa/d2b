@@ -87,6 +87,7 @@ fn reason_label(reason: ReasonCode) -> &'static str {
         ReasonCode::MaterializationRateLimited => "clipboard source was rate limited",
         ReasonCode::MemoryCapExceeded => "clipboard memory cap was exceeded",
         ReasonCode::AuditFailure => "audit queue is unavailable",
+        ReasonCode::VirtualKeyboardFailed => "virtual keyboard paste replay failed",
     }
 }
 
@@ -120,6 +121,7 @@ fn is_user_visible_failure(reason: ReasonCode) -> bool {
             | ReasonCode::BridgeUnavailable
             | ReasonCode::MemoryCapExceeded
             | ReasonCode::AuditFailure
+            | ReasonCode::VirtualKeyboardFailed
     )
 }
 
@@ -178,5 +180,13 @@ mod tests {
         );
         assert_eq!(notifier.notifications.len(), 2);
         assert!(notifier.notifications[1].body.contains("not configured"));
+        emit_user_visible_failure(
+            &mut notifier,
+            ReasonCode::VirtualKeyboardFailed,
+            "clipboard",
+            "Host",
+        );
+        assert_eq!(notifier.notifications.len(), 3);
+        assert!(notifier.notifications[2].body.contains("virtual keyboard"));
     }
 }

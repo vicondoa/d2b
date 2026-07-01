@@ -44,7 +44,7 @@ fn d2b_clipd_exported_in_flake_nix() {
 // ---------------------------------------------------------------------------
 
 /// The `d2b` CLI must expose a `Clipboard` top-level subcommand for the
-/// ADR 0042 two-step fallback paste arming workflow (`d2b clipboard arm`).
+/// ADR 0042 explicit picker-driven paste action (`d2b clipboard arm`).
 ///
 /// Regression gate: if the `Clipboard` variant is removed from `NativeCommand`
 /// (breaking the `d2b clipboard arm` operator path), this test fails.
@@ -57,7 +57,7 @@ fn d2b_cli_has_clipboard_subcommand() {
         lib.contains("Clipboard(ClipboardArgs)") || lib.contains("Clipboard(clipboard_args"),
         "packages/d2b/src/lib.rs must declare a `Clipboard(ClipboardArgs)` variant in \
          the NativeCommand enum. ADR 0042 requires `d2b clipboard arm` as the \
-         two-step fallback paste arming command."
+         explicit picker-driven paste command."
     );
 
     // The dispatch block must handle the Clipboard arm.
@@ -70,7 +70,7 @@ fn d2b_cli_has_clipboard_subcommand() {
     assert!(
         lib.contains("ClipboardCommand::Arm") || lib.contains("clipboard arm"),
         "packages/d2b/src/lib.rs must declare a ClipboardCommand::Arm subverb \
-         for the two-step fallback paste workflow (ADR 0042 §fallback)."
+         for the explicit picker-driven paste workflow (ADR 0042 §fallback)."
     );
 }
 

@@ -74,14 +74,14 @@ in
     expected = [ "WAYLAND_DISPLAY" "NIRI_SOCKET" ];
   };
 
-  "clipboard/user-service-runtime-directory" = {
+  "clipboard/user-service-has-no-runtime-directory" = {
     expr = {
-      directory = serviceConfig.RuntimeDirectory;
-      mode = serviceConfig.RuntimeDirectoryMode;
+      hasDirectory = serviceConfig ? RuntimeDirectory;
+      hasMode = serviceConfig ? RuntimeDirectoryMode;
     };
     expected = {
-      directory = "d2b-clipd";
-      mode = "0700";
+      hasDirectory = false;
+      hasMode = false;
     };
   };
 
@@ -97,7 +97,7 @@ in
     expected = {
       restart = "on-failure";
       noNewPrivileges = true;
-      umask = "0000";
+      umask = "0077";
       lockPersonality = true;
       restrictRealtime = true;
       restrictSuidSgid = true;
@@ -110,6 +110,58 @@ in
       && lib.hasInfix "--config /etc/d2b/clipboard.json" serviceConfig.ExecStart
       && lib.hasInfix "--bridge-root /run/d2b/clipd" serviceConfig.ExecStart;
     expected = true;
+  };
+
+  "clipboard/execstart-escapes-systemd-percent-and-dollar" = {
+    expr =
+      let
+        weirdExec = evalWith [
+          ({ ... }: {
+            d2b.site.clipboard = {
+              enable = true;
+              niri.external = true;
+              clipd.executablePath = "/run/current-system/sw/bin/d2b-clipd%";
+              picker.executablePath = "/run/current-system/sw/bin/d2b-clip-picker$";
+            };
+          })
+        ];
+        execStart = weirdExec.config.systemd.user.services.d2b-clipd.serviceConfig.ExecStart;
+      in
+      lib.hasInfix "d2b-clipd%%" execStart && lib.hasInfix "d2b-clip-picker$$" execStart;
+    expected = true;
+  };
+
+  "clipboard/bridge-root-allows-safe-child" = {
+    expr =
+      let
+        safe = evalWith [
+          ({ ... }: {
+            d2b.site.clipboard = {
+              enable = true;
+              niri.external = true;
+              clipd.package = fakeClipd;
+              runtime.bridgeRoot = "/run/d2b/clipd/child_dir-1";
+            };
+          })
+        ];
+      in
+      safe.config.d2b.site.clipboard.runtime.bridgeRoot;
+    expected = "/run/d2b/clipd/child_dir-1";
+  };
+
+  "clipboard/bridge-root-rejects-dot-segment" = {
+    expr =
+      (evalWith [
+        ({ ... }: {
+          d2b.site.clipboard = {
+            enable = true;
+            niri.external = true;
+            clipd.package = fakeClipd;
+            runtime.bridgeRoot = "/run/d2b/clipd/..";
+          };
+        })
+      ]).config.d2b.site.clipboard.runtime.bridgeRoot;
+    expectedError = { };
   };
 
   "clipboard/etc-config-mode" = {

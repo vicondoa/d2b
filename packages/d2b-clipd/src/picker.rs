@@ -254,7 +254,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                     active.read_buffer.extend_from_slice(&buf[..n]);
                     if let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n')
                     {
-                        if newline + 1 > max_frame_bytes {
+                        if newline > max_frame_bytes {
                             return Err(PickerError::Frame(
                                 FramingError::FrameTooLong {
                                     max: max_frame_bytes,
@@ -300,7 +300,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n') else {
             return Ok(PickerPoll::Incomplete);
         };
-        if newline + 1 > max_frame_bytes {
+        if newline > max_frame_bytes {
             return Err(PickerError::Frame(
                 FramingError::FrameTooLong {
                     max: max_frame_bytes,

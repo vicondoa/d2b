@@ -74,11 +74,11 @@ not block on synchronous compositor IPC.
 
 Host cross-realm native paste requires a trusted no-patch Niri hook or future
 upstream-equivalent IPC event. Focus alone is not paste intent. When that hook is
-unavailable, operators can enable the explicit fallback: a d2b-owned keybind
-opens the picker when one is configured, or directly arms the current
-d2b-owned selection when no picker is configured, then the user performs a
-normal paste within a short timeout. D2b never compensates by using
-virtual-keyboard injection.
+unavailable, operators can enable the explicit d2b paste action: a d2b-owned
+keybind opens the picker for the focused target, then `d2b-clipd` publishes the
+selected item as the d2b-owned host selection and triggers paste replay. Picker
+launch or handshake failures are reported as typed failures; the picker still
+never writes a clipboard or receives transfer FDs.
 
 ## Diagnostics
 
@@ -89,6 +89,13 @@ Relevant reasons include `connect-failed` and `handoff-failed` for the internal
 clipboard bridge, plus picker exits before selection completion. These warnings
 are operational signals only; clipboard transfer decisions and byte counts remain
 in the structured audit/metrics paths.
+
+`d2b-clip-debug` provides local Wayland probes for development and manual
+validation. The probes use only the standard unprivileged Wayland clipboard
+protocol of the session they run inside. They do not talk to the picker protocol,
+do not receive privileged data-control globals, and do not bypass `d2b-clipd`
+for VM boundary transfers. See the diagnostic commands in
+[`../how-to/configure-clipboard-picker.md`](../how-to/configure-clipboard-picker.md).
 
 ## Initial limitations
 

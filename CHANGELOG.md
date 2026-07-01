@@ -27,6 +27,9 @@ deprecations ship one minor release before removal.
   depend on host-local ACL overrides.
 - Console drainers now spawn on a daemon-owned Tokio runtime even when console
   attach requests are handled by synchronous public-socket worker threads.
+- Clipboard documentation now follows Diataxis placement more closely: the
+  architecture overview is indexed as Explanation, while `d2b-clip-debug`
+  diagnostic command examples live in the clipboard picker how-to.
 - Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
   change. Commands, packages, services, sockets, Nix options, runtime paths,
   schemas, telemetry identifiers, and generated artifacts now use only `d2b`
@@ -41,6 +44,41 @@ deprecations ship one minor release before removal.
   text-input v3 forwarding by default to avoid guest app crashes on invalid
   seat-bound requests. Clipboard-boundary allow overrides now remain denied
   and emit stable `W-*` diagnostics.
+- Clipboard paste selection offers no longer send drag-and-drop action events
+  for normal selections, fixing GTK/Firefox startup through the proxy; `d2b-clipd`
+  now requests the exact pending paste MIME from the picker and installs bridge
+  sockets with deterministic peer-connect permissions.
+- `d2b-clipd` now clears stale host-selection state when it observes its own
+  bridge-published VM selection, matches bridge send requests by source id
+  instead of MIME alone, and fulfills all queued Wayland paste FDs after one
+  picker selection so VM-to-host and VM-to-VM pastes cannot resolve to EOF after
+  the picker selects an item.
+- Clipboard picker selection now publishes the selected entry as a fresh
+  d2b-owned host selection and triggers paste replay, while VM destination paste
+  requests open the picker first and serve the replayed transfer immediately
+  from the published selection instead of holding a Wayland transfer FD across
+  picker interaction.
+- Clipboard bridge hardening now binds per-VM bridge sockets under a temporary
+  umask before starting background helper threads, uses anonymous memfds for
+  virtual-keyboard keymaps, closes bridge streams after partial refresh writes,
+  backs off failed nonblocking bridge connects, queues bridge handoffs across
+  transient send backpressure, bounds guest-controlled proxy diagnostic label
+  cardinality, and prunes stale host-backed virtual offers.
+- VM clipboard history now aggregates all MIME variants for the same exact VM
+  source under an injective bridge entry id, and the bridge-published selection
+  echo guard no longer depends on a time window.
+- `d2b-clip-debug` and picker Wayland polling now process readable events
+  before hangup/error handling so final Wayland events are not dropped on
+  disconnect.
+- The flake's `d2b-clipd` package now installs only the daemon binary, keeping
+  diagnostic probe binaries out of the daemon package closure.
+- `d2b-clipd` now emits an accurate user-visible reason when virtual-keyboard
+  paste replay fails, avoids high-cardinality `key=value` fields in routine
+  bridge logs, and sends bridge refreshes with fail-closed backpressure handling
+  on newly accepted proxy streams.
+- Clipboard audit and metric queues now flush metadata-only events instead of
+  silently discarding them, and the clipboard user service escapes systemd
+  specifiers while rejecting dot-segment bridge roots.
 
 ### Added
 
@@ -76,11 +114,11 @@ deprecations ship one minor release before removal.
   picker package/path configuration with no bundled GPL input, bridge runtime
   path policy, eval assertions, and reference docs for the authority split,
   picker protocol, and policy caps.
-- Added `d2b clipboard arm` CLI subcommand for the two-step fallback
-  paste arming workflow; it sends an arm request to the running `d2b-clipd`
+- Added `d2b clipboard arm` CLI subcommand for the explicit picker-driven
+  paste action; it sends an arm request to the running `d2b-clipd`
   control socket with bounded read/write deadlines, reports structured
-  `--json` failures, and treats picker launch/handshake failure as success
-  only when `d2b-clipd` arms the native paste fallback.
+  `--json` failures, and treats picker launch/handshake failure as a typed
+  daemon failure rather than success-shaped clipboard writes.
 - Added clipboard test gates: scaffold-detection test asserting `d2b-clipd`
   uses no `thread::park()` stub; picker handshake integration test
   (`CLIPD_TEST_PICKER` env gated); `policy_clipboard` contract tests verifying
@@ -103,6 +141,9 @@ deprecations ship one minor release before removal.
   bounded helper task instead of blocking the daemon event loop, and bridge /
   picker failures emit content-free, rate-limited warnings such as
   `connect-failed`, `handoff-failed`, and picker-closed-before-selection.
+- Added the `d2b-clip-debug wl-copy <text>` and
+  `d2b-clip-debug wl-paste [mime]` Wayland probe binary for local clipboard
+  validation without relying on session-only helper binaries.
 - Staged the console/audio contract surface: public
   `ConsoleOp`/`AudioOp` wire DTOs, audio CLI JSON DTOs, provider
   console/audio capability descriptors for Cloud Hypervisor NixOS,
