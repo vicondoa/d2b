@@ -1097,13 +1097,15 @@ fn accept_bridge_streams(
                     });
                     continue;
                 }
-                streams.push(BridgeStream {
+                let mut stream = BridgeStream {
                     vm_name: bridge.vm_name.clone(),
                     stream,
                     read_buffer: Vec::new(),
                     received_fds: Vec::new(),
                     frame_deadline: Instant::now() + STREAM_FRAME_IDLE_TIMEOUT,
-                });
+                };
+                notify_bridge_stream_selection_refresh(&mut stream);
+                streams.push(stream);
                 if validate_fd_cap(FdCapModel {
                     requested_cap: streams.len().saturating_add(1) as u64,
                     rlimit_nofile,
@@ -1488,32 +1490,34 @@ fn bridge_refresh_write_outcome(
 }
 
 fn notify_bridge_selection_refresh(streams: &mut Vec<BridgeStream>) {
+    streams.retain_mut(|stream| notify_bridge_stream_selection_refresh(stream));
+}
+
+fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
     let frame = br#"{"type":"refresh_selection"}"#;
-    streams.retain_mut(|stream| {
-        let mut bytes = Vec::with_capacity(frame.len() + 1);
-        bytes.extend_from_slice(frame);
-        bytes.push(b'\n');
-        let result = stream.stream.write(&bytes);
-        match &result {
-            Ok(n) if *n == bytes.len() => {}
-            Ok(_) => {
-                log::debug!(
-                    "d2b-clipd: bridge refresh notify partial write for vm={}; closing stream",
-                    bounded_label(&stream.vm_name)
-                );
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => {
-                log::debug!(
-                    "d2b-clipd: bridge refresh notify failed for vm={}: {}",
-                    bounded_label(&stream.vm_name),
-                    error
-                );
-            }
+    let mut bytes = Vec::with_capacity(frame.len() + 1);
+    bytes.extend_from_slice(frame);
+    bytes.push(b'\n');
+    let result = stream.stream.write(&bytes);
+    match &result {
+        Ok(n) if *n == bytes.len() => {}
+        Ok(_) => {
+            log::debug!(
+                "d2b-clipd: bridge refresh notify partial write for vm={}; closing stream",
+                bounded_label(&stream.vm_name)
+            );
         }
-        bridge_refresh_write_outcome(&result, bytes.len()) == BridgeRefreshWriteOutcome::Keep
-    });
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+        Err(error) => {
+            log::debug!(
+                "d2b-clipd: bridge refresh notify failed for vm={}: {}",
+                bounded_label(&stream.vm_name),
+                error
+            );
+        }
+    }
+    bridge_refresh_write_outcome(&result, bytes.len()) == BridgeRefreshWriteOutcome::Keep
 }
 
 fn handle_bridge_copy_selection(
@@ -2614,10 +2618,10 @@ fn picker_handshake(
     }
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
         .map_err(|e| format!("encode open_request: {e}"))?;
-    socket
+    let writer = socket
         .try_clone()
-        .map_err(|e| format!("clone for write: {e}"))?
-        .write_all(&frame)
+        .map_err(|e| format!("clone for write: {e}"))?;
+    write_all_nonblocking_stream(&writer, &frame, BOUNDED_READ_TIMEOUT)
         .map_err(|e| format!("write open_request: {e}"))?;
 
     Ok(picker_version)
