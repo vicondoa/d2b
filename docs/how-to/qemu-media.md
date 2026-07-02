@@ -113,9 +113,10 @@ d2b status dark-live
 The dry-run should show `host-reconcile → qemu-media`. After start,
 status should show the qemu-media runner, QMP readiness, source refs,
 source kind/format/read-only policy, and registry state. The host QEMU
-window is routed through the d2b Wayland proxy, so the niri
-border rule matches the proxy-rewritten app-id prefix
-`d2b.dark-live.`.
+window is routed through the d2b Wayland proxy, which draws the default
+VM identity border itself. If you intentionally disable the proxy border,
+the generated niri rule can match the proxy-rewritten app-id prefix
+`d2b.dark-live.` instead.
 
 ## 4. Hotplug configured media
 

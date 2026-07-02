@@ -32,6 +32,28 @@ pattern `^d2b\.work\.`.
 The window title prefix `[<vm>] ` behavior is preserved for
 compositors that rely on title-based VM disambiguation.
 
+### Disable proxy-drawn borders when needed
+
+When the host-side Wayland proxy is enabled, d2b draws a colored VM identity
+border around proxied Wayland toplevels by default, including qemu-media host
+windows routed through the proxy. The color comes from the same
+`d2b.vms.<vm>.ui.border` model used by generated compositor artifacts, and the
+default label is the authenticated VM name. The configured border thickness
+controls the side and bottom edges; when labels are enabled, the proxy reserves a
+taller top label band so the default label is visible.
+
+Disable the proxy-drawn border for a VM with:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.enable = false;
+```
+
+Disable only the label while keeping the colored border with:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.label.enable = false;
+```
+
 ### Xwayland must be disabled before the migration
 
 `graphics.xwayland.enable = true` is not supported during the
@@ -103,7 +125,7 @@ window-rule {
 }
 ```
 
-Or use the generated include file (see
+For non-proxied host windows, use the generated include file (see
 [Set up niri window borders for d2b VMs](./niri-vm-borders.md)):
 
 ```nix
@@ -115,9 +137,17 @@ d2b.site.ui.compositors.niri.enable = true;
 include "/etc/d2b/niri-vm-borders.kdl"
 ```
 
-The generated rules use the prefix regex `^d2b\.<vm>\.` so they
-match all windows from a given VM regardless of their original
-app-ids.
+The generated rules use the prefix regex `^d2b\.<vm>\.` for VM windows that
+need compositor-native borders. Graphics and qemu-media VMs whose proxy-drawn
+border is effective are omitted from the generated niri border rules so the same
+window does not get two borders.
+
+If you prefer niri-native borders for a proxied VM, disable the proxy border
+for that VM:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.enable = false;
+```
 
 ### 5. Restart the VM
 
@@ -146,6 +176,15 @@ Every window from the VM should have `app_id` starting with
 `d2b.<vm>.`.  If the original app-id appears without the prefix,
 confirm `crossDomainTrusted = true` and that the Wayland proxy is
 running (`d2b vm status <vm>`).
+
+### Check the proxy-drawn border
+
+Launch a Wayland client in the VM. The window should show a border using the
+VM's resolved `ui.border.activeColor`/`inactiveColor`, and should show the VM
+name label unless `graphics.waylandProxy.border.label.enable = false`.
+
+The border is drawn from a proxy-owned decoration buffer. It does not require
+the proxy to read or copy guest application buffers.
 
 ### Check the host compositor socket ownership
 

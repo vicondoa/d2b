@@ -617,6 +617,20 @@ EOF
       bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
       titlePrefix = "[${vmName}] ";
+      border = vm.graphics.waylandProxy.border;
+      borderColors = cfg._uiColors.vms.${vmName}.border;
+      borderLabelText = if border.label.text == null then vmName else border.label.text;
+      borderLabelArgs = lib.optionals (border.label.enable && borderLabelText != "") [
+        "--border-label" borderLabelText
+        "--border-label-position" border.label.position
+      ];
+      borderArgs = lib.optionals border.enable ([
+        "--border-enable"
+        "--border-color-active" borderColors.active
+        "--border-color-inactive" borderColors.inactive
+        "--border-color-urgent" borderColors.urgent
+        "--border-thickness" (toString border.thickness)
+      ] ++ borderLabelArgs);
       denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
       allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandProxy.allowGlobals;
       maxVersionArgs = lib.concatMap
@@ -645,7 +659,7 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
-      ] ++ lib.optionals config.d2b.site.clipboard.enable [
+      ] ++ borderArgs ++ lib.optionals config.d2b.site.clipboard.enable [
         "--clipd-bridge-socket" bridgeSock
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };

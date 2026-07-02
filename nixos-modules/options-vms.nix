@@ -622,6 +622,55 @@ in
           '';
         };
 
+        graphics.waylandProxy.border = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = ''
+              Enable proxy-drawn VM identity borders for this VM's
+              host-side Wayland proxy. This is effective only when the
+              `wayland-proxy` DAG node is emitted.
+            '';
+          };
+
+          thickness = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = 4;
+            example = 6;
+            description = ''
+              Thickness, in logical pixels, of the side and bottom
+              proxy-drawn VM identity border. When the label is enabled,
+              the proxy reserves a taller top label band as needed so
+              the label remains visible without changing this thickness.
+            '';
+          };
+
+          label = {
+            enable = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Show a VM identity label inside the proxy-drawn border.";
+            };
+
+            text = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "Work";
+              description = ''
+                Optional label text for the proxy-drawn VM identity border.
+                When null, the authenticated VM name is used. An empty string
+                suppresses the label text while leaving the border enabled.
+              '';
+            };
+
+            position = lib.mkOption {
+              type = lib.types.enum [ "top-left" "top-center" ];
+              default = "top-left";
+              description = "Position of the proxy-drawn VM identity label.";
+            };
+          };
+        };
+
         graphics.waylandProxy.denyGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];

@@ -20,9 +20,11 @@ use std::{
 };
 use wl_proxy::{
     client::{Client, ClientHandler},
+    fixed::Fixed,
     object::{Object, ObjectCoreApi, ObjectRcUtils},
     protocols::{
         ObjectInterface,
+        drm::wl_drm::{WlDrm, WlDrmHandler},
         linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
         stream::{
             wl_eglstream::WlEglstreamHandleType,
@@ -30,14 +32,25 @@ use wl_proxy::{
                 WlEglstreamDisplay, WlEglstreamDisplayCap, WlEglstreamDisplayHandler,
             },
         },
+        viewporter::{
+            wp_viewport::{WpViewport, WpViewportHandler},
+            wp_viewporter::{WpViewporter, WpViewporterHandler},
+        },
         wayland::{
             wl_buffer::WlBuffer,
+            wl_compositor::{WlCompositor, WlCompositorHandler},
             wl_data_device::{WlDataDevice, WlDataDeviceHandler},
             wl_data_device_manager::{WlDataDeviceManager, WlDataDeviceManagerHandler},
             wl_data_offer::{WlDataOffer, WlDataOfferHandler},
             wl_data_source::{WlDataSource, WlDataSourceHandler},
             wl_display::{WlDisplay, WlDisplayHandler},
+            wl_output::WlOutputTransform,
             wl_registry::{WlRegistry, WlRegistryHandler},
+            wl_shm::{WlShm, WlShmHandler},
+            wl_shm_pool::WlShmPool,
+            wl_subcompositor::{WlSubcompositor, WlSubcompositorHandler},
+            wl_subsurface::{WlSubsurface, WlSubsurfaceHandler},
+            wl_surface::{WlSurface, WlSurfaceHandler},
         },
         xdg_shell::{
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
@@ -57,6 +70,7 @@ use crate::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
         global_disposition,
     },
+    decoration::{SharedDecorationManager, WindowGeometry, tracking_shm_pool_handler},
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -70,6 +84,7 @@ pub struct FilterStateHandler {
     policy: Rc<FilterPolicy>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     clipboard: Rc<RefCell<VirtualClipboardState>>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl FilterStateHandler {
@@ -77,11 +92,13 @@ impl FilterStateHandler {
         policy: Rc<FilterPolicy>,
         diag: Rc<RefCell<DiagRateLimiter>>,
         clipboard: Rc<RefCell<VirtualClipboardState>>,
+        decoration: Option<SharedDecorationManager>,
     ) -> Self {
         Self {
             policy,
             diag,
             clipboard,
+            decoration,
         }
     }
 }
@@ -93,6 +110,7 @@ impl StateHandler for FilterStateHandler {
             self.policy.clone(),
             self.diag.clone(),
             self.clipboard.clone(),
+            self.decoration.clone(),
         );
     }
 }
@@ -108,11 +126,13 @@ pub fn install_client_handlers(
     policy: Rc<FilterPolicy>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     clipboard: Rc<RefCell<VirtualClipboardState>>,
+    decoration: Option<SharedDecorationManager>,
 ) {
     let handler = FilterDisplayHandler {
         policy: policy.clone(),
         diag,
         clipboard,
+        decoration,
     };
     client.display().set_handler(handler);
     log::debug!("[d2b-wlproxy] vm={} new client connected", policy.vm_name);
@@ -123,6 +143,7 @@ struct FilterDisplayHandler {
     policy: Rc<FilterPolicy>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     clipboard: Rc<RefCell<VirtualClipboardState>>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl WlDisplayHandler for FilterDisplayHandler {
@@ -135,6 +156,7 @@ impl WlDisplayHandler for FilterDisplayHandler {
             self.policy.clone(),
             self.diag.clone(),
             self.clipboard.clone(),
+            self.decoration.clone(),
         ));
     }
 }
@@ -890,6 +912,7 @@ pub struct FilterRegistryHandler {
     policy: Rc<FilterPolicy>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     clipboard: Rc<RefCell<VirtualClipboardState>>,
+    decoration: Option<SharedDecorationManager>,
     /// Server global names intentionally hidden from this client.
     hidden_globals: HashSet<u32>,
     /// Server global names actually advertised to this client, with the
@@ -924,11 +947,13 @@ impl FilterRegistryHandler {
         policy: Rc<FilterPolicy>,
         diag: Rc<RefCell<DiagRateLimiter>>,
         clipboard: Rc<RefCell<VirtualClipboardState>>,
+        decoration: Option<SharedDecorationManager>,
     ) -> Self {
         Self {
             policy,
             diag,
             clipboard,
+            decoration,
             hidden_globals: HashSet::new(),
             advertised_globals: HashMap::new(),
             synthetic_clipboard_name: None,
@@ -1052,6 +1077,11 @@ impl WlRegistryHandler for FilterRegistryHandler {
         interface: ObjectInterface,
         version: u32,
     ) {
+        if let Some(decoration) = &self.decoration {
+            decoration
+                .borrow_mut()
+                .observe_global(slf, name, interface, version);
+        }
         let (synthetic, decision) = self.prepare_global(name, interface, version);
         if let Some(global) = synthetic {
             slf.send_global(global.name, global.interface, global.version);
@@ -1133,6 +1163,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
             Some(wm_base) => {
                 wm_base.set_handler(FilterXdgWmBaseHandler {
                     policy: self.policy.clone(),
+                    decoration: self.decoration.clone(),
                 });
             }
             _ => match id.try_downcast::<WlEglstreamDisplay>() {
@@ -1140,16 +1171,57 @@ impl WlRegistryHandler for FilterRegistryHandler {
                     eglstream_display.set_handler(FilterEglstreamDisplayHandler {
                         vm: self.policy.vm_name.clone(),
                         diag: self.diag.clone(),
+                        decoration: self.decoration.clone(),
                     });
                 }
                 _ => {
+                    if let Some(compositor) = id.try_downcast::<WlCompositor>() {
+                        compositor.set_handler(FilterCompositorHandler {
+                            decoration: self.decoration.clone(),
+                        });
+                        slf.send_bind(name, compositor);
+                        return;
+                    }
+                    if let Some(shm) = id.try_downcast::<WlShm>() {
+                        shm.set_handler(FilterShmHandler {
+                            decoration: self.decoration.clone(),
+                        });
+                        slf.send_bind(name, shm);
+                        return;
+                    }
+                    if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
+                        if let Some(decoration) = &self.decoration {
+                            subcompositor.set_handler(FilterSubcompositorHandler {
+                                decoration: decoration.clone(),
+                            });
+                        }
+                        slf.send_bind(name, subcompositor);
+                        return;
+                    }
+                    if let Some(viewporter) = id.try_downcast::<WpViewporter>()
+                        && let Some(decoration) = &self.decoration
+                    {
+                        viewporter.set_handler(FilterViewporterHandler {
+                            decoration: decoration.clone(),
+                        });
+                    }
                     if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
-                        && !self.policy.dmabuf_filters.is_empty()
+                        && (!self.policy.dmabuf_filters.is_empty() || self.decoration.is_some())
                     {
                         dmabuf.set_handler(DmabufHandler::new(
                             self.policy.dmabuf_filters.clone(),
                             self.diag.clone(),
+                            self.decoration.clone(),
                         ));
+                    }
+                    if let Some(drm) = id.try_downcast::<WlDrm>() {
+                        if let Some(decoration) = &self.decoration {
+                            drm.set_handler(FilterDrmHandler {
+                                decoration: decoration.clone(),
+                            });
+                        }
+                        slf.send_bind(name, drm);
+                        return;
                     }
                 }
             },
@@ -1336,10 +1408,234 @@ impl WlDataOfferHandler for VirtualOfferHandler {
     }
 }
 
+struct FilterCompositorHandler {
+    decoration: Option<SharedDecorationManager>,
+}
+
+impl WlCompositorHandler for FilterCompositorHandler {
+    fn handle_create_surface(&mut self, slf: &Rc<WlCompositor>, id: &Rc<WlSurface>) {
+        if let Some(decoration) = &self.decoration {
+            decoration.borrow_mut().register_surface(id);
+            id.set_handler(FilterSurfaceHandler {
+                decoration: decoration.clone(),
+            });
+        }
+        slf.send_create_surface(id);
+    }
+}
+
+struct FilterSubcompositorHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlSubcompositorHandler for FilterSubcompositorHandler {
+    fn handle_destroy(&mut self, slf: &Rc<WlSubcompositor>) {
+        slf.send_destroy();
+    }
+
+    fn handle_get_subsurface(
+        &mut self,
+        slf: &Rc<WlSubcompositor>,
+        id: &Rc<WlSubsurface>,
+        surface: &Rc<WlSurface>,
+        parent: &Rc<WlSurface>,
+    ) {
+        id.set_handler(FilterSubsurfaceHandler {
+            decoration: self.decoration.clone(),
+            parent: Rc::downgrade(parent),
+            surface: Rc::downgrade(surface),
+        });
+        slf.send_get_subsurface(id, surface, parent);
+        self.decoration
+            .borrow_mut()
+            .register_guest_subsurface(surface, parent);
+    }
+}
+
+struct FilterSubsurfaceHandler {
+    decoration: SharedDecorationManager,
+    parent: Weak<WlSurface>,
+    surface: Weak<WlSurface>,
+}
+
+impl FilterSubsurfaceHandler {
+    fn raise_decoration(&self) {
+        if let Some(parent) = self.parent.upgrade() {
+            if let Some(surface) = self.surface.upgrade() {
+                self.decoration
+                    .borrow_mut()
+                    .register_guest_subsurface(&surface, &parent);
+            } else {
+                self.decoration
+                    .borrow_mut()
+                    .raise_decoration_above_guest_subsurfaces(&parent);
+            }
+        }
+    }
+}
+
+impl WlSubsurfaceHandler for FilterSubsurfaceHandler {
+    fn handle_destroy(&mut self, slf: &Rc<WlSubsurface>) {
+        slf.send_destroy();
+        self.raise_decoration();
+    }
+
+    fn handle_set_position(&mut self, slf: &Rc<WlSubsurface>, x: i32, y: i32) {
+        slf.send_set_position(x, y);
+    }
+
+    fn handle_place_above(&mut self, slf: &Rc<WlSubsurface>, sibling: &Rc<WlSurface>) {
+        slf.send_place_above(sibling);
+        self.raise_decoration();
+    }
+
+    fn handle_place_below(&mut self, slf: &Rc<WlSubsurface>, sibling: &Rc<WlSurface>) {
+        slf.send_place_below(sibling);
+        self.raise_decoration();
+    }
+
+    fn handle_set_sync(&mut self, slf: &Rc<WlSubsurface>) {
+        slf.send_set_sync();
+    }
+
+    fn handle_set_desync(&mut self, slf: &Rc<WlSubsurface>) {
+        slf.send_set_desync();
+    }
+}
+
+struct FilterViewporterHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WpViewporterHandler for FilterViewporterHandler {
+    fn handle_destroy(&mut self, slf: &Rc<WpViewporter>) {
+        slf.send_destroy();
+    }
+
+    fn handle_get_viewport(
+        &mut self,
+        slf: &Rc<WpViewporter>,
+        id: &Rc<WpViewport>,
+        surface: &Rc<WlSurface>,
+    ) {
+        self.decoration.borrow_mut().surface_get_viewport(surface);
+        id.set_handler(FilterViewportHandler {
+            decoration: self.decoration.clone(),
+            surface: Rc::downgrade(surface),
+        });
+        slf.send_get_viewport(id, surface);
+    }
+}
+
+struct FilterViewportHandler {
+    decoration: SharedDecorationManager,
+    surface: Weak<WlSurface>,
+}
+
+impl WpViewportHandler for FilterViewportHandler {
+    fn handle_destroy(&mut self, slf: &Rc<WpViewport>) {
+        if let Some(surface) = self.surface.upgrade() {
+            self.decoration
+                .borrow_mut()
+                .surface_viewport_destroyed(&surface);
+        }
+        slf.send_destroy();
+    }
+
+    fn handle_set_source(
+        &mut self,
+        slf: &Rc<WpViewport>,
+        x: Fixed,
+        y: Fixed,
+        width: Fixed,
+        height: Fixed,
+    ) {
+        if let Some(surface) = self.surface.upgrade() {
+            self.decoration
+                .borrow_mut()
+                .surface_set_viewport_source(&surface, x, y, width, height);
+        }
+        slf.send_set_source(x, y, width, height);
+    }
+
+    fn handle_set_destination(&mut self, slf: &Rc<WpViewport>, width: i32, height: i32) {
+        if let Some(surface) = self.surface.upgrade() {
+            self.decoration
+                .borrow_mut()
+                .surface_set_viewport_destination(&surface, width, height);
+        }
+        slf.send_set_destination(width, height);
+    }
+}
+
+struct FilterShmHandler {
+    decoration: Option<SharedDecorationManager>,
+}
+
+impl WlShmHandler for FilterShmHandler {
+    fn handle_create_pool(
+        &mut self,
+        slf: &Rc<WlShm>,
+        id: &Rc<WlShmPool>,
+        fd: &Rc<OwnedFd>,
+        size: i32,
+    ) {
+        if let Some(decoration) = &self.decoration {
+            id.set_handler(tracking_shm_pool_handler(decoration));
+        }
+        slf.send_create_pool(id, fd, size);
+    }
+}
+
+struct FilterSurfaceHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlSurfaceHandler for FilterSurfaceHandler {
+    fn handle_destroy(&mut self, slf: &Rc<WlSurface>) {
+        self.decoration.borrow_mut().surface_destroyed(slf);
+        // Ordinary forwarded wl_surface destruction uses wl-proxy's normal
+        // object lifetime. The shm-pool tracker owns the only cross-domain
+        // delete_id workaround because wl-cross-domain-proxy reuses pool IDs.
+        slf.send_destroy();
+    }
+
+    fn handle_attach(
+        &mut self,
+        slf: &Rc<WlSurface>,
+        buffer: Option<&Rc<WlBuffer>>,
+        x: i32,
+        y: i32,
+    ) {
+        self.decoration.borrow_mut().surface_attach(slf, buffer);
+        slf.send_attach(buffer, x, y);
+    }
+
+    fn handle_set_buffer_transform(&mut self, slf: &Rc<WlSurface>, transform: WlOutputTransform) {
+        self.decoration
+            .borrow_mut()
+            .surface_set_buffer_transform(slf, transform);
+        slf.send_set_buffer_transform(transform);
+    }
+
+    fn handle_set_buffer_scale(&mut self, slf: &Rc<WlSurface>, scale: i32) {
+        self.decoration
+            .borrow_mut()
+            .surface_set_buffer_scale(slf, scale);
+        slf.send_set_buffer_scale(scale);
+    }
+
+    fn handle_commit(&mut self, slf: &Rc<WlSurface>) {
+        slf.send_commit();
+        self.decoration.borrow_mut().surface_commit(slf);
+    }
+}
+
 /// Handler for `xdg_wm_base`: intercepts `get_xdg_surface` to install our
 /// surface handler on each new `xdg_surface`.
 struct FilterXdgWmBaseHandler {
     policy: Rc<FilterPolicy>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
@@ -1347,13 +1643,15 @@ impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
         &mut self,
         slf: &Rc<XdgWmBase>,
         xdg_surface: &Rc<XdgSurface>,
-        _surface: &Rc<wl_proxy::protocols::wayland::wl_surface::WlSurface>,
+        surface: &Rc<WlSurface>,
     ) {
         xdg_surface.set_handler(FilterXdgSurfaceHandler {
             policy: self.policy.clone(),
+            decoration: self.decoration.clone(),
+            surface: Rc::downgrade(surface),
         });
         // Forward to the compositor.
-        slf.send_get_xdg_surface(xdg_surface, _surface);
+        slf.send_get_xdg_surface(xdg_surface, surface);
     }
 }
 
@@ -1361,20 +1659,51 @@ impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
 /// toplevel handler.
 struct FilterXdgSurfaceHandler {
     policy: Rc<FilterPolicy>,
+    decoration: Option<SharedDecorationManager>,
+    surface: Weak<WlSurface>,
 }
 
 impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
     fn handle_get_toplevel(&mut self, slf: &Rc<XdgSurface>, toplevel: &Rc<XdgToplevel>) {
         toplevel.set_handler(FilterXdgToplevelHandler {
             policy: self.policy.clone(),
+            decoration: self.decoration.clone(),
+            surface_id: self.surface.upgrade().map(|surface| {
+                if let Some(decoration) = &self.decoration {
+                    decoration.borrow_mut().mark_toplevel(&surface);
+                }
+                surface.unique_id()
+            }),
         });
         slf.send_get_toplevel(toplevel);
+    }
+
+    fn handle_set_window_geometry(
+        &mut self,
+        slf: &Rc<XdgSurface>,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        let geometry = WindowGeometry::new(x, y, width, height);
+        let geometry = self.decoration.as_ref().zip(self.surface.upgrade()).map_or(
+            geometry,
+            |(decoration, surface)| {
+                decoration
+                    .borrow()
+                    .translate_window_geometry(&surface, geometry)
+            },
+        );
+        slf.send_set_window_geometry(geometry.x, geometry.y, geometry.width, geometry.height);
     }
 }
 
 /// Handler for `xdg_toplevel`: rewrites app-id and title.
 struct FilterXdgToplevelHandler {
     policy: Rc<FilterPolicy>,
+    decoration: Option<SharedDecorationManager>,
+    surface_id: Option<u64>,
 }
 
 impl XdgToplevelHandler for FilterXdgToplevelHandler {
@@ -1387,6 +1716,37 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
         let rewritten = self.policy.rewrite_title(title);
         slf.send_set_title(&rewritten);
     }
+
+    fn handle_set_fullscreen(
+        &mut self,
+        slf: &Rc<XdgToplevel>,
+        output: Option<&Rc<wl_proxy::protocols::wayland::wl_output::WlOutput>>,
+    ) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            decoration
+                .borrow_mut()
+                .toplevel_fullscreen_request(surface_id, true);
+        }
+        slf.send_set_fullscreen(output);
+    }
+
+    fn handle_unset_fullscreen(&mut self, slf: &Rc<XdgToplevel>) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            decoration
+                .borrow_mut()
+                .toplevel_fullscreen_request(surface_id, false);
+        }
+        slf.send_unset_fullscreen();
+    }
+
+    fn handle_configure(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32, states: &[u8]) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            decoration
+                .borrow_mut()
+                .toplevel_configure(surface_id, states);
+        }
+        slf.send_configure(width, height, states);
+    }
 }
 
 /// Handler for `wl_eglstream_display`: keep NVIDIA EGLStream constrained to
@@ -1396,6 +1756,7 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
 struct FilterEglstreamDisplayHandler {
     vm: String,
     diag: Rc<RefCell<DiagRateLimiter>>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
@@ -1414,6 +1775,10 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
         attribs: &[u8],
     ) {
         if eglstream_handle_is_fd(r#type) {
+            if let Some(decoration) = &self.decoration {
+                id.set_handler(crate::decoration::tracking_buffer_handler(decoration));
+                decoration.borrow_mut().record_buffer(id, width, height);
+            }
             slf.send_create_stream(id, width, height, handle, r#type, attribs);
             return;
         }
@@ -1430,6 +1795,81 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
         if let Some(client) = id.client() {
             client.disconnect();
         }
+    }
+}
+
+struct FilterDrmHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlDrmHandler for FilterDrmHandler {
+    fn handle_authenticate(&mut self, slf: &Rc<WlDrm>, id: u32) {
+        slf.send_authenticate(id);
+    }
+
+    fn handle_create_buffer(
+        &mut self,
+        slf: &Rc<WlDrm>,
+        id: &Rc<WlBuffer>,
+        name: u32,
+        width: i32,
+        height: i32,
+        stride: u32,
+        format: u32,
+    ) {
+        id.set_handler(crate::decoration::tracking_buffer_handler(&self.decoration));
+        self.decoration
+            .borrow_mut()
+            .record_buffer(id, width, height);
+        slf.send_create_buffer(id, name, width, height, stride, format);
+    }
+
+    fn handle_create_planar_buffer(
+        &mut self,
+        slf: &Rc<WlDrm>,
+        id: &Rc<WlBuffer>,
+        name: u32,
+        width: i32,
+        height: i32,
+        format: u32,
+        offset0: i32,
+        stride0: i32,
+        offset1: i32,
+        stride1: i32,
+        offset2: i32,
+        stride2: i32,
+    ) {
+        id.set_handler(crate::decoration::tracking_buffer_handler(&self.decoration));
+        self.decoration
+            .borrow_mut()
+            .record_buffer(id, width, height);
+        slf.send_create_planar_buffer(
+            id, name, width, height, format, offset0, stride0, offset1, stride1, offset2, stride2,
+        );
+    }
+
+    fn handle_create_prime_buffer(
+        &mut self,
+        slf: &Rc<WlDrm>,
+        id: &Rc<WlBuffer>,
+        name: &Rc<OwnedFd>,
+        width: i32,
+        height: i32,
+        format: u32,
+        offset0: i32,
+        stride0: i32,
+        offset1: i32,
+        stride1: i32,
+        offset2: i32,
+        stride2: i32,
+    ) {
+        id.set_handler(crate::decoration::tracking_buffer_handler(&self.decoration));
+        self.decoration
+            .borrow_mut()
+            .record_buffer(id, width, height);
+        slf.send_create_prime_buffer(
+            id, name, width, height, format, offset0, stride0, offset1, stride1, offset2, stride2,
+        );
     }
 }
 
@@ -1596,7 +2036,7 @@ mod tests {
             "work".to_owned(),
             diag,
             BridgeConfig::from_parts(
-                Some(PathBuf::from("/tmp/d2b-nonexistent-bridge.sock")),
+                Some(PathBuf::from("target/d2b-nonexistent-bridge.sock")),
                 std::path::Path::new("/run/d2b/clipd"),
                 None,
                 "work",
@@ -1696,8 +2136,8 @@ mod tests {
 
     #[test]
     fn queued_handoff_failure_preserves_queue_and_respects_backoff() {
-        let root = std::env::temp_dir().join(format!(
-            "d2b-wlproxy-reconnect-test-{}-{}",
+        let root = PathBuf::from("target").join(format!(
+            "wlp-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1767,7 +2207,7 @@ mod tests {
     #[test]
     fn filtered_globals_preserve_original_global_names() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
 
         handler.advertised_globals.insert(
             7,
@@ -1796,7 +2236,7 @@ mod tests {
     #[test]
     fn registry_handler_records_bind_denials_in_shared_limiter() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let handler = FilterRegistryHandler::new(policy(), diag.clone(), clipboard());
+        let handler = FilterRegistryHandler::new(policy(), diag.clone(), clipboard(), None);
 
         for name in 0..6 {
             handler.diag.borrow_mut().bind_denied(
@@ -1818,7 +2258,7 @@ mod tests {
     #[test]
     fn standard_clipboard_global_is_advertised_as_synthetic() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         // The generated WlRegistry send path needs a real object/client, so assert
         // the policy decision helper that handle_global uses for the synthetic path.
         let interface = ObjectInterface::WlDataDeviceManager;
@@ -1839,7 +2279,7 @@ mod tests {
     #[test]
     fn synthetic_clipboard_global_uses_reserved_high_name() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
 
         assert_eq!(handler.allocate_synthetic_clipboard_name(7), u32::MAX);
     }
@@ -1847,7 +2287,7 @@ mod tests {
     #[test]
     fn synthetic_clipboard_global_avoids_server_and_existing_names() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         handler.advertised_globals.insert(
             u32::MAX,
             AdvertisedGlobal {
@@ -1866,7 +2306,7 @@ mod tests {
     #[test]
     fn prepare_global_hides_late_host_collision_with_synthetic_clipboard_name() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         let (synthetic, first) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
         assert_eq!(
             synthetic,
@@ -1893,7 +2333,7 @@ mod tests {
     #[test]
     fn prepare_global_remove_ignores_synthetic_clipboard_name() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         let (_synthetic, _first) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
 
         assert!(!handler.prepare_global_remove(u32::MAX));
@@ -1906,7 +2346,7 @@ mod tests {
     #[test]
     fn prepare_global_hides_host_data_device_manager() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         let (_synthetic, decision) =
             handler.prepare_global(11, ObjectInterface::WlDataDeviceManager, 3);
 
@@ -1923,7 +2363,7 @@ mod tests {
             allow_globals: vec!["zwp_primary_selection_device_manager_v1".to_owned()],
             ..Default::default()
         }));
-        let mut handler = FilterRegistryHandler::new(policy, diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy, diag, clipboard(), None);
         let (_synthetic, decision) =
             handler.prepare_global(13, ObjectInterface::ZwpPrimarySelectionDeviceManagerV1, 1);
 
@@ -1935,7 +2375,7 @@ mod tests {
     #[test]
     fn prepare_global_hides_text_input_v3() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
-        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard());
+        let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
         let (_synthetic, decision) =
             handler.prepare_global(12, ObjectInterface::ZwpTextInputManagerV3, 1);
 

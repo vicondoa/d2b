@@ -1,9 +1,10 @@
 # Set up niri window borders for d2b VMs
 
 This guide covers enabling d2b's opt-in niri KDL window-rule
-generator so each graphics VM and qemu-media host window gets a
-distinct border color and the crosvm GPU sidecar's scanout window is
-hidden on the host compositor.
+generator so VMs that use compositor-native borders get a distinct
+border color and the crosvm GPU sidecar's scanout window is hidden on
+the host compositor. Graphics and qemu-media windows that already use
+proxy-drawn borders are omitted by default to avoid double borders.
 
 ## Prerequisites
 
@@ -63,10 +64,10 @@ window-rule {
 
 ### Per-VM border rules
 
-Each enabled graphics VM gets a `window-rule` block that matches its
-app-id prefix.  The host-side Wayland proxy rewrites guest
-app-ids to `d2b.<vm>.<original-app-id>`, so the regex
-`^d2b\.<vm>\.` reliably selects only windows from that VM:
+Enabled graphics VMs whose proxy-drawn border is disabled get a
+`window-rule` block that matches their app-id prefix. The host-side
+Wayland proxy rewrites guest app-ids to `d2b.<vm>.<original-app-id>`,
+so the regex `^d2b\.<vm>\.` reliably selects only windows from that VM:
 
 ```kdl
 window-rule {
@@ -87,10 +88,10 @@ color; set them in d2b if you prefer a neutral inactive color.
 
 ### qemu-media host-window rules
 
-Each enabled qemu-media VM routes the host QEMU window through the
-d2b Wayland proxy. The generated `window-rule` block matches
-the proxy-rewritten app-id prefix `d2b.<vm>.`, just like graphics VM
-windows:
+Each enabled qemu-media VM routes the host QEMU window through the d2b
+Wayland proxy. When the proxy-drawn border is disabled for that VM, the
+generated `window-rule` block matches the proxy-rewritten app-id prefix
+`d2b.<vm>.`, just like graphics VM windows:
 
 ```kdl
 window-rule {
@@ -120,6 +121,13 @@ d2b.vms.media.ui.border.activeColor = "#800080";
 ```
 
 The value must be a six-digit hex color (e.g. `#rrggbb`).
+
+To make the generated niri rule draw the visible border for a proxied VM, first
+disable the proxy-drawn border for that VM:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.enable = false;
+```
 
 To use a different inactive or urgent color, set:
 
@@ -178,8 +186,9 @@ Then update the `include` line in `config.kdl` accordingly.
    not be running. For qemu-media VMs, qemu-media itself should start
    only after the per-VM Wayland proxy is ready.
 
-4. Confirm the border rule is active by switching focus to a VM
-   window — the active border should appear in the configured color.
+4. If proxy-drawn borders are disabled for that VM, confirm the niri
+   border rule is active by switching focus to a VM window — the
+   active border should appear in the configured color.
 
 ## Why `crossDomainTrusted` is required for app-id matching
 
@@ -190,9 +199,9 @@ proxy absent, guest windows retain their original app-ids and the
 cannot match.
 
 If you enable the niri backend for a VM whose `crossDomainTrusted` is
-false, the border rule is generated but will not match any window.
-Set `crossDomainTrusted = true` to activate app-id rewriting for
-that VM.
+false, and you also disable the proxy-drawn border, the niri border rule is
+generated but will not match any window. Set `crossDomainTrusted = true` to
+activate app-id rewriting for that VM.
 
 ## Legacy options
 

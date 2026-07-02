@@ -23,6 +23,8 @@
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
+use std::num::NonZeroU32;
+
 use serde::{Deserialize, Serialize};
 
 // =========================================================================
@@ -51,6 +53,69 @@ pub struct WaylandProxyArgvInput {
     ///
     /// Default: `[<vm>] `
     pub title_prefix: String,
+    /// Effective VM identity border configuration.
+    ///
+    /// Default: `None` (no border flags emitted). Nix enables borders by
+    /// passing a populated config when the wayland-proxy node is emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<WaylandProxyBorderConfig>,
+}
+
+/// Effective proxy-drawn VM identity border settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WaylandProxyBorderConfig {
+    /// Active/focused border color as `#rrggbb`.
+    pub active_color: String,
+    /// Inactive/unfocused border color as `#rrggbb`.
+    pub inactive_color: String,
+    /// Urgent border color as `#rrggbb`.
+    pub urgent_color: String,
+    /// Side/bottom border thickness in logical pixels.
+    pub thickness: NonZeroU32,
+    /// Label configuration. Defaults to enabled VM-name label.
+    #[serde(default)]
+    pub label: WaylandProxyBorderLabelConfig,
+}
+
+/// Proxy-drawn VM identity label settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WaylandProxyBorderLabelConfig {
+    /// Whether to emit label argv.
+    pub enable: bool,
+    /// Optional label override. `None` means the authenticated VM name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Label position.
+    pub position: WaylandProxyBorderLabelPosition,
+}
+
+impl Default for WaylandProxyBorderLabelConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            text: None,
+            position: WaylandProxyBorderLabelPosition::TopLeft,
+        }
+    }
+}
+
+/// Proxy-drawn VM identity label position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WaylandProxyBorderLabelPosition {
+    TopLeft,
+    TopCenter,
+}
+
+impl WaylandProxyBorderLabelPosition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TopLeft => "top-left",
+            Self::TopCenter => "top-center",
+        }
+    }
 }
 
 impl WaylandProxyArgvInput {
@@ -67,6 +132,7 @@ impl WaylandProxyArgvInput {
             upstream_socket,
             app_id_prefix,
             title_prefix,
+            border: None,
         }
     }
 }
@@ -116,6 +182,27 @@ pub fn generate_wayland_proxy_argv(
         argv.push("--title-prefix".to_owned());
         argv.push(input.title_prefix.clone());
     }
+    if let Some(border) = &input.border {
+        argv.push("--border-enable".to_owned());
+        argv.push("--border-color-active".to_owned());
+        argv.push(border.active_color.clone());
+        argv.push("--border-color-inactive".to_owned());
+        argv.push(border.inactive_color.clone());
+        argv.push("--border-color-urgent".to_owned());
+        argv.push(border.urgent_color.clone());
+        argv.push("--border-thickness".to_owned());
+        argv.push(border.thickness.to_string());
+
+        if border.label.enable {
+            let label = border.label.text.as_deref().unwrap_or(&input.vm_name);
+            if !label.is_empty() {
+                argv.push("--border-label".to_owned());
+                argv.push(label.to_owned());
+                argv.push("--border-label-position".to_owned());
+                argv.push(border.label.position.as_str().to_owned());
+            }
+        }
+    }
 
     Ok(argv)
 }
@@ -123,6 +210,27 @@ pub fn generate_wayland_proxy_argv(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nonzero(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).expect("test thickness must be non-zero")
+    }
+
+    fn border_config() -> WaylandProxyBorderConfig {
+        WaylandProxyBorderConfig {
+            active_color: "#7fc8ff".to_owned(),
+            inactive_color: "#45475a".to_owned(),
+            urgent_color: "#f38ba8".to_owned(),
+            thickness: nonzero(4),
+            label: WaylandProxyBorderLabelConfig::default(),
+        }
+    }
+
+    fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+        argv.iter()
+            .position(|arg| arg == flag)
+            .and_then(|idx| argv.get(idx + 1))
+            .map(String::as_str)
+    }
 
     #[test]
     fn default_argv_shape() {
@@ -136,6 +244,17 @@ mod tests {
         assert_eq!(argv[listen_idx + 1], "/run/d2b-wlproxy/work/wayland-0");
         let connect_idx = argv.iter().position(|a| a == "--connect").unwrap();
         assert_eq!(argv[connect_idx + 1], "/run/d2b-wlproxy/work/upstream");
+    }
+
+    #[test]
+    fn default_argv_omits_border_flags() {
+        let input = WaylandProxyArgvInput::for_vm("work");
+        let argv = generate_wayland_proxy_argv(&input).expect("valid input");
+        assert!(!argv.contains(&"--border-enable".to_owned()));
+        assert!(flag_value(&argv, "--border-color-active").is_none());
+        assert!(flag_value(&argv, "--border-thickness").is_none());
+        assert!(flag_value(&argv, "--border-label").is_none());
+        assert!(flag_value(&argv, "--border-label-position").is_none());
     }
 
     #[test]
@@ -180,5 +299,58 @@ mod tests {
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         let prefix_idx = argv.iter().position(|a| a == "--title-prefix").unwrap();
         assert_eq!(argv[prefix_idx + 1], "[dev] ");
+    }
+
+    #[test]
+    fn enabled_border_flags_include_colors_thickness_and_default_label() {
+        let mut input = WaylandProxyArgvInput::for_vm("work");
+        input.border = Some(border_config());
+
+        let argv = generate_wayland_proxy_argv(&input).expect("valid");
+
+        assert!(argv.contains(&"--border-enable".to_owned()));
+        assert_eq!(flag_value(&argv, "--border-color-active"), Some("#7fc8ff"));
+        assert_eq!(
+            flag_value(&argv, "--border-color-inactive"),
+            Some("#45475a")
+        );
+        assert_eq!(flag_value(&argv, "--border-color-urgent"), Some("#f38ba8"));
+        assert_eq!(flag_value(&argv, "--border-thickness"), Some("4"));
+        assert_eq!(flag_value(&argv, "--border-label"), Some("work"));
+        assert_eq!(
+            flag_value(&argv, "--border-label-position"),
+            Some("top-left")
+        );
+    }
+
+    #[test]
+    fn custom_border_label_and_position_are_emitted() {
+        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut border = border_config();
+        border.label.text = Some("Work Desktop".to_owned());
+        border.label.position = WaylandProxyBorderLabelPosition::TopCenter;
+        input.border = Some(border);
+
+        let argv = generate_wayland_proxy_argv(&input).expect("valid");
+
+        assert_eq!(flag_value(&argv, "--border-label"), Some("Work Desktop"));
+        assert_eq!(
+            flag_value(&argv, "--border-label-position"),
+            Some("top-center")
+        );
+    }
+
+    #[test]
+    fn disabled_border_label_omits_label_flags() {
+        let mut input = WaylandProxyArgvInput::for_vm("work");
+        let mut border = border_config();
+        border.label.enable = false;
+        input.border = Some(border);
+
+        let argv = generate_wayland_proxy_argv(&input).expect("valid");
+
+        assert!(argv.contains(&"--border-enable".to_owned()));
+        assert!(flag_value(&argv, "--border-label").is_none());
+        assert!(flag_value(&argv, "--border-label-position").is_none());
     }
 }

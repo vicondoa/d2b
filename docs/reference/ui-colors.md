@@ -48,6 +48,34 @@ window loses focus. Operators who prefer a neutral inactive border should
 set `d2b.vms.<vm>.ui.border.inactiveColor` once in d2b instead of
 adding compositor-local override rules.
 
+## Wayland proxy borders
+
+For graphics VMs using the host-side Wayland proxy, and for qemu-media host
+windows routed through that proxy, d2b can draw the VM identity border inside
+`d2b-wayland-proxy` itself. Proxy-drawn borders are enabled by default when the
+proxy is active and can be disabled per VM:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.enable = false;
+```
+
+The proxy uses the same resolved VM border colors documented above. It draws
+only proxy-owned decoration pixels; guest application buffers and dma-bufs stay
+forwarded as Wayland objects and file descriptors and are not copied or sampled
+to render the border. The configured border thickness applies to the side and
+bottom edges; with labels enabled, the proxy reserves a taller top label band
+so the authenticated VM-name label is visible at the default thickness.
+
+Proxy borders are visual-only. They do not intercept pointer input, and
+popup/menu positioning remains based on the guest surface geometry.
+
+The default label is the authenticated VM name. Disable the label while keeping
+the colored border with:
+
+```nix
+d2b.vms.work.graphics.waylandProxy.border.label.enable = false;
+```
+
 ## JSON artifact
 
 When enabled, d2b writes `/etc/d2b/ui-colors.json` by default.
@@ -134,6 +162,16 @@ d2b.site.ui.compositors.niri.enable = true;
 D2b writes `/etc/d2b/niri-vm-borders.kdl` by default. The KDL
 renders `active-color`, `inactive-color`, and `urgent-color` from the same
 resolved VM border model used by the JSON and GTK CSS artifacts.
+
+The niri backend remains useful for host windows that do not pass through
+`d2b-wayland-proxy`, and for operators who prefer compositor-native rules.
+Wayland toplevels routed through the host-side proxy get compositor-agnostic
+proxy borders by default.
+
+Generated niri rules omit graphics and qemu-media VMs whose proxy-drawn border
+is effective, so enabling the niri backend does not create two borders for the
+same proxied window. To use niri-native borders for such a VM instead, disable
+the proxy border for that VM.
 
 The legacy `d2b.site.niriVmBorders` and `d2b.vms.<vm>.graphics.niriBorderColor`
 options remain compatibility inputs for one release, but new

@@ -37,6 +37,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Default proxy-drawn VM-name labels now render in a dedicated top band while
+  preserving the default 4-pixel side and bottom border thickness.
+- `d2b-wayland-proxy` now preserves the last committed surface size after a
+  guest destroys the current buffer object, while still clearing decorations on
+  committed `attach(NULL)`.
 - USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
   spawn failures as retryable instead of reporting the helper as missing.
 - `d2b-wayland-proxy` now advertises its virtual clipboard manager even when
@@ -95,6 +100,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `d2b-wayland-proxy` now draws compositor-agnostic, per-VM colored borders
+  with an optional VM-name label for proxied graphics windows. Borders use the
+  existing `d2b.vms.<vm>.ui.border` color model, are enabled by default with
+  the Wayland proxy, and can be disabled per VM.
 - Added the `d2b-clipd` Rust crate with picker NDJSON DTOs, bounded framing,
   clipboard policy primitives, FD safety models, picker supervision,
   fail-closed audit / droppable metrics queues, host data-control integration,
