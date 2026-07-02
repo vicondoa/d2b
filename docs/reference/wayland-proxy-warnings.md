@@ -1,27 +1,45 @@
 # `graphics.waylandProxy` warning catalog
 
-> **Reference** for the advisory runtime diagnostics the d2b
-> Wayland proxy emits when operator configuration deviates from
-> the secure baseline or touches a rule d2b classifies as required
-> high-risk, clipboard-boundary, or unclassified.
+> **Reference** for the advisory runtime diagnostics the d2b Wayland
+> proxy emits for policy overrides and operational proxy events.
 
 > **Status:** live for
-> `d2b.vms.<vm>.graphics.waylandProxy.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
+> `d2b.vms.<vm>.graphics.waylandProxy.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging,border.*}`.
 > The proxy emits these diagnostics at runtime in the
 > `d2b-wayland-proxy` journal stream. They are not NixOS eval-time
 > `config.warnings`.
 
 Warnings are **advisory**: the NixOS configuration still evaluates and
-builds when a warning condition is met. The warning is emitted by the
-host-side proxy process when the VM starts.
+builds when a warning condition is met. Policy warnings are emitted by the
+host-side proxy process when the VM starts; operational diagnostics are emitted
+when the corresponding runtime event occurs.
 
 Secure defaults emit **zero** `waylandProxy` warnings. A clean
 configuration with no overrides produces no output from this catalog.
 
 The `W-*` names below are emitted in `d2b-wayland-proxy` policy-warning
-messages and are stable grep targets for operator diagnostics.
+messages. Operational event/reason pairs, such as
+`border-decoration / draw-failed`, are also stable grep targets for operator
+diagnostics.
 
 ## Warning conditions
+
+### border-decoration / draw-failed
+
+**Trigger:** the proxy could not allocate or submit its own border decoration
+buffer for a guest toplevel.
+
+**Why it exists:** Decoration drawing is intentionally best-effort. Guest
+application buffers continue through the normal Wayland path, while d2b skips
+or removes the proxy-owned border for that surface. The diagnostic is
+rate-limited and does not include guest window titles, app IDs, or buffer
+contents.
+
+**How to override intentionally:** No configuration is required. If this repeats
+for ordinary window sizes, report it as a bug; if it appears only for extremely
+large guest surfaces, d2b is enforcing its resource-exhaustion guard.
+
+---
 
 ### W-DENY-BASELINE
 

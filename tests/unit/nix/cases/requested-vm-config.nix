@@ -4,6 +4,12 @@ let
   requested = mkEval [
     (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
   ];
+  requestedNiriNative = mkEval [
+    (import (flakeRoot + "/examples/qemu-media-dark-live.nix"))
+    ({ ... }: {
+      d2b.vms."dark-live".graphics.waylandProxy.border.enable = false;
+    })
+  ];
   cfg = requested.config;
   vm = cfg.d2b.vms."dark-live";
   hostJson = cfg.d2b._bundle.hostJson.data;
@@ -13,6 +19,7 @@ let
   netProcess = lib.findFirst (entry: entry.vm == "sys-dark-net") null processes;
   netCloudHypervisorNode = lib.findFirst (node: node.id == "cloud-hypervisor") null netProcess.nodes;
   kdl = cfg.environment.etc."d2b/niri-vm-borders.kdl".text;
+  niriNativeKdl = requestedNiriNative.config.environment.etc."d2b/niri-vm-borders.kdl".text;
   rawArtifactText = builtins.toJSON {
     inherit (hostJson) qemuMedia vmRuntimes;
     niri = kdl;
@@ -187,9 +194,9 @@ in
 
   "requested-vm-config/purple-qemu-media-niri-border" = {
     expr =
-      lib.hasInfix "// Borders for qemu-media VM host window: dark-live" kdl
-      && lib.hasInfix ''match app-id=r#"^d2b\.dark-live\."#'' kdl
-      && lib.hasInfix ''active-color "#301934"'' kdl;
+      lib.hasInfix "// Borders for qemu-media VM host window: dark-live" niriNativeKdl
+      && lib.hasInfix ''match app-id=r#"^d2b\.dark-live\."#'' niriNativeKdl
+      && lib.hasInfix ''active-color "#301934"'' niriNativeKdl;
     expected = true;
   };
 }

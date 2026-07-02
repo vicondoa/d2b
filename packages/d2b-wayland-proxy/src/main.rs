@@ -27,6 +27,7 @@ use d2b_wayland_proxy::filter::{
 };
 use d2b_wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
+    decoration::{BorderConfig, Color, DecorationManager, LabelPosition, sanitize_label},
     diag::{DiagRateLimiter, bounded_error_detail},
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
@@ -108,6 +109,50 @@ struct Args {
     /// Maximum reconnect backoff for the future d2b-clipd bridge.
     #[arg(long = "clipd-bridge-reconnect-max-ms", default_value_t = 5000)]
     clipd_bridge_reconnect_max_ms: u64,
+
+    /// Enable proxy-owned VM identity borders.
+    #[arg(long = "border-enable", default_value_t = false)]
+    border_enable: bool,
+
+    /// Border color when the VM window is active.
+    #[arg(
+        long = "border-color-active",
+        value_name = "#rrggbb",
+        default_value = "#3caaff"
+    )]
+    border_color_active: Color,
+
+    /// Border color when the VM window is inactive.
+    #[arg(
+        long = "border-color-inactive",
+        value_name = "#rrggbb",
+        default_value = "#5f5f5f"
+    )]
+    border_color_inactive: Color,
+
+    /// Border color reserved for urgent VM windows.
+    #[arg(
+        long = "border-color-urgent",
+        value_name = "#rrggbb",
+        default_value = "#ff5656"
+    )]
+    border_color_urgent: Color,
+
+    /// Side/bottom border thickness in surface-local pixels.
+    #[arg(long = "border-thickness", value_parser = parse_positive_u32, default_value_t = d2b_wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS)]
+    border_thickness: u32,
+
+    /// Optional text rendered into the top border.
+    #[arg(long = "border-label", value_name = "TEXT")]
+    border_label: Option<String>,
+
+    /// Position of the optional border label.
+    #[arg(
+        long = "border-label-position",
+        value_name = "top-left|top-center",
+        default_value = "top-left"
+    )]
+    border_label_position: LabelPosition,
 }
 
 fn parse_max_version(s: &str) -> Result<(String, u32), String> {
@@ -125,6 +170,17 @@ fn parse_dmabuf_filters(values: &[String]) -> Result<Vec<DmabufFilter>, String> 
         .iter()
         .map(|value| parse_dmabuf_filter(value))
         .collect::<Result<Vec<_>, _>>()
+}
+
+fn parse_positive_u32(value: &str) -> Result<u32, String> {
+    let parsed: u32 = value
+        .parse()
+        .map_err(|_| format!("expected positive u32, got `{value}`"))?;
+    if parsed == 0 {
+        Err("border thickness must be positive".to_owned())
+    } else {
+        Ok(parsed)
+    }
 }
 
 fn main() {
@@ -199,6 +255,27 @@ fn main() {
         );
     }
 
+    let border_config = BorderConfig {
+        enabled: args.border_enable,
+        active: args.border_color_active,
+        inactive: args.border_color_inactive,
+        urgent: args.border_color_urgent,
+        thickness: args.border_thickness,
+        label: args.border_label.as_deref().and_then(sanitize_label),
+        label_position: args.border_label_position,
+    };
+    if border_config.enabled() {
+        log::info!(
+            "[d2b-wlproxy] vm={} border-decoration=enabled thickness={} label={}",
+            args.vm_name,
+            border_config.thickness,
+            border_config
+                .label
+                .as_ref()
+                .map_or("disabled", |_| "enabled")
+        );
+    }
+
     // Step 3: prove the upstream compositor is reachable before exposing a
     // listen socket. Each accepted client gets its own upstream connection below.
     match build_state(&args.connect) {
@@ -245,7 +322,7 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    accept_loop(listener, args.connect, policy, bridge_config);
+    accept_loop(listener, args.connect, policy, bridge_config, border_config);
 }
 
 fn accept_loop(
@@ -253,6 +330,7 @@ fn accept_loop(
     upstream: String,
     policy: FilterPolicy,
     bridge_config: BridgeConfig,
+    border_config: BorderConfig,
 ) {
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
@@ -267,6 +345,12 @@ fn accept_loop(
         diag.clone(),
         bridge_config,
     )));
+    let decoration = border_config.enabled().then(|| {
+        Rc::new(RefCell::new(DecorationManager::new(
+            border_config,
+            diag.clone(),
+        )))
+    });
     let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {
@@ -280,6 +364,7 @@ fn accept_loop(
         policy.clone(),
         diag.clone(),
         clipboard.clone(),
+        decoration.clone(),
     ));
     VirtualClipboardState::drive_bridge_io(&clipboard, false);
 
@@ -368,6 +453,7 @@ fn accept_loop(
                             policy.clone(),
                             diag.clone(),
                             clipboard.clone(),
+                            decoration.clone(),
                         );
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -484,6 +570,62 @@ fn error_source_chain(error: &dyn std::error::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_cli_defaults_keep_decorations_disabled() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+            "--vm-name",
+            "work",
+        ])
+        .expect("parse args");
+
+        assert!(!args.border_enable);
+        assert_eq!(
+            args.border_thickness,
+            d2b_wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS
+        );
+        assert!(args.border_label.is_none());
+    }
+
+    #[test]
+    fn border_cli_parses_colors_thickness_and_label_position() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+            "--vm-name",
+            "work",
+            "--border-enable",
+            "--border-color-active",
+            "#112233",
+            "--border-color-inactive",
+            "#445566",
+            "--border-color-urgent",
+            "#778899",
+            "--border-thickness",
+            "9",
+            "--border-label",
+            "work vm",
+            "--border-label-position",
+            "top-center",
+        ])
+        .expect("parse args");
+
+        assert!(args.border_enable);
+        assert_eq!(args.border_color_active, Color::rgb(0x11, 0x22, 0x33));
+        assert_eq!(args.border_color_inactive, Color::rgb(0x44, 0x55, 0x66));
+        assert_eq!(args.border_color_urgent, Color::rgb(0x77, 0x88, 0x99));
+        assert_eq!(args.border_thickness, 9);
+        assert_eq!(args.border_label.as_deref(), Some("work vm"));
+        assert_eq!(args.border_label_position, LabelPosition::TopCenter);
+    }
 
     #[test]
     fn interrupted_accept_is_recoverable() {

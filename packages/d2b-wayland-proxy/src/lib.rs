@@ -6,6 +6,7 @@
 pub mod attribution;
 pub mod bridge;
 pub mod clipboard;
+pub mod decoration;
 pub mod diag;
 pub mod dmabuf;
 pub mod filter;

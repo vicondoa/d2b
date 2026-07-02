@@ -631,6 +631,19 @@ in
           "d2b.media."
           "--title-prefix"
           "[media] "
+          "--border-enable"
+          "--border-color-active"
+          "#c8a0e0"
+          "--border-color-inactive"
+          "#c8a0e0"
+          "--border-color-urgent"
+          "#c8a0e0"
+          "--border-thickness"
+          "4"
+          "--border-label"
+          "media"
+          "--border-label-position"
+          "top-left"
         ];
       };
     };
@@ -656,6 +669,11 @@ in
       noMediaPathInArgv = true;
       noVhostNetPathInArgv = true;
     };
+  };
+
+  "external-vm-kind/qemu-media-reports-no-guest-wayland-proxy-capability" = {
+    expr = positiveManifest.runtime.operationCapabilities.display.waylandProxy;
+    expected = false;
   };
 
   "external-vm-kind/qemu-media-tap-sync-lock-uses-resource-id" = {

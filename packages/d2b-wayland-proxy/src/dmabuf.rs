@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ffi::CString,
     fs::File,
     io::{self, Seek, SeekFrom, Write},
@@ -22,7 +22,10 @@ use wl_proxy::protocols::{
     wayland::{wl_buffer::WlBuffer, wl_surface::WlSurface},
 };
 
-use crate::diag::DiagRateLimiter;
+use crate::{
+    decoration::{SharedDecorationManager, tracking_buffer_handler},
+    diag::DiagRateLimiter,
+};
 
 pub const LINEAR_MODIFIER: u64 = 0;
 pub const INVALID_MODIFIER: u64 = 0x00ff_ffff_ffff_ffff;
@@ -204,11 +207,20 @@ fn parse_u64(s: &str) -> Option<u64> {
 pub struct DmabufHandler {
     filters: Arc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl DmabufHandler {
-    pub fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
-        Self { filters, diag }
+    pub fn new(
+        filters: Arc<DmabufFilterList>,
+        diag: Rc<RefCell<DiagRateLimiter>>,
+        decoration: Option<SharedDecorationManager>,
+    ) -> Self {
+        Self {
+            filters,
+            diag,
+            decoration,
+        }
     }
 }
 
@@ -265,6 +277,7 @@ impl ZwpLinuxDmabufV1Handler for DmabufHandler {
         params_id.set_handler(DmabufBufferParamsHandler::new(
             self.filters.clone(),
             self.diag.clone(),
+            self.decoration.clone(),
         ));
         slf.send_create_params(params_id);
     }
@@ -289,8 +302,16 @@ impl DmabufPlane {
 struct DmabufBufferParamsHandler {
     filters: Arc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
+    decoration: Option<SharedDecorationManager>,
     planes: Vec<DmabufPlane>,
     invalid_plane_count: usize,
+    pending_create_dimensions: VecDeque<BufferDimensions>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BufferDimensions {
+    width: i32,
+    height: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,12 +324,18 @@ enum DmabufCreateAction {
 }
 
 impl DmabufBufferParamsHandler {
-    fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
+    fn new(
+        filters: Arc<DmabufFilterList>,
+        diag: Rc<RefCell<DiagRateLimiter>>,
+        decoration: Option<SharedDecorationManager>,
+    ) -> Self {
         Self {
             filters,
             diag,
+            decoration,
             planes: Vec::new(),
             invalid_plane_count: 0,
+            pending_create_dimensions: VecDeque::new(),
         }
     }
 
@@ -495,7 +522,7 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
 impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
     fn handle_add(
         &mut self,
-        _slf: &Rc<ZwpLinuxBufferParamsV1>,
+        slf: &Rc<ZwpLinuxBufferParamsV1>,
         fd: &Rc<OwnedFd>,
         plane_idx: u32,
         offset: u32,
@@ -503,6 +530,10 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         modifier_hi: u32,
         modifier_lo: u32,
     ) {
+        if self.filters.is_empty() {
+            slf.send_add(fd, plane_idx, offset, stride, modifier_hi, modifier_lo);
+            return;
+        }
         self.store_plane(fd, plane_idx, offset, stride, modifier_hi, modifier_lo);
     }
 
@@ -514,11 +545,21 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
+        if self.filters.is_empty() {
+            self.pending_create_dimensions
+                .push_back(BufferDimensions { width, height });
+            slf.send_create(width, height, format, flags);
+            return;
+        }
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: None,
             diag: self.diag.clone(),
         };
+        if matches!(self.create_action(format), DmabufCreateAction::Forward) {
+            self.pending_create_dimensions
+                .push_back(BufferDimensions { width, height });
+        }
         self.handle_create_with_sink(&mut sink, width, height, format, flags);
     }
 
@@ -531,12 +572,47 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
+        if self.filters.is_empty() {
+            if let Some(decoration) = &self.decoration {
+                buffer_id.set_handler(tracking_buffer_handler(decoration));
+                decoration
+                    .borrow_mut()
+                    .record_buffer(buffer_id, width, height);
+            }
+            slf.send_create_immed(buffer_id, width, height, format, flags);
+            return;
+        }
         let mut sink = ProxyCreateSink {
             params: slf,
             buffer: Some(buffer_id),
             diag: self.diag.clone(),
         };
+        if matches!(self.create_action(format), DmabufCreateAction::Forward)
+            && let Some(decoration) = &self.decoration
+        {
+            buffer_id.set_handler(tracking_buffer_handler(decoration));
+            decoration
+                .borrow_mut()
+                .record_buffer(buffer_id, width, height);
+        }
         self.handle_create_immed_with_sink(&mut sink, width, height, format, flags);
+    }
+
+    fn handle_created(&mut self, slf: &Rc<ZwpLinuxBufferParamsV1>, buffer: &Rc<WlBuffer>) {
+        if let (Some(dimensions), Some(decoration)) =
+            (self.pending_create_dimensions.pop_front(), &self.decoration)
+        {
+            buffer.set_handler(tracking_buffer_handler(decoration));
+            decoration
+                .borrow_mut()
+                .record_buffer(buffer, dimensions.width, dimensions.height);
+        }
+        slf.send_created(buffer);
+    }
+
+    fn handle_failed(&mut self, slf: &Rc<ZwpLinuxBufferParamsV1>) {
+        self.pending_create_dimensions.pop_front();
+        slf.send_failed();
     }
 }
 
@@ -837,7 +913,7 @@ mod tests {
                 modifier: Some(LINEAR_MODIFIER),
             }],
         ));
-        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
         handler.planes.push(DmabufPlane {
             fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
             plane_idx: 0,
@@ -957,6 +1033,96 @@ mod tests {
     }
 
     #[test]
+    fn create_dimensions_are_queued_for_multiple_async_creates() {
+        let filters = Arc::new(DmabufFilterList::default());
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
+
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 640,
+                height: 480,
+            });
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 800,
+                height: 600,
+            });
+
+        assert_eq!(
+            handler.pending_create_dimensions.pop_front(),
+            Some(BufferDimensions {
+                width: 640,
+                height: 480
+            })
+        );
+        assert_eq!(
+            handler.pending_create_dimensions.pop_front(),
+            Some(BufferDimensions {
+                width: 800,
+                height: 600
+            })
+        );
+    }
+
+    #[test]
+    fn failed_create_drops_oldest_pending_dimensions() {
+        let filters = Arc::new(DmabufFilterList::default());
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 640,
+                height: 480,
+            });
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 800,
+                height: 600,
+            });
+
+        handler.pending_create_dimensions.pop_front();
+
+        assert_eq!(
+            handler.pending_create_dimensions.pop_front(),
+            Some(BufferDimensions {
+                width: 800,
+                height: 600,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_create_dimensions_still_reserve_queue_slot() {
+        let filters = Arc::new(DmabufFilterList::default());
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 0,
+                height: 480,
+            });
+        handler
+            .pending_create_dimensions
+            .push_back(BufferDimensions {
+                width: 800,
+                height: 600,
+            });
+
+        handler.pending_create_dimensions.pop_front();
+
+        assert_eq!(
+            handler.pending_create_dimensions.pop_front(),
+            Some(BufferDimensions {
+                width: 800,
+                height: 600,
+            })
+        );
+    }
+
+    #[test]
     fn allowed_create_immed_forwards_planes_before_create_immed() {
         let mut sink = FakeCreateSink::default();
         handler_with_plane(0x0100_0000_0000_0001).handle_create_immed_with_sink(
@@ -1055,7 +1221,7 @@ mod tests {
     fn invalid_plane_set_fails_create_without_unbounded_examples() {
         let format = 0x3432_5258u32;
         let filters = Arc::new(DmabufFilterList::new(&[], &[]));
-        let mut handler = DmabufBufferParamsHandler::new(filters, diag());
+        let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
         handler.invalid_plane_count = 100;
 
         assert_eq!(

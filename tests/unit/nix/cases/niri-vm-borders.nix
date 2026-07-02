@@ -76,12 +76,23 @@ let
   };
 
   etcOf = overrides: (mkEval ([ base ] ++ overrides)).config.environment.etc;
+  cfgOf = overrides: (mkEval ([ base ] ++ overrides)).config;
   kdlKey = "d2b/niri-vm-borders.kdl";
   jsonKey = "d2b/ui-colors.json";
   cssKey = "d2b/ui-colors.css";
   kdlText = etc: if builtins.hasAttr kdlKey etc then etc.${kdlKey}.text else "";
   jsonText = etc: if builtins.hasAttr jsonKey etc then etc.${jsonKey}.text else "";
   cssText = etc: if builtins.hasAttr cssKey etc then etc.${cssKey}.text else "";
+  processDag = cfg: builtins.head (builtins.filter (dag: dag.vm == "work") cfg.d2b._bundle.processesJson.data.vms);
+  processNode = cfg: id: builtins.head (builtins.filter (node: node.id == id) (processDag cfg).nodes);
+  flagValue = flag: argv:
+    let
+      positions =
+        builtins.filter
+          (i: builtins.elemAt argv i == flag)
+          (builtins.genList (i: i) (builtins.length argv));
+    in
+    if positions == [ ] then null else builtins.elemAt argv ((builtins.head positions) + 1);
 
   disabledEtc = etcOf [ ];
   uiEtc = etcOf [ ({ ... }: { d2b.site.ui.enable = true; }) ];
@@ -89,20 +100,34 @@ let
   uiCss = cssText uiEtc;
   newNiriEtc = etcOf [ ({ ... }: { d2b.site.ui.compositors.niri.enable = true; }) ];
   newNiriKdl = kdlText newNiriEtc;
+  niriOptOutKdl = kdlText (etcOf [
+    ({ ... }: {
+      d2b.site.ui.compositors.niri.enable = true;
+      d2b.vms.work.graphics.waylandProxy.border.enable = false;
+    })
+  ]);
   enabledEtc = etcOf [ ({ ... }: { d2b.site.niriVmBorders.enable = true; }) ];
   enabledKdl = kdlText enabledEtc;
   colorKdl = kdlText (etcOf [
     ({ ... }: {
       d2b.site.ui.compositors.niri.enable = true;
+      d2b.vms.work.graphics.waylandProxy.border.enable = false;
       d2b.vms.work.ui.border = {
         activeColor = "#AABBCC";
         urgentColor = "#112233";
       };
     })
   ]);
+  niriNativeWorkKdl = kdlText (etcOf [
+    ({ ... }: {
+      d2b.site.niriVmBorders.enable = true;
+      d2b.vms.work.graphics.waylandProxy.border.enable = false;
+    })
+  ]);
   qemuMediaColorKdl = kdlText (etcOf [
     ({ ... }: {
       d2b.site.niriVmBorders.enable = true;
+      d2b.vms.media.graphics.waylandProxy.border.enable = false;
       d2b.vms.media.qemuMedia.window.niriBorderColor = "#800080";
     })
   ]);
@@ -111,6 +136,23 @@ let
       d2b.site.niriVmBorders.enable = true;
       d2b.site.niriVmBorders.outputPath = "/etc/d2b/custom-borders.kdl";
     })
+  ];
+  proxyDefaultCfg = cfgOf [ ];
+  proxyDefaultArgv = (processNode proxyDefaultCfg "wayland-proxy").argv;
+  proxyDefaultColors = proxyDefaultCfg.d2b._uiColors.vms.work.border;
+  proxyDisabledArgv = (processNode (cfgOf [
+    ({ ... }: {
+      d2b.vms.work.graphics.waylandProxy.border.enable = false;
+    })
+  ]) "wayland-proxy").argv;
+  proxyBorderFlags = [
+    "--border-enable"
+    "--border-color-active"
+    "--border-color-inactive"
+    "--border-color-urgent"
+    "--border-thickness"
+    "--border-label"
+    "--border-label-position"
   ];
 in
 {
@@ -192,8 +234,8 @@ in
   };
   "niri-vm-borders/new-backend-renders-inactive-and-urgent" = {
     expr =
-      lib.hasInfix ''inactive-color "#7fc8ff"'' newNiriKdl
-      && lib.hasInfix ''urgent-color "#7fc8ff"'' newNiriKdl;
+      lib.hasInfix ''inactive-color "#7fc8ff"'' niriOptOutKdl
+      && lib.hasInfix ''urgent-color "#7fc8ff"'' niriOptOutKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-has-kdl" = {
@@ -202,6 +244,10 @@ in
   };
   "niri-vm-borders/enabled-work-rule" = {
     expr = lib.hasInfix "// Borders for VM: work" enabledKdl;
+    expected = false;
+  };
+  "niri-vm-borders/proxy-border-disabled-restores-work-rule" = {
+    expr = lib.hasInfix "// Borders for VM: work" niriNativeWorkKdl;
     expected = true;
   };
   "niri-vm-borders/enabled-headless-no-rule" = {
@@ -210,11 +256,11 @@ in
   };
   "niri-vm-borders/enabled-qemu-media-host-rule" = {
     expr = lib.hasInfix "// Borders for qemu-media VM host window: media" enabledKdl;
-    expected = true;
+    expected = false;
   };
   "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
     expr = lib.hasInfix ''match app-id=r#"^d2b\.media\."#'' enabledKdl;
-    expected = true;
+    expected = false;
   };
   "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
     expr = lib.hasInfix ''match app-id=r#"^qemu$"#'' enabledKdl;
@@ -246,11 +292,11 @@ in
     # derivation #7fc8ff; asserting the concrete value is a stronger
     # faithful successor than the bash's two-process equality check
     # (vacuous under pure single-eval).
-    expr = lib.hasInfix ''active-color "#7fc8ff"'' enabledKdl;
+    expr = lib.hasInfix ''active-color "#7fc8ff"'' niriNativeWorkKdl;
     expected = true;
   };
   "niri-vm-borders/default-inactive-color-is-identity" = {
-    expr = lib.hasInfix ''inactive-color "#7fc8ff"'' enabledKdl;
+    expr = lib.hasInfix ''inactive-color "#7fc8ff"'' niriNativeWorkKdl;
     expected = true;
   };
   "niri-vm-borders/kdl-mode" = {
@@ -264,6 +310,30 @@ in
   "niri-vm-borders/custom-output-path-default-absent" = {
     expr = builtins.hasAttr "d2b/niri-vm-borders.kdl" customEtc;
     expected = false;
+  };
+  "niri-vm-borders/wayland-proxy-border-default-uses-resolved-colors" = {
+    expr = {
+      enabled = builtins.elem "--border-enable" proxyDefaultArgv;
+      active = flagValue "--border-color-active" proxyDefaultArgv;
+      inactive = flagValue "--border-color-inactive" proxyDefaultArgv;
+      urgent = flagValue "--border-color-urgent" proxyDefaultArgv;
+      thickness = flagValue "--border-thickness" proxyDefaultArgv;
+      label = flagValue "--border-label" proxyDefaultArgv;
+      labelPosition = flagValue "--border-label-position" proxyDefaultArgv;
+    };
+    expected = {
+      enabled = true;
+      active = proxyDefaultColors.active;
+      inactive = proxyDefaultColors.inactive;
+      urgent = proxyDefaultColors.urgent;
+      thickness = "4";
+      label = "work";
+      labelPosition = "top-left";
+    };
+  };
+  "niri-vm-borders/wayland-proxy-border-disable-omits-border-flags" = {
+    expr = builtins.all (flag: !(builtins.elem flag proxyDisabledArgv)) proxyBorderFlags;
+    expected = true;
   };
 }
 )
