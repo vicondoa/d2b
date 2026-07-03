@@ -46,7 +46,10 @@ use wl_proxy::{
             wl_display::{WlDisplay, WlDisplayHandler},
             wl_keyboard::{WlKeyboard, WlKeyboardHandler},
             wl_output::WlOutputTransform,
-            wl_pointer::{WlPointer, WlPointerHandler},
+            wl_pointer::{
+                WlPointer, WlPointerAxis, WlPointerAxisRelativeDirection, WlPointerAxisSource,
+                WlPointerButtonState, WlPointerHandler,
+            },
             wl_registry::{WlRegistry, WlRegistryHandler},
             wl_seat::{WlSeat, WlSeatHandler},
             wl_shm::{WlShm, WlShmHandler},
@@ -54,8 +57,11 @@ use wl_proxy::{
             wl_subcompositor::{WlSubcompositor, WlSubcompositorHandler},
             wl_subsurface::{WlSubsurface, WlSubsurfaceHandler},
             wl_surface::{WlSurface, WlSurfaceHandler},
+            wl_touch::{WlTouch, WlTouchHandler},
         },
         xdg_shell::{
+            xdg_popup::XdgPopup,
+            xdg_positioner::XdgPositioner,
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler},
             xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
@@ -73,9 +79,7 @@ use crate::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
         global_disposition,
     },
-    decoration::{
-        SharedDecorationManager, WRAPPER_RAIL_WIDTH, WindowGeometry, tracking_shm_pool_handler,
-    },
+    decoration::{SharedDecorationManager, WindowGeometry, tracking_shm_pool_handler},
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -1446,6 +1450,7 @@ impl WlSeatHandler for FilterSeatHandler {
     fn handle_get_pointer(&mut self, slf: &Rc<WlSeat>, id: &Rc<WlPointer>) {
         id.set_handler(FilterPointerHandler {
             decoration: self.decoration.clone(),
+            rail_focus: false,
         });
         slf.send_get_pointer(id);
     }
@@ -1455,6 +1460,14 @@ impl WlSeatHandler for FilterSeatHandler {
             decoration: self.decoration.clone(),
         });
         slf.send_get_keyboard(id);
+    }
+
+    fn handle_get_touch(&mut self, slf: &Rc<WlSeat>, id: &Rc<WlTouch>) {
+        id.set_handler(FilterTouchHandler {
+            decoration: self.decoration.clone(),
+            suppressed_ids: HashSet::new(),
+        });
+        slf.send_get_touch(id);
     }
 }
 
@@ -1488,6 +1501,7 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
 
 struct FilterPointerHandler {
     decoration: SharedDecorationManager,
+    rail_focus: bool,
 }
 
 impl WlPointerHandler for FilterPointerHandler {
@@ -1499,20 +1513,174 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_x: Fixed,
         surface_y: Fixed,
     ) {
-        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            let x = surface_x - Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
-            slf.send_enter(serial, &surface, x, surface_y);
-        } else {
-            slf.send_enter(serial, surface, surface_x, surface_y);
+        if self
+            .decoration
+            .borrow()
+            .wrapper_input_target(surface)
+            .is_some()
+        {
+            self.rail_focus = true;
+            return;
         }
+        self.rail_focus = false;
+        slf.send_enter(serial, surface, surface_x, surface_y);
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
-        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            slf.send_leave(serial, &surface);
-        } else {
-            slf.send_leave(serial, surface);
+        if self
+            .decoration
+            .borrow()
+            .wrapper_input_target(surface)
+            .is_some()
+        {
+            self.rail_focus = false;
+            return;
         }
+        self.rail_focus = false;
+        slf.send_leave(serial, surface);
+    }
+
+    fn handle_motion(
+        &mut self,
+        slf: &Rc<WlPointer>,
+        time: u32,
+        surface_x: Fixed,
+        surface_y: Fixed,
+    ) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_motion(time, surface_x, surface_y);
+    }
+
+    fn handle_button(
+        &mut self,
+        slf: &Rc<WlPointer>,
+        serial: u32,
+        time: u32,
+        button: u32,
+        state: WlPointerButtonState,
+    ) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_button(serial, time, button, state);
+    }
+
+    fn handle_axis(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis, value: Fixed) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis(time, axis, value);
+    }
+
+    fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_frame();
+    }
+
+    fn handle_axis_source(&mut self, slf: &Rc<WlPointer>, axis_source: WlPointerAxisSource) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis_source(axis_source);
+    }
+
+    fn handle_axis_stop(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis_stop(time, axis);
+    }
+
+    fn handle_axis_discrete(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, discrete: i32) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis_discrete(axis, discrete);
+    }
+
+    fn handle_axis_value120(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, value120: i32) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis_value120(axis, value120);
+    }
+
+    fn handle_axis_relative_direction(
+        &mut self,
+        slf: &Rc<WlPointer>,
+        axis: WlPointerAxis,
+        direction: WlPointerAxisRelativeDirection,
+    ) {
+        if self.rail_focus {
+            return;
+        }
+        slf.send_axis_relative_direction(axis, direction);
+    }
+}
+
+struct FilterTouchHandler {
+    decoration: SharedDecorationManager,
+    suppressed_ids: HashSet<i32>,
+}
+
+impl WlTouchHandler for FilterTouchHandler {
+    fn handle_down(
+        &mut self,
+        slf: &Rc<WlTouch>,
+        serial: u32,
+        time: u32,
+        surface: &Rc<WlSurface>,
+        id: i32,
+        x: Fixed,
+        y: Fixed,
+    ) {
+        if self
+            .decoration
+            .borrow()
+            .wrapper_input_target(surface)
+            .is_some()
+        {
+            self.suppressed_ids.insert(id);
+            return;
+        }
+        slf.send_down(serial, time, surface, id, x, y);
+    }
+
+    fn handle_up(&mut self, slf: &Rc<WlTouch>, serial: u32, time: u32, id: i32) {
+        if self.suppressed_ids.remove(&id) {
+            return;
+        }
+        slf.send_up(serial, time, id);
+    }
+
+    fn handle_motion(&mut self, slf: &Rc<WlTouch>, time: u32, id: i32, x: Fixed, y: Fixed) {
+        if self.suppressed_ids.contains(&id) {
+            return;
+        }
+        slf.send_motion(time, id, x, y);
+    }
+
+    fn handle_shape(&mut self, slf: &Rc<WlTouch>, id: i32, major: Fixed, minor: Fixed) {
+        if self.suppressed_ids.contains(&id) {
+            return;
+        }
+        slf.send_shape(id, major, minor);
+    }
+
+    fn handle_orientation(&mut self, slf: &Rc<WlTouch>, id: i32, orientation: Fixed) {
+        if self.suppressed_ids.contains(&id) {
+            return;
+        }
+        slf.send_orientation(id, orientation);
+    }
+
+    fn handle_cancel(&mut self, slf: &Rc<WlTouch>) {
+        self.suppressed_ids.clear();
+        slf.send_cancel();
     }
 }
 
@@ -1745,6 +1913,8 @@ impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
             policy: self.policy.clone(),
             decoration: self.decoration.clone(),
             surface: Rc::downgrade(surface),
+            wm_base: slf.clone(),
+            server_xdg_surface_created: self.decoration.is_none(),
         });
         if self.decoration.is_none() {
             slf.send_get_xdg_surface(xdg_surface, surface);
@@ -1758,6 +1928,23 @@ struct FilterXdgSurfaceHandler {
     policy: Rc<FilterPolicy>,
     decoration: Option<SharedDecorationManager>,
     surface: Weak<WlSurface>,
+    wm_base: Rc<XdgWmBase>,
+    server_xdg_surface_created: bool,
+}
+
+impl FilterXdgSurfaceHandler {
+    fn ensure_server_xdg_surface(&mut self, slf: &Rc<XdgSurface>) -> bool {
+        if self.server_xdg_surface_created {
+            return true;
+        }
+        let Some(surface) = self.surface.upgrade() else {
+            return false;
+        };
+        self.wm_base.send_get_xdg_surface(slf, &surface);
+        slf.set_forward_to_server(true);
+        self.server_xdg_surface_created = true;
+        true
+    }
 }
 
 impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
@@ -1781,7 +1968,29 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
             }
             decoration.borrow_mut().mark_toplevel(surface);
         }
+        if !self.ensure_server_xdg_surface(slf) {
+            return;
+        }
         slf.send_get_toplevel(toplevel);
+    }
+
+    fn handle_get_popup(
+        &mut self,
+        slf: &Rc<XdgSurface>,
+        popup: &Rc<XdgPopup>,
+        parent: Option<&Rc<XdgSurface>>,
+        positioner: &Rc<XdgPositioner>,
+    ) {
+        if !self.ensure_server_xdg_surface(slf) {
+            return;
+        }
+        let wrapper_parent = parent.and_then(|parent| {
+            self.decoration
+                .as_ref()
+                .and_then(|decoration| decoration.borrow().wrapper_xdg_surface_for_guest(parent))
+        });
+        let parent = wrapper_parent.as_ref().or(parent);
+        slf.send_get_popup(popup, parent, positioner);
     }
 
     fn handle_set_window_geometry(

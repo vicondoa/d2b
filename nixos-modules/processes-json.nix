@@ -622,14 +622,12 @@ EOF
       borderLabelText = if border.label.text == null then vmName else border.label.text;
       borderLabelArgs = lib.optionals (border.label.enable && borderLabelText != "") [
         "--border-label" borderLabelText
-        "--border-label-position" border.label.position
       ];
       borderArgs = lib.optionals border.enable ([
         "--border-enable"
         "--border-color-active" borderColors.active
         "--border-color-inactive" borderColors.inactive
         "--border-color-urgent" borderColors.urgent
-        "--border-thickness" (toString border.thickness)
       ] ++ borderLabelArgs);
       denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandProxy.denyGlobals;
       allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandProxy.allowGlobals;

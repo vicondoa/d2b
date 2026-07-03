@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
+  `graphics.waylandProxy.border.label.position`, `--border-thickness`, and
+  `--border-label-position` as deprecated legacy shape knobs; generated d2b
+  proxy runners use the fixed-width left wrapper rail and vertical label.
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
   point `console` and `audio` surfaces at the provider capability

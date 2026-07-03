@@ -19,8 +19,8 @@ configuration with no overrides produces no output from this catalog.
 
 The `W-*` names below are emitted in `d2b-wayland-proxy` policy-warning
 messages. Operational event/reason pairs, such as
-`border-decoration / draw-failed`, are also stable grep targets for operator
-diagnostics.
+`border-decoration / draw-failed` and `wrapper-rail / draw-failed`, are also
+stable grep targets for operator diagnostics.
 
 ## Warning conditions
 
@@ -38,6 +38,23 @@ contents.
 **How to override intentionally:** No configuration is required. If this repeats
 for ordinary window sizes, report it as a bug; if it appears only for extremely
 large guest surfaces, d2b is enforcing its resource-exhaustion guard.
+
+---
+
+### wrapper-rail / draw-failed
+
+**Trigger:** the proxy could not allocate or submit its fixed-width wrapper rail
+buffer for a guest toplevel.
+
+**Why it exists:** Wrapper-rail drawing is intentionally best-effort. Guest
+application buffers remain attached to the guest subsurface and continue through
+the normal Wayland path without being copied or sampled. The diagnostic is
+rate-limited separately from legacy border drawing and does not include guest
+window titles, app IDs, or buffer contents.
+
+**How to override intentionally:** No configuration is required. If this repeats
+for ordinary window sizes, report it as a bug; if it appears only for extremely
+tall guest surfaces, d2b is enforcing its resource-exhaustion guard.
 
 ---
 

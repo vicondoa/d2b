@@ -150,9 +150,7 @@ let
     "--border-color-active"
     "--border-color-inactive"
     "--border-color-urgent"
-    "--border-thickness"
     "--border-label"
-    "--border-label-position"
   ];
 in
 {
@@ -317,18 +315,18 @@ in
       active = flagValue "--border-color-active" proxyDefaultArgv;
       inactive = flagValue "--border-color-inactive" proxyDefaultArgv;
       urgent = flagValue "--border-color-urgent" proxyDefaultArgv;
-      thickness = flagValue "--border-thickness" proxyDefaultArgv;
       label = flagValue "--border-label" proxyDefaultArgv;
-      labelPosition = flagValue "--border-label-position" proxyDefaultArgv;
+      legacyThickness = builtins.elem "--border-thickness" proxyDefaultArgv;
+      legacyLabelPosition = builtins.elem "--border-label-position" proxyDefaultArgv;
     };
     expected = {
       enabled = true;
       active = proxyDefaultColors.active;
       inactive = proxyDefaultColors.inactive;
       urgent = proxyDefaultColors.urgent;
-      thickness = "4";
       label = "work";
-      labelPosition = "top-left";
+      legacyThickness = false;
+      legacyLabelPosition = false;
     };
   };
   "niri-vm-borders/wayland-proxy-border-disable-omits-border-flags" = {

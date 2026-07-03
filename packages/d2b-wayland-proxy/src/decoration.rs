@@ -1115,6 +1115,7 @@ struct WrapperToplevel {
     buffer: Option<ProxyDecorationBuffer>,
     retired_buffers: Vec<ProxyDecorationBuffer>,
     key: Option<FrameKey>,
+    applied_geometry: Option<WrapperGeometry>,
     pending_window_geometry: Option<WindowGeometry>,
     current_window_geometry: Option<WindowGeometry>,
     current_configure: ConfigureSize,
@@ -1433,9 +1434,6 @@ impl DecorationManager {
 
         let wrapper_surface = compositor.new_send_create_surface();
         wrapper_surface.set_forward_to_client(false);
-        let empty = compositor.new_send_create_region();
-        wrapper_surface.send_set_input_region(Some(&empty));
-        empty.send_destroy();
         let wrapper_xdg_surface = wm_base.new_send_get_xdg_surface(&wrapper_surface);
         wrapper_xdg_surface.set_forward_to_client(false);
         let wrapper_toplevel = wrapper_xdg_surface.new_send_get_toplevel();
@@ -1443,6 +1441,7 @@ impl DecorationManager {
         let guest_subsurface = subcompositor.new_send_get_subsurface(surface, &wrapper_surface);
         guest_subsurface.set_forward_to_client(false);
         guest_subsurface.send_set_position(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0), 0);
+        guest_subsurface.send_place_below(&wrapper_surface);
         guest_subsurface.send_set_desync();
         wrapper_surface.send_commit();
 
@@ -1472,6 +1471,7 @@ impl DecorationManager {
             buffer: None,
             retired_buffers: Vec::new(),
             key: None,
+            applied_geometry: None,
             pending_window_geometry: None,
             current_window_geometry: None,
             current_configure: ConfigureSize::new(0, 0),
@@ -1638,6 +1638,20 @@ impl DecorationManager {
                 .as_ref()
                 .filter(|wrapper| wrapper.wrapper_surface.unique_id() == wrapper_id)
                 .map(|wrapper| wrapper.guest_surface.clone())
+        })
+    }
+
+    pub fn wrapper_xdg_surface_for_guest(
+        &self,
+        xdg_surface: &Rc<XdgSurface>,
+    ) -> Option<Rc<XdgSurface>> {
+        let guest_id = xdg_surface.unique_id();
+        self.surfaces.values().find_map(|state| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|wrapper| wrapper.guest_xdg_surface.unique_id() == guest_id)
+                .map(|wrapper| wrapper.wrapper_xdg_surface.clone())
         })
     }
 
@@ -1827,7 +1841,7 @@ impl DecorationManager {
                 }
             };
             let key = FrameKey {
-                outer: wrapper_geometry.outer,
+                outer: Size::new(wrapper_geometry.rail_width, wrapper_geometry.outer.height),
                 color: self.config.color_for_state(visual),
                 label: if visual.fullscreen {
                     None
@@ -1837,11 +1851,14 @@ impl DecorationManager {
                 label_position: self.config.label_position,
             };
             let needs_buffer = wrapper.key.as_ref() != Some(&key);
+            if !needs_buffer && wrapper.applied_geometry == Some(wrapper_geometry) {
+                return;
+            }
             (wrapper_geometry, key, needs_buffer)
         };
         let new_buffer = if needs_buffer && wrapper_geometry.rail_width > 0 {
             match self.create_wrapper_rail_buffer(
-                wrapper_geometry.outer.width,
+                wrapper_geometry.rail_width,
                 wrapper_geometry.outer.height,
                 key.color,
                 key.label.as_ref(),
@@ -1851,9 +1868,9 @@ impl DecorationManager {
                     let error = bounded_error_detail(error.to_string());
                     self.diag
                         .borrow_mut()
-                        .warn("border-decoration", "draw-failed", || {
+                        .warn("wrapper-rail", "draw-failed", || {
                             format!(
-                                "[d2b-wlproxy] event=border-decoration reason=draw-failed error={error}"
+                                "[d2b-wlproxy] event=wrapper-rail reason=draw-failed error={error}"
                             )
                         });
                     None
@@ -1862,6 +1879,7 @@ impl DecorationManager {
         } else {
             None
         };
+        let compositor = self.compositor.clone();
         let Some(wrapper) = self
             .surfaces
             .get_mut(&surface_id)
@@ -1873,6 +1891,19 @@ impl DecorationManager {
             wrapper_geometry.guest_offset.x,
             wrapper_geometry.guest_offset.y,
         );
+        if let Some(compositor) = &compositor {
+            let region = compositor.new_send_create_region();
+            if wrapper_geometry.rail_width > 0 {
+                region.send_add(
+                    0,
+                    0,
+                    i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
+                    i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
+                );
+            }
+            wrapper.wrapper_surface.send_set_input_region(Some(&region));
+            region.send_destroy();
+        }
         wrapper.wrapper_xdg_surface.send_set_window_geometry(
             0,
             0,
@@ -1886,6 +1917,7 @@ impl DecorationManager {
                 wrapper.retire_buffer(old_buffer);
             }
             wrapper.key = Some(key);
+            wrapper.applied_geometry = Some(wrapper_geometry);
             return;
         }
         if let Some(buffer) = new_buffer {
@@ -1896,7 +1928,7 @@ impl DecorationManager {
             wrapper.wrapper_surface.send_damage_buffer(
                 0,
                 0,
-                i32::try_from(wrapper_geometry.outer.width).unwrap_or(i32::MAX),
+                i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
                 i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
             );
             wrapper.wrapper_surface.send_commit();
@@ -1907,8 +1939,10 @@ impl DecorationManager {
             }
             wrapper.buffer = Some(buffer);
             wrapper.key = Some(key);
+            wrapper.applied_geometry = Some(wrapper_geometry);
         } else {
             wrapper.wrapper_surface.send_commit();
+            wrapper.applied_geometry = Some(wrapper_geometry);
         }
     }
 
@@ -2463,22 +2497,22 @@ mod tests {
     #[test]
     fn wrapper_rail_draws_only_proxy_owned_rail_pixels() {
         let label = sanitize_label("personal-dev");
-        let pixels = draw_wrapper_rail(40, 120, Color::rgb(0, 255, 0), label.as_ref())
-            .expect("valid wrapper rail");
-        let row_len = 40 * BYTES_PER_PIXEL as usize;
+        let pixels = draw_wrapper_rail(
+            WRAPPER_RAIL_WIDTH,
+            120,
+            Color::rgb(0, 255, 0),
+            label.as_ref(),
+        )
+        .expect("valid wrapper rail");
+        let row_len = WRAPPER_RAIL_WIDTH as usize * BYTES_PER_PIXEL as usize;
         let green = Color::rgb(0, 255, 0).argb8888_bytes();
 
         assert_eq!(pixels.len(), row_len * 120);
-        assert!(pixels.chunks_exact(row_len).all(|row| {
-            row[..WRAPPER_RAIL_WIDTH as usize * 4]
-                .chunks_exact(4)
-                .any(|px| px == green)
-        }));
-        assert!(pixels.chunks_exact(row_len).all(|row| {
-            row[WRAPPER_RAIL_WIDTH as usize * 4..]
-                .chunks_exact(4)
-                .all(|px| px == [0, 0, 0, 0])
-        }));
+        assert!(
+            pixels
+                .chunks_exact(row_len)
+                .all(|row| { row.chunks_exact(4).any(|px| px == green) })
+        );
     }
 
     #[test]
