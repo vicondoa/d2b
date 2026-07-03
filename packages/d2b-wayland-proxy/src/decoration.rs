@@ -1961,6 +1961,15 @@ impl DecorationManager {
         }
     }
 
+    pub fn toplevel_destroyed(&mut self, surface_id: u64) {
+        self.remove_decoration(surface_id);
+        if let Some(state) = self.surfaces.get_mut(&surface_id) {
+            state.toplevel = false;
+            state.pending_window_geometry = None;
+            state.current_window_geometry = None;
+        }
+    }
+
     pub fn register_guest_subsurface(&mut self, surface: &Rc<WlSurface>, parent: &Rc<WlSurface>) {
         let parent_id = parent.unique_id();
         let siblings = self.subsurfaces_by_parent.entry(parent_id).or_default();
