@@ -142,6 +142,11 @@ pub fn install_client_handlers(
     clipboard: Rc<RefCell<VirtualClipboardState>>,
     decoration: Option<SharedDecorationManager>,
 ) {
+    client.set_handler(FilterClientHandler::new(
+        policy.vm_name.clone(),
+        Rc::downgrade(client),
+        decoration.clone(),
+    ));
     let handler = FilterDisplayHandler {
         policy: policy.clone(),
         diag,
@@ -1538,16 +1543,20 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
         keys: &[u8],
     ) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            slf.send_enter(serial, &surface, keys);
-        } else {
+            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+                slf.send_enter(serial, &surface, keys);
+            }
+        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
             slf.send_enter(serial, surface, keys);
         }
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlKeyboard>, serial: u32, surface: &Rc<WlSurface>) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            slf.send_leave(serial, &surface);
-        } else {
+            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+                slf.send_leave(serial, &surface);
+            }
+        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
             slf.send_leave(serial, surface);
         }
     }
@@ -1568,13 +1577,13 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_x: Fixed,
         surface_y: Fixed,
     ) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.rail_focus = true;
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.rail_focus = true;
+            }
+            return;
+        }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
             return;
         }
         self.rail_focus = false;
@@ -1583,13 +1592,13 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.rail_focus = false;
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.rail_focus = false;
+            }
+            return;
+        }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
             return;
         }
         self.rail_focus = false;
@@ -1706,13 +1715,13 @@ impl WlTouchHandler for FilterTouchHandler {
         x: Fixed,
         y: Fixed,
     ) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.suppressed_ids.insert(id);
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.suppressed_ids.insert(id);
+            }
+            return;
+        }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
             return;
         }
         self.forwarded_ids.insert(id);
@@ -1772,6 +1781,10 @@ impl WlTouchHandler for FilterTouchHandler {
         self.pending_forwarded_frame = false;
         slf.send_frame();
     }
+}
+
+fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver_client_id: Option<u32>) -> bool {
+    receiver_client_id.is_some() && surface.client_id() == receiver_client_id
 }
 
 struct FilterSubcompositorHandler {
@@ -2153,6 +2166,17 @@ impl FilterXdgSurfaceHandler {
 }
 
 impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
+    fn handle_destroy(&mut self, slf: &Rc<XdgSurface>) {
+        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade()) {
+            decoration
+                .borrow_mut()
+                .toplevel_destroyed(surface.unique_id());
+        }
+        if self.server_xdg_surface_created {
+            slf.send_destroy();
+        }
+    }
+
     fn handle_get_toplevel(&mut self, slf: &Rc<XdgSurface>, toplevel: &Rc<XdgToplevel>) {
         let surface = self.surface.upgrade();
         let surface_id = surface.as_ref().map(|surface| surface.unique_id());
@@ -2252,6 +2276,18 @@ struct FilterXdgToplevelHandler {
 }
 
 impl XdgToplevelHandler for FilterXdgToplevelHandler {
+    fn handle_destroy(&mut self, slf: &Rc<XdgToplevel>) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            let mut decoration = decoration.borrow_mut();
+            if decoration.has_wrapper(surface_id) {
+                decoration.toplevel_destroyed(surface_id);
+                return;
+            }
+            decoration.toplevel_destroyed(surface_id);
+        }
+        slf.send_destroy();
+    }
+
     fn handle_set_app_id(&mut self, slf: &Rc<XdgToplevel>, app_id: &str) {
         let rewritten = self.policy.rewrite_app_id(app_id);
         if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
@@ -2531,16 +2567,42 @@ fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {
 /// Minimal `ClientHandler` that logs disconnections for debugging.
 pub struct FilterClientHandler {
     vm: String,
+    client: Weak<Client>,
+    decoration: Option<SharedDecorationManager>,
 }
 
 impl FilterClientHandler {
-    pub fn new(vm: String) -> Self {
-        Self { vm }
+    pub fn new(
+        vm: String,
+        client: Weak<Client>,
+        decoration: Option<SharedDecorationManager>,
+    ) -> Self {
+        Self {
+            vm,
+            client,
+            decoration,
+        }
     }
 }
 
 impl ClientHandler for FilterClientHandler {
     fn disconnected(self: Box<Self>) {
+        if let (Some(client), Some(decoration)) = (self.client.upgrade(), self.decoration.as_ref())
+        {
+            let mut objects: Vec<Rc<dyn Object>> = Vec::new();
+            client.objects(&mut objects);
+            let mut decoration = decoration.borrow_mut();
+            for object in &objects {
+                if let Some(surface) = object.try_downcast::<WlSurface>() {
+                    decoration.surface_destroyed(&surface);
+                }
+            }
+            for object in &objects {
+                if let Some(buffer) = object.try_downcast::<WlBuffer>() {
+                    decoration.remove_buffer(&buffer);
+                }
+            }
+        }
         log::debug!("[d2b-wlproxy] vm={} client disconnected", self.vm);
     }
 }

@@ -22,8 +22,7 @@ use std::{
 
 use clap::Parser;
 use d2b_wayland_proxy::filter::{
-    FilterClientHandler, FilterStateHandler, VirtualClipboardState, build_state,
-    install_client_handlers,
+    FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,
 };
 use d2b_wayland_proxy::{
     bridge::{BridgeConfig, BridgeReconnectPolicy},
@@ -446,7 +445,6 @@ fn accept_loop(
                                 continue;
                             }
                         };
-                        client.set_handler(FilterClientHandler::new(vm.clone()));
                         install_client_handlers(
                             &client,
                             policy.clone(),
