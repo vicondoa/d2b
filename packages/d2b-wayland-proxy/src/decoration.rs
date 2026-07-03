@@ -571,28 +571,37 @@ fn draw_vertical_label(
             pixels,
             width,
             height,
-            x,
-            y,
-            glyph(ch),
-            scale_x,
-            scale_y,
-            foreground,
+            RotatedGlyph {
+                x,
+                y,
+                rows: glyph(ch),
+                scale_x,
+                scale_y,
+                color: foreground,
+            },
         );
         y = y.saturating_add(advance);
     }
 }
 
-fn draw_rotated_glyph(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
+struct RotatedGlyph {
     x: usize,
     y: usize,
     rows: [u8; 7],
     scale_x: usize,
     scale_y: usize,
     color: [u8; 4],
-) {
+}
+
+fn draw_rotated_glyph(pixels: &mut [u8], width: usize, height: usize, glyph: RotatedGlyph) {
+    let RotatedGlyph {
+        x,
+        y,
+        rows,
+        scale_x,
+        scale_y,
+        color,
+    } = glyph;
     for (row, bits) in rows.iter().enumerate() {
         for col in 0..GLYPH_W as usize {
             if bits & (1 << (GLYPH_W as usize - 1 - col)) == 0 {
@@ -1030,10 +1039,11 @@ impl SurfaceState {
     }
 
     fn effective_window_geometry(&self) -> Option<WindowGeometry> {
-        if let Some(geometry) = self.current_window_geometry {
-            if geometry.width > 0 && geometry.height > 0 {
-                return Some(geometry);
-            }
+        if let Some(geometry) = self.current_window_geometry
+            && geometry.width > 0
+            && geometry.height > 0
+        {
+            return Some(geometry);
         }
         let size = self.current_size?;
         Some(WindowGeometry::new(

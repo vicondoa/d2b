@@ -1793,13 +1793,12 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
         height: i32,
     ) {
         let geometry = WindowGeometry::new(x, y, width, height);
-        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade()) {
-            if decoration
+        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade())
+            && decoration
                 .borrow_mut()
                 .wrapper_set_window_geometry(surface.unique_id(), geometry)
-            {
-                return;
-            }
+        {
+            return;
         }
         let geometry = self.decoration.as_ref().zip(self.surface.upgrade()).map_or(
             geometry,
@@ -1813,13 +1812,12 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
     }
 
     fn handle_ack_configure(&mut self, slf: &Rc<XdgSurface>, serial: u32) {
-        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade()) {
-            if decoration
+        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade())
+            && decoration
                 .borrow_mut()
                 .wrapper_ack_configure(surface.unique_id(), serial)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_ack_configure(serial);
     }
@@ -1835,26 +1833,24 @@ struct FilterXdgToplevelHandler {
 impl XdgToplevelHandler for FilterXdgToplevelHandler {
     fn handle_set_app_id(&mut self, slf: &Rc<XdgToplevel>, app_id: &str) {
         let rewritten = self.policy.rewrite_app_id(app_id);
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_app_id(surface_id, &rewritten)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_set_app_id(&rewritten);
     }
 
     fn handle_set_title(&mut self, slf: &Rc<XdgToplevel>, title: &str) {
         let rewritten = self.policy.rewrite_title(title);
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_title(surface_id, &rewritten)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_set_title(&rewritten);
     }
@@ -1886,58 +1882,54 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
     }
 
     fn handle_set_maximized(&mut self, slf: &Rc<XdgToplevel>) {
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_maximized(surface_id, true)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_set_maximized();
     }
 
     fn handle_unset_maximized(&mut self, slf: &Rc<XdgToplevel>) {
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_maximized(surface_id, false)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_unset_maximized();
     }
 
     fn handle_set_minimized(&mut self, slf: &Rc<XdgToplevel>) {
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration.borrow_mut().wrapper_set_minimized(surface_id) {
-                return;
-            }
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration.borrow_mut().wrapper_set_minimized(surface_id)
+        {
+            return;
         }
         slf.send_set_minimized();
     }
 
     fn handle_set_min_size(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32) {
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_min_size(surface_id, width, height)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_set_min_size(width, height);
     }
 
     fn handle_set_max_size(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32) {
-        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            if decoration
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id)
+            && decoration
                 .borrow_mut()
                 .wrapper_set_max_size(surface_id, width, height)
-            {
-                return;
-            }
+        {
+            return;
         }
         slf.send_set_max_size(width, height);
     }
