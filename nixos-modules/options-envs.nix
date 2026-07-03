@@ -103,6 +103,59 @@
           '';
         };
 
+        homeLan = {
+          enable = lib.mkEnableOption "a home-LAN-facing interface on this env's generated net VM";
+
+          bridge = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "br-home";
+            description = "Host bridge or macvtap parent presented to the net VM as its home-LAN-facing NIC.";
+          };
+
+          address = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "192.168.1.2/24";
+            description = "Static IPv4 address assigned to the net VM's deterministic home-LAN interface.";
+          };
+
+          egress.allowCidrs = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "192.168.1.53/32" ];
+            description = "Home-LAN destinations workload VMs may reach before the normal host blocklist drops apply.";
+          };
+
+          portForwards = lib.mkOption {
+            type = lib.types.listOf (lib.types.submodule {
+              options = {
+                vm = lib.mkOption {
+                  type = lib.types.str;
+                  description = "Workload VM receiving the forwarded home-LAN traffic.";
+                };
+                port = lib.mkOption {
+                  type = lib.types.port;
+                  description = "TCP/UDP port to forward.";
+                };
+                protocol = lib.mkOption {
+                  type = lib.types.enum [ "tcp" "udp" ];
+                  default = "tcp";
+                  description = "Transport protocol for this forward.";
+                };
+              };
+            });
+            default = [ ];
+            description = "Explicit home-LAN DNAT rules into workload VMs.";
+          };
+
+          mdns = {
+            enable = lib.mkEnableOption "mDNS reflection between the env LAN and the home LAN";
+
+            dnsmasqLocal.enable = lib.mkEnableOption "dnsmasq forwarding for .local lookups to mDNS";
+          };
+        };
+
         extraNetConfig = lib.mkOption {
           type = lib.types.unspecified;
           default = { };

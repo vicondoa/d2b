@@ -37,6 +37,10 @@ let
       inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
       allowEastWest = net.lan.allowEastWest;
       hostBlocklist = sortNames (lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs));
+      homeLan = net.homeLan // {
+        interfaceName = "home0";
+        mac = mkMac envName "home" 3;
+      };
       lanBridge = "br-${envName}-lan";
       uplinkBridge = "br-${envName}-up";
       hostUplinkIp = subnetIp uplinkSubnet 1;

@@ -19,6 +19,15 @@
 
 let
   m = envMeta;
+  homeLanEnabled = m.homeLan.enable;
+  homeLanPortForwards = lib.optionals homeLanEnabled m.homeLan.portForwards;
+  portForwardTarget = forward: m.workloads.${forward.vm}.ip;
+  portForwardAcceptRules = lib.concatMapStringsSep "\n          "
+    (forward: ''iifname "${m.homeLan.interfaceName}" oifname "eth1" ip daddr ${portForwardTarget forward} ${forward.protocol} dport ${toString forward.port} ct state new accept'')
+    homeLanPortForwards;
+  portForwardDnatRules = lib.concatMapStringsSep "\n          "
+    (forward: ''iifname "${m.homeLan.interfaceName}" ${forward.protocol} dport ${toString forward.port} dnat to ${portForwardTarget forward}:${toString forward.port}'')
+    homeLanPortForwards;
   # The net VM has./base.nix layered in by host.nix (see
   # nixos-modules/host.nix's `microvm.vms = lib.mapAttrs` block, which
   # unconditionally imports ./base.nix). Everything here builds on top
@@ -79,6 +88,16 @@ in
         MTUBytes = toString m.mtu;
       };
     };
+  } // lib.optionalAttrs homeLanEnabled {
+    "10-home" = {
+      matchConfig.MACAddress = m.homeLan.mac;
+      addresses = lib.optional (m.homeLan.address != null) { Address = m.homeLan.address; };
+      linkConfig = {
+        RequiredForOnline = "no";
+      } // lib.optionalAttrs (m.mtu != null) {
+        MTUBytes = toString m.mtu;
+      };
+    };
   };
 
   # The MACs that the host-side bridges expect on each NIC. The
@@ -93,6 +112,11 @@ in
     "10-lan" = {
       matchConfig.MACAddress = m.netLanMac;
       linkConfig.Name = "eth1";
+    };
+  } // lib.optionalAttrs homeLanEnabled {
+    "10-home" = {
+      matchConfig.MACAddress = m.homeLan.mac;
+      linkConfig.Name = m.homeLan.interfaceName;
     };
   };
 
@@ -129,6 +153,9 @@ in
           # LAN: DHCP + DNS for workload VMs.
           iifname "eth1" udp dport { 53, 67 } accept
           iifname "eth1" tcp dport 53 accept
+          ${lib.optionalString (homeLanEnabled && m.homeLan.mdns.enable) ''
+          iifname { "eth1", "${m.homeLan.interfaceName}" } udp dport 5353 ip daddr 224.0.0.251 accept
+          ''}
 
           # ICMP echo — rate-limited (was unconditional, now 10/s burst).
           ip protocol icmp icmp type echo-request limit rate 10/second burst 20 packets accept
@@ -166,6 +193,13 @@ in
             ip daddr ${m.hostUplinkIp} tcp dport 3240 ct state new accept
           iifname "eth1" oifname "eth0" ip daddr ${m.hostUplinkIp} drop
 
+          ${lib.optionalString homeLanEnabled ''
+          ${lib.concatMapStringsSep "\n          "
+            (cidr: ''iifname "eth1" oifname "${m.homeLan.interfaceName}" ip daddr ${cidr} ct state new accept'')
+            m.homeLan.egress.allowCidrs}
+          ${portForwardAcceptRules}
+          ''}
+
           # Workload → blocklisted host destinations (RFC1918, link-
           # local, etc): drop BEFORE the broad "lan to internet" rule
           # below.
@@ -187,6 +221,12 @@ in
           type nat hook postrouting priority 100; policy accept;
           oifname "eth0" masquerade
         }
+        ${lib.optionalString (portForwardDnatRules != "") ''
+        chain prerouting {
+          type nat hook prerouting priority -100; policy accept;
+          ${portForwardDnatRules}
+        }
+        ''}
       }
     '';
   };
@@ -214,7 +254,8 @@ in
       domain-needed = true;
       bogus-priv = true;
       no-resolv = true;
-      server = [ "1.1.1.1" "8.8.8.8" ];
+      server = [ "1.1.1.1" "8.8.8.8" ]
+        ++ lib.optional (homeLanEnabled && m.homeLan.mdns.dnsmasqLocal.enable) "/local/224.0.0.251#5353";
       cache-size = 1000;
 
       # DHCP — pool covers the "unreserved" tail end of the subnet.
@@ -236,6 +277,13 @@ in
       # static dhcp-host reservations above.
       dhcp-ignore-names = true;
     };
+  };
+
+  services.avahi = lib.mkIf (homeLanEnabled && m.homeLan.mdns.enable) {
+    enable = true;
+    reflector = true;
+    allowInterfaces = [ "eth1" m.homeLan.interfaceName ];
+    openFirewall = false;
   };
 
   # dnsmasq systemd confinement.
@@ -400,7 +448,12 @@ in
         id = "${m.name}-l1";
         mac = m.netLanMac;
       }
-    ];
+    ] ++ lib.optional homeLanEnabled {
+      type = if m.homeLan.bridge != null then "bridge" else "tap";
+      id = "${m.name}-h0";
+      mac = m.homeLan.mac;
+      bridge = m.homeLan.bridge;
+    };
   };
 
   # SSH on by default but only key-auth so a forgotten password

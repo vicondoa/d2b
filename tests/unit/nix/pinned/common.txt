@@ -377,6 +377,12 @@ multi-env-daemon/work-uplink-flags
 multi-env-daemon/work-workload-lan-flags
 net-vm-network/eth-dhcp-match-mac-sentinel
 net-vm-network/eth-dhcp-match-type-not-ether
+net-vm-network/home-lan-dnsmasq-local-forwarding-gated
+net-vm-network/home-lan-egress-allow-before-host-blocklist
+net-vm-network/home-lan-mdns-avahi-present-only-when-enabled
+net-vm-network/home-lan-port-forward-default-absent
+net-vm-network/home-lan-port-forward-dnat-present
+net-vm-network/host-avahi-and-udp5353-not-opened
 net-vm-network/host-lan-bridge-ipv6-ra-disabled
 net-vm-network/host-lan-bridge-link-local-addressing-disabled
 net-vm-network/host-lan-bridge-mtu
@@ -391,6 +397,7 @@ net-vm-network/host-uplink-tap-mtu
 net-vm-network/host-workload-lan-tap-mtu
 net-vm-network/net-lan-tap-bridge
 net-vm-network/net-lan-tap-isolation-unset
+net-vm-network/obs-home-lan-default-off
 net-vm-network/obs-lan-address
 net-vm-network/obs-lan-bridge-isolated-default
 net-vm-network/obs-nft-egress-accept-present
@@ -407,6 +414,8 @@ net-vm-network/obs-nft-work-uplink-drop-present
 net-vm-network/obs-stack-vm-env
 net-vm-network/obs-stack-vm-name
 net-vm-network/obs-uplink-address
+net-vm-network/safe-home-lan-default-off
+net-vm-network/safe-home-lan-egress-allow-absent
 net-vm-network/safe-lan-bridge-isolated-default
 net-vm-network/safe-nft-egress-accept-present
 net-vm-network/safe-nft-lan-to-lan-forward-absent
@@ -417,6 +426,9 @@ net-vm-network/safe-nft-work-lan-drop-before-egress-accept
 net-vm-network/safe-nft-work-lan-drop-present
 net-vm-network/safe-nft-work-uplink-drop-before-egress-accept
 net-vm-network/safe-nft-work-uplink-drop-present
+net-vm-network/work-home-lan-address
+net-vm-network/work-home-lan-link-name
+net-vm-network/work-home-lan-third-nic
 net-vm-network/work-lan-address
 net-vm-network/work-lan-bridge-east-west-unisolated
 net-vm-network/work-lan-mtu

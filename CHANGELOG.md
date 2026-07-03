@@ -10,6 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Nix-unit coverage and minimal eval wiring for opt-in per-env home-LAN net VM
+  interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
+  forwarding.
+
 ### Changed
 
 - `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
