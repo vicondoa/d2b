@@ -10,6 +10,7 @@ let
   anyTpm = builtins.any (vm: vm.tpm.enable) (lib.attrValues enabledVms);
   anyObservability = builtins.any (vm: vm.observability.enable) (lib.attrValues enabledVms);
   anyUsbip = cfg.site.yubikey.enable && builtins.any (vm: vm.usbip.yubikey) (lib.attrValues enabledVms);
+  anyHomeLan = builtins.any (m: m.homeLan.attachment.enable) (lib.attrValues envMeta);
   defaultMtu = 1500;
 
   moduleRow = module: feature: requirement: gate: sysctls: jailVisibleDevice: {
@@ -65,7 +66,8 @@ let
       m.uplinkBridge
       "${envName}-l1"
       "${envName}-u2"
-    ] ++ workloadTapNames envName);
+    ] ++ lib.optional m.homeLan.attachment.enable m.homeLan.attachment.hostIfName
+      ++ workloadTapNames envName);
 
   # live systems now have a broker-written canonical runtime
   # ifname map. Pure flake evals cannot see `/var/lib/...`, so they
@@ -263,6 +265,26 @@ let
       mtu = resolvedMtu m;
       mssClamp = resolvedMssClamp m;
       netVmForwardBlocklist = m.hostBlocklist;
+      homeLan = if m.homeLan.attachment.enable then {
+        attachment = {
+          mode = m.homeLan.attachment.mode;
+          parentInterface = m.homeLan.attachment.interface;
+          hostIfName = m.homeLan.attachment.hostIfName;
+          guestIfName = m.homeLan.attachment.guestIfName;
+          macAddress = m.homeLan.attachment.macAddress;
+          macvtapMode = m.homeLan.attachment.macvtapMode;
+          ipv4 = {
+            method = m.homeLan.attachment.ipv4.method;
+            address = m.homeLan.attachment.ipv4.address;
+            gateway = m.homeLan.attachment.ipv4.gateway;
+            dns = m.homeLan.attachment.ipv4.dns;
+          };
+        };
+        egress = {
+          enabled = m.homeLan.egress.enable;
+        };
+        portForwards = m.homeLan.portForwards;
+      } else null;
     } // lib.optionalAttrs (usbipBusidLocks != [ ]) {
       usbipBackendPort = cfg._index.usbip.backendPorts.${envName};
     };
@@ -347,6 +369,12 @@ let
       (moduleRow "kvm_amd" "cloud-hypervisor-amd" "alternatives" "host-cpu-vendor=amd" [ ] false)
       (moduleRow "tun" "tap" "required" "All env-backed VMs require TAP devices on the host." [ ] false)
       (moduleRow "vhost_net" "virtio-net" "required" "Required when vhost-net acceleration is used for Cloud Hypervisor TAP handoff." [ ] false)
+      (moduleRow "macvtap" "home-lan-macvtap" (if anyHomeLan then "required" else "optional")
+        (if anyHomeLan then "Required when any env enables home-LAN attachment." else "Used only when an env enables home-LAN attachment.")
+        [ ] false)
+      (moduleRow "macvlan" "home-lan-macvtap" (if anyHomeLan then "required" else "optional")
+        (if anyHomeLan then "Required by macvtap-backed home-LAN attachment." else "Used only when an env enables home-LAN attachment.")
+        [ ] false)
       (moduleRow "fuse" "virtiofs" "required" "Required for the per-VM virtiofs store views served by virtiofsd." [ ] false)
       (moduleRow "nf_tables" "nftables" "required" "Required for the marker-owned inet d2b table." [ ] false)
       (moduleRow "bridge" "linux-bridge" "required" "Required for every env LAN and uplink bridge." [ ] false)

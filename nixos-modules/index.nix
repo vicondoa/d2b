@@ -48,6 +48,42 @@ let
       dhcpRangeEnd = subnetIp lanSubnet 254;
       netUplinkMac = mkMac envName "up" 2;
       netLanMac = mkMac envName "lan" 1;
+      homeLan =
+        let
+          attachment = net.homeLan.attachment;
+          envWorkloads = workloadsInEnv envName;
+          homeMac =
+            if attachment.macAddress != null
+            then attachment.macAddress
+            else mkMac envName "home" 3;
+          resolveForward = pf:
+            let
+              targetPort =
+                if pf.targetPort != null
+                then pf.targetPort
+                else pf.listenPort;
+              targetIp =
+                if pf.targetIp != null then pf.targetIp
+                else if pf.vm != null && builtins.hasAttr pf.vm envWorkloads
+                then subnetIp lanSubnet envWorkloads.${pf.vm}.index
+                else null;
+            in
+            {
+              inherit (pf) protocol listenPort vm;
+              inherit targetIp targetPort;
+            };
+        in
+        {
+          attachment = {
+            inherit (attachment) enable interface mode macvtapMode;
+            macAddress = homeMac;
+            hostIfName = "${envName}-h0";
+            guestIfName = "home0";
+            ipv4 = attachment.ipv4;
+          };
+          egress = net.homeLan.egress;
+          portForwards = map resolveForward net.homeLan.portForwards;
+        };
       workloads = lib.mapAttrs
         (vmName: vm: {
           ip = subnetIp lanSubnet vm.index;

@@ -402,7 +402,7 @@ EOF
           } // diskMqOps))
         ];
       netParams = builtins.map (iface:
-        if iface.type == "tap" then
+        if iface.type == "tap" || iface.type == "macvtap" then
           opsMapped ({
             tap = iface.id;
             mac = iface.mac;

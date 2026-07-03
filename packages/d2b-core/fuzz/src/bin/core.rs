@@ -345,6 +345,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                 effective_east_west: false,
             },
             net_vm_forward_blocklist: vec!["192.168.1.0/24".to_owned()],
+            home_lan: None,
             bridge_port_flags: vec![
                 BridgePortFlags {
                     role: TapRole::WorkloadLan,

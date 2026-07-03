@@ -114,6 +114,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Env net VMs can now opt into home-LAN plumbing with a macvtap-backed
+  `home0` NIC, separate workload-to-home egress NAT, and explicit
+  home-LAN port forwards.
 - `d2b-wayland-proxy` now draws compositor-agnostic, per-VM colored borders
   with an optional VM-name label for proxied graphics windows. Borders use the
   existing `d2b.vms.<vm>.ui.border` color model, are enabled by default with

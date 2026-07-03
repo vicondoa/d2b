@@ -63,6 +63,125 @@
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
 
+        homeLan = {
+          attachment = {
+            enable = lib.mkEnableOption "a separate net-VM NIC on the host LAN";
+
+            interface = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "eno1";
+              description = ''
+                Physical host interface that the net VM's home-LAN NIC is
+                attached to. The host interface stays managed by the host's
+                existing network stack; d2b does not bridge or reconfigure it.
+              '';
+            };
+
+            mode = lib.mkOption {
+              type = lib.types.enum [ "macvtap" ];
+              default = "macvtap";
+              description = "Host attachment mode for the net VM home-LAN NIC.";
+            };
+
+            macvtapMode = lib.mkOption {
+              type = lib.types.enum [ "bridge" "private" "vepa" "passthru" ];
+              default = "bridge";
+              description = "macvtap/macvlan mode used when attachment.mode is macvtap.";
+            };
+
+            macAddress = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Optional fixed MAC for the net VM's home-LAN NIC. When null,
+                d2b derives a deterministic locally-administered MAC from the
+                env name.
+              '';
+            };
+
+            ipv4 = {
+              method = lib.mkOption {
+                type = lib.types.enum [ "dhcp" "static" ];
+                default = "dhcp";
+                description = "How sys-<env>-net configures home0 inside the guest.";
+              };
+
+              address = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.50/24";
+                description = "Static IPv4 address with prefix when method is static.";
+              };
+
+              gateway = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.1";
+                description = "Optional static default gateway for home0.";
+              };
+
+              dns = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                example = [ "192.168.1.1" ];
+                description = "Optional static DNS servers for home0.";
+              };
+            };
+          };
+
+          egress.enable = lib.mkEnableOption "workload-initiated home-LAN access NATed behind sys-<env>-net's home0 address";
+
+          portForwards = lib.mkOption {
+            type = lib.types.listOf (lib.types.submodule {
+              options = {
+                protocol = lib.mkOption {
+                  type = lib.types.enum [ "tcp" "udp" ];
+                  default = "tcp";
+                  description = "Layer-4 protocol to forward from home0.";
+                };
+
+                listenPort = lib.mkOption {
+                  type = lib.types.port;
+                  example = 2222;
+                  description = "Port on sys-<env>-net's home0 address.";
+                };
+
+                vm = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  example = "workstation";
+                  description = "Workload VM in this env that receives the forward.";
+                };
+
+                targetIp = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  description = "Explicit workload-LAN target IP. Use instead of vm for advanced cases.";
+                };
+
+                targetPort = lib.mkOption {
+                  type = lib.types.nullOr lib.types.port;
+                  default = null;
+                  example = 22;
+                  description = "Target port on the workload VM. Defaults to listenPort.";
+                };
+              };
+            });
+            default = [ ];
+            example = lib.literalExpression ''
+              [
+                { protocol = "tcp"; listenPort = 2222; vm = "workstation"; targetPort = 22; }
+              ]
+            '';
+            description = ''
+              Explicit DNAT rules from sys-<env>-net home0 to workload VMs on
+              eth1. Empty by default; no SSH or other service is exposed unless
+              a forward is declared here.
+            '';
+          };
+        };
+
         ui.accentColor = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
           default = null;

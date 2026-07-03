@@ -3024,6 +3024,7 @@ mod tests {
                     effective_east_west: false,
                 },
                 net_vm_forward_blocklist: Vec::new(),
+                home_lan: None,
                 bridge_port_flags: vec![BridgePortFlags {
                     role: TapRole::Uplink,
                     isolated: true,
