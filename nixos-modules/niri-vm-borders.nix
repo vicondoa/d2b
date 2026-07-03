@@ -28,22 +28,14 @@ let
   niriEnabled = cfg.enable || legacyCfg.enable;
   outputPath = if cfg.enable then cfg.outputPath else legacyCfg.outputPath;
 
-  proxyBorderEffective = vm:
-    if isQemuMediaVm vm
-    then config.d2b.site.waylandUser != null && vm.graphics.waylandProxy.border.enable
-    else
-      vm.graphics.enable
-      && vm.graphics.crossDomainTrusted
-      && vm.graphics.waylandProxy.enable
-      && vm.graphics.waylandProxy.border.enable;
-
-  # All enabled graphics VMs that still need compositor-native niri borders,
-  # sorted by name for a stable output order. VMs with proxy-drawn borders are
-  # omitted so operators do not get two visible borders by default.
+  # All enabled graphics VMs that need compositor-native niri border colors,
+  # sorted by name for a stable output order. Proxy-drawn decorations use a
+  # host-visible wrapper toplevel, so niri's native border and focus ring wrap
+  # the whole proxy window instead of fighting the proxy-owned rail.
   graphicsVmNames = builtins.sort (a: b: a < b) (
     lib.attrNames (
       lib.filterAttrs
-        (name: vm: vm.enable && vm.graphics.enable && !proxyBorderEffective vm)
+        (name: vm: vm.enable && vm.graphics.enable)
         vmsCfg
     )
   );
@@ -53,7 +45,7 @@ let
   qemuMediaVmNames = builtins.sort (a: b: a < b) (
     lib.attrNames (
       lib.filterAttrs
-        (name: vm: vm.enable && isQemuMediaVm vm && !proxyBorderEffective vm)
+        (name: vm: vm.enable && isQemuMediaVm vm)
         vmsCfg
     )
   );

@@ -34,13 +34,13 @@ compositors that rely on title-based VM disambiguation.
 
 ### Disable proxy-drawn borders when needed
 
-When the host-side Wayland proxy is enabled, d2b draws a colored VM identity
-border around proxied Wayland toplevels by default, including qemu-media host
-windows routed through the proxy. The color comes from the same
-`d2b.vms.<vm>.ui.border` model used by generated compositor artifacts, and the
-default label is the authenticated VM name. The configured border thickness
-controls the side and bottom edges; when labels are enabled, the proxy reserves a
-taller top label band so the default label is visible.
+When the host-side Wayland proxy is enabled, d2b wraps proxied Wayland
+toplevels in a proxy-owned host-visible toplevel and draws a colored VM identity
+rail on the left side by default, including qemu-media host windows routed
+through the proxy. The color comes from the same `d2b.vms.<vm>.ui.border` model
+used by generated compositor artifacts, and the default label is the
+authenticated VM name. Guest buffers remain attached to the guest surface as an
+embedded subsurface; the proxy-drawn rail uses only proxy-owned SHM buffers.
 
 Disable the proxy-drawn border for a VM with:
 
@@ -138,16 +138,9 @@ include "/etc/d2b/niri-vm-borders.kdl"
 ```
 
 The generated rules use the prefix regex `^d2b\.<vm>\.` for VM windows that
-need compositor-native borders. Graphics and qemu-media VMs whose proxy-drawn
-border is effective are omitted from the generated niri border rules so the same
-window does not get two borders.
-
-If you prefer niri-native borders for a proxied VM, disable the proxy border
-for that VM:
-
-```nix
-d2b.vms.work.graphics.waylandProxy.border.enable = false;
-```
+need compositor-native borders. Proxied graphics and qemu-media VMs are still
+included: niri sees the proxy-owned wrapper toplevel as the host window, so its
+native border and focus ring wrap the VM rail and guest content together.
 
 ### 5. Restart the VM
 
@@ -179,8 +172,8 @@ running (`d2b vm status <vm>`).
 
 ### Check the proxy-drawn border
 
-Launch a Wayland client in the VM. The window should show a border using the
-VM's resolved `ui.border.activeColor`/`inactiveColor`, and should show the VM
+Launch a Wayland client in the VM. The window should show a left-side rail using
+the VM's resolved `ui.border.activeColor`/`inactiveColor`, and should show the VM
 name label unless `graphics.waylandProxy.border.label.enable = false`.
 
 The border is drawn from a proxy-owned decoration buffer. It does not require

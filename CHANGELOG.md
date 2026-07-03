@@ -37,8 +37,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Default proxy-drawn VM-name labels now render in a dedicated top band while
-  preserving the default 4-pixel side and bottom border thickness.
+- `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
+  proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
+  the VM rail and guest content together without copying guest buffers.
+- Default proxy-drawn VM-name labels render in the wrapper rail so the VM
+  identity remains visible without overlaying guest buffers.
 - `d2b-wayland-proxy` now preserves the last committed surface size after a
   guest destroys the current buffer object, while still clearing decorations on
   committed `attach(NULL)`.

@@ -44,8 +44,11 @@ use wl_proxy::{
             wl_data_offer::{WlDataOffer, WlDataOfferHandler},
             wl_data_source::{WlDataSource, WlDataSourceHandler},
             wl_display::{WlDisplay, WlDisplayHandler},
+            wl_keyboard::{WlKeyboard, WlKeyboardHandler},
             wl_output::WlOutputTransform,
+            wl_pointer::{WlPointer, WlPointerHandler},
             wl_registry::{WlRegistry, WlRegistryHandler},
+            wl_seat::{WlSeat, WlSeatHandler},
             wl_shm::{WlShm, WlShmHandler},
             wl_shm_pool::WlShmPool,
             wl_subcompositor::{WlSubcompositor, WlSubcompositorHandler},
@@ -70,7 +73,9 @@ use crate::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
         global_disposition,
     },
-    decoration::{SharedDecorationManager, WindowGeometry, tracking_shm_pool_handler},
+    decoration::{
+        SharedDecorationManager, WRAPPER_RAIL_WIDTH, WindowGeometry, tracking_shm_pool_handler,
+    },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -1198,6 +1203,15 @@ impl WlRegistryHandler for FilterRegistryHandler {
                         slf.send_bind(name, subcompositor);
                         return;
                     }
+                    if let Some(seat) = id.try_downcast::<WlSeat>() {
+                        if let Some(decoration) = &self.decoration {
+                            seat.set_handler(FilterSeatHandler {
+                                decoration: decoration.clone(),
+                            });
+                        }
+                        slf.send_bind(name, seat);
+                        return;
+                    }
                     if let Some(viewporter) = id.try_downcast::<WpViewporter>()
                         && let Some(decoration) = &self.decoration
                     {
@@ -1424,6 +1438,84 @@ impl WlCompositorHandler for FilterCompositorHandler {
     }
 }
 
+struct FilterSeatHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlSeatHandler for FilterSeatHandler {
+    fn handle_get_pointer(&mut self, slf: &Rc<WlSeat>, id: &Rc<WlPointer>) {
+        id.set_handler(FilterPointerHandler {
+            decoration: self.decoration.clone(),
+        });
+        slf.send_get_pointer(id);
+    }
+
+    fn handle_get_keyboard(&mut self, slf: &Rc<WlSeat>, id: &Rc<WlKeyboard>) {
+        id.set_handler(FilterKeyboardHandler {
+            decoration: self.decoration.clone(),
+        });
+        slf.send_get_keyboard(id);
+    }
+}
+
+struct FilterKeyboardHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlKeyboardHandler for FilterKeyboardHandler {
+    fn handle_enter(
+        &mut self,
+        slf: &Rc<WlKeyboard>,
+        serial: u32,
+        surface: &Rc<WlSurface>,
+        keys: &[u8],
+    ) {
+        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
+            slf.send_enter(serial, &surface, keys);
+        } else {
+            slf.send_enter(serial, surface, keys);
+        }
+    }
+
+    fn handle_leave(&mut self, slf: &Rc<WlKeyboard>, serial: u32, surface: &Rc<WlSurface>) {
+        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
+            slf.send_leave(serial, &surface);
+        } else {
+            slf.send_leave(serial, surface);
+        }
+    }
+}
+
+struct FilterPointerHandler {
+    decoration: SharedDecorationManager,
+}
+
+impl WlPointerHandler for FilterPointerHandler {
+    fn handle_enter(
+        &mut self,
+        slf: &Rc<WlPointer>,
+        serial: u32,
+        surface: &Rc<WlSurface>,
+        surface_x: Fixed,
+        surface_y: Fixed,
+    ) {
+        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
+            let x = surface_x - Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
+            slf.send_enter(serial, &surface, x, surface_y);
+        } else {
+            slf.send_enter(serial, surface, surface_x, surface_y);
+        }
+    }
+
+    fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
+        if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
+            slf.send_leave(serial, &surface);
+        } else {
+            slf.send_leave(serial, surface);
+        }
+    }
+}
+
 struct FilterSubcompositorHandler {
     decoration: SharedDecorationManager,
 }
@@ -1645,13 +1737,18 @@ impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
         xdg_surface: &Rc<XdgSurface>,
         surface: &Rc<WlSurface>,
     ) {
+        if let Some(decoration) = &self.decoration {
+            xdg_surface.set_forward_to_server(false);
+            decoration.borrow_mut().register_surface(surface);
+        }
         xdg_surface.set_handler(FilterXdgSurfaceHandler {
             policy: self.policy.clone(),
             decoration: self.decoration.clone(),
             surface: Rc::downgrade(surface),
         });
-        // Forward to the compositor.
-        slf.send_get_xdg_surface(xdg_surface, surface);
+        if self.decoration.is_none() {
+            slf.send_get_xdg_surface(xdg_surface, surface);
+        }
     }
 }
 
@@ -1665,16 +1762,25 @@ struct FilterXdgSurfaceHandler {
 
 impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
     fn handle_get_toplevel(&mut self, slf: &Rc<XdgSurface>, toplevel: &Rc<XdgToplevel>) {
+        let surface = self.surface.upgrade();
+        let surface_id = surface.as_ref().map(|surface| surface.unique_id());
         toplevel.set_handler(FilterXdgToplevelHandler {
             policy: self.policy.clone(),
             decoration: self.decoration.clone(),
-            surface_id: self.surface.upgrade().map(|surface| {
-                if let Some(decoration) = &self.decoration {
-                    decoration.borrow_mut().mark_toplevel(&surface);
-                }
-                surface.unique_id()
-            }),
+            surface_id,
         });
+        if let (Some(decoration), Some(surface)) = (&self.decoration, surface.as_ref()) {
+            let created = decoration.borrow_mut().create_wrapper_toplevel(
+                surface,
+                slf,
+                toplevel,
+                Rc::downgrade(decoration),
+            );
+            if created {
+                return;
+            }
+            decoration.borrow_mut().mark_toplevel(surface);
+        }
         slf.send_get_toplevel(toplevel);
     }
 
@@ -1687,6 +1793,14 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
         height: i32,
     ) {
         let geometry = WindowGeometry::new(x, y, width, height);
+        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade()) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_window_geometry(surface.unique_id(), geometry)
+            {
+                return;
+            }
+        }
         let geometry = self.decoration.as_ref().zip(self.surface.upgrade()).map_or(
             geometry,
             |(decoration, surface)| {
@@ -1696,6 +1810,18 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
             },
         );
         slf.send_set_window_geometry(geometry.x, geometry.y, geometry.width, geometry.height);
+    }
+
+    fn handle_ack_configure(&mut self, slf: &Rc<XdgSurface>, serial: u32) {
+        if let (Some(decoration), Some(surface)) = (&self.decoration, self.surface.upgrade()) {
+            if decoration
+                .borrow_mut()
+                .wrapper_ack_configure(surface.unique_id(), serial)
+            {
+                return;
+            }
+        }
+        slf.send_ack_configure(serial);
     }
 }
 
@@ -1709,11 +1835,27 @@ struct FilterXdgToplevelHandler {
 impl XdgToplevelHandler for FilterXdgToplevelHandler {
     fn handle_set_app_id(&mut self, slf: &Rc<XdgToplevel>, app_id: &str) {
         let rewritten = self.policy.rewrite_app_id(app_id);
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_app_id(surface_id, &rewritten)
+            {
+                return;
+            }
+        }
         slf.send_set_app_id(&rewritten);
     }
 
     fn handle_set_title(&mut self, slf: &Rc<XdgToplevel>, title: &str) {
         let rewritten = self.policy.rewrite_title(title);
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_title(surface_id, &rewritten)
+            {
+                return;
+            }
+        }
         slf.send_set_title(&rewritten);
     }
 
@@ -1723,27 +1865,90 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
         output: Option<&Rc<wl_proxy::protocols::wayland::wl_output::WlOutput>>,
     ) {
         if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            decoration
-                .borrow_mut()
-                .toplevel_fullscreen_request(surface_id, true);
+            let mut decoration = decoration.borrow_mut();
+            if decoration.wrapper_set_fullscreen(surface_id, output) {
+                return;
+            }
+            decoration.toplevel_fullscreen_request(surface_id, true);
         }
         slf.send_set_fullscreen(output);
     }
 
     fn handle_unset_fullscreen(&mut self, slf: &Rc<XdgToplevel>) {
         if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            decoration
-                .borrow_mut()
-                .toplevel_fullscreen_request(surface_id, false);
+            let mut decoration = decoration.borrow_mut();
+            if decoration.wrapper_unset_fullscreen(surface_id) {
+                return;
+            }
+            decoration.toplevel_fullscreen_request(surface_id, false);
         }
         slf.send_unset_fullscreen();
     }
 
+    fn handle_set_maximized(&mut self, slf: &Rc<XdgToplevel>) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_maximized(surface_id, true)
+            {
+                return;
+            }
+        }
+        slf.send_set_maximized();
+    }
+
+    fn handle_unset_maximized(&mut self, slf: &Rc<XdgToplevel>) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_maximized(surface_id, false)
+            {
+                return;
+            }
+        }
+        slf.send_unset_maximized();
+    }
+
+    fn handle_set_minimized(&mut self, slf: &Rc<XdgToplevel>) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration.borrow_mut().wrapper_set_minimized(surface_id) {
+                return;
+            }
+        }
+        slf.send_set_minimized();
+    }
+
+    fn handle_set_min_size(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_min_size(surface_id, width, height)
+            {
+                return;
+            }
+        }
+        slf.send_set_min_size(width, height);
+    }
+
+    fn handle_set_max_size(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32) {
+        if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
+            if decoration
+                .borrow_mut()
+                .wrapper_set_max_size(surface_id, width, height)
+            {
+                return;
+            }
+        }
+        slf.send_set_max_size(width, height);
+    }
+
     fn handle_configure(&mut self, slf: &Rc<XdgToplevel>, width: i32, height: i32, states: &[u8]) {
         if let (Some(decoration), Some(surface_id)) = (&self.decoration, self.surface_id) {
-            decoration
-                .borrow_mut()
-                .toplevel_configure(surface_id, states);
+            let mut decoration = decoration.borrow_mut();
+            if decoration.has_wrapper(surface_id) {
+                return;
+            }
+            decoration.toplevel_configure(surface_id, states);
         }
         slf.send_configure(width, height, states);
     }
