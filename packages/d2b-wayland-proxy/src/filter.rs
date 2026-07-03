@@ -1506,7 +1506,7 @@ impl WlSeatHandler for FilterSeatHandler {
     fn handle_get_pointer(&mut self, slf: &Rc<WlSeat>, id: &Rc<WlPointer>) {
         id.set_handler(FilterPointerHandler {
             decoration: self.decoration.clone(),
-            rail_focus: false,
+            focus: PointerFocus::None,
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1564,8 +1564,32 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
 
 struct FilterPointerHandler {
     decoration: SharedDecorationManager,
-    rail_focus: bool,
+    focus: PointerFocus,
     pending_forwarded_frame: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PointerFocus {
+    #[default]
+    None,
+    Direct,
+    WrapperContent,
+    Rail,
+}
+
+fn wrapper_content_pointer_x(surface_x: Fixed) -> Option<Fixed> {
+    let rail_width = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
+    (surface_x >= rail_width).then_some(surface_x - rail_width)
+}
+
+fn pointer_motion_x_for_focus(focus: PointerFocus, surface_x: Fixed) -> Option<Fixed> {
+    match focus {
+        PointerFocus::Direct => Some(surface_x),
+        PointerFocus::WrapperContent => {
+            Some(surface_x - Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32))
+        }
+        PointerFocus::None | PointerFocus::Rail => None,
+    }
 }
 
 impl WlPointerHandler for FilterPointerHandler {
@@ -1579,29 +1603,43 @@ impl WlPointerHandler for FilterPointerHandler {
     ) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client_id()) {
-                self.rail_focus = true;
+                if let Some(x) = wrapper_content_pointer_x(surface_x) {
+                    self.focus = PointerFocus::WrapperContent;
+                    self.pending_forwarded_frame = true;
+                    slf.send_enter(serial, &target, x, surface_y);
+                } else {
+                    self.focus = PointerFocus::Rail;
+                }
+            } else {
+                self.focus = PointerFocus::None;
             }
             return;
         }
         if !surface_belongs_to_receiver(surface, slf.client_id()) {
+            self.focus = PointerFocus::None;
             return;
         }
-        self.rail_focus = false;
+        self.focus = PointerFocus::Direct;
         self.pending_forwarded_frame = true;
         slf.send_enter(serial, surface, surface_x, surface_y);
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&target, slf.client_id()) {
-                self.rail_focus = false;
+            if surface_belongs_to_receiver(&target, slf.client_id())
+                && self.focus == PointerFocus::WrapperContent
+            {
+                self.pending_forwarded_frame = true;
+                slf.send_leave(serial, &target);
             }
+            self.focus = PointerFocus::None;
             return;
         }
         if !surface_belongs_to_receiver(surface, slf.client_id()) {
+            self.focus = PointerFocus::None;
             return;
         }
-        self.rail_focus = false;
+        self.focus = PointerFocus::None;
         self.pending_forwarded_frame = true;
         slf.send_leave(serial, surface);
     }
@@ -1614,15 +1652,15 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_y: Fixed,
     ) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        let Some(x) = pointer_motion_x_for_focus(self.focus, surface_x) else {
             return;
-        }
+        };
         self.pending_forwarded_frame = true;
-        slf.send_motion(time, surface_x, surface_y);
+        slf.send_motion(time, x, surface_y);
     }
 
     fn handle_button(
@@ -1634,11 +1672,11 @@ impl WlPointerHandler for FilterPointerHandler {
         state: WlPointerButtonState,
     ) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1647,11 +1685,11 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_axis(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis, value: Fixed) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1660,7 +1698,7 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
@@ -1673,11 +1711,11 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_axis_source(&mut self, slf: &Rc<WlPointer>, axis_source: WlPointerAxisSource) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1686,11 +1724,11 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_axis_stop(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1699,11 +1737,11 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_axis_discrete(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, discrete: i32) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1712,11 +1750,11 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_axis_value120(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, value120: i32) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1730,11 +1768,11 @@ impl WlPointerHandler for FilterPointerHandler {
         direction: WlPointerAxisRelativeDirection,
     ) {
         if !receiver_has_client(slf.client_id()) {
-            self.rail_focus = false;
+            self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.rail_focus {
+        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -2733,6 +2771,42 @@ mod tests {
             diag,
             BridgeConfig::disabled(),
         )))
+    }
+
+    #[test]
+    fn wrapper_pointer_enter_translates_content_but_suppresses_rail() {
+        let rail_edge = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
+        let content_x = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 42);
+
+        assert_eq!(wrapper_content_pointer_x(Fixed::ZERO), None);
+        assert_eq!(wrapper_content_pointer_x(rail_edge), Some(Fixed::ZERO));
+        assert_eq!(
+            wrapper_content_pointer_x(content_x),
+            Some(Fixed::from_i32_saturating(42))
+        );
+    }
+
+    #[test]
+    fn pointer_motion_translation_matches_current_focus() {
+        let wrapper_x = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 10);
+        let direct_x = Fixed::from_i32_saturating(10);
+
+        assert_eq!(
+            pointer_motion_x_for_focus(PointerFocus::WrapperContent, wrapper_x),
+            Some(Fixed::from_i32_saturating(10))
+        );
+        assert_eq!(
+            pointer_motion_x_for_focus(PointerFocus::Direct, direct_x),
+            Some(direct_x)
+        );
+        assert_eq!(
+            pointer_motion_x_for_focus(PointerFocus::Rail, wrapper_x),
+            None
+        );
+        assert_eq!(
+            pointer_motion_x_for_focus(PointerFocus::None, wrapper_x),
+            None
+        );
     }
 
     #[test]
