@@ -1613,6 +1613,11 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_x: Fixed,
         surface_y: Fixed,
     ) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1628,6 +1633,11 @@ impl WlPointerHandler for FilterPointerHandler {
         button: u32,
         state: WlPointerButtonState,
     ) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1636,6 +1646,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis, value: Fixed) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1644,6 +1659,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if !self.pending_forwarded_frame {
             return;
         }
@@ -1652,6 +1672,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_source(&mut self, slf: &Rc<WlPointer>, axis_source: WlPointerAxisSource) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1660,6 +1685,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_stop(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1668,6 +1698,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_discrete(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, discrete: i32) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1676,6 +1711,11 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_value120(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, value120: i32) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1689,6 +1729,11 @@ impl WlPointerHandler for FilterPointerHandler {
         axis: WlPointerAxis,
         direction: WlPointerAxisRelativeDirection,
     ) {
+        if !receiver_has_client(slf.client_id()) {
+            self.rail_focus = false;
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.rail_focus {
             return;
         }
@@ -1715,6 +1760,12 @@ impl WlTouchHandler for FilterTouchHandler {
         x: Fixed,
         y: Fixed,
     ) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client_id()) {
                 self.suppressed_ids.insert(id);
@@ -1730,6 +1781,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_up(&mut self, slf: &Rc<WlTouch>, serial: u32, time: u32, id: i32) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.suppressed_ids.remove(&id) {
             return;
         }
@@ -1739,6 +1796,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_motion(&mut self, slf: &Rc<WlTouch>, time: u32, id: i32, x: Fixed, y: Fixed) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.suppressed_ids.contains(&id) {
             return;
         }
@@ -1747,6 +1810,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_shape(&mut self, slf: &Rc<WlTouch>, id: i32, major: Fixed, minor: Fixed) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.suppressed_ids.contains(&id) {
             return;
         }
@@ -1755,6 +1824,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_orientation(&mut self, slf: &Rc<WlTouch>, id: i32, orientation: Fixed) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.suppressed_ids.contains(&id) {
             return;
         }
@@ -1763,6 +1838,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_cancel(&mut self, slf: &Rc<WlTouch>) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if self.forwarded_ids.is_empty() {
             self.suppressed_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1775,6 +1856,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlTouch>) {
+        if !receiver_has_client(slf.client_id()) {
+            self.suppressed_ids.clear();
+            self.forwarded_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
         if !self.pending_forwarded_frame {
             return;
         }
@@ -1783,8 +1870,12 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 }
 
+fn receiver_has_client(receiver_client_id: Option<u32>) -> bool {
+    receiver_client_id.is_some()
+}
+
 fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver_client_id: Option<u32>) -> bool {
-    receiver_client_id.is_some() && surface.client_id() == receiver_client_id
+    receiver_has_client(receiver_client_id) && surface.client_id() == receiver_client_id
 }
 
 struct FilterSubcompositorHandler {
