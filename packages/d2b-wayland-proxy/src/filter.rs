@@ -47,7 +47,7 @@ use wl_proxy::{
             wl_keyboard::{
                 WlKeyboard, WlKeyboardHandler, WlKeyboardKeyState, WlKeyboardKeymapFormat,
             },
-            wl_output::WlOutputTransform,
+            wl_output::{WlOutput, WlOutputTransform},
             wl_pointer::{
                 WlPointer, WlPointerAxis, WlPointerAxisRelativeDirection, WlPointerAxisSource,
                 WlPointerButtonState, WlPointerHandler,
@@ -1960,12 +1960,19 @@ fn receiver_has_client(receiver: Option<Rc<Client>>) -> bool {
 }
 
 fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver: Option<Rc<Client>>) -> bool {
+    object_belongs_to_receiver(surface, receiver)
+}
+
+fn object_belongs_to_receiver<T>(object: &Rc<T>, receiver: Option<Rc<Client>>) -> bool
+where
+    T: ObjectCoreApi,
+{
     let Some(receiver) = receiver else {
         return false;
     };
-    surface
+    object
         .client()
-        .is_some_and(|surface_client| Rc::ptr_eq(&surface_client, &receiver))
+        .is_some_and(|object_client| Rc::ptr_eq(&object_client, &receiver))
 }
 
 struct FilterSubcompositorHandler {
@@ -2172,6 +2179,18 @@ impl WlSurfaceHandler for FilterSurfaceHandler {
     fn handle_commit(&mut self, slf: &Rc<WlSurface>) {
         slf.send_commit();
         self.decoration.borrow_mut().surface_commit(slf);
+    }
+
+    fn handle_enter(&mut self, slf: &Rc<WlSurface>, output: &Rc<WlOutput>) {
+        if object_belongs_to_receiver(output, slf.client()) {
+            slf.send_enter(output);
+        }
+    }
+
+    fn handle_leave(&mut self, slf: &Rc<WlSurface>, output: &Rc<WlOutput>) {
+        if object_belongs_to_receiver(output, slf.client()) {
+            slf.send_leave(output);
+        }
     }
 }
 
