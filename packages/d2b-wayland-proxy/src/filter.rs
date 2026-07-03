@@ -61,7 +61,10 @@ use wl_proxy::{
         },
         xdg_shell::{
             xdg_popup::XdgPopup,
-            xdg_positioner::XdgPositioner,
+            xdg_positioner::{
+                XdgPositioner, XdgPositionerAnchor, XdgPositionerConstraintAdjustment,
+                XdgPositionerGravity, XdgPositionerHandler,
+            },
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler},
             xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
@@ -79,7 +82,9 @@ use crate::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
         global_disposition,
     },
-    decoration::{SharedDecorationManager, WindowGeometry, tracking_shm_pool_handler},
+    decoration::{
+        SharedDecorationManager, WRAPPER_RAIL_WIDTH, WindowGeometry, tracking_shm_pool_handler,
+    },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
     policy::FilterPolicy,
@@ -217,6 +222,51 @@ struct VirtualOffer {
 struct PendingBridgeHandoff {
     fd: OwnedFd,
     metadata: BridgeTransferMetadata,
+}
+
+#[derive(Clone, Default)]
+struct PositionerState {
+    size: Option<(i32, i32)>,
+    anchor_rect: Option<(i32, i32, i32, i32)>,
+    anchor: Option<XdgPositionerAnchor>,
+    gravity: Option<XdgPositionerGravity>,
+    constraint_adjustment: Option<XdgPositionerConstraintAdjustment>,
+    offset: Option<(i32, i32)>,
+    reactive: bool,
+    parent_size: Option<(i32, i32)>,
+    parent_configure: Option<u32>,
+}
+
+impl PositionerState {
+    fn apply_to(&self, positioner: &Rc<XdgPositioner>, x_offset: i32) {
+        if let Some((width, height)) = self.size {
+            positioner.send_set_size(width, height);
+        }
+        if let Some((x, y, width, height)) = self.anchor_rect {
+            positioner.send_set_anchor_rect(x.saturating_add(x_offset), y, width, height);
+        }
+        if let Some(anchor) = self.anchor {
+            positioner.send_set_anchor(anchor);
+        }
+        if let Some(gravity) = self.gravity {
+            positioner.send_set_gravity(gravity);
+        }
+        if let Some(constraint_adjustment) = self.constraint_adjustment {
+            positioner.send_set_constraint_adjustment(constraint_adjustment);
+        }
+        if let Some((x, y)) = self.offset {
+            positioner.send_set_offset(x, y);
+        }
+        if self.reactive {
+            positioner.send_set_reactive();
+        }
+        if let Some((width, height)) = self.parent_size {
+            positioner.send_set_parent_size(width.saturating_add(x_offset), height);
+        }
+        if let Some(serial) = self.parent_configure {
+            positioner.send_set_parent_configure(serial);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1173,6 +1223,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
                 wm_base.set_handler(FilterXdgWmBaseHandler {
                     policy: self.policy.clone(),
                     decoration: self.decoration.clone(),
+                    positioners: Rc::new(RefCell::new(HashMap::new())),
                 });
             }
             _ => match id.try_downcast::<WlEglstreamDisplay>() {
@@ -1466,6 +1517,8 @@ impl WlSeatHandler for FilterSeatHandler {
         id.set_handler(FilterTouchHandler {
             decoration: self.decoration.clone(),
             suppressed_ids: HashSet::new(),
+            forwarded_ids: HashSet::new(),
+            pending_forwarded_frame: false,
         });
         slf.send_get_touch(id);
     }
@@ -1575,9 +1628,6 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
-        if self.rail_focus {
-            return;
-        }
         slf.send_frame();
     }
 
@@ -1625,6 +1675,8 @@ impl WlPointerHandler for FilterPointerHandler {
 struct FilterTouchHandler {
     decoration: SharedDecorationManager,
     suppressed_ids: HashSet<i32>,
+    forwarded_ids: HashSet<i32>,
+    pending_forwarded_frame: bool,
 }
 
 impl WlTouchHandler for FilterTouchHandler {
@@ -1647,6 +1699,8 @@ impl WlTouchHandler for FilterTouchHandler {
             self.suppressed_ids.insert(id);
             return;
         }
+        self.forwarded_ids.insert(id);
+        self.pending_forwarded_frame = true;
         slf.send_down(serial, time, surface, id, x, y);
     }
 
@@ -1654,6 +1708,8 @@ impl WlTouchHandler for FilterTouchHandler {
         if self.suppressed_ids.remove(&id) {
             return;
         }
+        self.forwarded_ids.remove(&id);
+        self.pending_forwarded_frame = true;
         slf.send_up(serial, time, id);
     }
 
@@ -1661,6 +1717,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if self.suppressed_ids.contains(&id) {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_motion(time, id, x, y);
     }
 
@@ -1668,6 +1725,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if self.suppressed_ids.contains(&id) {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_shape(id, major, minor);
     }
 
@@ -1675,12 +1733,28 @@ impl WlTouchHandler for FilterTouchHandler {
         if self.suppressed_ids.contains(&id) {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_orientation(id, orientation);
     }
 
     fn handle_cancel(&mut self, slf: &Rc<WlTouch>) {
+        if self.forwarded_ids.is_empty() {
+            self.suppressed_ids.clear();
+            self.pending_forwarded_frame = false;
+            return;
+        }
+        self.forwarded_ids.clear();
         self.suppressed_ids.clear();
+        self.pending_forwarded_frame = false;
         slf.send_cancel();
+    }
+
+    fn handle_frame(&mut self, slf: &Rc<WlTouch>) {
+        if !self.pending_forwarded_frame {
+            return;
+        }
+        self.pending_forwarded_frame = false;
+        slf.send_frame();
     }
 }
 
@@ -1896,9 +1970,21 @@ impl WlSurfaceHandler for FilterSurfaceHandler {
 struct FilterXdgWmBaseHandler {
     policy: Rc<FilterPolicy>,
     decoration: Option<SharedDecorationManager>,
+    positioners: Rc<RefCell<HashMap<u64, PositionerState>>>,
 }
 
 impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
+    fn handle_create_positioner(&mut self, slf: &Rc<XdgWmBase>, id: &Rc<XdgPositioner>) {
+        self.positioners
+            .borrow_mut()
+            .entry(id.unique_id())
+            .or_default();
+        id.set_handler(FilterXdgPositionerHandler {
+            positioners: self.positioners.clone(),
+        });
+        slf.send_create_positioner(id);
+    }
+
     fn handle_get_xdg_surface(
         &mut self,
         slf: &Rc<XdgWmBase>,
@@ -1915,10 +2001,101 @@ impl XdgWmBaseHandler for FilterXdgWmBaseHandler {
             surface: Rc::downgrade(surface),
             wm_base: slf.clone(),
             server_xdg_surface_created: self.decoration.is_none(),
+            positioners: self.positioners.clone(),
         });
         if self.decoration.is_none() {
             slf.send_get_xdg_surface(xdg_surface, surface);
         }
+    }
+}
+
+struct FilterXdgPositionerHandler {
+    positioners: Rc<RefCell<HashMap<u64, PositionerState>>>,
+}
+
+impl FilterXdgPositionerHandler {
+    fn update(&self, positioner: &Rc<XdgPositioner>, update: impl FnOnce(&mut PositionerState)) {
+        if let Some(state) = self
+            .positioners
+            .borrow_mut()
+            .get_mut(&positioner.unique_id())
+        {
+            update(state);
+        }
+    }
+}
+
+impl XdgPositionerHandler for FilterXdgPositionerHandler {
+    fn handle_destroy(&mut self, slf: &Rc<XdgPositioner>) {
+        self.positioners.borrow_mut().remove(&slf.unique_id());
+        slf.send_destroy();
+    }
+
+    fn handle_set_size(&mut self, slf: &Rc<XdgPositioner>, width: i32, height: i32) {
+        self.update(slf, |state| state.size = Some((width, height)));
+        slf.send_set_size(width, height);
+    }
+
+    fn handle_set_anchor_rect(
+        &mut self,
+        slf: &Rc<XdgPositioner>,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        self.update(slf, |state| {
+            state.anchor_rect = Some((x, y, width, height));
+        });
+        slf.send_set_anchor_rect(x, y, width, height);
+    }
+
+    fn handle_set_anchor(&mut self, slf: &Rc<XdgPositioner>, anchor: XdgPositionerAnchor) {
+        self.update(slf, |state| state.anchor = Some(anchor));
+        slf.send_set_anchor(anchor);
+    }
+
+    fn handle_set_gravity(&mut self, slf: &Rc<XdgPositioner>, gravity: XdgPositionerGravity) {
+        self.update(slf, |state| state.gravity = Some(gravity));
+        slf.send_set_gravity(gravity);
+    }
+
+    fn handle_set_constraint_adjustment(
+        &mut self,
+        slf: &Rc<XdgPositioner>,
+        constraint_adjustment: XdgPositionerConstraintAdjustment,
+    ) {
+        self.update(slf, |state| {
+            state.constraint_adjustment = Some(constraint_adjustment);
+        });
+        slf.send_set_constraint_adjustment(constraint_adjustment);
+    }
+
+    fn handle_set_offset(&mut self, slf: &Rc<XdgPositioner>, x: i32, y: i32) {
+        self.update(slf, |state| state.offset = Some((x, y)));
+        slf.send_set_offset(x, y);
+    }
+
+    fn handle_set_reactive(&mut self, slf: &Rc<XdgPositioner>) {
+        self.update(slf, |state| state.reactive = true);
+        slf.send_set_reactive();
+    }
+
+    fn handle_set_parent_size(
+        &mut self,
+        slf: &Rc<XdgPositioner>,
+        parent_width: i32,
+        parent_height: i32,
+    ) {
+        self.update(slf, |state| {
+            state.parent_size = Some((parent_width, parent_height));
+        });
+        slf.send_set_parent_size(parent_width, parent_height);
+    }
+
+    fn handle_set_parent_configure(&mut self, slf: &Rc<XdgPositioner>, serial: u32) {
+        self.update(slf, |state| state.parent_configure = Some(serial));
+        slf.send_set_parent_configure(serial);
     }
 }
 
@@ -1930,6 +2107,7 @@ struct FilterXdgSurfaceHandler {
     surface: Weak<WlSurface>,
     wm_base: Rc<XdgWmBase>,
     server_xdg_surface_created: bool,
+    positioners: Rc<RefCell<HashMap<u64, PositionerState>>>,
 }
 
 impl FilterXdgSurfaceHandler {
@@ -1944,6 +2122,17 @@ impl FilterXdgSurfaceHandler {
         slf.set_forward_to_server(true);
         self.server_xdg_surface_created = true;
         true
+    }
+
+    fn adjusted_positioner_for_wrapper_parent(
+        &self,
+        positioner: &Rc<XdgPositioner>,
+    ) -> Rc<XdgPositioner> {
+        let adjusted = self.wm_base.new_send_create_positioner();
+        if let Some(state) = self.positioners.borrow().get(&positioner.unique_id()) {
+            state.apply_to(&adjusted, i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0));
+        }
+        adjusted
     }
 }
 
@@ -1989,8 +2178,15 @@ impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
                 .as_ref()
                 .and_then(|decoration| decoration.borrow().wrapper_xdg_surface_for_guest(parent))
         });
+        let adjusted_positioner = wrapper_parent
+            .as_ref()
+            .map(|_| self.adjusted_positioner_for_wrapper_parent(positioner));
         let parent = wrapper_parent.as_ref().or(parent);
+        let positioner = adjusted_positioner.as_ref().unwrap_or(positioner);
         slf.send_get_popup(popup, parent, positioner);
+        if let Some(positioner) = adjusted_positioner {
+            positioner.send_destroy();
+        }
     }
 
     fn handle_set_window_geometry(

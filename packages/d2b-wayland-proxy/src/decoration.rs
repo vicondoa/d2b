@@ -35,7 +35,7 @@ use wl_proxy::{
         xdg_shell::{
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler, XdgToplevelState},
-            xdg_wm_base::XdgWmBase,
+            xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
         },
     },
 };
@@ -1394,6 +1394,7 @@ impl DecorationManager {
                     .state()
                     .create_object::<XdgWmBase>(version.min(XdgWmBase::XML_VERSION));
                 registry.send_bind(name, wm_base.clone());
+                wm_base.set_handler(ProxyWmBaseHandler);
                 self.wm_base = Some(wm_base);
             }
             _ => {}
@@ -2215,6 +2216,14 @@ impl DecorationManager {
 struct WrapperXdgSurfaceHandler {
     manager: Weak<RefCell<DecorationManager>>,
     surface_id: u64,
+}
+
+struct ProxyWmBaseHandler;
+
+impl XdgWmBaseHandler for ProxyWmBaseHandler {
+    fn handle_ping(&mut self, slf: &Rc<XdgWmBase>, serial: u32) {
+        slf.send_pong(serial);
+    }
 }
 
 impl XdgSurfaceHandler for WrapperXdgSurfaceHandler {
