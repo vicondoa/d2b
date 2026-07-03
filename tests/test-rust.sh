@@ -481,7 +481,12 @@ cargo_deny_check "main workspace" "$manifest" "$deny_config"
 cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
 cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
 
-cargo_audit_check "main workspace" "$lock_file"
+# Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
+# updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
+# a release on quick-xml >= 0.41.
+cargo_audit_check "main workspace" "$lock_file" \
+  --ignore RUSTSEC-2026-0194 \
+  --ignore RUSTSEC-2026-0195
 cargo_audit_check "broker workspace" "$broker_lock_file"
 # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
 # The helper pins and tracks that transitive unmaintained advisory explicitly

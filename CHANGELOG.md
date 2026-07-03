@@ -40,6 +40,10 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
   proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
   the VM rail and guest content together without copying guest buffers.
+- Updated the Windows notification transitive dependency to remove the runtime
+  `quick-xml` advisory path, and documented a temporary build-time
+  `wayland-scanner` advisory exception until that code generator publishes a
+  fixed `quick-xml` release.
 - Default proxy-drawn VM-name labels render in the wrapper rail so the VM
   identity remains visible without overlaying guest buffers.
 - `d2b-wayland-proxy` now preserves the last committed surface size after a

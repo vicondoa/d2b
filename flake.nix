@@ -1207,7 +1207,12 @@
             cargo-audit audit --file "$lock" \
               --db ${advisoryDbGit} --no-fetch "$@"
           }
-          run_audit ${rustPackagesSrc}/packages/Cargo.lock
+          # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users
+          # were updated away from vulnerable 0.37.x. Remove once
+          # wayland-scanner publishes a release on quick-xml >= 0.41.
+          run_audit ${rustPackagesSrc}/packages/Cargo.lock \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195
           run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
           run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
           # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
