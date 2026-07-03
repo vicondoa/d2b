@@ -1546,7 +1546,7 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
             if surface_belongs_to_receiver(&surface, slf.client_id()) {
                 slf.send_enter(serial, &surface, keys);
             }
-        } else {
+        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
             slf.send_enter(serial, surface, keys);
         }
     }
@@ -1556,7 +1556,7 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
             if surface_belongs_to_receiver(&surface, slf.client_id()) {
                 slf.send_leave(serial, &surface);
             }
-        } else {
+        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
             slf.send_leave(serial, surface);
         }
     }
@@ -1583,6 +1583,9 @@ impl WlPointerHandler for FilterPointerHandler {
             }
             return;
         }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
+            return;
+        }
         self.rail_focus = false;
         self.pending_forwarded_frame = true;
         slf.send_enter(serial, surface, surface_x, surface_y);
@@ -1593,6 +1596,9 @@ impl WlPointerHandler for FilterPointerHandler {
             if surface_belongs_to_receiver(&target, slf.client_id()) {
                 self.rail_focus = false;
             }
+            return;
+        }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
             return;
         }
         self.rail_focus = false;
@@ -1713,6 +1719,9 @@ impl WlTouchHandler for FilterTouchHandler {
             if surface_belongs_to_receiver(&target, slf.client_id()) {
                 self.suppressed_ids.insert(id);
             }
+            return;
+        }
+        if !surface_belongs_to_receiver(surface, slf.client_id()) {
             return;
         }
         self.forwarded_ids.insert(id);
