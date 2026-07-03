@@ -17,6 +17,9 @@ deprecations ship one minor release before removal.
   policy.
 - Net VMs can opt into home-LAN mDNS reflection and an optional `.local`
   dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
+- Nix-unit coverage and minimal eval wiring for opt-in per-env home-LAN net VM
+  interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
+  forwarding.
 
 ### Changed
 

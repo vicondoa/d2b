@@ -183,7 +183,6 @@ in
           # LAN: DHCP + DNS for workload VMs.
           iifname "eth1" udp dport { 53, 67 } accept
           iifname "eth1" tcp dport 53 accept
-
           ${lib.optionalString homeLanEnabled ''
           # Home LAN: DHCP client replies for home0 only.
           iifname "${homeIf}" udp sport 67 udp dport 68 accept
@@ -298,7 +297,8 @@ in
       domain-needed = true;
       bogus-priv = true;
       no-resolv = true;
-      server = [ "1.1.1.1" "8.8.8.8" ];
+      server = [ "1.1.1.1" "8.8.8.8" ]
+        ++ lib.optional (homeLanEnabled && m.homeLan.mdns.dnsmasqLocal.enable) "/local/224.0.0.251#5353";
       cache-size = 1000;
 
       # DHCP — pool covers the "unreserved" tail end of the subnet.
@@ -320,6 +320,13 @@ in
       # static dhcp-host reservations above.
       dhcp-ignore-names = true;
     };
+  };
+
+  services.avahi = lib.mkIf (homeLanEnabled && m.homeLan.mdns.enable) {
+    enable = true;
+    reflector = true;
+    allowInterfaces = [ "eth1" homeIf ];
+    openFirewall = false;
   };
 
   # dnsmasq systemd confinement.

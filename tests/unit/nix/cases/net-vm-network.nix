@@ -59,7 +59,6 @@ let
       lanSubnet = "10.30.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
     };
-
     d2b.vms.corp-vm = {
       enable = true;
       env = "work";
@@ -244,6 +243,34 @@ in
         targetIp = "10.20.0.10";
         targetPort = 22;
       };
+    };
+  };
+  "net-vm-network/safe-home-lan-default-off" = {
+    expr = {
+      optionDefault = cfg.d2b.envs.safe.homeLan.enable;
+      hasGuestNetwork = builtins.hasAttr "10-home" safeNet.systemd.network.networks;
+      hasGuestLink = builtins.hasAttr "10-home" safeNet.systemd.network.links;
+      interfaceCount = builtins.length safeNet.microvm.interfaces;
+    };
+    expected = {
+      optionDefault = false;
+      hasGuestNetwork = false;
+      hasGuestLink = false;
+      interfaceCount = 2;
+    };
+  };
+  "net-vm-network/obs-home-lan-default-off" = {
+    expr = {
+      optionDefault = cfg.d2b.envs.obs.homeLan.enable;
+      hasGuestNetwork = builtins.hasAttr "10-home" obsNet.systemd.network.networks;
+      hasGuestLink = builtins.hasAttr "10-home" obsNet.systemd.network.links;
+      interfaceCount = builtins.length obsNet.microvm.interfaces;
+    };
+    expected = {
+      optionDefault = false;
+      hasGuestNetwork = false;
+      hasGuestLink = false;
+      interfaceCount = 2;
     };
   };
 
