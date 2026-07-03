@@ -44,6 +44,9 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now tears down proxy-owned wrapper toplevels when guests
   destroy the XDG role or disconnect abruptly, preventing dead VM identity rails
   from outliving the guest window.
+- `d2b-wayland-proxy` now translates pointer focus and motion from wrapper
+  content coordinates into guest-surface coordinates while suppressing only the
+  trusted rail, preventing clicks in wrapped guest windows from crashing clients.
 - `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
   proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
   the VM rail and guest content together without copying guest buffers.
