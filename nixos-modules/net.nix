@@ -322,13 +322,6 @@ in
     };
   };
 
-  services.avahi = lib.mkIf (homeLanEnabled && m.homeLan.mdns.enable) {
-    enable = true;
-    reflector = true;
-    allowInterfaces = [ "eth1" homeIf ];
-    openFirewall = false;
-  };
-
   # dnsmasq systemd confinement.
   #
   # The NixOS dnsmasq module starts the daemon as root then relies on dnsmasq's

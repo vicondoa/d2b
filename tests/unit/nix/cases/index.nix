@@ -45,7 +45,7 @@ let
         enable = true;
         attachment = {
           enable = true;
-          hostInterface = "eno1";
+          interface = "eno1";
         };
         egress = {
           enable = true;
@@ -54,7 +54,7 @@ let
         portForwards = [{
           protocol = "tcp";
           listenPort = 8443;
-          targetVm = "app";
+          vm = "app";
           targetPort = 443;
           sourceCidrs = [ "192.168.1.0/24" ];
         }];
@@ -217,11 +217,17 @@ in
         enable = true;
         attachment = {
           enable = true;
-          hostInterface = "eno1";
+          interface = "eno1";
           mode = "macvtap";
-          address = {
-            mode = "dhcp";
-            static = null;
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "home0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
           };
         };
         egress = {
@@ -231,15 +237,19 @@ in
         };
         portForwards = [{
           listenPort = 8443;
-          targetVm = "app";
-          targetPort = 443;
           protocol = "tcp";
+          vm = "app";
           sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
         }];
         mdns = {
           enable = true;
           reflector.enable = true;
-          dnsmasqLocal.enable = false;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
           publishWorkstation = true;
         };
       };
@@ -247,11 +257,17 @@ in
         enable = true;
         attachment = {
           enable = true;
-          hostInterface = "eno1";
+          interface = "eno1";
           mode = "macvtap";
-          address = {
-            mode = "dhcp";
-            static = null;
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "home0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
           };
         };
         egress = {
@@ -261,15 +277,19 @@ in
         };
         portForwards = [{
           listenPort = 8443;
-          targetVm = "app";
-          targetPort = 443;
           protocol = "tcp";
+          vm = "app";
           sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
         }];
         mdns = {
           enable = true;
           reflector.enable = true;
-          dnsmasqLocal.enable = false;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
           publishWorkstation = true;
         };
       };

@@ -239,6 +239,7 @@ in
       forward = {
         protocol = "tcp";
         listenPort = 2222;
+        sourceCidrs = [ ];
         vm = "corp-vm";
         targetIp = "10.20.0.10";
         targetPort = 22;

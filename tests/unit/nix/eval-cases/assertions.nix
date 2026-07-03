@@ -340,7 +340,7 @@ shared.mkBatch {
           d2b.envs.work.homeLan.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
-            targetVm = "corp-vm";
+            vm = "corp-vm";
             targetPort = 443;
           }];
         }
@@ -358,15 +358,17 @@ shared.mkBatch {
     };
 
     "home-lan-port-forward-required-fields" = {
-      expectedSubstring = "must specify protocol, listenPort, targetVm, and targetPort";
+      expectedSubstring = "must specify either vm or targetIp";
       override = (
         { ... }:
         {
           d2b.envs.work.homeLan.attachment = {
             enable = true;
-            hostInterface = "eno1";
+            interface = "eno1";
           };
-          d2b.envs.work.homeLan.portForwards = [{ }];
+          d2b.envs.work.homeLan.portForwards = [{
+            listenPort = 8443;
+          }];
         }
       );
     };
@@ -388,12 +390,12 @@ shared.mkBatch {
           };
           d2b.envs.work.homeLan.attachment = {
             enable = true;
-            hostInterface = "eno1";
+            interface = "eno1";
           };
           d2b.envs.work.homeLan.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
-            targetVm = "other-vm";
+            vm = "other-vm";
             targetPort = 443;
           }];
         }
@@ -411,7 +413,7 @@ shared.mkBatch {
           };
           d2b.envs.work.homeLan.attachment = {
             enable = true;
-            hostInterface = "eno1";
+            interface = "eno1";
           };
           d2b.envs.work.homeLan.egress = {
             enable = true;
@@ -432,12 +434,12 @@ shared.mkBatch {
           };
           d2b.envs.work.homeLan.attachment = {
             enable = true;
-            hostInterface = "eno1";
+            interface = "eno1";
           };
           d2b.envs.work.homeLan.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
-            targetVm = "corp-vm";
+            vm = "corp-vm";
             targetPort = 443;
             sourceCidrs = [ "10.30.0.0/24" ];
           }];
