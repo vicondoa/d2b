@@ -41,7 +41,7 @@ let
     in
     rec {
       name = envName;
-      inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
+      inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp homeLan;
       allowEastWest = net.lan.allowEastWest;
       hostBlocklist = sortNames (lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs));
       lanBridge = "br-${envName}-lan";

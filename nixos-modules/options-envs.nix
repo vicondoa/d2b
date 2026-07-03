@@ -286,6 +286,15 @@ in
               default = false;
               description = "Whether the generated net VM should publish workstation presence on the home LAN.";
             };
+
+            dnsmasqLocal.port = lib.mkOption {
+              type = lib.types.port;
+              default = 53530;
+              description = ''
+                Loopback UDP/TCP port used by the net-VM-local `.local`
+                DNS bridge when `dnsmasqLocal.enable` is true.
+              '';
+            };
           };
         };
 

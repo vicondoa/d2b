@@ -49,6 +49,10 @@ let
         portForwards = [
           { protocol = "tcp"; listenPort = 2222; vm = "corp-vm"; targetPort = 22; }
         ];
+        mdns = {
+          enable = true;
+          dnsmasqLocal.enable = true;
+        };
       };
     };
     d2b.envs.safe = {
@@ -99,6 +103,7 @@ let
   workRuleset = workNet.networking.nftables.ruleset;
   safeRuleset = safeNet.networking.nftables.ruleset;
   obsRuleset = obsNet.networking.nftables.ruleset;
+  workDnsmasqServers = workNet.services.dnsmasq.settings.server;
 
   mssClampRule = "tcp flags syn tcp option maxseg size set rt mtu";
   lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
@@ -110,6 +115,8 @@ let
 
   hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
   workHostEnv = builtins.head (builtins.filter (env: env.env == "work") hostJson.environments);
+  mdnsHomeInputRule = ''iifname "home0" udp dport 5353 accept'';
+  mdnsLanInputRule = ''iifname "eth1" udp dport 5353 accept'';
 
   hasRule = ruleset: needle: lib.hasInfix needle ruleset;
 
@@ -309,10 +316,6 @@ in
     expr = hasRule workRuleset ''iifname "home0" udp sport 67 udp dport 68 accept'';
     expected = true;
   };
-  "net-vm-network/work-nft-no-mdns-opening" = {
-    expr = hasRule workRuleset "5353";
-    expected = false;
-  };
   "net-vm-network/host-avahi-not-enabled" = {
     expr = cfg.services.avahi.enable or false;
     expected = false;
@@ -357,6 +360,64 @@ in
   };
   "net-vm-network/safe-nft-lan-to-lan-forward-absent" = {
     expr = hasRule safeRuleset lanToLanForwardRule;
+    expected = false;
+  };
+
+  # ---- home-LAN mDNS is net-VM scoped and opt-in -----------------------
+  "net-vm-network/host-avahi-disabled" = {
+    expr = cfg.services.avahi.enable;
+    expected = false;
+  };
+  "net-vm-network/workload-avahi-disabled" = {
+    expr = workGuest.services.avahi.enable;
+    expected = false;
+  };
+  "net-vm-network/work-net-avahi-enabled" = {
+    expr = workNet.services.avahi.enable;
+    expected = true;
+  };
+  "net-vm-network/work-net-avahi-reflector-enabled" = {
+    expr = workNet.services.avahi.reflector;
+    expected = true;
+  };
+  "net-vm-network/work-net-avahi-open-firewall-disabled" = {
+    expr = workNet.services.avahi.openFirewall;
+    expected = false;
+  };
+  "net-vm-network/work-net-avahi-interfaces" = {
+    expr = workNet.services.avahi.allowInterfaces;
+    expected = [ "home0" "eth1" ];
+  };
+  "net-vm-network/safe-net-avahi-disabled" = {
+    expr = safeNet.services.avahi.enable;
+    expected = false;
+  };
+  "net-vm-network/work-net-mdns-home0-input-rule" = {
+    expr = hasRule workRuleset mdnsHomeInputRule;
+    expected = true;
+  };
+  "net-vm-network/work-net-mdns-eth1-input-rule" = {
+    expr = hasRule workRuleset mdnsLanInputRule;
+    expected = true;
+  };
+  "net-vm-network/safe-net-mdns-home0-input-rule-absent" = {
+    expr = hasRule safeRuleset mdnsHomeInputRule;
+    expected = false;
+  };
+  "net-vm-network/safe-net-mdns-eth1-input-rule-absent" = {
+    expr = hasRule safeRuleset mdnsLanInputRule;
+    expected = false;
+  };
+  "net-vm-network/work-net-dnsmasq-local-forward" = {
+    expr = builtins.elem "/local/127.0.0.1#53530" workDnsmasqServers;
+    expected = true;
+  };
+  "net-vm-network/work-net-mdns-local-resolver-service" = {
+    expr = builtins.hasAttr "d2b-mdns-local-resolver" workNet.systemd.services;
+    expected = true;
+  };
+  "net-vm-network/safe-net-mdns-local-resolver-service-absent" = {
+    expr = builtins.hasAttr "d2b-mdns-local-resolver" safeNet.systemd.services;
     expected = false;
   };
 

@@ -15,6 +15,8 @@ deprecations ship one minor release before removal.
 - Added the `d2b.envs.<env>.homeLan.*` option and normalized-index metadata
   surface for net-VM-owned home-LAN attachment, egress, port-forward, and mDNS
   policy.
+- Net VMs can opt into home-LAN mDNS reflection and an optional `.local`
+  dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
 
 ### Changed
 
