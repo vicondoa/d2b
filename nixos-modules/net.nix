@@ -31,6 +31,10 @@ let
   # with a MAC that can never match.
 in
 {
+  imports = [
+    ./net-mdns.nix
+  ];
+
   networking.hostName = lib.mkDefault m.netName;
 
   # Routing/firewalling needs forwarding enabled.
@@ -129,6 +133,13 @@ in
           # LAN: DHCP + DNS for workload VMs.
           iifname "eth1" udp dport { 53, 67 } accept
           iifname "eth1" tcp dport 53 accept
+
+          ${lib.optionalString (m.homeLan.mdns.enable || m.homeLan.mdns.dnsmasqLocal.enable) ''
+          # mDNS is only opened inside opted-in net VMs; host firewall
+          # state remains untouched.
+          iifname "home0" udp dport 5353 accept
+          iifname "eth1" udp dport 5353 accept
+          ''}
 
           # ICMP echo — rate-limited (was unconditional, now 10/s burst).
           ip protocol icmp icmp type echo-request limit rate 10/second burst 20 packets accept

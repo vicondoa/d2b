@@ -10,6 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Net VMs can opt into home-LAN mDNS reflection and an optional `.local`
+  dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
+
 ### Changed
 
 - `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,

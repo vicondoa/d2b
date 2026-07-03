@@ -377,6 +377,7 @@ multi-env-daemon/work-uplink-flags
 multi-env-daemon/work-workload-lan-flags
 net-vm-network/eth-dhcp-match-mac-sentinel
 net-vm-network/eth-dhcp-match-type-not-ether
+net-vm-network/host-avahi-disabled
 net-vm-network/host-lan-bridge-ipv6-ra-disabled
 net-vm-network/host-lan-bridge-link-local-addressing-disabled
 net-vm-network/host-lan-bridge-mtu
@@ -408,6 +409,9 @@ net-vm-network/obs-stack-vm-env
 net-vm-network/obs-stack-vm-name
 net-vm-network/obs-uplink-address
 net-vm-network/safe-lan-bridge-isolated-default
+net-vm-network/safe-net-avahi-disabled
+net-vm-network/safe-net-mdns-eth1-input-rule-absent
+net-vm-network/safe-net-mdns-home0-input-rule-absent
 net-vm-network/safe-nft-egress-accept-present
 net-vm-network/safe-nft-lan-to-lan-forward-absent
 net-vm-network/safe-nft-mss-clamp-absent
@@ -420,9 +424,18 @@ net-vm-network/safe-nft-work-uplink-drop-present
 net-vm-network/work-lan-address
 net-vm-network/work-lan-bridge-east-west-unisolated
 net-vm-network/work-lan-mtu
+net-vm-network/workload-avahi-disabled
 net-vm-network/workload-guest-dhcp-mtu
 net-vm-network/workload-lan-tap-bridge
 net-vm-network/workload-lan-tap-isolation-east-west
+net-vm-network/work-net-avahi-enabled
+net-vm-network/work-net-avahi-interfaces
+net-vm-network/work-net-avahi-open-firewall-disabled
+net-vm-network/work-net-avahi-reflector-enabled
+net-vm-network/work-net-dnsmasq-local-forward
+net-vm-network/work-net-mdns-eth1-input-rule
+net-vm-network/work-net-mdns-home0-input-rule
+net-vm-network/work-net-mdns-local-resolver-service
 net-vm-network/work-nft-egress-accept-present
 net-vm-network/work-nft-host-uplink-drop-before-egress-accept
 net-vm-network/work-nft-host-uplink-drop-present

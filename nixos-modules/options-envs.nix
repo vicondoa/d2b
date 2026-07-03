@@ -63,6 +63,33 @@
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
 
+        homeLan.mdns = {
+          enable = lib.mkEnableOption ''
+            mDNS reflection inside this env's auto-declared net VM.
+            When enabled, the framework runs Avahi only in
+            `sys-${name}-net` and reflects between `home0` and
+            `eth1`; the host never runs Avahi or an mDNS relay
+          '';
+
+          dnsmasqLocal = {
+            enable = lib.mkEnableOption ''
+              a net-VM-local unicast DNS bridge for `.local` names.
+              dnsmasq forwards `server=/local/127.0.0.1#<port>` to
+              this bridge, which resolves through Avahi/mDNS inside
+              the net VM
+            '';
+
+            port = lib.mkOption {
+              type = lib.types.port;
+              default = 53530;
+              description = ''
+                Loopback UDP/TCP port used by the net-VM-local `.local`
+                DNS bridge when `dnsmasqLocal.enable` is true.
+              '';
+            };
+          };
+        };
+
         ui.accentColor = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
           default = null;
