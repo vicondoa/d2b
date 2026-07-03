@@ -40,6 +40,16 @@ let
       mtu = 1280;
       mssClamp = true;
       lan.allowEastWest = true;
+      homeLan = {
+        attachment = {
+          enable = true;
+          interface = "eno1";
+        };
+        egress.enable = true;
+        portForwards = [
+          { protocol = "tcp"; listenPort = 2222; vm = "corp-vm"; targetPort = 22; }
+        ];
+      };
     };
     d2b.envs.safe = {
       lanSubnet = "10.30.0.0/24";
@@ -69,7 +79,10 @@ let
   workEthDhcp = workNet.systemd.network.networks."10-eth-dhcp";
   workUplink = workNet.systemd.network.networks."10-uplink";
   workLan = workNet.systemd.network.networks."10-lan";
+  workHome = workNet.systemd.network.networks."10-home";
+  workHomeLink = workNet.systemd.network.links."10-home";
   workGuestDhcp = workGuest.systemd.network.networks."10-eth-dhcp";
+  workHomeIface = builtins.elemAt workNet.microvm.interfaces 2;
 
   hostBrUp = cfg.systemd.network.networks."20-br-work-up";
   hostBrUpRoute = builtins.head hostBrUp.routes;
@@ -90,6 +103,13 @@ let
   mssClampRule = "tcp flags syn tcp option maxseg size set rt mtu";
   lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
   lanToUplinkAcceptRule = ''iifname "eth1" oifname "eth0" ct state new accept'';
+  lanToHomeAcceptRule = ''iifname "eth1" oifname "home0" ct state new accept'';
+  homeDnatRule = ''iifname "home0" tcp dport 2222 dnat to 10.20.0.10:22'';
+  homeForwardRule = ''iifname "home0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
+  homeMasqueradeRule = ''oifname "home0" masquerade'';
+
+  hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
+  workHostEnv = builtins.head (builtins.filter (env: env.env == "work") hostJson.environments);
 
   hasRule = ruleset: needle: lib.hasInfix needle ruleset;
 
@@ -161,6 +181,65 @@ in
     expected = "1280";
   };
 
+  # ---- home-LAN net VM attachment --------------------------------------
+  "net-vm-network/home-lan-net-vm-third-interface-type" = {
+    expr = workHomeIface.type;
+    expected = "macvtap";
+  };
+  "net-vm-network/home-lan-net-vm-third-interface-id" = {
+    expr = workHomeIface.id;
+    expected = "work-h0";
+  };
+  "net-vm-network/home-lan-net-vm-macvtap-parent" = {
+    expr = workHomeIface.macvtap.link;
+    expected = "eno1";
+  };
+  "net-vm-network/home-lan-net-vm-macvtap-mode" = {
+    expr = workHomeIface.macvtap.mode;
+    expected = "bridge";
+  };
+  "net-vm-network/home-lan-guest-renamed-home0" = {
+    expr = workHomeLink.linkConfig.Name or null;
+    expected = "home0";
+  };
+  "net-vm-network/home-lan-guest-dhcp" = {
+    expr = workHome.networkConfig.DHCP or null;
+    expected = "ipv4";
+  };
+  "net-vm-network/home-lan-guest-dhcp-routes-ignored" = {
+    expr = workHome.dhcpV4Config.UseRoutes or null;
+    expected = false;
+  };
+  "net-vm-network/home-lan-host-nm-unmanaged-macvtap-only" = {
+    expr = {
+      hasHome = builtins.elem "interface-name:work-h0" cfg.networking.networkmanager.unmanaged;
+      hasParent = builtins.elem "interface-name:eno1" cfg.networking.networkmanager.unmanaged;
+    };
+    expected = { hasHome = true; hasParent = false; };
+  };
+  "net-vm-network/home-lan-host-json-contract" = {
+    expr = {
+      parent = workHostEnv.homeLan.attachment.parentInterface;
+      hostIf = workHostEnv.homeLan.attachment.hostIfName;
+      guestIf = workHostEnv.homeLan.attachment.guestIfName;
+      egress = workHostEnv.homeLan.egress.enabled;
+      forward = builtins.head workHostEnv.homeLan.portForwards;
+    };
+    expected = {
+      parent = "eno1";
+      hostIf = "work-h0";
+      guestIf = "home0";
+      egress = true;
+      forward = {
+        protocol = "tcp";
+        listenPort = 2222;
+        vm = "corp-vm";
+        targetIp = "10.20.0.10";
+        targetPort = 22;
+      };
+    };
+  };
+
   # ---- nftables MSS clamp and inter-env/host drops ---------------------
   "net-vm-network/work-nft-mss-clamp-present" = {
     expr = hasRule workRuleset mssClampRule;
@@ -209,6 +288,34 @@ in
   "net-vm-network/work-nft-egress-accept-present" = {
     expr = hasRule workRuleset lanToUplinkAcceptRule;
     expected = true;
+  };
+  "net-vm-network/work-nft-home-egress-accept-present" = {
+    expr = hasRule workRuleset lanToHomeAcceptRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-egress-masquerade-present" = {
+    expr = hasRule workRuleset homeMasqueradeRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-port-forward-dnat-present" = {
+    expr = hasRule workRuleset homeDnatRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-port-forward-filter-present" = {
+    expr = hasRule workRuleset homeForwardRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-dhcp-client-only" = {
+    expr = hasRule workRuleset ''iifname "home0" udp sport 67 udp dport 68 accept'';
+    expected = true;
+  };
+  "net-vm-network/work-nft-no-mdns-opening" = {
+    expr = hasRule workRuleset "5353";
+    expected = false;
+  };
+  "net-vm-network/host-avahi-not-enabled" = {
+    expr = cfg.services.avahi.enable or false;
+    expected = false;
   };
   "net-vm-network/safe-nft-egress-accept-present" = {
     expr = hasRule safeRuleset lanToUplinkAcceptRule;

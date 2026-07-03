@@ -19,6 +19,16 @@
 
 let
   m = envMeta;
+  homeAttachment = m.homeLan.attachment;
+  homeLanEnabled = homeAttachment.enable;
+  homeIf = homeAttachment.guestIfName;
+  homePortForwards = m.homeLan.portForwards;
+  homeDnatRules = lib.concatMapStringsSep "\n          "
+    (pf: ''iifname "${homeIf}" ${pf.protocol} dport ${toString pf.listenPort} dnat to ${pf.targetIp}:${toString pf.targetPort}'')
+    homePortForwards;
+  homeForwardRules = lib.concatMapStringsSep "\n          "
+    (pf: ''iifname "${homeIf}" oifname "eth1" ip daddr ${pf.targetIp} ${pf.protocol} dport ${toString pf.targetPort} ct state new accept'')
+    homePortForwards;
   # The net VM has./base.nix layered in by host.nix (see
   # nixos-modules/host.nix's `microvm.vms = lib.mapAttrs` block, which
   # unconditionally imports ./base.nix). Everything here builds on top
@@ -79,6 +89,41 @@ in
         MTUBytes = toString m.mtu;
       };
     };
+  } // lib.optionalAttrs homeLanEnabled {
+    "10-home" = {
+      matchConfig.MACAddress = homeAttachment.macAddress;
+      networkConfig = {
+        LinkLocalAddressing = "no";
+        IPv6AcceptRA = false;
+      } // (
+        if homeAttachment.ipv4.method == "dhcp"
+        then {
+          DHCP = "ipv4";
+          DNSDefaultRoute = false;
+        }
+        else {
+          DNS = homeAttachment.ipv4.dns;
+        }
+      );
+      dhcpV4Config = lib.optionalAttrs (homeAttachment.ipv4.method == "dhcp") {
+        UseDNS = false;
+        UseRoutes = false;
+      };
+      addresses = lib.optionals (homeAttachment.ipv4.method == "static") [
+        { Address = homeAttachment.ipv4.address; }
+      ];
+      routes = lib.optionals (homeAttachment.ipv4.method == "static" && homeAttachment.ipv4.gateway != null) [
+        {
+          Gateway = homeAttachment.ipv4.gateway;
+          Metric = 2048;
+        }
+      ];
+      linkConfig = {
+        RequiredForOnline = "no";
+      } // lib.optionalAttrs (m.mtu != null) {
+        MTUBytes = toString m.mtu;
+      };
+    };
   };
 
   # The MACs that the host-side bridges expect on each NIC. The
@@ -93,6 +138,11 @@ in
     "10-lan" = {
       matchConfig.MACAddress = m.netLanMac;
       linkConfig.Name = "eth1";
+    };
+  } // lib.optionalAttrs homeLanEnabled {
+    "10-home" = {
+      matchConfig.MACAddress = homeAttachment.macAddress;
+      linkConfig.Name = homeIf;
     };
   };
 
@@ -129,6 +179,11 @@ in
           # LAN: DHCP + DNS for workload VMs.
           iifname "eth1" udp dport { 53, 67 } accept
           iifname "eth1" tcp dport 53 accept
+
+          ${lib.optionalString homeLanEnabled ''
+          # Home LAN: DHCP client replies for home0 only.
+          iifname "${homeIf}" udp sport 67 udp dport 68 accept
+          ''}
 
           # ICMP echo — rate-limited (was unconditional, now 10/s burst).
           ip protocol icmp icmp type echo-request limit rate 10/second burst 20 packets accept
@@ -175,6 +230,16 @@ in
 
           # Workload → internet: allowed (NAT'd by postrouting below).
           iifname "eth1" oifname "eth0" ct state new accept
+
+          ${lib.optionalString m.homeLan.egress.enable ''
+          # Workload → home LAN: explicit opt-in, NAT'd behind home0.
+          iifname "eth1" oifname "${homeIf}" ct state new accept
+          ''}
+
+          ${lib.optionalString (homePortForwards != [ ]) ''
+          # Home LAN → workload VMs: explicit DNAT forwards only.
+          ${homeForwardRules}
+          ''}
         }
 
         chain output {
@@ -183,9 +248,17 @@ in
       }
 
       table inet nat {
+        chain prerouting {
+          type nat hook prerouting priority -100; policy accept;
+          ${lib.optionalString (homePortForwards != [ ]) homeDnatRules}
+        }
+
         chain postrouting {
           type nat hook postrouting priority 100; policy accept;
           oifname "eth0" masquerade
+          ${lib.optionalString m.homeLan.egress.enable ''
+          oifname "${homeIf}" masquerade
+          ''}
         }
       }
     '';
@@ -400,7 +473,15 @@ in
         id = "${m.name}-l1";
         mac = m.netLanMac;
       }
-    ];
+    ] ++ lib.optional homeLanEnabled {
+      type = homeAttachment.mode;
+      id = homeAttachment.hostIfName;
+      mac = homeAttachment.macAddress;
+      macvtap = {
+        link = homeAttachment.interface;
+        mode = homeAttachment.macvtapMode;
+      };
+    };
   };
 
   # SSH on by default but only key-auth so a forgotten password

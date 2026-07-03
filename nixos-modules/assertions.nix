@@ -975,10 +975,10 @@ let
       in
       [
         {
-          assertion = !(homeLan.attachment.enable && homeLan.attachment.hostInterface == null);
+          assertion = !(homeLan.attachment.enable && homeLan.attachment.interface == null);
           message = ''
             d2b.envs.${envName}.homeLan.attachment.enable requires an
-            explicit d2b.envs.${envName}.homeLan.attachment.hostInterface.
+            explicit d2b.envs.${envName}.homeLan.attachment.interface.
           '';
         }
         {
@@ -1006,25 +1006,22 @@ let
       ++ map
         ({ i, forward }: {
           assertion =
-            forward.protocol != null
-            && forward.listenPort != null
-            && forward.targetVm != null
-            && forward.targetPort != null;
+            forward.vm != null || forward.targetIp != null;
           message = ''
             d2b.envs.${envName}.homeLan.portForwards[${toString i}]
-            must specify protocol, listenPort, targetVm, and targetPort.
+            must specify either vm or targetIp.
           '';
         })
         portForwards
       ++ map
         ({ i, forward }: {
           assertion =
-            forward.targetVm == null
-            || builtins.elem forward.targetVm sameEnvTargets;
+            forward.vm == null
+            || builtins.elem forward.vm sameEnvTargets;
           message = ''
-            d2b.envs.${envName}.homeLan.portForwards[${toString i}].targetVm
+            d2b.envs.${envName}.homeLan.portForwards[${toString i}].vm
             must name an enabled VM in the same env. Got
-            `${toString forward.targetVm}`; valid targets: ${
+            `${toString forward.vm}`; valid targets: ${
               lib.concatStringsSep ", " sameEnvTargets
             }.
           '';

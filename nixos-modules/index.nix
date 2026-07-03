@@ -22,25 +22,6 @@ let
     sortedAttrs (lib.filterAttrs (_: vm: vm.env == envName) enabledVms);
   workloadNamesInEnv = envName: sortedAttrNames (workloadsInEnv envName);
 
-  homeLanPortForwardMeta = forward: {
-    inherit (forward) listenPort targetVm targetPort protocol;
-    sourceCidrs = sortNames (lib.unique forward.sourceCidrs);
-  };
-
-  homeLanMeta = homeLan: {
-    enable = homeLan.enable;
-    attachment = {
-      inherit (homeLan.attachment) enable hostInterface mode;
-      address = homeLan.attachment.address;
-    };
-    egress = {
-      inherit (homeLan.egress) enable masquerade;
-      allowedCidrs = sortNames (lib.unique homeLan.egress.allowedCidrs);
-    };
-    portForwards = map homeLanPortForwardMeta homeLan.portForwards;
-    mdns = homeLan.mdns;
-  };
-
   homeLanConfigured = env:
     env.homeLan.enable
     || env.homeLan.attachment.enable
@@ -62,7 +43,6 @@ let
       name = envName;
       inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
       allowEastWest = net.lan.allowEastWest;
-      homeLan = homeLanMeta net.homeLan;
       hostBlocklist = sortNames (lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs));
       lanBridge = "br-${envName}-lan";
       uplinkBridge = "br-${envName}-up";
@@ -75,6 +55,47 @@ let
       dhcpRangeEnd = subnetIp lanSubnet 254;
       netUplinkMac = mkMac envName "up" 2;
       netLanMac = mkMac envName "lan" 1;
+      homeLan =
+        let
+          attachment = net.homeLan.attachment;
+          envWorkloads = workloadsInEnv envName;
+          homeMac =
+            if attachment.macAddress != null
+            then attachment.macAddress
+            else mkMac envName "home" 3;
+          resolveForward = pf:
+            let
+              targetPort =
+                if pf.targetPort != null
+                then pf.targetPort
+                else pf.listenPort;
+              targetIp =
+                if pf.targetIp != null then pf.targetIp
+                else if pf.vm != null && builtins.hasAttr pf.vm envWorkloads
+                then subnetIp lanSubnet envWorkloads.${pf.vm}.index
+                else null;
+            in
+            {
+              inherit (pf) protocol listenPort vm;
+              sourceCidrs = sortNames (lib.unique pf.sourceCidrs);
+              inherit targetIp targetPort;
+            };
+        in
+        {
+          enable = net.homeLan.enable;
+          attachment = {
+            inherit (attachment) enable interface mode macvtapMode;
+            macAddress = homeMac;
+            hostIfName = "${envName}-h0";
+            guestIfName = "home0";
+            ipv4 = attachment.ipv4;
+          };
+          egress = net.homeLan.egress // {
+            allowedCidrs = sortNames (lib.unique net.homeLan.egress.allowedCidrs);
+          };
+          portForwards = map resolveForward net.homeLan.portForwards;
+          mdns = net.homeLan.mdns;
+        };
       workloads = lib.mapAttrs
         (vmName: vm: {
           ip = subnetIp lanSubnet vm.index;

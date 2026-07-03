@@ -312,6 +312,9 @@ pub struct NetEnv {
     pub lan: LanPolicy,
     /// Forwarding blocklist derived from env config and host LAN CIDRs.
     pub net_vm_forward_blocklist: Vec<String>,
+    /// Optional home-LAN attachment contract for the env net VM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_lan: Option<HomeLanPolicy>,
     /// TAP bridge-port flags by role.
     pub bridge_port_flags: Vec<BridgePortFlags>,
     /// Per-link IPv6-off sysctl contract.
@@ -322,6 +325,87 @@ pub struct NetEnv {
     /// USBIP-capable workloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usbip_backend_port: Option<u16>,
+}
+
+/// Home-LAN attachment and forwarding policy for one env net VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeLanPolicy {
+    pub attachment: HomeLanAttachment,
+    pub egress: HomeLanEgress,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_forwards: Vec<HomeLanPortForward>,
+}
+
+/// Host and guest interface identity for the home-LAN NIC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeLanAttachment {
+    pub mode: HomeLanAttachmentMode,
+    pub parent_interface: IfName,
+    pub host_if_name: IfName,
+    pub guest_if_name: IfName,
+    pub mac_address: String,
+    pub macvtap_mode: HomeLanMacvtapMode,
+    pub ipv4: HomeLanIpv4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HomeLanAttachmentMode {
+    Macvtap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HomeLanMacvtapMode {
+    Bridge,
+    Private,
+    Vepa,
+    Passthru,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeLanIpv4 {
+    pub method: HomeLanIpv4Method,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HomeLanIpv4Method {
+    Dhcp,
+    Static,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeLanEgress {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HomeLanPortForward {
+    pub protocol: HomeLanPortForwardProtocol,
+    pub listen_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm: Option<String>,
+    pub target_ip: String,
+    pub target_port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HomeLanPortForwardProtocol {
+    Tcp,
+    Udp,
 }
 
 /// LAN policy inputs and effective result.

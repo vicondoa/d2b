@@ -58,32 +58,36 @@ let
   homeLanPortForwardType = lib.types.submodule {
     freeformType = null;
     options = {
-      listenPort = lib.mkOption {
-        type = lib.types.nullOr lib.types.port;
-        default = null;
-        example = 8443;
-        description = "Home-LAN port opened on the generated net VM.";
+      protocol = lib.mkOption {
+        type = lib.types.enum [ "tcp" "udp" ];
+        default = "tcp";
+        description = "Layer-4 protocol to forward from home0.";
       };
 
-      targetVm = lib.mkOption {
+      listenPort = lib.mkOption {
+        type = lib.types.port;
+        example = 2222;
+        description = "Port on sys-<env>-net's home0 address.";
+      };
+
+      vm = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "workstation";
-        description = "Same-env workload VM that receives this port forward.";
+        description = "Workload VM in this env that receives the forward.";
+      };
+
+      targetIp = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Explicit workload-LAN target IP. Use instead of vm for advanced cases.";
       };
 
       targetPort = lib.mkOption {
         type = lib.types.nullOr lib.types.port;
         default = null;
-        example = 443;
-        description = "Port on `targetVm` that receives forwarded traffic.";
-      };
-
-      protocol = lib.mkOption {
-        type = lib.types.nullOr (lib.types.enum [ "tcp" "udp" ]);
-        default = null;
-        example = "tcp";
-        description = "Transport protocol for this port forward.";
+        example = 22;
+        description = "Target port on the workload VM. Defaults to listenPort.";
       };
 
       sourceCidrs = lib.mkOption {
@@ -155,131 +159,134 @@ in
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
 
-        homeLan = lib.mkOption {
-          type = lib.types.submodule {
-            freeformType = null;
-            options = {
-              enable = lib.mkEnableOption "home-LAN policy metadata for this env";
+        homeLan = {
+          enable = lib.mkEnableOption "home-LAN policy metadata for this env";
 
-              attachment = lib.mkOption {
-                type = lib.types.submodule {
-                  freeformType = null;
-                  options = {
-                    enable = lib.mkEnableOption "a generated-net-VM home-LAN attachment";
+          attachment = {
+            enable = lib.mkEnableOption "a separate net-VM NIC on the host LAN";
 
-                    hostInterface = lib.mkOption {
-                      type = lib.types.nullOr homeLanInterfaceNameType;
-                      default = null;
-                      example = "eno1";
-                      description = ''
-                        Explicit host interface used for the generated net
-                        VM's home-LAN attachment. Required when
-                        `attachment.enable = true`.
-                      '';
-                    };
+            interface = lib.mkOption {
+              type = lib.types.nullOr homeLanInterfaceNameType;
+              default = null;
+              example = "eno1";
+              description = ''
+                Physical host interface that the net VM's home-LAN NIC is
+                attached to. The host interface stays managed by the host's
+                existing network stack; d2b does not bridge or reconfigure it.
+              '';
+            };
 
-                    mode = lib.mkOption {
-                      type = lib.types.enum [ "macvtap" ];
-                      default = "macvtap";
-                      description = "Attachment backend for net-VM home-LAN presence.";
-                    };
+            mode = lib.mkOption {
+              type = lib.types.enum [ "macvtap" ];
+              default = "macvtap";
+              description = "Host attachment mode for the net VM home-LAN NIC.";
+            };
 
-                    address = lib.mkOption {
-                      type = homeLanAddressType;
-                      default = { };
-                      description = "Addressing policy for the net VM's home-LAN interface.";
-                    };
-                  };
-                };
-                default = { };
-                description = ''
-                  Physical home-LAN attachment for the generated net VM. d2b
-                  does not run a host Avahi daemon, host mDNS relay/proxy, or
-                  open host UDP/5353 for this surface.
-                '';
+            macvtapMode = lib.mkOption {
+              type = lib.types.enum [ "bridge" "private" "vepa" "passthru" ];
+              default = "bridge";
+              description = "macvtap/macvlan mode used when attachment.mode is macvtap.";
+            };
+
+            macAddress = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Optional fixed MAC for the net VM's home-LAN NIC. When null,
+                d2b derives a deterministic locally-administered MAC from the
+                env name.
+              '';
+            };
+
+            ipv4 = {
+              method = lib.mkOption {
+                type = lib.types.enum [ "dhcp" "static" ];
+                default = "dhcp";
+                description = "How sys-<env>-net configures home0 inside the guest.";
               };
 
-              egress = lib.mkOption {
-                type = lib.types.submodule {
-                  freeformType = null;
-                  options = {
-                    enable = lib.mkEnableOption "home-LAN egress from this env's net VM";
-
-                    allowedCidrs = lib.mkOption {
-                      type = lib.types.listOf lib.types.str;
-                      default = config.d2b.hostLanCidrs;
-                      defaultText = lib.literalExpression "config.d2b.hostLanCidrs";
-                      example = [ "192.168.1.0/24" ];
-                      description = ''
-                        Home-LAN CIDRs this env may reach through the
-                        generated net VM. Entries must not overlap peer d2b
-                        env CIDRs.
-                      '';
-                    };
-
-                    masquerade = lib.mkOption {
-                      type = lib.types.bool;
-                      default = true;
-                      description = "Whether the generated net VM should masquerade home-LAN egress.";
-                    };
-                  };
-                };
-                default = { };
-                description = "Home-LAN egress policy for this env.";
+              address = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.50/24";
+                description = "Static IPv4 address with prefix when method is static.";
               };
 
-              portForwards = lib.mkOption {
-                type = lib.types.listOf homeLanPortForwardType;
+              gateway = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.1";
+                description = "Optional static default gateway for home0.";
+              };
+
+              dns = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
                 default = [ ];
-                example = lib.literalExpression ''
-                  [
-                    {
-                      listenPort = 8443;
-                      targetVm = "workstation";
-                      targetPort = 443;
-                      protocol = "tcp";
-                      sourceCidrs = [ "192.168.1.0/24" ];
-                    }
-                  ]
-                '';
-                description = "Home-LAN port forwards terminated by the generated net VM.";
-              };
-
-              mdns = lib.mkOption {
-                type = lib.types.submodule {
-                  freeformType = null;
-                  options = {
-                    enable = lib.mkEnableOption "mDNS behaviour inside the generated net VM";
-
-                    reflector.enable = lib.mkOption {
-                      type = lib.types.bool;
-                      default = true;
-                      description = "Whether net-VM mDNS reflection is requested when mDNS is enabled.";
-                    };
-
-                    dnsmasqLocal.enable = lib.mkEnableOption "net-VM-local dnsmasq mDNS name handling";
-
-                    publishWorkstation = lib.mkOption {
-                      type = lib.types.bool;
-                      default = false;
-                      description = "Whether the generated net VM should publish workstation presence on the home LAN.";
-                    };
-                  };
-                };
-                default = { };
-                description = ''
-                  mDNS policy owned by the generated net VM. The host must not
-                  run Avahi, relay/proxy mDNS, or open UDP/5353 for this option.
-                '';
+                example = [ "192.168.1.1" ];
+                description = "Optional static DNS servers for home0.";
               };
             };
           };
-          default = { };
-          description = ''
-            Home-LAN access policy for this env. The generated net VM owns
-            any home-LAN presence and may receive its own LAN IP; the host does
-            not become the mDNS or LAN-presence endpoint.
-          '';
+
+          egress = {
+            enable = lib.mkEnableOption "workload-initiated home-LAN access NATed behind sys-<env>-net's home0 address";
+
+            allowedCidrs = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = config.d2b.hostLanCidrs;
+              defaultText = lib.literalExpression "config.d2b.hostLanCidrs";
+              example = [ "192.168.1.0/24" ];
+              description = ''
+                Home-LAN CIDRs this env may reach through the generated net VM.
+                Entries must not overlap peer d2b env CIDRs.
+              '';
+            };
+
+            masquerade = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether the generated net VM should masquerade home-LAN egress.";
+            };
+          };
+
+          portForwards = lib.mkOption {
+            type = lib.types.listOf homeLanPortForwardType;
+            default = [ ];
+            example = lib.literalExpression ''
+              [
+                {
+                  protocol = "tcp";
+                  listenPort = 2222;
+                  vm = "workstation";
+                  targetPort = 22;
+                  sourceCidrs = [ "192.168.1.0/24" ];
+                }
+              ]
+            '';
+            description = ''
+              Explicit DNAT rules from sys-<env>-net home0 to workload VMs on
+              eth1. Empty by default; no SSH or other service is exposed unless
+              a forward is declared here.
+            '';
+          };
+
+          mdns = {
+            enable = lib.mkEnableOption "mDNS behaviour inside the generated net VM";
+
+            reflector.enable = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether net-VM mDNS reflection is requested when mDNS is enabled.";
+            };
+
+            dnsmasqLocal.enable = lib.mkEnableOption "net-VM-local dnsmasq mDNS name handling";
+
+            publishWorkstation = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether the generated net VM should publish workstation presence on the home LAN.";
+            };
+          };
         };
 
         ui.accentColor = lib.mkOption {
