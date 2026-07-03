@@ -43,6 +43,7 @@ assertions/graphics-without-wayland-user
 assertions/graphics-xwayland-unsupported
 assertions/guest-exec-allowroot-removed
 assertions/guest-exec-users-removed
+assertions/home-lan-attachment-interface-rust-safe-name
 assertions/home-lan-attachment-requires-host-interface
 assertions/home-lan-egress-peer-cidr-rejected
 assertions/home-lan-egress-requires-attachment
@@ -429,6 +430,7 @@ net-vm-network/obs-nft-work-uplink-drop-present
 net-vm-network/obs-stack-vm-env
 net-vm-network/obs-stack-vm-name
 net-vm-network/obs-uplink-address
+net-vm-network/quiet-net-avahi-reflector-disabled
 net-vm-network/safe-home-lan-default-off
 net-vm-network/safe-lan-bridge-isolated-default
 net-vm-network/safe-net-avahi-disabled

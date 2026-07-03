@@ -45,7 +45,10 @@ let
           enable = true;
           interface = "eno1";
         };
-        egress.enable = true;
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+        };
         portForwards = [
           { protocol = "tcp"; listenPort = 2222; vm = "corp-vm"; targetPort = 22; }
         ];
@@ -58,6 +61,20 @@ let
     d2b.envs.safe = {
       lanSubnet = "10.30.0.0/24";
       uplinkSubnet = "198.51.100.0/30";
+    };
+    d2b.envs.quiet = {
+      lanSubnet = "10.50.0.0/24";
+      uplinkSubnet = "198.51.100.4/30";
+      homeLan = {
+        attachment = {
+          enable = true;
+          interface = "eno2";
+        };
+        mdns = {
+          enable = true;
+          reflector.enable = false;
+        };
+      };
     };
     d2b.vms.corp-vm = {
       enable = true;
@@ -76,6 +93,7 @@ let
 
   workNet = computed.sys-work-net.config;
   safeNet = computed.sys-safe-net.config;
+  quietNet = computed.sys-quiet-net.config;
   obsNet = computed.sys-obs-net.config;
   workGuest = computed.corp-vm.config;
 
@@ -107,7 +125,7 @@ let
   mssClampRule = "tcp flags syn tcp option maxseg size set rt mtu";
   lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
   lanToUplinkAcceptRule = ''iifname "eth1" oifname "eth0" ct state new accept'';
-  lanToHomeAcceptRule = ''iifname "eth1" oifname "home0" ct state new accept'';
+  lanToHomeAcceptRule = ''iifname "eth1" oifname "home0" ip daddr 192.168.1.0/24 ct state new accept'';
   homeDnatRule = ''iifname "home0" tcp dport 2222 dnat to 10.20.0.10:22'';
   homeForwardRule = ''iifname "home0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
   homeMasqueradeRule = ''oifname "home0" masquerade'';
@@ -229,6 +247,7 @@ in
       hostIf = workHostEnv.homeLan.attachment.hostIfName;
       guestIf = workHostEnv.homeLan.attachment.guestIfName;
       egress = workHostEnv.homeLan.egress.enabled;
+      egressCidrs = workHostEnv.homeLan.egress.allowedCidrs;
       forward = builtins.head workHostEnv.homeLan.portForwards;
     };
     expected = {
@@ -236,6 +255,7 @@ in
       hostIf = "work-h0";
       guestIf = "home0";
       egress = true;
+      egressCidrs = [ "192.168.1.0/24" ];
       forward = {
         protocol = "tcp";
         listenPort = 2222;
@@ -407,6 +427,16 @@ in
   "net-vm-network/work-net-avahi-reflector-enabled" = {
     expr = workNet.services.avahi.reflector;
     expected = true;
+  };
+  "net-vm-network/quiet-net-avahi-reflector-disabled" = {
+    expr = {
+      enable = quietNet.services.avahi.enable;
+      reflector = quietNet.services.avahi.reflector;
+    };
+    expected = {
+      enable = true;
+      reflector = false;
+    };
   };
   "net-vm-network/work-net-avahi-open-firewall-disabled" = {
     expr = workNet.services.avahi.openFirewall;

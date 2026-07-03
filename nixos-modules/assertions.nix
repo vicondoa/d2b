@@ -982,6 +982,16 @@ let
           '';
         }
         {
+          assertion = !(homeLan.attachment.enable
+            && homeLan.attachment.interface != null
+            && builtins.match "^[A-Za-z0-9_-]{1,15}$" homeLan.attachment.interface == null);
+          message = ''
+            d2b.envs.${envName}.homeLan.attachment.interface must match
+            Rust IfName syntax ^[A-Za-z0-9_-]{1,15}$ so generated
+            host.json cannot pass Nix eval and fail bundle parsing later.
+          '';
+        }
+        {
           assertion = !(homeLan.egress.enable && !homeLan.attachment.enable);
           message = ''
             d2b.envs.${envName}.homeLan.egress.enable requires

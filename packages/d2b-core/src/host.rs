@@ -388,6 +388,8 @@ pub enum HomeLanIpv4Method {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HomeLanEgress {
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_cidrs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -397,6 +399,8 @@ pub struct HomeLanPortForward {
     pub listen_port: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_cidrs: Vec<String>,
     pub target_ip: String,
     pub target_port: u16,
 }

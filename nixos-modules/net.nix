@@ -23,11 +23,17 @@ let
   homeLanEnabled = homeAttachment.enable;
   homeIf = homeAttachment.guestIfName;
   homePortForwards = m.homeLan.portForwards;
+  homeSourceMatch = pf:
+    lib.optionalString (pf.sourceCidrs != [ ])
+      "ip saddr { ${lib.concatStringsSep ", " pf.sourceCidrs} } ";
+  homeEgressRules = lib.concatMapStringsSep "\n          "
+    (cidr: ''iifname "eth1" oifname "${homeIf}" ip daddr ${cidr} ct state new accept'')
+    m.homeLan.egress.allowedCidrs;
   homeDnatRules = lib.concatMapStringsSep "\n          "
-    (pf: ''iifname "${homeIf}" ${pf.protocol} dport ${toString pf.listenPort} dnat to ${pf.targetIp}:${toString pf.targetPort}'')
+    (pf: ''iifname "${homeIf}" ${homeSourceMatch pf}${pf.protocol} dport ${toString pf.listenPort} dnat to ${pf.targetIp}:${toString pf.targetPort}'')
     homePortForwards;
   homeForwardRules = lib.concatMapStringsSep "\n          "
-    (pf: ''iifname "${homeIf}" oifname "eth1" ip daddr ${pf.targetIp} ${pf.protocol} dport ${toString pf.targetPort} ct state new accept'')
+    (pf: ''iifname "${homeIf}" oifname "eth1" ${homeSourceMatch pf}ip daddr ${pf.targetIp} ${pf.protocol} dport ${toString pf.targetPort} ct state new accept'')
     homePortForwards;
   # The net VM has./base.nix layered in by host.nix (see
   # nixos-modules/host.nix's `microvm.vms = lib.mapAttrs` block, which
@@ -242,8 +248,8 @@ in
           iifname "eth1" oifname "eth0" ct state new accept
 
           ${lib.optionalString m.homeLan.egress.enable ''
-          # Workload → home LAN: explicit opt-in, NAT'd behind home0.
-          iifname "eth1" oifname "${homeIf}" ct state new accept
+          # Workload → home LAN: explicit CIDR opt-in, NAT'd behind home0.
+          ${homeEgressRules}
           ''}
 
           ${lib.optionalString (homePortForwards != [ ]) ''
@@ -297,8 +303,7 @@ in
       domain-needed = true;
       bogus-priv = true;
       no-resolv = true;
-      server = [ "1.1.1.1" "8.8.8.8" ]
-        ++ lib.optional (homeLanEnabled && m.homeLan.mdns.dnsmasqLocal.enable) "/local/224.0.0.251#5353";
+      server = [ "1.1.1.1" "8.8.8.8" ];
       cache-size = 1000;
 
       # DHCP — pool covers the "unreserved" tail end of the subnet.

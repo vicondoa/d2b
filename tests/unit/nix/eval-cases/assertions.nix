@@ -322,6 +322,19 @@ shared.mkBatch {
       );
     };
 
+    "home-lan-attachment-interface-rust-safe-name" = {
+      expectedSubstring = "homeLan.attachment.interface must match";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.attachment = {
+            enable = true;
+            interface = "eno1.100";
+          };
+        }
+      );
+    };
+
     "home-lan-egress-requires-attachment" = {
       expectedSubstring = "homeLan.egress.enable requires";
       override = (

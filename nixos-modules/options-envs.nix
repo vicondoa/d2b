@@ -8,8 +8,6 @@
 { lib, config, ... }:
 
 let
-  homeLanInterfaceNameType = lib.types.strMatching "^[A-Za-z0-9_.:-]{1,15}$";
-
   homeLanStaticAddressType = lib.types.submodule {
     freeformType = null;
     options = {
@@ -166,7 +164,7 @@ in
             enable = lib.mkEnableOption "a separate net-VM NIC on the host LAN";
 
             interface = lib.mkOption {
-              type = lib.types.nullOr homeLanInterfaceNameType;
+              type = lib.types.nullOr lib.types.str;
               default = null;
               example = "eno1";
               description = ''

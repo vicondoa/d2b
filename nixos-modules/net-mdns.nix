@@ -178,7 +178,7 @@ in
   config = lib.mkIf avahiEnabled {
     services.avahi = {
       enable = true;
-      reflector = mdns.enable;
+      reflector = mdns.enable && mdns.reflector.enable;
       openFirewall = false;
       allowInterfaces = [ "home0" "eth1" ];
       nssmdns4 = false;

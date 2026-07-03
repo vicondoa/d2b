@@ -282,6 +282,7 @@ let
         };
         egress = {
           enabled = m.homeLan.egress.enable;
+          allowedCidrs = m.homeLan.egress.allowedCidrs;
         };
         portForwards = m.homeLan.portForwards;
       } else null;
