@@ -43,6 +43,14 @@ assertions/graphics-without-wayland-user
 assertions/graphics-xwayland-unsupported
 assertions/guest-exec-allowroot-removed
 assertions/guest-exec-users-removed
+assertions/home-lan-attachment-requires-host-interface
+assertions/home-lan-egress-peer-cidr-rejected
+assertions/home-lan-egress-requires-attachment
+assertions/home-lan-mdns-requires-attachment
+assertions/home-lan-port-forward-required-fields
+assertions/home-lan-port-forward-requires-attachment
+assertions/home-lan-port-forward-source-peer-cidr-rejected
+assertions/home-lan-port-forward-target-same-env
 assertions/lansubnet-nonzero-host
 assertions/lansubnet-wrong-mask
 assertions/overlap-containment
@@ -355,6 +363,7 @@ index/allow-east-west-metadata
 index/component-and-usbip-subsets
 index/computed-net-vms-remain-reachable
 index/env-meta-compat-alias
+index/home-lan-metadata
 index/observability-and-shell-subsets
 index/qemu-media-and-runtime-subsets
 index/shape-and-sorting

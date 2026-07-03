@@ -22,6 +22,32 @@ let
     sortedAttrs (lib.filterAttrs (_: vm: vm.env == envName) enabledVms);
   workloadNamesInEnv = envName: sortedAttrNames (workloadsInEnv envName);
 
+  homeLanPortForwardMeta = forward: {
+    inherit (forward) listenPort targetVm targetPort protocol;
+    sourceCidrs = sortNames (lib.unique forward.sourceCidrs);
+  };
+
+  homeLanMeta = homeLan: {
+    enable = homeLan.enable;
+    attachment = {
+      inherit (homeLan.attachment) enable hostInterface mode;
+      address = homeLan.attachment.address;
+    };
+    egress = {
+      inherit (homeLan.egress) enable masquerade;
+      allowedCidrs = sortNames (lib.unique homeLan.egress.allowedCidrs);
+    };
+    portForwards = map homeLanPortForwardMeta homeLan.portForwards;
+    mdns = homeLan.mdns;
+  };
+
+  homeLanConfigured = env:
+    env.homeLan.enable
+    || env.homeLan.attachment.enable
+    || env.homeLan.egress.enable
+    || env.homeLan.portForwards != [ ]
+    || env.homeLan.mdns.enable;
+
   netMeta = envName: net:
     let
       peerEnvCidrs = lib.flatten (sortedMapAttrsToList
@@ -36,6 +62,7 @@ let
       name = envName;
       inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
       allowEastWest = net.lan.allowEastWest;
+      homeLan = homeLanMeta net.homeLan;
       hostBlocklist = sortNames (lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs));
       lanBridge = "br-${envName}-lan";
       uplinkBridge = "br-${envName}-up";
@@ -58,6 +85,7 @@ let
     };
 
   envMeta = lib.mapAttrs netMeta enabledEnvs;
+  homeLanEnvs = sortedAttrs (lib.filterAttrs (_: env: homeLanConfigured env) enabledEnvs);
 
   subset = pred: sortedAttrs (lib.filterAttrs pred enabledVms);
   subsetNames = pred: sortedAttrNames (subset pred);
@@ -197,6 +225,12 @@ let
     workloadsByEnv = lib.mapAttrs (envName: _: workloadsInEnv envName) enabledEnvs;
     workloadNamesByEnv = lib.mapAttrs (envName: _: workloadNamesInEnv envName) enabledEnvs;
     envMeta = envMeta;
+
+    homeLan = {
+      envs = homeLanEnvs;
+      envNames = sortedAttrNames homeLanEnvs;
+      envMeta = lib.filterAttrs (envName: _: builtins.elem envName (sortedAttrNames homeLanEnvs)) envMeta;
+    };
 
     components = {
       graphics = { vms = graphicsVms; vmNames = sortedAttrNames graphicsVms; };
