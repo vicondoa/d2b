@@ -138,15 +138,15 @@ struct Args {
     )]
     border_color_urgent: Color,
 
-    /// Side/bottom border thickness in surface-local pixels.
+    /// Deprecated legacy border thickness; wrapper rails use a fixed width.
     #[arg(long = "border-thickness", value_parser = parse_positive_u32, default_value_t = d2b_wayland_proxy::decoration::DEFAULT_BORDER_THICKNESS)]
     border_thickness: u32,
 
-    /// Optional text rendered into the top border.
+    /// Optional text rendered into the wrapper rail.
     #[arg(long = "border-label", value_name = "TEXT")]
     border_label: Option<String>,
 
-    /// Position of the optional border label.
+    /// Deprecated legacy label position; wrapper rails always use a vertical label.
     #[arg(
         long = "border-label-position",
         value_name = "top-left|top-center",
@@ -266,9 +266,8 @@ fn main() {
     };
     if border_config.enabled() {
         log::info!(
-            "[d2b-wlproxy] vm={} border-decoration=enabled thickness={} label={}",
+            "[d2b-wlproxy] vm={} wrapper-rail=enabled label={}",
             args.vm_name,
-            border_config.thickness,
             border_config
                 .label
                 .as_ref()
@@ -593,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn border_cli_parses_colors_thickness_and_label_position() {
+    fn border_cli_parses_colors_and_legacy_shape_flags() {
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
             "--listen",

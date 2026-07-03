@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
+  `graphics.waylandProxy.border.label.position`, `--border-thickness`, and
+  `--border-label-position` as deprecated legacy shape knobs; generated d2b
+  proxy runners use the fixed-width left wrapper rail and vertical label.
 - Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
   `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
   point `console` and `audio` surfaces at the provider capability
@@ -37,8 +41,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Default proxy-drawn VM-name labels now render in a dedicated top band while
-  preserving the default 4-pixel side and bottom border thickness.
+- `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
+  proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
+  the VM rail and guest content together without copying guest buffers.
+- Updated the Windows notification transitive dependency to remove the runtime
+  `quick-xml` advisory path, and documented a temporary build-time
+  `wayland-scanner` advisory exception until that code generator publishes a
+  fixed `quick-xml` release.
+- Default proxy-drawn VM-name labels render in the wrapper rail so the VM
+  identity remains visible without overlaying guest buffers.
 - `d2b-wayland-proxy` now preserves the last committed surface size after a
   guest destroys the current buffer object, while still clearing decorations on
   committed `attach(NULL)`.

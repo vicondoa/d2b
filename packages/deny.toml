@@ -1,5 +1,11 @@
 [advisories]
-ignore = []
+ignore = [
+    # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
+    # updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
+    # a release on quick-xml >= 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
 
 [bans]
 multiple-versions = "warn"

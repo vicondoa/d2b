@@ -59,12 +59,11 @@ proxy is active and can be disabled per VM:
 d2b.vms.work.graphics.waylandProxy.border.enable = false;
 ```
 
-The proxy uses the same resolved VM border colors documented above. It draws
-only proxy-owned decoration pixels; guest application buffers and dma-bufs stay
-forwarded as Wayland objects and file descriptors and are not copied or sampled
-to render the border. The configured border thickness applies to the side and
-bottom edges; with labels enabled, the proxy reserves a taller top label band
-so the authenticated VM-name label is visible at the default thickness.
+The proxy uses the same resolved VM border colors documented above. It exposes a
+proxy-owned wrapper toplevel and draws only proxy-owned rail pixels; guest
+application buffers and dma-bufs stay forwarded as Wayland objects and file
+descriptors and are not copied or sampled to render the rail. The default
+identity rail appears on the left side with the authenticated VM-name label.
 
 Proxy borders are visual-only. They do not intercept pointer input, and
 popup/menu positioning remains based on the guest surface geometry.
@@ -168,10 +167,10 @@ The niri backend remains useful for host windows that do not pass through
 Wayland toplevels routed through the host-side proxy get compositor-agnostic
 proxy borders by default.
 
-Generated niri rules omit graphics and qemu-media VMs whose proxy-drawn border
-is effective, so enabling the niri backend does not create two borders for the
-same proxied window. To use niri-native borders for such a VM instead, disable
-the proxy border for that VM.
+Generated niri rules include proxied graphics and qemu-media VMs. The
+host-side Wayland proxy exposes a wrapper toplevel for proxy-drawn VM rails, so
+niri-native borders and focus rings wrap the proxy rail and guest content
+together.
 
 The legacy `d2b.site.niriVmBorders` and `d2b.vms.<vm>.graphics.niriBorderColor`
 options remain compatibility inputs for one release, but new

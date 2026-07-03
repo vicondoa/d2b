@@ -1146,6 +1146,24 @@ let
         '';
       })
     (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) cfg.vms);
+
+  deprecatedWaylandProxyBorderWarnings = lib.flatten (lib.mapAttrsToList
+    (name: vm:
+      let
+        border = vm.graphics.waylandProxy.border;
+        proxyEnabled = vm.enable && vm.graphics.enable && vm.graphics.waylandProxy.enable && border.enable;
+      in
+      lib.optionals (proxyEnabled && border.thickness != 9) [
+        ''
+          d2b.vms.${name}.graphics.waylandProxy.border.thickness is deprecated and ignored by the fixed-width wrapper rail; remove the setting.
+        ''
+      ]
+      ++ lib.optionals (proxyEnabled && border.label.position != "top-left") [
+        ''
+          d2b.vms.${name}.graphics.waylandProxy.border.label.position is deprecated and ignored by the vertical wrapper rail label; remove the setting.
+        ''
+      ])
+    cfg.vms);
 in
 {
   assertions = lib.flatten (
@@ -1170,5 +1188,5 @@ in
   # The daemon-only end state is now the default. Do not warn on the
   # compatibility option here: option-default definitions make
   # `options.<path>.isDefined` true even when consumers do not set it.
-  warnings = [ ];
+  warnings = deprecatedWaylandProxyBorderWarnings;
 }

@@ -638,12 +638,8 @@ in
           "#c8a0e0"
           "--border-color-urgent"
           "#c8a0e0"
-          "--border-thickness"
-          "4"
           "--border-label"
           "media"
-          "--border-label-position"
-          "top-left"
         ];
       };
     };

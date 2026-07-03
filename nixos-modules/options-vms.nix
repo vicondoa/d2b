@@ -635,13 +635,14 @@ in
 
           thickness = lib.mkOption {
             type = lib.types.ints.positive;
-            default = 4;
-            example = 6;
+            default = 9;
+            example = 9;
             description = ''
-              Thickness, in logical pixels, of the side and bottom
-              proxy-drawn VM identity border. When the label is enabled,
-              the proxy reserves a taller top label band as needed so
-              the label remains visible without changing this thickness.
+              Deprecated legacy border thickness, in logical pixels. The
+              current proxy wrapper always renders a fixed-width left VM
+              identity rail; non-default values are ignored by that wrapper
+              path and only remain for compatibility with legacy fallback
+              decoration handling.
             '';
           };
 
@@ -666,7 +667,11 @@ in
             position = lib.mkOption {
               type = lib.types.enum [ "top-left" "top-center" ];
               default = "top-left";
-              description = "Position of the proxy-drawn VM identity label.";
+              description = ''
+                Deprecated legacy label position. The current proxy wrapper
+                always renders the VM identity label vertically in the fixed
+                left rail; non-default values are ignored by that wrapper path.
+              '';
             };
           };
         };

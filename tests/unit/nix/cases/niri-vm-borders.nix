@@ -150,9 +150,7 @@ let
     "--border-color-active"
     "--border-color-inactive"
     "--border-color-urgent"
-    "--border-thickness"
     "--border-label"
-    "--border-label-position"
   ];
 in
 {
@@ -244,9 +242,9 @@ in
   };
   "niri-vm-borders/enabled-work-rule" = {
     expr = lib.hasInfix "// Borders for VM: work" enabledKdl;
-    expected = false;
+    expected = true;
   };
-  "niri-vm-borders/proxy-border-disabled-restores-work-rule" = {
+  "niri-vm-borders/proxy-border-disabled-keeps-work-rule" = {
     expr = lib.hasInfix "// Borders for VM: work" niriNativeWorkKdl;
     expected = true;
   };
@@ -256,11 +254,11 @@ in
   };
   "niri-vm-borders/enabled-qemu-media-host-rule" = {
     expr = lib.hasInfix "// Borders for qemu-media VM host window: media" enabledKdl;
-    expected = false;
+    expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
     expr = lib.hasInfix ''match app-id=r#"^d2b\.media\."#'' enabledKdl;
-    expected = false;
+    expected = true;
   };
   "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
     expr = lib.hasInfix ''match app-id=r#"^qemu$"#'' enabledKdl;
@@ -317,18 +315,18 @@ in
       active = flagValue "--border-color-active" proxyDefaultArgv;
       inactive = flagValue "--border-color-inactive" proxyDefaultArgv;
       urgent = flagValue "--border-color-urgent" proxyDefaultArgv;
-      thickness = flagValue "--border-thickness" proxyDefaultArgv;
       label = flagValue "--border-label" proxyDefaultArgv;
-      labelPosition = flagValue "--border-label-position" proxyDefaultArgv;
+      legacyThickness = builtins.elem "--border-thickness" proxyDefaultArgv;
+      legacyLabelPosition = builtins.elem "--border-label-position" proxyDefaultArgv;
     };
     expected = {
       enabled = true;
       active = proxyDefaultColors.active;
       inactive = proxyDefaultColors.inactive;
       urgent = proxyDefaultColors.urgent;
-      thickness = "4";
       label = "work";
-      labelPosition = "top-left";
+      legacyThickness = false;
+      legacyLabelPosition = false;
     };
   };
   "niri-vm-borders/wayland-proxy-border-disable-omits-border-flags" = {
