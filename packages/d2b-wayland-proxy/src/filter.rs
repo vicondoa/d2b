@@ -44,7 +44,9 @@ use wl_proxy::{
             wl_data_offer::{WlDataOffer, WlDataOfferHandler},
             wl_data_source::{WlDataSource, WlDataSourceHandler},
             wl_display::{WlDisplay, WlDisplayHandler},
-            wl_keyboard::{WlKeyboard, WlKeyboardHandler},
+            wl_keyboard::{
+                WlKeyboard, WlKeyboardHandler, WlKeyboardKeyState, WlKeyboardKeymapFormat,
+            },
             wl_output::WlOutputTransform,
             wl_pointer::{
                 WlPointer, WlPointerAxis, WlPointerAxisRelativeDirection, WlPointerAxisSource,
@@ -1535,6 +1537,18 @@ struct FilterKeyboardHandler {
 }
 
 impl WlKeyboardHandler for FilterKeyboardHandler {
+    fn handle_keymap(
+        &mut self,
+        slf: &Rc<WlKeyboard>,
+        format: WlKeyboardKeymapFormat,
+        fd: &Rc<OwnedFd>,
+        size: u32,
+    ) {
+        if receiver_has_client(slf.client()) {
+            slf.send_keymap(format, fd, size);
+        }
+    }
+
     fn handle_enter(
         &mut self,
         slf: &Rc<WlKeyboard>,
@@ -1543,21 +1557,54 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
         keys: &[u8],
     ) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+            if surface_belongs_to_receiver(&surface, slf.client()) {
                 slf.send_enter(serial, &surface, keys);
             }
-        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
+        } else if surface_belongs_to_receiver(surface, slf.client()) {
             slf.send_enter(serial, surface, keys);
         }
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlKeyboard>, serial: u32, surface: &Rc<WlSurface>) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+            if surface_belongs_to_receiver(&surface, slf.client()) {
                 slf.send_leave(serial, &surface);
             }
-        } else if surface_belongs_to_receiver(surface, slf.client_id()) {
+        } else if surface_belongs_to_receiver(surface, slf.client()) {
             slf.send_leave(serial, surface);
+        }
+    }
+
+    fn handle_key(
+        &mut self,
+        slf: &Rc<WlKeyboard>,
+        serial: u32,
+        time: u32,
+        key: u32,
+        state: WlKeyboardKeyState,
+    ) {
+        if receiver_has_client(slf.client()) {
+            slf.send_key(serial, time, key, state);
+        }
+    }
+
+    fn handle_modifiers(
+        &mut self,
+        slf: &Rc<WlKeyboard>,
+        serial: u32,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    ) {
+        if receiver_has_client(slf.client()) {
+            slf.send_modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
+        }
+    }
+
+    fn handle_repeat_info(&mut self, slf: &Rc<WlKeyboard>, rate: i32, delay: i32) {
+        if receiver_has_client(slf.client()) {
+            slf.send_repeat_info(rate, delay);
         }
     }
 }
@@ -1602,7 +1649,7 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_y: Fixed,
     ) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&target, slf.client_id()) {
+            if surface_belongs_to_receiver(&target, slf.client()) {
                 if let Some(x) = wrapper_content_pointer_x(surface_x) {
                     self.focus = PointerFocus::WrapperContent;
                     self.pending_forwarded_frame = true;
@@ -1615,7 +1662,7 @@ impl WlPointerHandler for FilterPointerHandler {
             }
             return;
         }
-        if !surface_belongs_to_receiver(surface, slf.client_id()) {
+        if !surface_belongs_to_receiver(surface, slf.client()) {
             self.focus = PointerFocus::None;
             return;
         }
@@ -1626,7 +1673,7 @@ impl WlPointerHandler for FilterPointerHandler {
 
     fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&target, slf.client_id())
+            if surface_belongs_to_receiver(&target, slf.client())
                 && self.focus == PointerFocus::WrapperContent
             {
                 self.pending_forwarded_frame = true;
@@ -1635,7 +1682,7 @@ impl WlPointerHandler for FilterPointerHandler {
             self.focus = PointerFocus::None;
             return;
         }
-        if !surface_belongs_to_receiver(surface, slf.client_id()) {
+        if !surface_belongs_to_receiver(surface, slf.client()) {
             self.focus = PointerFocus::None;
             return;
         }
@@ -1651,7 +1698,7 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_x: Fixed,
         surface_y: Fixed,
     ) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1671,7 +1718,7 @@ impl WlPointerHandler for FilterPointerHandler {
         button: u32,
         state: WlPointerButtonState,
     ) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1684,7 +1731,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis, value: Fixed) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1697,7 +1744,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1710,7 +1757,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_source(&mut self, slf: &Rc<WlPointer>, axis_source: WlPointerAxisSource) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1723,7 +1770,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_stop(&mut self, slf: &Rc<WlPointer>, time: u32, axis: WlPointerAxis) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1736,7 +1783,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_discrete(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, discrete: i32) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1749,7 +1796,7 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_axis_value120(&mut self, slf: &Rc<WlPointer>, axis: WlPointerAxis, value120: i32) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1767,7 +1814,7 @@ impl WlPointerHandler for FilterPointerHandler {
         axis: WlPointerAxis,
         direction: WlPointerAxisRelativeDirection,
     ) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
             self.pending_forwarded_frame = false;
             return;
@@ -1798,19 +1845,19 @@ impl WlTouchHandler for FilterTouchHandler {
         x: Fixed,
         y: Fixed,
     ) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
-            if surface_belongs_to_receiver(&target, slf.client_id()) {
+            if surface_belongs_to_receiver(&target, slf.client()) {
                 self.suppressed_ids.insert(id);
             }
             return;
         }
-        if !surface_belongs_to_receiver(surface, slf.client_id()) {
+        if !surface_belongs_to_receiver(surface, slf.client()) {
             return;
         }
         self.forwarded_ids.insert(id);
@@ -1819,7 +1866,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_up(&mut self, slf: &Rc<WlTouch>, serial: u32, time: u32, id: i32) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1834,7 +1881,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_motion(&mut self, slf: &Rc<WlTouch>, time: u32, id: i32, x: Fixed, y: Fixed) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1848,7 +1895,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_shape(&mut self, slf: &Rc<WlTouch>, id: i32, major: Fixed, minor: Fixed) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1862,7 +1909,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_orientation(&mut self, slf: &Rc<WlTouch>, id: i32, orientation: Fixed) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1876,7 +1923,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_cancel(&mut self, slf: &Rc<WlTouch>) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1894,7 +1941,7 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlTouch>) {
-        if !receiver_has_client(slf.client_id()) {
+        if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
             self.pending_forwarded_frame = false;
@@ -1908,12 +1955,17 @@ impl WlTouchHandler for FilterTouchHandler {
     }
 }
 
-fn receiver_has_client(receiver_client_id: Option<u32>) -> bool {
-    receiver_client_id.is_some()
+fn receiver_has_client(receiver: Option<Rc<Client>>) -> bool {
+    receiver.is_some()
 }
 
-fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver_client_id: Option<u32>) -> bool {
-    receiver_has_client(receiver_client_id) && surface.client_id() == receiver_client_id
+fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver: Option<Rc<Client>>) -> bool {
+    let Some(receiver) = receiver else {
+        return false;
+    };
+    surface
+        .client()
+        .is_some_and(|surface_client| Rc::ptr_eq(&surface_client, &receiver))
 }
 
 struct FilterSubcompositorHandler {
