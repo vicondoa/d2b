@@ -125,8 +125,13 @@ window-rule {
 }
 ```
 
-For non-proxied host windows, use the generated include file (see
-[Set up niri window borders for d2b VMs](./niri-vm-borders.md)):
+The proxy-drawn rail is the default VM identity border for proxied graphics and
+qemu-media windows. Do not add compositor-native niri border rules for those
+windows just to color their identity border; that creates a second outer border
+around the proxy wrapper and no longer owns the VM identity color.
+
+For intentionally non-proxied host windows only, use the generated include file
+(see [Set up niri window borders for d2b VMs](./niri-vm-borders.md)):
 
 ```nix
 d2b.site.ui.compositors.niri.enable = true;
@@ -137,10 +142,9 @@ d2b.site.ui.compositors.niri.enable = true;
 include "/etc/d2b/niri-vm-borders.kdl"
 ```
 
-The generated rules use the prefix regex `^d2b\.<vm>\.` for VM windows that
-need compositor-native borders. Proxied graphics and qemu-media VMs are still
-included: niri sees the proxy-owned wrapper toplevel as the host window, so its
-native border and focus ring wrap the VM rail and guest content together.
+The generated rules use the prefix regex `^d2b\.<vm>\.` for non-proxied VM
+windows that need compositor-native borders. Proxied graphics and qemu-media VMs
+already carry their identity border inside the proxy wrapper.
 
 ### 5. Restart the VM
 

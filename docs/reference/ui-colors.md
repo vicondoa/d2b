@@ -163,14 +163,15 @@ renders `active-color`, `inactive-color`, and `urgent-color` from the same
 resolved VM border model used by the JSON and GTK CSS artifacts.
 
 The niri backend remains useful for host windows that do not pass through
-`d2b-wayland-proxy`, and for operators who prefer compositor-native rules.
-Wayland toplevels routed through the host-side proxy get compositor-agnostic
-proxy borders by default.
+`d2b-wayland-proxy`, and for operators who deliberately want an additional
+compositor-native wrapper. Wayland toplevels routed through the host-side proxy
+get compositor-agnostic proxy borders by default; the proxy is the primary owner
+of the VM identity border for those windows.
 
-Generated niri rules include proxied graphics and qemu-media VMs. The
-host-side Wayland proxy exposes a wrapper toplevel for proxy-drawn VM rails, so
-niri-native borders and focus rings wrap the proxy rail and guest content
-together.
+Do not enable or include the niri artifact solely to color proxied graphics or
+qemu-media windows. If you include it anyway, niri-native borders and focus
+rings wrap the proxy rail and guest content together as an outer compositor
+decoration.
 
 The legacy `d2b.site.niriVmBorders` and `d2b.vms.<vm>.graphics.niriBorderColor`
 options remain compatibility inputs for one release, but new

@@ -1,11 +1,11 @@
 # Set up niri window borders for d2b VMs
 
-This guide covers enabling d2b's opt-in niri KDL window-rule
-generator so VM windows get a distinct compositor-native border color
-and the crosvm GPU sidecar's scanout window is hidden on the host
-compositor. Proxied graphics and qemu-media windows remain included:
-the Wayland proxy exposes a wrapper toplevel, so niri's border and
-focus ring wrap the proxy rail and guest content together.
+This guide covers d2b's optional niri KDL window-rule generator. It is now a
+fallback/extra compositor-native path: proxied graphics and qemu-media windows
+get their VM identity border from `d2b-wayland-proxy` by default. Use this guide
+only for non-proxied VM windows, for the crosvm GPU sidecar's scanout-window hide
+rule, or when you intentionally want an additional niri-native wrapper around the
+proxy rail and guest content.
 
 ## Prerequisites
 
@@ -25,7 +25,9 @@ d2b.site.ui.compositors.niri.enable = true;
 
 After `nixos-rebuild switch`, d2b installs a KDL file at
 `/etc/d2b/niri-vm-borders.kdl` and the shared UI color artifacts at
-`/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css`.
+`/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css`. Do not add the include
+just to get VM identity colors for proxied windows; those come from the proxy
+border model.
 
 ## Sourcing the file from niri
 
