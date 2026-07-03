@@ -1502,6 +1502,7 @@ impl WlSeatHandler for FilterSeatHandler {
         id.set_handler(FilterPointerHandler {
             decoration: self.decoration.clone(),
             rail_focus: false,
+            pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
     }
@@ -1555,6 +1556,7 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
 struct FilterPointerHandler {
     decoration: SharedDecorationManager,
     rail_focus: bool,
+    pending_forwarded_frame: bool,
 }
 
 impl WlPointerHandler for FilterPointerHandler {
@@ -1576,6 +1578,7 @@ impl WlPointerHandler for FilterPointerHandler {
             return;
         }
         self.rail_focus = false;
+        self.pending_forwarded_frame = true;
         slf.send_enter(serial, surface, surface_x, surface_y);
     }
 
@@ -1590,6 +1593,7 @@ impl WlPointerHandler for FilterPointerHandler {
             return;
         }
         self.rail_focus = false;
+        self.pending_forwarded_frame = true;
         slf.send_leave(serial, surface);
     }
 
@@ -1603,6 +1607,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_motion(time, surface_x, surface_y);
     }
 
@@ -1617,6 +1622,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_button(serial, time, button, state);
     }
 
@@ -1624,10 +1630,15 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis(time, axis, value);
     }
 
     fn handle_frame(&mut self, slf: &Rc<WlPointer>) {
+        if !self.pending_forwarded_frame {
+            return;
+        }
+        self.pending_forwarded_frame = false;
         slf.send_frame();
     }
 
@@ -1635,6 +1646,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis_source(axis_source);
     }
 
@@ -1642,6 +1654,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis_stop(time, axis);
     }
 
@@ -1649,6 +1662,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis_discrete(axis, discrete);
     }
 
@@ -1656,6 +1670,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis_value120(axis, value120);
     }
 
@@ -1668,6 +1683,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if self.rail_focus {
             return;
         }
+        self.pending_forwarded_frame = true;
         slf.send_axis_relative_direction(axis, direction);
     }
 }
