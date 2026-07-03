@@ -244,6 +244,10 @@ in
   };
   "niri-vm-borders/enabled-work-rule" = {
     expr = lib.hasInfix "// Borders for VM: work" enabledKdl;
+    expected = false;
+  };
+  "niri-vm-borders/proxy-border-disabled-restores-work-rule" = {
+    expr = lib.hasInfix "// Borders for VM: work" niriNativeWorkKdl;
     expected = true;
   };
   "niri-vm-borders/proxy-border-disabled-keeps-work-rule" = {
@@ -256,11 +260,11 @@ in
   };
   "niri-vm-borders/enabled-qemu-media-host-rule" = {
     expr = lib.hasInfix "// Borders for qemu-media VM host window: media" enabledKdl;
-    expected = true;
+    expected = false;
   };
   "niri-vm-borders/enabled-qemu-media-stable-title-match" = {
     expr = lib.hasInfix ''match app-id=r#"^d2b\.media\."#'' enabledKdl;
-    expected = true;
+    expected = false;
   };
   "niri-vm-borders/enabled-qemu-media-no-guest-app-id-rule" = {
     expr = lib.hasInfix ''match app-id=r#"^qemu$"#'' enabledKdl;
