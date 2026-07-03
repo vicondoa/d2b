@@ -10,6 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added the `d2b.envs.<env>.homeLan.*` option and normalized-index metadata
+  surface for net-VM-owned home-LAN attachment, egress, port-forward, and mDNS
+  policy.
+
 ### Changed
 
 - `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,

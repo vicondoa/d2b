@@ -41,6 +41,28 @@ let
       lan.allowEastWest = true;
       mtu = 1280;
       mssClamp = true;
+      homeLan = {
+        enable = true;
+        attachment = {
+          enable = true;
+          hostInterface = "eno1";
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+        };
+        portForwards = [{
+          protocol = "tcp";
+          listenPort = 8443;
+          targetVm = "app";
+          targetPort = 443;
+          sourceCidrs = [ "192.168.1.0/24" ];
+        }];
+        mdns = {
+          enable = true;
+          publishWorkstation = true;
+        };
+      };
     };
 
     d2b.vms.zed = {
@@ -178,6 +200,77 @@ in
           ip = "10.20.0.20";
           mac = "02:70:C9:07:75:14";
           hostName = "media";
+        };
+      };
+    };
+  };
+
+  "index/home-lan-metadata" = {
+    expr = {
+      envNames = index.homeLan.envNames;
+      alpha = index.envMeta.alpha.homeLan;
+      alphaFromHomeLanIndex = index.homeLan.envMeta.alpha.homeLan;
+    };
+    expected = {
+      envNames = [ "alpha" ];
+      alpha = {
+        enable = true;
+        attachment = {
+          enable = true;
+          hostInterface = "eno1";
+          mode = "macvtap";
+          address = {
+            mode = "dhcp";
+            static = null;
+          };
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          targetVm = "app";
+          targetPort = 443;
+          protocol = "tcp";
+          sourceCidrs = [ "192.168.1.0/24" ];
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal.enable = false;
+          publishWorkstation = true;
+        };
+      };
+      alphaFromHomeLanIndex = {
+        enable = true;
+        attachment = {
+          enable = true;
+          hostInterface = "eno1";
+          mode = "macvtap";
+          address = {
+            mode = "dhcp";
+            static = null;
+          };
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          targetVm = "app";
+          targetPort = 443;
+          protocol = "tcp";
+          sourceCidrs = [ "192.168.1.0/24" ];
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal.enable = false;
+          publishWorkstation = true;
         };
       };
     };

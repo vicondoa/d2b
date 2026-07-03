@@ -312,6 +312,139 @@ shared.mkBatch {
       );
     };
 
+    "home-lan-attachment-requires-host-interface" = {
+      expectedSubstring = "homeLan.attachment.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.attachment.enable = true;
+        }
+      );
+    };
+
+    "home-lan-egress-requires-attachment" = {
+      expectedSubstring = "homeLan.egress.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.egress.enable = true;
+        }
+      );
+    };
+
+    "home-lan-port-forward-requires-attachment" = {
+      expectedSubstring = "homeLan.portForwards requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            targetVm = "corp-vm";
+            targetPort = 443;
+          }];
+        }
+      );
+    };
+
+    "home-lan-mdns-requires-attachment" = {
+      expectedSubstring = "homeLan.mdns.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.mdns.enable = true;
+        }
+      );
+    };
+
+    "home-lan-port-forward-required-fields" = {
+      expectedSubstring = "must specify protocol, listenPort, targetVm, and targetPort";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.homeLan.attachment = {
+            enable = true;
+            hostInterface = "eno1";
+          };
+          d2b.envs.work.homeLan.portForwards = [{ }];
+        }
+      );
+    };
+
+    "home-lan-port-forward-target-same-env" = {
+      expectedSubstring = "must name an enabled VM in the same env";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.vms.other-vm = {
+            enable = true;
+            env = "other";
+            index = 10;
+            ssh.user = "alice";
+          };
+          d2b.envs.work.homeLan.attachment = {
+            enable = true;
+            hostInterface = "eno1";
+          };
+          d2b.envs.work.homeLan.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            targetVm = "other-vm";
+            targetPort = 443;
+          }];
+        }
+      );
+    };
+
+    "home-lan-egress-peer-cidr-rejected" = {
+      expectedSubstring = "homeLan.egress.allowedCidrs entry";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.envs.work.homeLan.attachment = {
+            enable = true;
+            hostInterface = "eno1";
+          };
+          d2b.envs.work.homeLan.egress = {
+            enable = true;
+            allowedCidrs = [ "10.30.0.0/24" ];
+          };
+        }
+      );
+    };
+
+    "home-lan-port-forward-source-peer-cidr-rejected" = {
+      expectedSubstring = "homeLan.portForwards[0].sourceCidrs";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.envs.work.homeLan.attachment = {
+            enable = true;
+            hostInterface = "eno1";
+          };
+          d2b.envs.work.homeLan.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            targetVm = "corp-vm";
+            targetPort = 443;
+            sourceCidrs = [ "10.30.0.0/24" ];
+          }];
+        }
+      );
+    };
+
     # graphics.enable on aarch64-linux must trip the
     # host.nix platform gate.
     "platform-gate-graphics-aarch64" = {

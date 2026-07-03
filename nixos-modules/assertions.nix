@@ -18,7 +18,7 @@ let
   obsVsockCid = 1000;
   u32Max = 4294967295;
   d2bLib = import ./lib.nix { inherit lib; };
-  inherit (d2bLib) parseCidr subnetIp volumeSerialIssues;
+  inherit (d2bLib) cidrOverlaps parseCidr subnetIp volumeSerialIssues;
 
   pow2 = n:
     lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
@@ -940,6 +940,118 @@ let
       ])
     cfg.envs;
 
+  homeLanAssertions = lib.flatten (lib.mapAttrsToList
+    (envName: env:
+      let
+        homeLan = env.homeLan;
+        peerEnvCidrs = lib.flatten (lib.mapAttrsToList
+          (peerName: peer:
+            lib.optionals (peerName != envName) [
+              { inherit peerName; kind = "lanSubnet"; cidr = peer.lanSubnet; }
+              { inherit peerName; kind = "uplinkSubnet"; cidr = peer.uplinkSubnet; }
+            ])
+          cfg._index.enabledEnvs);
+        sameEnvTargets = cfg._index.workloadNamesByEnv.${envName} or [ ];
+        portForwards = lib.imap0
+          (i: forward: { inherit i forward; })
+          homeLan.portForwards;
+        overlapsPeer = cidr:
+          map
+            (peer: {
+              inherit (peer) peerName kind;
+              peerCidr = peer.cidr;
+              inherit cidr;
+            })
+            (lib.filter (peer: cidrOverlaps cidr peer.cidr) peerEnvCidrs);
+        egressPeerOverlaps =
+          lib.concatMap overlapsPeer
+            (lib.optionals homeLan.egress.enable homeLan.egress.allowedCidrs);
+        portForwardPeerOverlaps = lib.flatten (map
+          ({ i, forward }:
+            map
+              (overlap: overlap // { inherit i; })
+              (lib.concatMap overlapsPeer forward.sourceCidrs))
+          portForwards);
+      in
+      [
+        {
+          assertion = !(homeLan.attachment.enable && homeLan.attachment.hostInterface == null);
+          message = ''
+            d2b.envs.${envName}.homeLan.attachment.enable requires an
+            explicit d2b.envs.${envName}.homeLan.attachment.hostInterface.
+          '';
+        }
+        {
+          assertion = !(homeLan.egress.enable && !homeLan.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.homeLan.egress.enable requires
+            d2b.envs.${envName}.homeLan.attachment.enable = true.
+          '';
+        }
+        {
+          assertion = !(homeLan.portForwards != [ ] && !homeLan.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.homeLan.portForwards requires
+            d2b.envs.${envName}.homeLan.attachment.enable = true.
+          '';
+        }
+        {
+          assertion = !(homeLan.mdns.enable && !homeLan.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.homeLan.mdns.enable requires
+            d2b.envs.${envName}.homeLan.attachment.enable = true.
+          '';
+        }
+      ]
+      ++ map
+        ({ i, forward }: {
+          assertion =
+            forward.protocol != null
+            && forward.listenPort != null
+            && forward.targetVm != null
+            && forward.targetPort != null;
+          message = ''
+            d2b.envs.${envName}.homeLan.portForwards[${toString i}]
+            must specify protocol, listenPort, targetVm, and targetPort.
+          '';
+        })
+        portForwards
+      ++ map
+        ({ i, forward }: {
+          assertion =
+            forward.targetVm == null
+            || builtins.elem forward.targetVm sameEnvTargets;
+          message = ''
+            d2b.envs.${envName}.homeLan.portForwards[${toString i}].targetVm
+            must name an enabled VM in the same env. Got
+            `${toString forward.targetVm}`; valid targets: ${
+              lib.concatStringsSep ", " sameEnvTargets
+            }.
+          '';
+        })
+        portForwards
+      ++ map
+        (overlap: {
+          assertion = false;
+          message = ''
+            d2b.envs.${envName}.homeLan.egress.allowedCidrs entry
+            `${overlap.cidr}` overlaps peer d2b env
+            ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
+          '';
+        })
+        egressPeerOverlaps
+      ++ map
+        (overlap: {
+          assertion = false;
+          message = ''
+            d2b.envs.${envName}.homeLan.portForwards[${toString overlap.i}].sourceCidrs
+            entry `${overlap.cidr}` overlaps peer d2b env
+            ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
+          '';
+        })
+        portForwardPeerOverlaps)
+    cfg._index.enabledEnvs);
+
   vsockAssertions =
     map
       (collision: {
@@ -1170,6 +1282,7 @@ in
     vmAssertions
     ++ qemuMediaAssertions
     ++ envAssertions
+    ++ homeLanAssertions
     ++ vsockAssertions
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions
