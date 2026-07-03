@@ -1543,7 +1543,9 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
         keys: &[u8],
     ) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            slf.send_enter(serial, &surface, keys);
+            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+                slf.send_enter(serial, &surface, keys);
+            }
         } else {
             slf.send_enter(serial, surface, keys);
         }
@@ -1551,7 +1553,9 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
 
     fn handle_leave(&mut self, slf: &Rc<WlKeyboard>, serial: u32, surface: &Rc<WlSurface>) {
         if let Some(surface) = self.decoration.borrow().wrapper_input_target(surface) {
-            slf.send_leave(serial, &surface);
+            if surface_belongs_to_receiver(&surface, slf.client_id()) {
+                slf.send_leave(serial, &surface);
+            }
         } else {
             slf.send_leave(serial, surface);
         }
@@ -1573,13 +1577,10 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_x: Fixed,
         surface_y: Fixed,
     ) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.rail_focus = true;
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.rail_focus = true;
+            }
             return;
         }
         self.rail_focus = false;
@@ -1588,13 +1589,10 @@ impl WlPointerHandler for FilterPointerHandler {
     }
 
     fn handle_leave(&mut self, slf: &Rc<WlPointer>, serial: u32, surface: &Rc<WlSurface>) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.rail_focus = false;
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.rail_focus = false;
+            }
             return;
         }
         self.rail_focus = false;
@@ -1711,13 +1709,10 @@ impl WlTouchHandler for FilterTouchHandler {
         x: Fixed,
         y: Fixed,
     ) {
-        if self
-            .decoration
-            .borrow()
-            .wrapper_input_target(surface)
-            .is_some()
-        {
-            self.suppressed_ids.insert(id);
+        if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            if surface_belongs_to_receiver(&target, slf.client_id()) {
+                self.suppressed_ids.insert(id);
+            }
             return;
         }
         self.forwarded_ids.insert(id);
@@ -1777,6 +1772,10 @@ impl WlTouchHandler for FilterTouchHandler {
         self.pending_forwarded_frame = false;
         slf.send_frame();
     }
+}
+
+fn surface_belongs_to_receiver(surface: &Rc<WlSurface>, receiver_client_id: Option<u32>) -> bool {
+    receiver_client_id.is_some() && surface.client_id() == receiver_client_id
 }
 
 struct FilterSubcompositorHandler {
