@@ -19,11 +19,11 @@
 //! No `unsafe` code. Struct bytes are constructed/parsed manually using the
 //! documented packed C layout.
 
-use std::io;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::unix::AsyncFd;
 
 use crate::framing::CTAPHID_REPORT_LEN;
 
@@ -122,7 +122,7 @@ pub enum UhidEvent {
 
 /// Manages the lifecycle of a virtual FIDO2 HID device via /dev/uhid.
 pub struct UhidDevice {
-    file: File,
+    file: AsyncFd<std::fs::File>,
 }
 
 impl UhidDevice {
@@ -132,12 +132,14 @@ impl UhidDevice {
     /// immediately after this returns. The caller is responsible for the relay
     /// loop (see [`Self::read_event`] and [`Self::send_input_report`]).
     pub async fn create(uhid_path: &Path, vm_id: &str) -> io::Result<Self> {
-        let file = tokio::fs::OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .open(uhid_path)
-            .await?;
-        let mut dev = UhidDevice { file };
+            .custom_flags(libc::O_NONBLOCK)
+            .open(uhid_path)?;
+        let mut dev = UhidDevice {
+            file: AsyncFd::new(file)?,
+        };
         dev.write_create2(vm_id).await?;
         Ok(dev)
     }
@@ -148,7 +150,7 @@ impl UhidDevice {
     /// (e.g. the kernel closed the device).
     pub async fn read_event(&mut self) -> io::Result<Option<UhidEvent>> {
         let mut buf = [0u8; UHID_EVENT_SIZE];
-        let n = self.file.read(&mut buf).await?;
+        let n = self.read_nonblocking(&mut buf).await?;
         if n == 0 {
             return Ok(None);
         }
@@ -197,14 +199,14 @@ impl UhidDevice {
     /// Inject a 64-byte CTAPHID input report (token response → browser).
     pub async fn send_input_report(&mut self, data: &[u8; CTAPHID_REPORT_LEN]) -> io::Result<()> {
         let buf = build_input2_event(data);
-        self.file.write_all(&buf).await
+        self.write_all_nonblocking(&buf).await
     }
 
     /// Write a GET_REPORT_REPLY with an error status (no data) for unsolicited
     /// get-report requests we cannot serve.
     pub async fn send_get_report_reply_error(&mut self, id: u32) -> io::Result<()> {
         let buf = build_get_report_reply_error(id);
-        self.file.write_all(&buf).await
+        self.write_all_nonblocking(&buf).await
     }
 
     // -----------------------------------------------------------------------
@@ -213,7 +215,36 @@ impl UhidDevice {
 
     async fn write_create2(&mut self, vm_id: &str) -> io::Result<()> {
         let buf = build_create2_event(vm_id);
-        self.file.write_all(&buf).await
+        self.write_all_nonblocking(&buf).await
+    }
+
+    async fn read_nonblocking(&self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let mut guard = self.file.readable().await?;
+            match guard.try_io(|inner| {
+                let mut file = inner.get_ref();
+                file.read(buf)
+            }) {
+                Ok(result) => return result,
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    async fn write_all_nonblocking(&self, mut buf: &[u8]) -> io::Result<()> {
+        while !buf.is_empty() {
+            let mut guard = self.file.writable().await?;
+            match guard.try_io(|inner| {
+                let mut file = inner.get_ref();
+                file.write(buf)
+            }) {
+                Ok(Ok(0)) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(Ok(n)) => buf = &buf[n..],
+                Ok(Err(error)) => return Err(error),
+                Err(_would_block) => continue,
+            }
+        }
+        Ok(())
     }
 }
 
