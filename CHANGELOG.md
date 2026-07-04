@@ -39,6 +39,34 @@ deprecations ship one minor release before removal.
   - Migration: [`docs/how-to/migrate-usbip-yubikey-to-security-key.md`](docs/how-to/migrate-usbip-yubikey-to-security-key.md)
   - Reference (options, CLI, event/notification JSON): [`docs/reference/components-usb-security-key.md`](docs/reference/components-usb-security-key.md), [`docs/reference/usb-security-key-events.md`](docs/reference/usb-security-key-events.md)
   - Explanation (CTAP proxy architecture, why not USB sharing, comparison with USBIP and Qubes): [`docs/explanation/usb-security-key-architecture.md`](docs/explanation/usb-security-key-architecture.md)
+- Added the `d2b-notify` crate: a reusable notification/event mechanism for
+  d2b desktop UX, including:
+  - Typed `SecurityKeyEvent` enum covering all CTAP/WebAuthn ceremony
+    lifecycle phases: `Started`, `TouchNeeded`, `Busy`, `Queued`, `Blocked`,
+    `TimedOut`, `Failed`, `Canceled`, `Completed`.
+  - `ActionNonceStore`: single-use CSPRNG nonces (32 bytes, 64-char hex)
+    bound to `session_id`/`action_key`/expiry, with fail-closed validation
+    that prevents notification-action replay by hostile desktop clients.
+  - `SkNotifyState`: durable JSON state format (schema version 1) written by
+    the host runtime to `/run/d2b/notify/sk-state.json`; read by the Waybar
+    helper and `d2b-wlcontrol`.
+  - `WaybarBlock` + `waybar_block_from_state`: Waybar JSON-protocol block
+    derived from the current ceremony state, with per-state CSS classes
+    (`d2b-sk-idle`, `d2b-sk-touch`, `d2b-sk-busy`, `d2b-sk-active`).
+  - `WlcontrolSkStatus`: data contract for the `d2b-wlcontrol` status/action
+    surface, with pluggable per-ceremony action builder for nonce-backed
+    buttons.
+  - `d2b-sk-waybar-helper` binary: reads the durable state file and emits
+    one Waybar JSON line to stdout; suitable as a `custom/d2b-sk` `exec`
+    target.
+  - Pluggable `Notifier` trait + `RecordingNotifier` for hermetic tests;
+    per-event builders for all user-visible ceremony transitions.
+- Added `nixos-modules/notifications.nix`: NixOS module with options
+  `d2b.notifications.enable`, `d2b.notifications.statusHelper.{enable,
+  package,executablePath}`, `d2b.notifications.integrations.waybar.enable`,
+  `d2b.notifications.securityKey.{enable,staleEntryTtlSecs}`, and
+  `d2b.notifications.runtime.stateDir`; creates the
+  `/run/d2b/notify` tmpfiles directory on activation.
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.
