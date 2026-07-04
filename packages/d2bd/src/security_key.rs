@@ -432,7 +432,9 @@ impl HidrawDevice {
     /// Blocking write of a single 64-byte CTAPHID report to the
     /// physical token. Call from `tokio::task::spawn_blocking`.
     pub fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
-        (&self.file).write_all(report)
+        let mut hidraw_report = [0u8; CTAPHID_REPORT_SIZE + 1];
+        hidraw_report[1..].copy_from_slice(report);
+        (&self.file).write_all(&hidraw_report)
     }
 }
 
@@ -1202,6 +1204,32 @@ mod tests {
         let device = HidrawDevice::from_owned_fd(fd);
         let report = build_error_report(1, CTAPHID_ERR_INVALID_CMD);
         device.write_report(&report).expect("write to /dev/null");
+    }
+
+    #[test]
+    fn hidraw_device_write_report_prefixes_report_id() {
+        let dir = test_scratch_dir("hidraw-write-prefix");
+        let path = dir.join("hidraw.out");
+        let file = File::options()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .expect("scratch file writable");
+        let fd: OwnedFd = file.into();
+        let device = HidrawDevice::from_owned_fd(fd);
+        let report = build_init_packet(CTAPHID_BROADCAST_CID, CTAPHID_INIT, 8, &[1, 2, 3, 4]);
+
+        device.write_report(&report).expect("write report");
+        drop(device);
+
+        let written = fs::read(&path).expect("read scratch file");
+        assert_eq!(written.len(), CTAPHID_REPORT_SIZE + 1);
+        assert_eq!(written[0], 0, "hidraw write must include report ID prefix");
+        assert_eq!(&written[1..], &report);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // -----------------------------------------------------------------------
