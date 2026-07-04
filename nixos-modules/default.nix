@@ -51,6 +51,7 @@
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
     ./clipboard.nix
+    ./notifications.nix
     ./store.nix
     ./manifest.nix
     ./bundle.nix
