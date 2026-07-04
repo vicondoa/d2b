@@ -345,6 +345,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                 effective_east_west: false,
             },
             net_vm_forward_blocklist: vec!["192.168.1.0/24".to_owned()],
+            external_network: None,
             bridge_port_flags: vec![
                 BridgePortFlags {
                     role: TapRole::WorkloadLan,
@@ -504,6 +505,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                     "/run/d2b/vms/work-vm/api.sock".to_owned(),
                 )],
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::<DagEdge>::new(),
             invariants: VmProcessInvariants {

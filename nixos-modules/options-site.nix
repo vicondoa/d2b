@@ -377,7 +377,7 @@
   #
   # Defaults to the empty list; override to your actual subnet.
   # `ip route` on the host will tell you what to put here, e.g.
-  # `192.168.1.0/24` for a typical home LAN with the host at
+  # `192.168.1.0/24` for a typical external network with the host at
   # `192.168.1.42/24`.
   options.d2b.hostLanCidrs = lib.mkOption {
     type = lib.types.listOf lib.types.str;

@@ -499,6 +499,7 @@ mod tests {
             profile: dummy_profile(),
             readiness: vec![],
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
         }
     }
 

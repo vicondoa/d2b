@@ -132,11 +132,16 @@ EOF
     else [ flag ] ++ params;
 
   resolvedInterfaces = microvm:
-    builtins.map (iface: {
+    builtins.map (iface: ({
       type = iface.type;
       id = iface.id or null;
       mac = iface.mac or null;
-    }) microvm.interfaces;
+    } // (lib.optionalAttrs (iface.type == "macvtap") {
+      macvtap = {
+        link = iface.macvtap.link;
+        mode = iface.macvtap.mode;
+      };
+    }))) microvm.interfaces;
 
   resolvedVirtiofsdThreadPoolSize = microvm:
     let
@@ -401,15 +406,33 @@ EOF
             image_type = "raw";
           } // diskMqOps))
         ];
+      interfaces = resolvedInterfaces microvm;
+      macvtapInterfaces = builtins.filter (iface: iface.type == "macvtap") interfaces;
+      macvtapFdFor = iface:
+        let
+          matches = builtins.filter (entry: entry.idx != null) (lib.imap0
+            (idx: candidate: {
+              idx = if candidate.id == iface.id then idx else null;
+            })
+            macvtapInterfaces);
+        in
+        if matches == [ ]
+        then throw "internal error: macvtap interface ${iface.id} missing from macvtap index"
+        else 10 + (builtins.head matches).idx;
       netParams = builtins.map (iface:
         if iface.type == "tap" then
           opsMapped ({
             tap = iface.id;
             mac = iface.mac;
           } // netMqOps)
+        else if iface.type == "macvtap" then
+          opsMapped ({
+            fd = toString (macvtapFdFor iface);
+            mac = iface.mac;
+          } // netMqOps)
         else
           throw "Unsupported interface type ${iface.type} for cloud-hypervisor argv emission"
-      ) (resolvedInterfaces microvm);
+      ) interfaces;
       deviceParams = builtins.map (device:
         # Defensive default for device.bus when the consumer doesn't
         # specify (defaults to "pci" for the
@@ -851,7 +874,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ownerGid = ownerProfile.gid;
   };
 
-  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ] }:
+  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ], networkInterfaces ? [ ] }:
     let
       # `vm.supervisor` was removed per ADR 0015; every
       # enabled VM is daemon-supervised. `emitUnit` is permanently
@@ -878,6 +901,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     }
     // lib.optionalAttrs (planOps != [ ]) {
       inherit planOps;
+    }
+    // lib.optionalAttrs (networkInterfaces != [ ]) {
+      inherit networkInterfaces;
     };
 
   mkRunnerNode = name: args: runner:
@@ -1018,6 +1044,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           runner = {
             binaryPath = cloudHypervisorBinaryPath microvm;
             argv = cloudHypervisorArgv name vm manifest;
+            networkInterfaces = resolvedInterfaces microvm;
             # the cloud-hypervisor binary is a bash
             # wrapper that calls `dirname` to compute paths; under
             # the broker spawn (empty PATH) it exits 127 on the

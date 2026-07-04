@@ -18,7 +18,7 @@ let
   obsVsockCid = 1000;
   u32Max = 4294967295;
   d2bLib = import ./lib.nix { inherit lib; };
-  inherit (d2bLib) parseCidr subnetIp volumeSerialIssues;
+  inherit (d2bLib) cidrOverlaps parseCidr subnetIp volumeSerialIssues;
 
   pow2 = n:
     lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
@@ -940,6 +940,125 @@ let
       ])
     cfg.envs;
 
+  externalNetworkAssertions = lib.flatten (lib.mapAttrsToList
+    (envName: env:
+      let
+        externalNetwork = env.externalNetwork;
+        peerEnvCidrs = lib.flatten (lib.mapAttrsToList
+          (peerName: peer:
+            lib.optionals (peerName != envName) [
+              { inherit peerName; kind = "lanSubnet"; cidr = peer.lanSubnet; }
+              { inherit peerName; kind = "uplinkSubnet"; cidr = peer.uplinkSubnet; }
+            ])
+          cfg._index.enabledEnvs);
+        sameEnvTargets = cfg._index.workloadNamesByEnv.${envName} or [ ];
+        portForwards = lib.imap0
+          (i: forward: { inherit i forward; })
+          externalNetwork.portForwards;
+        overlapsPeer = cidr:
+          map
+            (peer: {
+              inherit (peer) peerName kind;
+              peerCidr = peer.cidr;
+              inherit cidr;
+            })
+            (lib.filter (peer: cidrOverlaps cidr peer.cidr) peerEnvCidrs);
+        egressPeerOverlaps =
+          lib.concatMap overlapsPeer
+            (lib.optionals externalNetwork.egress.enable externalNetwork.egress.allowedCidrs);
+        portForwardPeerOverlaps = lib.flatten (map
+          ({ i, forward }:
+            map
+              (overlap: overlap // { inherit i; })
+              (lib.concatMap overlapsPeer forward.sourceCidrs))
+          portForwards);
+      in
+      [
+        {
+          assertion = !(externalNetwork.attachment.enable && externalNetwork.attachment.interface == null);
+          message = ''
+            d2b.envs.${envName}.externalNetwork.attachment.enable requires an
+            explicit d2b.envs.${envName}.externalNetwork.attachment.interface.
+          '';
+        }
+        {
+          assertion = !(externalNetwork.attachment.enable
+            && externalNetwork.attachment.interface != null
+            && builtins.match "^[A-Za-z0-9_-]{1,15}$" externalNetwork.attachment.interface == null);
+          message = ''
+            d2b.envs.${envName}.externalNetwork.attachment.interface must match
+            Rust IfName syntax ^[A-Za-z0-9_-]{1,15}$ so generated
+            host.json cannot pass Nix eval and fail bundle parsing later.
+          '';
+        }
+        {
+          assertion = !(externalNetwork.egress.enable && !externalNetwork.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.externalNetwork.egress.enable requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
+          '';
+        }
+        {
+          assertion = !(externalNetwork.portForwards != [ ] && !externalNetwork.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.externalNetwork.portForwards requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
+          '';
+        }
+        {
+          assertion = !(externalNetwork.mdns.enable && !externalNetwork.attachment.enable);
+          message = ''
+            d2b.envs.${envName}.externalNetwork.mdns.enable requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
+          '';
+        }
+      ]
+      ++ map
+        ({ i, forward }: {
+          assertion =
+            forward.vm != null || forward.targetIp != null;
+          message = ''
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString i}]
+            must specify either vm or targetIp.
+          '';
+        })
+        portForwards
+      ++ map
+        ({ i, forward }: {
+          assertion =
+            forward.vm == null
+            || builtins.elem forward.vm sameEnvTargets;
+          message = ''
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString i}].vm
+            must name an enabled VM in the same env. Got
+            `${toString forward.vm}`; valid targets: ${
+              lib.concatStringsSep ", " sameEnvTargets
+            }.
+          '';
+        })
+        portForwards
+      ++ map
+        (overlap: {
+          assertion = false;
+          message = ''
+            d2b.envs.${envName}.externalNetwork.egress.allowedCidrs entry
+            `${overlap.cidr}` overlaps peer d2b env
+            ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
+          '';
+        })
+        egressPeerOverlaps
+      ++ map
+        (overlap: {
+          assertion = false;
+          message = ''
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString overlap.i}].sourceCidrs
+            entry `${overlap.cidr}` overlaps peer d2b env
+            ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
+          '';
+        })
+        portForwardPeerOverlaps)
+    cfg._index.enabledEnvs);
+
   vsockAssertions =
     map
       (collision: {
@@ -1170,6 +1289,7 @@ in
     vmAssertions
     ++ qemuMediaAssertions
     ++ envAssertions
+    ++ externalNetworkAssertions
     ++ vsockAssertions
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions

@@ -136,6 +136,42 @@ in
         message = "d2b.envs.${envName}.lan.allowEastWest requires d2b.site.allowUnsafeEastWest = true because peer-guest traffic is outside d2b's default isolation threat model.";
       })
       envs)
+    ++ (lib.concatLists (lib.mapAttrsToList
+      (envName: net:
+        let
+          attachment = net.externalNetwork.attachment;
+          forwards = net.externalNetwork.portForwards;
+        in
+        [
+          {
+            assertion = !attachment.enable || attachment.interface != null;
+            message = "d2b.envs.${envName}.externalNetwork.attachment.enable requires externalNetwork.attachment.interface (for example \"eno1\").";
+          }
+          {
+            assertion = attachment.ipv4.method != "static" || attachment.ipv4.address != null;
+            message = "d2b.envs.${envName}.externalNetwork.attachment.ipv4.method = \"static\" requires externalNetwork.attachment.ipv4.address.";
+          }
+          {
+            assertion = !net.externalNetwork.egress.enable || attachment.enable;
+            message = "d2b.envs.${envName}.externalNetwork.egress.enable requires externalNetwork.attachment.enable.";
+          }
+          {
+            assertion = forwards == [ ] || attachment.enable;
+            message = "d2b.envs.${envName}.externalNetwork.portForwards requires externalNetwork.attachment.enable.";
+          }
+        ] ++ lib.imap0
+          (i: pf: {
+            assertion = (pf.vm != null) != (pf.targetIp != null);
+            message = "d2b.envs.${envName}.externalNetwork.portForwards[${toString i}] must set exactly one of `vm` or `targetIp`.";
+          })
+          forwards
+        ++ lib.imap0
+          (i: pf: {
+            assertion = pf.vm == null || builtins.hasAttr pf.vm index.workloadsByEnv.${envName};
+            message = "d2b.envs.${envName}.externalNetwork.portForwards[${toString i}].vm = \"${if pf.vm == null then "<null>" else pf.vm}\" is not a workload VM in this env.";
+          })
+          forwards)
+      envs))
     # per-env CIDR validation.
     # - lanSubnet MUST be exactly /24 with the network address
     #   ending in `.0` (the framework's static-IP scheme assumes
@@ -392,7 +428,7 @@ in
       "interface-name:${m.uplinkBridge}"
       "interface-name:${envName}-u*"
       "interface-name:${envName}-l*"
-    ])
+    ] ++ lib.optional m.externalNetwork.attachment.enable "interface-name:${m.externalNetwork.attachment.hostIfName}")
     allMeta);
 
   # ---------------------------------------------------------------------------

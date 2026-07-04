@@ -41,6 +41,28 @@ let
       lan.allowEastWest = true;
       mtu = 1280;
       mssClamp = true;
+      externalNetwork = {
+        enable = true;
+        attachment = {
+          enable = true;
+          interface = "eno1";
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+        };
+        portForwards = [{
+          protocol = "tcp";
+          listenPort = 8443;
+          vm = "app";
+          targetPort = 443;
+          sourceCidrs = [ "192.168.1.0/24" ];
+        }];
+        mdns = {
+          enable = true;
+          publishWorkstation = true;
+        };
+      };
     };
 
     d2b.vms.zed = {
@@ -178,6 +200,97 @@ in
           ip = "10.20.0.20";
           mac = "02:70:C9:07:75:14";
           hostName = "media";
+        };
+      };
+    };
+  };
+
+  "index/home-lan-metadata" = {
+    expr = {
+      envNames = index.externalNetwork.envNames;
+      alpha = index.envMeta.alpha.externalNetwork;
+      alphaFromExternalNetworkIndex = index.externalNetwork.envMeta.alpha.externalNetwork;
+    };
+    expected = {
+      envNames = [ "alpha" ];
+      alpha = {
+        enable = true;
+        attachment = {
+          enable = true;
+          interface = "eno1";
+          mode = "macvtap";
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "external0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
+          };
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          protocol = "tcp";
+          vm = "app";
+          sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
+          publishWorkstation = true;
+        };
+      };
+      alphaFromExternalNetworkIndex = {
+        enable = true;
+        attachment = {
+          enable = true;
+          interface = "eno1";
+          mode = "macvtap";
+          macvtapMode = "bridge";
+          macAddress = "02:4A:E9:D5:17:03";
+          hostIfName = "alpha-h0";
+          guestIfName = "external0";
+          ipv4 = {
+            method = "dhcp";
+            address = null;
+            gateway = null;
+            dns = [ ];
+          };
+        };
+        egress = {
+          enable = true;
+          allowedCidrs = [ "192.168.1.0/24" ];
+          masquerade = true;
+        };
+        portForwards = [{
+          listenPort = 8443;
+          protocol = "tcp";
+          vm = "app";
+          sourceCidrs = [ "192.168.1.0/24" ];
+          targetIp = "10.20.0.10";
+          targetPort = 443;
+        }];
+        mdns = {
+          enable = true;
+          reflector.enable = true;
+          dnsmasqLocal = {
+            enable = false;
+            port = 53530;
+          };
+          publishWorkstation = true;
         };
       };
     };

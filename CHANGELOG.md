@@ -10,6 +10,17 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
+  surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
+  policy.
+- Net VMs can opt into external network mDNS reflection and an optional `.local`
+  dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
+- Nix-unit coverage and minimal eval wiring for opt-in per-env external network net VM
+  interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
+  forwarding.
+
 ### Changed
 
 - `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
@@ -117,6 +128,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Env net VMs can now opt into external network plumbing with a macvtap-backed
+  `external0` NIC, separate workload-to-home egress NAT, and explicit
+  external network port forwards.
 - `d2b-wayland-proxy` now draws compositor-agnostic, per-VM colored borders
   with an optional VM-name label for proxied graphics windows. Borders use the
   existing `d2b.vms.<vm>.ui.border` color model, are enabled by default with

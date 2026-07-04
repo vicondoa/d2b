@@ -22,6 +22,13 @@ let
     sortedAttrs (lib.filterAttrs (_: vm: vm.env == envName) enabledVms);
   workloadNamesInEnv = envName: sortedAttrNames (workloadsInEnv envName);
 
+  externalNetworkConfigured = env:
+    env.externalNetwork.enable
+    || env.externalNetwork.attachment.enable
+    || env.externalNetwork.egress.enable
+    || env.externalNetwork.portForwards != [ ]
+    || env.externalNetwork.mdns.enable;
+
   netMeta = envName: net:
     let
       peerEnvCidrs = lib.flatten (sortedMapAttrsToList
@@ -48,6 +55,47 @@ let
       dhcpRangeEnd = subnetIp lanSubnet 254;
       netUplinkMac = mkMac envName "up" 2;
       netLanMac = mkMac envName "lan" 1;
+      externalNetwork =
+        let
+          attachment = net.externalNetwork.attachment;
+          envWorkloads = workloadsInEnv envName;
+          homeMac =
+            if attachment.macAddress != null
+            then attachment.macAddress
+            else mkMac envName "home" 3;
+          resolveForward = pf:
+            let
+              targetPort =
+                if pf.targetPort != null
+                then pf.targetPort
+                else pf.listenPort;
+              targetIp =
+                if pf.targetIp != null then pf.targetIp
+                else if pf.vm != null && builtins.hasAttr pf.vm envWorkloads
+                then subnetIp lanSubnet envWorkloads.${pf.vm}.index
+                else null;
+            in
+            {
+              inherit (pf) protocol listenPort vm;
+              sourceCidrs = sortNames (lib.unique pf.sourceCidrs);
+              inherit targetIp targetPort;
+            };
+        in
+        {
+          enable = net.externalNetwork.enable;
+          attachment = {
+            inherit (attachment) enable interface mode macvtapMode;
+            macAddress = homeMac;
+            hostIfName = "${envName}-h0";
+            guestIfName = "external0";
+            ipv4 = attachment.ipv4;
+          };
+          egress = net.externalNetwork.egress // {
+            allowedCidrs = sortNames (lib.unique net.externalNetwork.egress.allowedCidrs);
+          };
+          portForwards = map resolveForward net.externalNetwork.portForwards;
+          mdns = net.externalNetwork.mdns;
+        };
       workloads = lib.mapAttrs
         (vmName: vm: {
           ip = subnetIp lanSubnet vm.index;
@@ -58,6 +106,7 @@ let
     };
 
   envMeta = lib.mapAttrs netMeta enabledEnvs;
+  externalNetworkEnvs = sortedAttrs (lib.filterAttrs (_: env: externalNetworkConfigured env) enabledEnvs);
 
   subset = pred: sortedAttrs (lib.filterAttrs pred enabledVms);
   subsetNames = pred: sortedAttrNames (subset pred);
@@ -197,6 +246,12 @@ let
     workloadsByEnv = lib.mapAttrs (envName: _: workloadsInEnv envName) enabledEnvs;
     workloadNamesByEnv = lib.mapAttrs (envName: _: workloadNamesInEnv envName) enabledEnvs;
     envMeta = envMeta;
+
+    externalNetwork = {
+      envs = externalNetworkEnvs;
+      envNames = sortedAttrNames externalNetworkEnvs;
+      envMeta = lib.filterAttrs (envName: _: builtins.elem envName (sortedAttrNames externalNetworkEnvs)) envMeta;
+    };
 
     components = {
       graphics = { vms = graphicsVms; vmNames = sortedAttrNames graphicsVms; };

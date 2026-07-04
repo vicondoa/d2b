@@ -312,6 +312,154 @@ shared.mkBatch {
       );
     };
 
+    "home-lan-attachment-requires-host-interface" = {
+      expectedSubstring = "externalNetwork.attachment.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.attachment.enable = true;
+        }
+      );
+    };
+
+    "home-lan-attachment-interface-rust-safe-name" = {
+      expectedSubstring = "externalNetwork.attachment.interface must match";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.attachment = {
+            enable = true;
+            interface = "eno1.100";
+          };
+        }
+      );
+    };
+
+    "home-lan-egress-requires-attachment" = {
+      expectedSubstring = "externalNetwork.egress.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.egress.enable = true;
+        }
+      );
+    };
+
+    "home-lan-port-forward-requires-attachment" = {
+      expectedSubstring = "externalNetwork.portForwards requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            vm = "corp-vm";
+            targetPort = 443;
+          }];
+        }
+      );
+    };
+
+    "home-lan-mdns-requires-attachment" = {
+      expectedSubstring = "externalNetwork.mdns.enable requires";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.mdns.enable = true;
+        }
+      );
+    };
+
+    "home-lan-port-forward-required-fields" = {
+      expectedSubstring = "must specify either vm or targetIp";
+      override = (
+        { ... }:
+        {
+          d2b.envs.work.externalNetwork.attachment = {
+            enable = true;
+            interface = "eno1";
+          };
+          d2b.envs.work.externalNetwork.portForwards = [{
+            listenPort = 8443;
+          }];
+        }
+      );
+    };
+
+    "home-lan-port-forward-target-same-env" = {
+      expectedSubstring = "must name an enabled VM in the same env";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.vms.other-vm = {
+            enable = true;
+            env = "other";
+            index = 10;
+            ssh.user = "alice";
+          };
+          d2b.envs.work.externalNetwork.attachment = {
+            enable = true;
+            interface = "eno1";
+          };
+          d2b.envs.work.externalNetwork.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            vm = "other-vm";
+            targetPort = 443;
+          }];
+        }
+      );
+    };
+
+    "home-lan-egress-peer-cidr-rejected" = {
+      expectedSubstring = "externalNetwork.egress.allowedCidrs entry";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.envs.work.externalNetwork.attachment = {
+            enable = true;
+            interface = "eno1";
+          };
+          d2b.envs.work.externalNetwork.egress = {
+            enable = true;
+            allowedCidrs = [ "10.30.0.0/24" ];
+          };
+        }
+      );
+    };
+
+    "home-lan-port-forward-source-peer-cidr-rejected" = {
+      expectedSubstring = "externalNetwork.portForwards[0].sourceCidrs";
+      override = (
+        { ... }:
+        {
+          d2b.envs.other = {
+            lanSubnet = "10.30.0.0/24";
+            uplinkSubnet = "198.51.100.0/30";
+          };
+          d2b.envs.work.externalNetwork.attachment = {
+            enable = true;
+            interface = "eno1";
+          };
+          d2b.envs.work.externalNetwork.portForwards = [{
+            protocol = "tcp";
+            listenPort = 8443;
+            vm = "corp-vm";
+            targetPort = 443;
+            sourceCidrs = [ "10.30.0.0/24" ];
+          }];
+        }
+      );
+    };
+
     # graphics.enable on aarch64-linux must trip the
     # host.nix platform gate.
     "platform-gate-graphics-aarch64" = {

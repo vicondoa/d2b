@@ -138,6 +138,18 @@ in
           id = mkOption { type = types.str; };
           mac = mkOption { type = types.str; };
           bridge = mkOption { type = types.nullOr types.str; default = null; };
+          macvtap = {
+            link = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              description = "Lower host interface for macvtap interfaces.";
+            };
+            mode = mkOption {
+              type = types.enum [ "bridge" "private" "vepa" "passthru" ];
+              default = "bridge";
+              description = "macvtap mode.";
+            };
+          };
         };
       });
       default = [ ];

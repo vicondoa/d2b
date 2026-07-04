@@ -14008,6 +14008,7 @@ mod host_install_dispatch_tests {
                     argv: Vec::new(),
                     env: Vec::new(),
                     plan_ops: Vec::new(),
+                    network_interfaces: Vec::new(),
                     profile: gc_test_role_profile(),
                     readiness: Vec::new(),
                 }],
@@ -15584,6 +15585,7 @@ mod host_install_dispatch_tests {
                     profile: role_profile(),
                     readiness: Vec::new(),
                     plan_ops: Vec::new(),
+                    network_interfaces: Vec::new(),
                 },
                 d2b_core::processes::ProcessNode {
                     id: d2b_core::processes::NodeId("video".to_owned()),
@@ -15595,6 +15597,7 @@ mod host_install_dispatch_tests {
                     profile: role_profile(),
                     readiness: Vec::new(),
                     plan_ops: Vec::new(),
+                    network_interfaces: Vec::new(),
                 },
             ],
             edges: Vec::new(),

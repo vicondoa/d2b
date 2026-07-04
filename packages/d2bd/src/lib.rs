@@ -17908,6 +17908,7 @@ mod public_status_tests {
                 argv: Vec::new(),
                 env: Vec::new(),
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
                 profile: d2b_core::test_support::RoleProfileBuilder::new()
                     .with_profile_id("vm-installer-qemu-media")
                     .build(),
@@ -25548,6 +25549,7 @@ mod broker_dispatch_tests {
             argv: vec![],
             env: vec![],
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("ch-runner")
                 .with_uid(0)
@@ -25582,6 +25584,7 @@ mod broker_dispatch_tests {
                 owner_gid: 12345,
                 if_absent: true,
             }],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("ch-runner")
                 .with_uid(0)
@@ -25655,6 +25658,7 @@ mod broker_dispatch_tests {
             argv: vec![],
             env: vec![],
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("swtpm")
                 .with_uid(0)
@@ -25812,6 +25816,7 @@ mod broker_dispatch_tests {
             argv: vec![],
             env: vec![],
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("swtpm")
                 .with_uid(0)
@@ -25880,6 +25885,7 @@ mod broker_dispatch_tests {
             argv: vec![],
             env: vec![],
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("gc-health")
                 .with_uid(0)

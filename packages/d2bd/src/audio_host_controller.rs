@@ -694,6 +694,7 @@ mod tests {
             argv: vec!["d2b-corp-vm-snd".to_owned()],
             env,
             plan_ops: vec![],
+            network_interfaces: Vec::new(),
             profile: RoleProfile {
                 profile_id: "w1-audio".to_owned(),
                 uid: 60100,

@@ -180,6 +180,74 @@
       },
       "additionalProperties": false
     },
+    "ProcessMacvtapInterface": {
+      "type": "object",
+      "required": [
+        "link",
+        "mode"
+      ],
+      "properties": {
+        "link": {
+          "description": "Lower host interface to attach to, e.g. `eno1`.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "macvtap/macvlan mode passed to `ip link ... type macvtap mode`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessMacvtapMode"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessMacvtapMode": {
+      "type": "string",
+      "enum": [
+        "bridge",
+        "private",
+        "vepa",
+        "passthru"
+      ]
+    },
+    "ProcessNetworkInterface": {
+      "type": "object",
+      "required": [
+        "id",
+        "mac",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mac": {
+          "type": "string"
+        },
+        "macvtap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessMacvtapInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/ProcessNetworkInterfaceType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessNetworkInterfaceType": {
+      "type": "string",
+      "enum": [
+        "tap",
+        "macvtap"
+      ]
+    },
     "ProcessNode": {
       "description": "Single process role in a VM DAG.",
       "type": "object",
@@ -214,6 +282,13 @@
         "id": {
           "description": "Stable node id used by edges.",
           "type": "string"
+        },
+        "networkInterfaces": {
+          "description": "Network interfaces consumed by VMM runner roles.\n\nThis mirrors the VMM-facing `--net` contract instead of forcing the broker to infer every interface from legacy TAP naming rows. In particular, macvtap needs parent/mode metadata so it can be created/opened as macvtap and not silently downgraded to a TAP.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessNetworkInterface"
+          }
         },
         "planOps": {
           "description": "v1.2 broker-executed plan operations that run before the runner spawns. The daemon sends only the opaque `vm_id`; the broker resolves these ops from the trusted bundle.\n\nBackward-compatible: omitted from JSON when empty (serde default).",

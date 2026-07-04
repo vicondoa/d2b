@@ -312,6 +312,9 @@ pub struct NetEnv {
     pub lan: LanPolicy,
     /// Forwarding blocklist derived from env config and host LAN CIDRs.
     pub net_vm_forward_blocklist: Vec<String>,
+    /// Optional external network attachment contract for the env net VM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_network: Option<ExternalNetworkPolicy>,
     /// TAP bridge-port flags by role.
     pub bridge_port_flags: Vec<BridgePortFlags>,
     /// Per-link IPv6-off sysctl contract.
@@ -322,6 +325,91 @@ pub struct NetEnv {
     /// USBIP-capable workloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usbip_backend_port: Option<u16>,
+}
+
+/// External network attachment and forwarding policy for one env net VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalNetworkPolicy {
+    pub attachment: ExternalNetworkAttachment,
+    pub egress: ExternalNetworkEgress,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_forwards: Vec<ExternalNetworkPortForward>,
+}
+
+/// Host and guest interface identity for the external network NIC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalNetworkAttachment {
+    pub mode: ExternalNetworkAttachmentMode,
+    pub parent_interface: IfName,
+    pub host_if_name: IfName,
+    pub guest_if_name: IfName,
+    pub mac_address: String,
+    pub macvtap_mode: ExternalNetworkMacvtapMode,
+    pub ipv4: ExternalNetworkIpv4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalNetworkAttachmentMode {
+    Macvtap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalNetworkMacvtapMode {
+    Bridge,
+    Private,
+    Vepa,
+    Passthru,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalNetworkIpv4 {
+    pub method: ExternalNetworkIpv4Method,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalNetworkIpv4Method {
+    Dhcp,
+    Static,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalNetworkEgress {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_cidrs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExternalNetworkPortForward {
+    pub protocol: ExternalNetworkPortForwardProtocol,
+    pub listen_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_cidrs: Vec<String>,
+    pub target_ip: String,
+    pub target_port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalNetworkPortForwardProtocol {
+    Tcp,
+    Udp,
 }
 
 /// LAN policy inputs and effective result.

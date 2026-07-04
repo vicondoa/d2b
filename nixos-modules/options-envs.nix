@@ -5,7 +5,101 @@
 # and a per-env broker-spawned USBIP proxy. Workload
 # VMs join an env by setting `d2b.vms.<name>.env = "<env>"` and
 # `index = <N>`. Extracted from options.nix for reviewability.
-{ lib, ... }:
+{ lib, config, ... }:
+
+let
+  externalNetworkStaticAddressType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      address = lib.mkOption {
+        type = lib.types.str;
+        example = "192.168.1.50/24";
+        description = ''
+          Static IPv4 address, in CIDR notation, for the generated
+          net VM's external network interface when `address.mode = "static"`.
+        '';
+      };
+
+      gateway = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "192.168.1.1";
+        description = "Optional IPv4 default gateway for static external network addressing.";
+      };
+
+      dns = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "192.168.1.1" ];
+        description = "Optional DNS resolvers for static external network addressing.";
+      };
+    };
+  };
+
+  externalNetworkAddressType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      mode = lib.mkOption {
+        type = lib.types.enum [ "dhcp" "static" ];
+        default = "dhcp";
+        description = "How the generated net VM obtains its external network address.";
+      };
+
+      static = lib.mkOption {
+        type = lib.types.nullOr externalNetworkStaticAddressType;
+        default = null;
+        description = "Static address details used when `mode = \"static\"`.";
+      };
+    };
+  };
+
+  externalNetworkPortForwardType = lib.types.submodule {
+    freeformType = null;
+    options = {
+      protocol = lib.mkOption {
+        type = lib.types.enum [ "tcp" "udp" ];
+        default = "tcp";
+        description = "Layer-4 protocol to forward from external0.";
+      };
+
+      listenPort = lib.mkOption {
+        type = lib.types.port;
+        example = 2222;
+        description = "Port on sys-<env>-net's external0 address.";
+      };
+
+      vm = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "workstation";
+        description = "Workload VM in this env that receives the forward.";
+      };
+
+      targetIp = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Explicit workload-LAN target IP. Use instead of vm for advanced cases.";
+      };
+
+      targetPort = lib.mkOption {
+        type = lib.types.nullOr lib.types.port;
+        default = null;
+        example = 22;
+        description = "Target port on the workload VM. Defaults to listenPort.";
+      };
+
+      sourceCidrs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "192.168.1.0/24" ];
+        description = ''
+          Optional external network source CIDR allowlist for this forward. Entries
+          must not overlap peer d2b env CIDRs.
+        '';
+      };
+    };
+  };
+in
 
 {
   options.d2b.envs = lib.mkOption {
@@ -62,6 +156,145 @@
         mssClamp = lib.mkEnableOption "TCP MSS clamping on the net VM's nftables forward chain (recommended when running over a tunneled uplink)";
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
+
+        externalNetwork = {
+          enable = lib.mkEnableOption "external network policy metadata for this env";
+
+          attachment = {
+            enable = lib.mkEnableOption "a separate net-VM NIC on the host LAN";
+
+            interface = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "eno1";
+              description = ''
+                Physical host interface that the net VM's external network NIC is
+                attached to. The host interface stays managed by the host's
+                existing network stack; d2b does not bridge or reconfigure it.
+              '';
+            };
+
+            mode = lib.mkOption {
+              type = lib.types.enum [ "macvtap" ];
+              default = "macvtap";
+              description = "Host attachment mode for the net VM external network NIC.";
+            };
+
+            macvtapMode = lib.mkOption {
+              type = lib.types.enum [ "bridge" "private" "vepa" "passthru" ];
+              default = "bridge";
+              description = "macvtap/macvlan mode used when attachment.mode is macvtap.";
+            };
+
+            macAddress = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Optional fixed MAC for the net VM's external network NIC. When null,
+                d2b derives a deterministic locally-administered MAC from the
+                env name.
+              '';
+            };
+
+            ipv4 = {
+              method = lib.mkOption {
+                type = lib.types.enum [ "dhcp" "static" ];
+                default = "dhcp";
+                description = "How sys-<env>-net configures external0 inside the guest.";
+              };
+
+              address = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.50/24";
+                description = "Static IPv4 address with prefix when method is static.";
+              };
+
+              gateway = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "192.168.1.1";
+                description = "Optional static default gateway for external0.";
+              };
+
+              dns = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                example = [ "192.168.1.1" ];
+                description = "Optional static DNS servers for external0.";
+              };
+            };
+          };
+
+          egress = {
+            enable = lib.mkEnableOption "workload-initiated external network access NATed behind sys-<env>-net's external0 address";
+
+            allowedCidrs = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = config.d2b.hostLanCidrs;
+              defaultText = lib.literalExpression "config.d2b.hostLanCidrs";
+              example = [ "192.168.1.0/24" ];
+              description = ''
+                External network CIDRs this env may reach through the generated net VM.
+                Entries must not overlap peer d2b env CIDRs.
+              '';
+            };
+
+            masquerade = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether the generated net VM should masquerade external network egress.";
+            };
+          };
+
+          portForwards = lib.mkOption {
+            type = lib.types.listOf externalNetworkPortForwardType;
+            default = [ ];
+            example = lib.literalExpression ''
+              [
+                {
+                  protocol = "tcp";
+                  listenPort = 2222;
+                  vm = "workstation";
+                  targetPort = 22;
+                  sourceCidrs = [ "192.168.1.0/24" ];
+                }
+              ]
+            '';
+            description = ''
+              Explicit DNAT rules from sys-<env>-net external0 to workload VMs on
+              eth1. Empty by default; no SSH or other service is exposed unless
+              a forward is declared here.
+            '';
+          };
+
+          mdns = {
+            enable = lib.mkEnableOption "mDNS behaviour inside the generated net VM";
+
+            reflector.enable = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether net-VM mDNS reflection is requested when mDNS is enabled.";
+            };
+
+            dnsmasqLocal.enable = lib.mkEnableOption "net-VM-local dnsmasq mDNS name handling";
+
+            publishWorkstation = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether the generated net VM should publish workstation presence on the external network.";
+            };
+
+            dnsmasqLocal.port = lib.mkOption {
+              type = lib.types.port;
+              default = 53530;
+              description = ''
+                Loopback UDP/TCP port used by the net-VM-local `.local`
+                DNS bridge when `dnsmasqLocal.enable` is true.
+              '';
+            };
+          };
+        };
 
         ui.accentColor = lib.mkOption {
           type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
