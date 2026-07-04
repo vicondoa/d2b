@@ -30,6 +30,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenFuse | promoted-live | Opens the allowed FUSE device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenHidrawSecurityKey | promoted-live | Resolves a configured FIDO security-key stable selector from the trusted bundle, opens the physical `hidraw` node, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |

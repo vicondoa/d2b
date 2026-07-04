@@ -171,6 +171,15 @@ pub enum OperationFields {
         device_path: String,
         matrix_entry_id: String,
     },
+    /// `OpenHidrawSecurityKey` audit fields. Records the stable
+    /// selector label and resolution status; never carries the raw
+    /// hidraw device path or any CTAP payload material.
+    OpenHidrawSecurityKey {
+        vm_id: String,
+        selector_id: String,
+        device_class: String,
+        resolved: bool,
+    },
     OpenDevice {
         role_id: String,
         device_class: String,
@@ -529,6 +538,12 @@ impl OperationFields {
                 device_class: String,
                 device_path: String,
                 matrix_entry_id: String,
+            }),
+            "OpenHidrawSecurityKey" => parse_fields!(value => OpenHidrawSecurityKey {
+                vm_id: String,
+                selector_id: String,
+                device_class: String,
+                resolved: bool,
             }),
             "OpenDevice" => parse_fields!(value => OpenDevice {
                 role_id: String,
