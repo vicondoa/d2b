@@ -840,9 +840,12 @@ in
     # Host activation hook.
     # On every `nixos-rebuild switch`, drop the per-VM next-generation
     # pointer into /run/d2b/<vm>/next-generation. The leaf directory is
-    # tmpfiles-owned so activation only updates the pointer. The daemon-native
-    # Rust StoreSync broker op is the canonical writer for store-view;
-    # activation must not build/sweep/activate per-VM store closures.
+    # also tmpfiles-owned, but activation can run before tmpfiles has
+    # materialised newly-declared VM leaves on the first switch that
+    # introduces a VM, so this hook idempotently creates ONLY the leaf
+    # before updating the pointer. The daemon-native Rust StoreSync
+    # broker op is the canonical writer for store-view; activation must
+    # not build/sweep/activate per-VM store closures.
     #
     # /run/d2b is created by
     # host-daemon.nix tmpfiles (root:d2b 1770 with ACLs) under
@@ -854,6 +857,7 @@ in
       set -u
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: gen: ''
+          install -d -m 0755 -o root -g root /run/d2b/${name}
           ln -sfT ${gen} /run/d2b/${name}/next-generation
         '')
         vmGenPaths)}

@@ -359,8 +359,8 @@ in
     expected = true;
   };
 
-  "activation-runtime-tmpfiles/store-sync-no-run-dir-install" = {
-    expr = !(lib.hasInfix "install -d -m 0755 /run/d2b/corp-vm" storeSyncText);
+  "activation-runtime-tmpfiles/store-sync-creates-run-leaf" = {
+    expr = lib.hasInfix "install -d -m 0755 -o root -g root /run/d2b/corp-vm" storeSyncText;
     expected = true;
   };
 
