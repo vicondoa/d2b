@@ -283,7 +283,9 @@ pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd,
         &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
     ) {
         Ok(()) => {}
-        Err(super::OpError::Io { path: _, detail }) if detail.contains("File exists") => {}
+        Err(super::OpError::Io { path: _, detail }) if detail.contains("File exists") => {
+            validate_existing_macvtap(&ip, intent)?
+        }
         Err(err) => return Err(err),
     }
     run_ip_link(
@@ -342,6 +344,76 @@ fn build_macvtap_link_add_args(intent: &ResolvedMacvtapIntent) -> Vec<String> {
 
 fn macvtap_device_path(ifindex: u32) -> PathBuf {
     PathBuf::from(format!("/dev/tap{ifindex}"))
+}
+
+fn validate_existing_macvtap(ip: &Path, intent: &ResolvedMacvtapIntent) -> Result<(), super::OpError> {
+    let output = Command::new(ip)
+        .args(["-d", "-j", "link", "show", "dev", intent.ifname.as_str()])
+        .env_remove("NOTIFY_SOCKET")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: err.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(super::OpError::Io {
+            path: ip.to_path_buf(),
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    validate_existing_macvtap_json(&String::from_utf8_lossy(&output.stdout), intent)
+}
+
+fn validate_existing_macvtap_json(
+    json: &str,
+    intent: &ResolvedMacvtapIntent,
+) -> Result<(), super::OpError> {
+    let links: Vec<serde_json::Value> =
+        serde_json::from_str(json).map_err(|err| super::OpError::InvalidInput {
+            detail: format!(
+                "invalid ip -j link output for existing macvtap {}: {err}",
+                intent.ifname.as_str()
+            ),
+        })?;
+    let link = links
+        .iter()
+        .find(|link| {
+            link.get("ifname").and_then(serde_json::Value::as_str)
+                == Some(intent.ifname.as_str())
+        })
+        .or_else(|| links.first())
+        .ok_or_else(|| super::OpError::InvalidInput {
+            detail: format!(
+                "ip -j link output missing existing macvtap {}",
+                intent.ifname.as_str()
+            ),
+        })?;
+    let kind = link
+        .pointer("/linkinfo/info_kind")
+        .and_then(serde_json::Value::as_str);
+    let parent = link.get("link").and_then(serde_json::Value::as_str);
+    let mode = link
+        .pointer("/linkinfo/info_data/mode")
+        .and_then(serde_json::Value::as_str);
+    let expected_mode = intent.mode.as_ip_arg();
+    if kind != Some("macvtap")
+        || parent != Some(intent.parent_ifname.as_str())
+        || mode != Some(expected_mode)
+    {
+        return Err(super::OpError::InvalidInput {
+            detail: format!(
+                "existing link {} does not match trusted macvtap intent: kind={:?} parent={:?} mode={:?}, expected kind=macvtap parent={} mode={}",
+                intent.ifname.as_str(),
+                kind,
+                parent,
+                mode,
+                intent.parent_ifname.as_str(),
+                expected_mode
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn attach_tap_to_bridge(
@@ -1011,6 +1083,71 @@ mod tests {
         );
         assert!(!args.contains(" master "));
         assert_eq!(macvtap_device_path(42), PathBuf::from("/dev/tap42"));
+    }
+
+    fn macvtap_intent_for_readback() -> ResolvedMacvtapIntent {
+        ResolvedMacvtapIntent {
+            vm_name: "sys-work-net".to_owned(),
+            role_id: "cloud-hypervisor".to_owned(),
+            ifname: BundleIfName::new("work-h0").expect("macvtap ifname"),
+            parent_ifname: BundleIfName::new("eno1").expect("parent ifname"),
+            mode: d2b_core::processes::ProcessMacvtapMode::Bridge,
+            mac: "02:4A:E9:D5:17:03".to_owned(),
+            fd: 10,
+        }
+    }
+
+    #[test]
+    fn existing_macvtap_readback_accepts_matching_link() {
+        let json = r#"[{
+          "ifname":"work-h0",
+          "link":"eno1",
+          "linkinfo":{
+            "info_kind":"macvtap",
+            "info_data":{"mode":"bridge"}
+          }
+        }]"#;
+
+        validate_existing_macvtap_json(json, &macvtap_intent_for_readback())
+            .expect("matching existing macvtap is accepted");
+    }
+
+    #[test]
+    fn existing_macvtap_readback_rejects_foreign_parent() {
+        let json = r#"[{
+          "ifname":"work-h0",
+          "link":"eno2",
+          "linkinfo":{
+            "info_kind":"macvtap",
+            "info_data":{"mode":"bridge"}
+          }
+        }]"#;
+
+        let err = validate_existing_macvtap_json(json, &macvtap_intent_for_readback())
+            .expect_err("foreign parent must fail closed");
+        match err {
+            crate::ops::OpError::InvalidInput { detail } => {
+                assert!(detail.contains("expected kind=macvtap parent=eno1 mode=bridge"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn existing_macvtap_readback_rejects_plain_tap() {
+        let json = r#"[{
+          "ifname":"work-h0",
+          "linkinfo":{"info_kind":"tun"}
+        }]"#;
+
+        let err = validate_existing_macvtap_json(json, &macvtap_intent_for_readback())
+            .expect_err("plain TAP must fail closed");
+        match err {
+            crate::ops::OpError::InvalidInput { detail } => {
+                assert!(detail.contains("expected kind=macvtap"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

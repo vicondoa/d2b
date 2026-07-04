@@ -4926,8 +4926,16 @@ fn prepare_runner_preopened_fds(
     daemon_gid: u32,
 ) -> Result<RunnerPreopenedFds, BrokerError> {
     if req.role == d2b_contracts::broker_wire::RunnerRole::CloudHypervisor {
+        let runner_intent = resolver
+            .find_runner_intent(req.bundle_runner_intent_ref.as_str())
+            .ok_or_else(|| {
+                BrokerError::BundleIntentMissing {
+                    kind: "runner",
+                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
+                }
+            })?;
         let intents = resolver
-            .resolve_macvtap_intents(req.vm_id.as_str(), req.role_id.as_str())
+            .resolve_macvtap_intents(req.vm_id.as_str(), runner_intent.role_id.as_str())
             .map_err(BrokerError::LiveHandler)?;
         if intents.is_empty() {
             return Ok(RunnerPreopenedFds {
