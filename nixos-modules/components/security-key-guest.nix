@@ -49,19 +49,15 @@ in
     # libfido2 and Firefox use this group for hidraw access.
     users.groups.fido = { };
 
-    # udev rule: grant the `fido` group read/write access to every HID raw
-    # device that presents the FIDO Alliance usage page. This matches both
-    # real and virtual FIDO/CTAPHID devices so the same rule works during
-    # development (physical key via USBIP or direct) and in production (the
-    # virtual device created by d2b-sk-frontend).
+    # udev rule: grant the `fido` group read/write access to the virtual
+    # FIDO/CTAPHID HID raw device created by d2b-sk-frontend.
     #
-    # The rule fires on SUBSYSTEM=="hidraw" with the FIDO usage page. The
-    # kernel exposes the top-level HID usage page in the uevent ATTRS so
-    # uaccess-style matching is not needed — group ownership is enough.
+    # The virtual device is a UHID HID parent whose kernel name encodes the
+    # Yubico FIDO vendor/product pair used by d2b-sk-frontend.
     services.udev.extraRules = ''
       # d2b security-key: grant fido group access to FIDO/CTAPHID HID raw nodes.
-      # Match only the virtual FIDO device created by d2b-sk-frontend.
-      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{phys}=="d2b-sk*", GROUP="fido", MODE="0660"
+      # Match the virtual FIDO device created by d2b-sk-frontend.
+      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", SUBSYSTEMS=="hid", KERNELS=="0003:1050:0407.*", GROUP="fido", MODE="0660"
     '';
 
     # The d2b-sk-frontend service runs as the guest's login user so it has
