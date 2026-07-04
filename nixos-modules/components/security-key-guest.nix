@@ -64,10 +64,6 @@ in
       # Match virtual FIDO devices (d2b-sk-frontend uhid device) and any
       # other HID device with the FIDO Alliance usage page reported via phys.
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{phys}=="d2b-sk*", GROUP="fido", MODE="0660"
-      # Broad FIDO2/U2F coverage: any hidraw device where the parent USB device
-      # has the FIDO Alliance usage-page class.
-      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{bInterfaceClass}=="03", \
-        ATTRS{bInterfaceSubClass}=="00", ATTRS{bInterfaceProtocol}=="00", GROUP="fido", MODE="0660"
     '';
 
     # The d2b-sk-frontend service runs as the guest's login user so it has

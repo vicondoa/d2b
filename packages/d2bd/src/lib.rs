@@ -541,6 +541,7 @@ struct ServerState {
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
+    security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
 }
 
 struct GatewayDisplayRuntime {
@@ -1004,6 +1005,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         conn_semaphore: concurrency::ConnSemaphore::new(resolve_max_inflight_connections()),
         op_locks: crate::concurrency::OpLockManager::new(),
         public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+        security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            crate::security_key::SkSessionTable::default(),
+        )),
     };
     refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
@@ -9911,6 +9915,77 @@ impl VmStartRunner<'_> {
         }
     }
 
+    async fn start_sk_accept_loop(&self, vm: &str, node: &ProcessNode) -> Result<(), String> {
+        let dag = self
+            .resolver
+            .find_process_vm(vm)
+            .ok_or_else(|| "sk-accept-loop:no-process-dag".to_owned())?;
+        let ch = dag
+            .nodes
+            .iter()
+            .find(|candidate| candidate.role == ProcessRole::CloudHypervisorRunner)
+            .ok_or_else(|| "sk-accept-loop:no-cloud-hypervisor-node".to_owned())?;
+        let vsock_base_path = cloud_hypervisor_vsock_socket(&ch.argv)
+            .ok_or_else(|| "sk-accept-loop:no-vsock-socket".to_owned())?;
+        let sk_socket_path = PathBuf::from(format!("{}_14320", vsock_base_path.display()));
+        let expected_uid = ch.profile.uid;
+        let expected_gid = ch.profile.gid;
+
+        let (response, received_fds) = dispatch_broker_request_with_fds_timeout(
+            self.state,
+            BrokerRequest::OpenHidrawSecurityKey(
+                d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+                    vm_id: VmId::new(vm),
+                    selector_id: "default".to_owned(),
+                    tracing_span_id: None,
+                },
+            ),
+            Duration::from_secs(30),
+        )
+        .map_err(|error| format!("sk-broker-dispatch:{}", error.message()))?;
+
+        let result = match response {
+            BrokerResponse::OpenHidrawSecurityKey(response) => {
+                let hidraw_fd = duplicate_received_fd(&received_fds, 0, "duplicate hidraw fd")
+                    .map_err(|error| format!("sk-hidraw-fd:{}", error.message()));
+                Ok((response.selector_resolved, hidraw_fd))
+            }
+            BrokerResponse::Error(error) => Err(format!("sk-broker-error:{}", error.kind)),
+            other => Err(format!(
+                "sk-broker-protocol:{}",
+                broker_response_kind(&other)
+            )),
+        };
+        close_received_fds(&received_fds);
+
+        let (selector_resolved, hidraw_fd) = result?;
+        let hidraw = Arc::new(security_key::HidrawDevice::from_owned_fd(hidraw_fd?));
+        let mut security_key_state = security_key::SecurityKeyState::new(selector_resolved);
+        security_key_state.enabled_vms.insert(vm.to_owned());
+        let state = Arc::new(parking_lot::Mutex::new(security_key_state));
+        let listener = security_key::bind_accept_socket(&sk_socket_path)
+            .map_err(|error| format!("sk-bind-socket:{error}"))?;
+        let abort = security_key::spawn_accept_loop(
+            listener,
+            vm.to_owned(),
+            expected_uid,
+            expected_gid,
+            Arc::clone(&state),
+            Arc::clone(&hidraw),
+        );
+        self.state
+            .security_key_sessions
+            .lock()
+            .register(vm.to_owned(), security_key::SkAcceptHandle { state, abort });
+        tracing::info!(
+            vm = %vm,
+            node = %node.id.0,
+            socket = %sk_socket_path.display(),
+            "security-key accept loop ready"
+        );
+        Ok(())
+    }
+
     /// State-aware readiness for a `GuestControlHealth` node. Resolves the
     /// per-VM probe parameters from the trusted bundle and runs the
     /// authenticated Health probe on a dedicated current-thread runtime
@@ -9977,6 +10052,9 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         // `spawn_and_check_process_alive` fall-through, which delegates here.
         if node.role == ProcessRole::GuestControlHealth {
             return self.wait_for_guest_control_health(vm, node, budget).await;
+        }
+        if node.role == ProcessRole::SecurityKeyFrontend {
+            return self.start_sk_accept_loop(vm, node).await;
         }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {
@@ -16901,6 +16979,9 @@ mod public_status_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
         (state, dir)
     }
@@ -19798,6 +19879,9 @@ mod detached_exec_routing_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         }
     }
 
@@ -20465,6 +20549,9 @@ mod accept_loop_concurrency_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
@@ -20997,6 +21084,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         }
     }
 
@@ -21031,6 +21121,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         }
     }
 
@@ -23119,6 +23212,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -23340,6 +23436,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
 
         let listener = socket(
@@ -23594,6 +23693,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -25484,6 +25586,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
 
         // Emit the same event that the timeout handler in
@@ -26389,6 +26494,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
 
         // Set a 0ms readiness timeout via the test-only config override so the
@@ -26510,6 +26618,9 @@ mod broker_dispatch_tests {
             conn_semaphore: crate::concurrency::ConnSemaphore::new(8),
             op_locks: crate::concurrency::OpLockManager::new(),
             public_status_read_model: Arc::new(crate::PublicStatusReadModel::new()),
+            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+                crate::security_key::SkSessionTable::default(),
+            )),
         };
 
         let response = dispatch_broker_vm_start(

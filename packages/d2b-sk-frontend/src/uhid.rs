@@ -147,10 +147,21 @@ impl UhidDevice {
     /// (e.g. the kernel closed the device).
     pub async fn read_event(&mut self) -> io::Result<Option<UhidEvent>> {
         let mut buf = [0u8; UHID_EVENT_SIZE];
-        match self.file.read_exact(&mut buf).await {
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e),
+        let n = self.file.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if n < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("short uhid event header: {n} bytes"),
+            ));
+        }
+        if n < UHID_EVENT_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("short uhid event: expected {UHID_EVENT_SIZE} bytes, got {n}"),
+            ));
         }
         let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
         let payload = &buf[4..];

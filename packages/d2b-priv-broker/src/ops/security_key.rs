@@ -116,12 +116,16 @@ pub(crate) fn resolve_selector(
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
 fn is_fido_device(sysfs_entry: &Path) -> bool {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
-    if let Ok(rdesc) = std::fs::read(&rdesc_path)
-        && rdesc
-            .windows(FIDO_USAGE_PAGE_LE.len())
-            .any(|w| w == FIDO_USAGE_PAGE_LE)
-    {
-        return true;
+    match std::fs::read(&rdesc_path) {
+        Ok(rdesc) => {
+            return rdesc
+                .windows(FIDO_USAGE_PAGE_LE.len())
+                .any(|w| w == FIDO_USAGE_PAGE_LE);
+        }
+        Err(_) => {
+            // Fall through to the distro udev-group fallback only when
+            // the kernel refuses descriptor access.
+        }
     }
     // Fallback: accept if the /dev node is owned by an allowed group.
     let dev_name = sysfs_entry.file_name().unwrap_or_default();
@@ -224,6 +228,31 @@ mod tests {
     #[test]
     fn is_fido_device_rejects_nonexistent_path() {
         assert!(!is_fido_device(Path::new("/nonexistent/hidraw-path")));
+    }
+
+    #[test]
+    fn is_fido_device_rejects_readable_non_fido_descriptor_without_group_fallback() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let device_dir = tmp.path().join("hidraw0/device");
+        std::fs::create_dir_all(&device_dir).expect("device dir");
+        std::fs::write(device_dir.join("report_descriptor"), [0x00, 0x01, 0x02, 0x03])
+            .expect("write descriptor");
+
+        assert!(
+            !is_fido_device(&tmp.path().join("hidraw0")),
+            "readable non-FIDO report descriptors must fail closed instead of falling through to group fallback"
+        );
+    }
+
+    #[test]
+    fn is_fido_device_accepts_readable_fido_descriptor() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let device_dir = tmp.path().join("hidraw0/device");
+        std::fs::create_dir_all(&device_dir).expect("device dir");
+        std::fs::write(device_dir.join("report_descriptor"), [0x06, 0xD0, 0xF1, 0x09, 0x01])
+            .expect("write descriptor");
+
+        assert!(is_fido_device(&tmp.path().join("hidraw0")));
     }
 
     #[test]

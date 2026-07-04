@@ -50,10 +50,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
@@ -208,6 +211,9 @@ impl CidTranslator {
     /// Allocate a fresh host-side CID for a guest's newly established
     /// channel (in response to `CTAPHID_INIT` on the broadcast CID).
     pub fn alloc_host_cid(&mut self, guest_cid: u32) -> u32 {
+        if let Some(old_host_cid) = self.guest_to_host.remove(&guest_cid) {
+            self.host_to_guest.remove(&old_host_cid);
+        }
         loop {
             let candidate = self.next_host_cid;
             self.next_host_cid = self.next_host_cid.wrapping_add(1);
@@ -331,8 +337,10 @@ impl SecurityKeyState {
     /// success, or `None` if another VM holds an unexpired lease.
     pub fn try_acquire_lease(&mut self, vm_id: &str) -> Option<LeaseId> {
         if self.lease.is_expired() {
+            let expired_holder = self.lease.holder().unwrap_or("<unknown>").to_owned();
             info!(
-                vm = vm_id,
+                vm = expired_holder.as_str(),
+                requester = vm_id,
                 selector = self.selector_label.as_str(),
                 "security-key: expiring stale lease"
             );
@@ -406,9 +414,21 @@ pub struct HidrawDevice {
 
 impl HidrawDevice {
     pub fn from_owned_fd(fd: OwnedFd) -> Self {
+        let _ = Self::clear_nonblocking(&fd);
         Self {
             file: File::from(fd),
         }
+    }
+
+    fn clear_nonblocking<F: AsRawFd>(fd: &F) -> std::io::Result<()> {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+
+        let raw_fd = fd.as_raw_fd();
+        let flags = fcntl(raw_fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
+        let mut flags = OFlag::from_bits_truncate(flags);
+        flags.remove(OFlag::O_NONBLOCK);
+        fcntl(raw_fd, FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
+        Ok(())
     }
 
     /// Blocking read of a single 64-byte CTAPHID report from the
@@ -454,6 +474,36 @@ pub fn recv_report<R: Read>(stream: &mut R) -> std::io::Result<CtaphidReport> {
 pub fn send_report<W: Write>(stream: &mut W, report: &CtaphidReport) -> std::io::Result<()> {
     stream.write_all(&(CTAPHID_REPORT_SIZE as u32).to_le_bytes())?;
     stream.write_all(report)?;
+    Ok(())
+}
+
+/// Async version of [`recv_report`] for the per-VM relay stream.
+pub(crate) async fn recv_report_async<R: AsyncRead + Unpin>(
+    stream: &mut R,
+) -> std::io::Result<CtaphidReport> {
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len != CTAPHID_REPORT_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("expected {CTAPHID_REPORT_SIZE}-byte CTAPHID report, got {len}"),
+        ));
+    }
+    let mut report = [0u8; CTAPHID_REPORT_SIZE];
+    stream.read_exact(&mut report).await?;
+    Ok(report)
+}
+
+/// Async version of [`send_report`] for the per-VM relay stream.
+pub(crate) async fn send_report_async<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    report: &CtaphidReport,
+) -> std::io::Result<()> {
+    stream
+        .write_all(&(CTAPHID_REPORT_SIZE as u32).to_le_bytes())
+        .await?;
+    stream.write_all(report).await?;
     Ok(())
 }
 
@@ -509,6 +559,247 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
     Ok(())
 }
 
+pub fn bind_accept_socket(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    tokio::net::UnixListener::bind(path)
+}
+
+#[derive(Debug)]
+pub struct SkAcceptHandle {
+    pub state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    pub abort: tokio::task::AbortHandle,
+}
+
+#[derive(Debug, Default)]
+pub struct SkSessionTable {
+    sessions: HashMap<String, SkAcceptHandle>,
+}
+
+impl SkSessionTable {
+    pub fn register(&mut self, vm_id: String, handle: SkAcceptHandle) {
+        if let Some(previous) = self.sessions.insert(vm_id, handle) {
+            previous.abort.abort();
+        }
+    }
+
+    pub fn remove(&mut self, vm_id: &str) -> Option<SkAcceptHandle> {
+        self.sessions.remove(vm_id)
+    }
+}
+
+pub fn spawn_accept_loop(
+    listener: tokio::net::UnixListener,
+    vm_id: String,
+    expected_uid: u32,
+    expected_gid: u32,
+    state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    hidraw: Arc<HidrawDevice>,
+) -> tokio::task::AbortHandle {
+    let task = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    let vm_id = vm_id.clone();
+                    let state = Arc::clone(&state);
+                    let hidraw = Arc::clone(&hidraw);
+                    tokio::spawn(async move {
+                        run_connection(stream, vm_id, expected_uid, expected_gid, state, hidraw)
+                            .await;
+                    });
+                }
+                Err(error) => {
+                    info!(vm = %vm_id, error = %error, "security-key: accept loop stopped");
+                    break;
+                }
+            }
+        }
+    });
+    task.abort_handle()
+}
+
+fn relay_join_error(error: tokio::task::JoinError) -> std::io::Error {
+    std::io::Error::other(format!("relay task join error: {error}"))
+}
+
+fn relay_eof(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+pub(crate) async fn run_connection(
+    stream: tokio::net::UnixStream,
+    vm_id: String,
+    expected_uid: u32,
+    expected_gid: u32,
+    state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    hidraw: Arc<HidrawDevice>,
+) {
+    if let Err(error) = authenticate_peer(&stream, expected_uid, expected_gid) {
+        info!(
+            vm = %vm_id,
+            expected_uid,
+            expected_gid,
+            error = %error,
+            "security-key: rejecting connection from unexpected peer"
+        );
+        return;
+    }
+
+    if !state.lock().enabled_vms.contains(&vm_id) {
+        info!(vm = %vm_id, "security-key: rejecting connection for disabled vm");
+        return;
+    }
+
+    let deadline = Instant::now() + QUEUE_WAIT_TIMEOUT;
+    let lease_id = loop {
+        if let Some(lease_id) = {
+            let mut guard = state.lock();
+            guard.try_acquire_lease(&vm_id)
+        } {
+            break lease_id;
+        }
+        if Instant::now() >= deadline {
+            info!(vm = %vm_id, "security-key: queue wait timed out");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    let active_host_cid = Arc::new(parking_lot::Mutex::new(None::<u32>));
+    let cid_translator = Arc::new(parking_lot::Mutex::new(CidTranslator::new()));
+    let (mut stream_reader, mut stream_writer) = stream.into_split();
+
+    let mut guest_to_hidraw = tokio::spawn({
+        let active_host_cid = Arc::clone(&active_host_cid);
+        let cid_translator = Arc::clone(&cid_translator);
+        let hidraw = Arc::clone(&hidraw);
+        async move {
+            loop {
+                let mut report = match recv_report_async(&mut stream_reader).await {
+                    Ok(report) => report,
+                    Err(error) if relay_eof(&error) => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+
+                let host_cid = {
+                    let packet = parse_ctaphid_report(&report);
+                    let mut translator = cid_translator.lock();
+                    match packet {
+                        CtaphidPacket::Init(packet) => {
+                            let host_cid = if packet.cid == CTAPHID_BROADCAST_CID {
+                                translator.alloc_host_cid(packet.cid)
+                            } else {
+                                translator.guest_to_host(packet.cid).ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "unknown guest cid",
+                                    )
+                                })?
+                            };
+                            *active_host_cid.lock() = Some(host_cid);
+                            host_cid
+                        }
+                        CtaphidPacket::Cont(packet) => {
+                            translator.guest_to_host(packet.cid).ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "unknown guest cid",
+                                )
+                            })?
+                        }
+                    }
+                };
+
+                report[0..4].copy_from_slice(&host_cid.to_be_bytes());
+                let hidraw = Arc::clone(&hidraw);
+                tokio::task::spawn_blocking(move || hidraw.write_report(&report))
+                    .await
+                    .map_err(relay_join_error)??;
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        }
+    });
+
+    let mut hidraw_to_guest = tokio::spawn({
+        let cid_translator = Arc::clone(&cid_translator);
+        let hidraw = Arc::clone(&hidraw);
+        async move {
+            loop {
+                let hidraw = Arc::clone(&hidraw);
+                let mut report = match tokio::task::spawn_blocking(move || hidraw.read_report())
+                    .await
+                    .map_err(relay_join_error)?
+                {
+                    Ok(report) => report,
+                    Err(error) if relay_eof(&error) => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+
+                let host_cid = u32::from_be_bytes([report[0], report[1], report[2], report[3]]);
+                let guest_cid = {
+                    let translator = cid_translator.lock();
+                    translator.host_to_guest(host_cid).ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown host cid")
+                    })?
+                };
+                report[0..4].copy_from_slice(&guest_cid.to_be_bytes());
+                send_report_async(&mut stream_writer, &report).await?;
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        }
+    });
+
+    let (direction, relay_result) = tokio::select! {
+        result = &mut guest_to_hidraw => {
+            hidraw_to_guest.abort();
+            ("guest->hidraw", result)
+        }
+        result = &mut hidraw_to_guest => {
+            guest_to_hidraw.abort();
+            ("hidraw->guest", result)
+        }
+    };
+
+    match relay_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            info!(vm = %vm_id, direction, error = %error, "security-key: relay closed");
+        }
+        Err(error) if !error.is_cancelled() => {
+            info!(vm = %vm_id, direction, error = %error, "security-key: relay task failed");
+        }
+        Err(_) => {}
+    }
+
+    if direction == "guest->hidraw" {
+        let _ = hidraw_to_guest.await;
+    } else {
+        let _ = guest_to_hidraw.await;
+    }
+
+    let cancel_host_cid = { *active_host_cid.lock() };
+    if let Some(host_cid) = cancel_host_cid {
+        let cancel_packet = build_cancel_packet(host_cid);
+        let hidraw = Arc::clone(&hidraw);
+        let _ = tokio::task::spawn_blocking(move || hidraw.write_report(&cancel_packet)).await;
+    }
+
+    state.lock().release_lease(&vm_id, lease_id);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -516,7 +807,55 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Cursor;
+    use std::path::PathBuf;
+
+    fn test_scratch_dir(name: &str) -> PathBuf {
+        static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
+        let root = PathBuf::from("t").join("sk");
+        fs::create_dir_all(&root).expect("create security-key test root");
+        let dir = root.join(format!(
+            "{name}-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).expect("create security-key test dir");
+        dir
+    }
+
+    fn tokio_socket_pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
+        let (left, right) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        left.set_nonblocking(true).expect("left nonblocking");
+        right.set_nonblocking(true).expect("right nonblocking");
+        (
+            tokio::net::UnixStream::from_std(left).expect("tokio left stream"),
+            tokio::net::UnixStream::from_std(right).expect("tokio right stream"),
+        )
+    }
+
+    fn dev_null_hidraw() -> Arc<HidrawDevice> {
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .expect("open /dev/null");
+        Arc::new(HidrawDevice::from_owned_fd(file.into()))
+    }
+
+    fn current_peer_ids() -> (u32, u32) {
+        (
+            nix::unistd::geteuid().as_raw(),
+            nix::unistd::getegid().as_raw(),
+        )
+    }
+
+    fn mismatched_ids() -> (u32, u32) {
+        let (uid, gid) = current_peer_ids();
+        let wrong_uid = if uid == 0 { 1 } else { 0 };
+        let wrong_gid = if gid == 0 { 1 } else { 0 };
+        (wrong_uid, wrong_gid)
+    }
 
     // -----------------------------------------------------------------------
     // CTAPHID packet parsing
@@ -591,6 +930,22 @@ mod tests {
         let host1 = t.alloc_host_cid(10);
         let host2 = t.alloc_host_cid(20);
         assert_ne!(host1, host2);
+    }
+
+    #[test]
+    fn cid_translator_reallocating_guest_cid_removes_old_reverse_mapping() {
+        let mut t = CidTranslator::new();
+        let old_host = t.alloc_host_cid(10);
+        let new_host = t.alloc_host_cid(10);
+
+        assert_ne!(old_host, new_host);
+        assert_eq!(t.guest_to_host(10), Some(new_host));
+        assert_eq!(t.host_to_guest(new_host), Some(10));
+        assert_eq!(
+            t.host_to_guest(old_host),
+            None,
+            "old host CID must not keep a stale reverse mapping"
+        );
     }
 
     #[test]
@@ -814,5 +1169,114 @@ mod tests {
             result,
             Err(PeerAuthError::PeerCredentialMismatch { .. })
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn accept_socket_bind_creates_socket() {
+        let dir = test_scratch_dir("accept-socket-bind");
+        let socket_path = dir.join("vsock.sock_14320");
+
+        let _listener = bind_accept_socket(&socket_path).expect("bind accept socket");
+
+        assert!(socket_path.exists(), "socket path should exist after bind");
+
+        let _ = fs::remove_file(&socket_path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_rejects_mismatched_peer() {
+        let (stream, _peer) = tokio_socket_pair();
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+        state.lock().enabled_vms.insert("vm-a".to_owned());
+        let hidraw = dev_null_hidraw();
+        let (wrong_uid, wrong_gid) = mismatched_ids();
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            run_connection(
+                stream,
+                "vm-a".to_owned(),
+                wrong_uid,
+                wrong_gid,
+                state,
+                hidraw,
+            ),
+        )
+        .await
+        .expect("mismatched peer should return quickly");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_rejects_disabled_vm() {
+        let (stream, _peer) = tokio_socket_pair();
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+        let hidraw = dev_null_hidraw();
+        let (uid, gid) = current_peer_ids();
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            run_connection(stream, "vm-a".to_owned(), uid, gid, state, hidraw),
+        )
+        .await
+        .expect("disabled vm should return quickly");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_acquires_and_releases_lease() {
+        let (stream, peer) = tokio_socket_pair();
+        let mut inner = SecurityKeyState::new("selector");
+        inner.enabled_vms.insert("vm-a".to_owned());
+        let state = Arc::new(parking_lot::Mutex::new(inner));
+        let hidraw = dev_null_hidraw();
+        let (uid, gid) = current_peer_ids();
+
+        drop(peer);
+        run_connection(
+            stream,
+            "vm-a".to_owned(),
+            uid,
+            gid,
+            Arc::clone(&state),
+            hidraw,
+        )
+        .await;
+
+        assert!(matches!(state.lock().lease, LeaseState::Available));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sk_session_table_abort_on_duplicate_register() {
+        let mut table = SkSessionTable::default();
+        let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
+
+        let first_task = tokio::spawn(async { std::future::pending::<()>().await });
+        table.register(
+            "vm-a".to_owned(),
+            SkAcceptHandle {
+                state: Arc::clone(&state),
+                abort: first_task.abort_handle(),
+            },
+        );
+
+        let second_task = tokio::spawn(async { std::future::pending::<()>().await });
+        table.register(
+            "vm-a".to_owned(),
+            SkAcceptHandle {
+                state,
+                abort: second_task.abort_handle(),
+            },
+        );
+
+        let first_error = first_task.await.expect_err("first task should be aborted");
+        assert!(first_error.is_cancelled());
+
+        if let Some(handle) = table.remove("vm-a") {
+            handle.abort.abort();
+        }
+        let second_error = second_task
+            .await
+            .expect_err("second task should be aborted during cleanup");
+        assert!(second_error.is_cancelled());
     }
 }
