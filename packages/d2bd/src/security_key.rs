@@ -51,6 +51,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use std::sync::Arc;
@@ -582,7 +583,9 @@ pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    StdUnixListener::bind(path)
+    let listener = StdUnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))?;
+    Ok(listener)
 }
 
 pub struct SkAcceptAbort {
@@ -1231,6 +1234,12 @@ mod tests {
         let _listener = bind_accept_socket(&socket_path).expect("bind accept socket");
 
         assert!(socket_path.exists(), "socket path should exist after bind");
+        let mode = fs::metadata(&socket_path)
+            .expect("socket metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o770);
 
         let _ = fs::remove_file(&socket_path);
         let _ = fs::remove_dir_all(&dir);
