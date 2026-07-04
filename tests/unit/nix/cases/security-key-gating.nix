@@ -124,17 +124,18 @@ in
     expected = true;
   };
 
-  "security-key-gating/guest-activation-creates-etc-before-users" = {
+  "security-key-gating/guest-activation-users-after-etc" = {
     expr =
       let
-        script = (guestConfig enabledEval "corp-vm").system.activationScripts.script;
-        ensureNeedle = "Activation script snippet d2bEnsureEtcForUsers";
-        usersNeedle = "Activation script snippet users";
-        ensureMatch = builtins.match ".*${ensureNeedle}.*" script;
-        usersMatch = builtins.match ".*${usersNeedle}.*" script;
-        beforeMatch = builtins.match ".*${ensureNeedle}.*${usersNeedle}.*" script;
+        activation = (guestConfig enabledEval "corp-vm").system.activationScripts;
+        ensureText =
+          if builtins.isAttrs activation.d2bEnsureEtcForUsers
+          then activation.d2bEnsureEtcForUsers.text or ""
+          else activation.d2bEnsureEtcForUsers;
       in
-      ensureMatch != null && usersMatch != null && beforeMatch != null;
+      activation ? d2bEnsureEtcForUsers
+      && ensureText != ""
+      && builtins.elem "etc" activation.users.deps;
     expected = true;
   };
 

@@ -85,15 +85,15 @@ in
 
   system.stateVersion = lib.mkDefault "26.05";
 
-  # NixOS' generated `users` activation snippet writes /etc/passwd and
-  # /etc/group before the generated `etc` snippet runs. d2b guests boot from a
-  # minimal root overlay where /etc may not exist yet, so create it explicitly
-  # before user/group activation.
+  # d2b guests boot from a minimal root overlay where /etc may not exist yet.
+  # Create it before static /etc setup, then run user/group activation after the
+  # static /etc links are in place so /etc/passwd and /etc/group remain real
+  # writable files instead of being overwritten during first boot.
   system.activationScripts.d2bEnsureEtcForUsers = ''
     mkdir -p /etc
     chmod 0755 /etc
   '';
-  system.activationScripts.users.deps = lib.mkBefore [ "d2bEnsureEtcForUsers" ];
+  system.activationScripts.users.deps = lib.mkAfter [ "etc" ];
 
   # ---------------------------------------------------------------------------
   # Per-VM nix store: load the db.dump from the host-injected
