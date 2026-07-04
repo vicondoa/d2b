@@ -198,6 +198,9 @@ deprecations ship one minor release before removal.
   listener world-accessible.
 - Security-key guest frontend now writes the full UHID_CREATE2 payload,
   including `dev_flags` and padding fields required by current Linux kernels.
+- Security-key guest frontend now uses the correct Linux UHID event type
+  numbers (`CREATE2 = 11`, `INPUT2 = 12`) so the virtual FIDO HID device is
+  actually created rather than sending an input report to no device.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.

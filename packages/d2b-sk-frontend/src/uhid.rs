@@ -32,19 +32,19 @@ use crate::framing::CTAPHID_REPORT_LEN;
 // ---------------------------------------------------------------------------
 
 /// Create the virtual HID device (UHID_CREATE2).
-const UHID_CREATE2: u32 = 12;
+const UHID_CREATE2: u32 = 11;
 /// Inject an input report (device→kernel→userspace) (UHID_INPUT2).
-const UHID_INPUT2: u32 = 11;
+const UHID_INPUT2: u32 = 12;
 /// Kernel sends an output report (userspace→kernel→device) to us.
 const UHID_OUTPUT: u32 = 6;
 /// Kernel signals device start (first client opened it).
-const UHID_START: u32 = 4;
+const UHID_START: u32 = 2;
 /// Kernel signals device stop (last client closed it).
-const UHID_STOP: u32 = 5;
+const UHID_STOP: u32 = 3;
 /// A userspace client opened the device.
-const UHID_OPEN: u32 = 7;
+const UHID_OPEN: u32 = 4;
 /// A userspace client closed the device.
-const UHID_CLOSE: u32 = 8;
+const UHID_CLOSE: u32 = 5;
 /// Kernel requests a GET_REPORT from the device.
 const UHID_GET_REPORT: u32 = 9;
 
@@ -299,6 +299,18 @@ fn build_get_report_reply_error(id: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uhid_event_type_values_match_kernel_uapi() {
+        assert_eq!(UHID_START, 2);
+        assert_eq!(UHID_STOP, 3);
+        assert_eq!(UHID_OPEN, 4);
+        assert_eq!(UHID_CLOSE, 5);
+        assert_eq!(UHID_OUTPUT, 6);
+        assert_eq!(UHID_GET_REPORT, 9);
+        assert_eq!(UHID_CREATE2, 11);
+        assert_eq!(UHID_INPUT2, 12);
+    }
 
     #[test]
     fn create2_event_length() {
