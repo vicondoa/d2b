@@ -347,6 +347,183 @@
         "none"
       ]
     },
+    "HomeLanAttachment": {
+      "description": "Host and guest interface identity for the home-LAN NIC.",
+      "type": "object",
+      "required": [
+        "guestIfName",
+        "hostIfName",
+        "ipv4",
+        "macAddress",
+        "macvtapMode",
+        "mode",
+        "parentInterface"
+      ],
+      "properties": {
+        "guestIfName": {
+          "$ref": "#/definitions/IfName"
+        },
+        "hostIfName": {
+          "$ref": "#/definitions/IfName"
+        },
+        "ipv4": {
+          "$ref": "#/definitions/HomeLanIpv4"
+        },
+        "macAddress": {
+          "type": "string"
+        },
+        "macvtapMode": {
+          "$ref": "#/definitions/HomeLanMacvtapMode"
+        },
+        "mode": {
+          "$ref": "#/definitions/HomeLanAttachmentMode"
+        },
+        "parentInterface": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HomeLanAttachmentMode": {
+      "type": "string",
+      "enum": [
+        "macvtap"
+      ]
+    },
+    "HomeLanEgress": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "allowedCidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HomeLanIpv4": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "address": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gateway": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "$ref": "#/definitions/HomeLanIpv4Method"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HomeLanIpv4Method": {
+      "type": "string",
+      "enum": [
+        "dhcp",
+        "static"
+      ]
+    },
+    "HomeLanMacvtapMode": {
+      "type": "string",
+      "enum": [
+        "bridge",
+        "private",
+        "vepa",
+        "passthru"
+      ]
+    },
+    "HomeLanPolicy": {
+      "description": "Home-LAN attachment and forwarding policy for one env net VM.",
+      "type": "object",
+      "required": [
+        "attachment",
+        "egress"
+      ],
+      "properties": {
+        "attachment": {
+          "$ref": "#/definitions/HomeLanAttachment"
+        },
+        "egress": {
+          "$ref": "#/definitions/HomeLanEgress"
+        },
+        "portForwards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HomeLanPortForward"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HomeLanPortForward": {
+      "type": "object",
+      "required": [
+        "listenPort",
+        "protocol",
+        "targetIp",
+        "targetPort"
+      ],
+      "properties": {
+        "listenPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "$ref": "#/definitions/HomeLanPortForwardProtocol"
+        },
+        "sourceCidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "targetIp": {
+          "type": "string"
+        },
+        "targetPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HomeLanPortForwardProtocol": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
     "HostChConfig": {
       "description": "Cloud Hypervisor host-side configuration probed at bundle build. Selects the runner network-handoff mode based on the packaged CH binary's capabilities.",
       "type": "object",
@@ -607,6 +784,17 @@
         "env": {
           "description": "Environment name from the public manifest.",
           "type": "string"
+        },
+        "homeLan": {
+          "description": "Optional home-LAN attachment contract for the env net VM.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HomeLanPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "hostUplinkIp": {
           "description": "Host-side IP on the env uplink bridge. Required for scoped USBIP proxy firewall carve-outs; absent legacy bundles fail closed for USBIP.",
