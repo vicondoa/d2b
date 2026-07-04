@@ -2250,6 +2250,44 @@
               "$ref": "#/definitions/DiskInitRequest"
             }
           }
+        },
+        {
+          "description": "Open the FIDO/CTAP hidraw node for the named device selector.\n\nThe broker resolves the stable device label against the trusted bundle security-key device table, performs sysfs-presence and FIDO-class checks, opens the exact hidraw node, and returns the fd via `SCM_RIGHTS`. The daemon holds the fd for the CTAP relay session lifetime.\n\nTyped stub — live handler target: `live_security_key_open_device`.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SecurityKeyOpenDevice"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeyOpenDeviceRequest"
+            }
+          }
+        },
+        {
+          "description": "Apply udev group grants for configured FIDO hidraw nodes.\n\nWrites broker-generated udev rules granting the `d2b-security-key` group ownership of the configured vendor/product/serial-matched hidraw nodes. Called once during host activation or when the device selector list changes.\n\nTyped stub — live handler target: `live_security_key_apply_udev_rules`.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SecurityKeyApplyUdevRules"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeyApplyUdevRulesRequest"
+            }
+          }
         }
       ]
     },
@@ -7370,6 +7408,55 @@
               "$ref": "#/definitions/GatewayDisplayOp"
             }
           }
+        },
+        {
+          "description": "Security-key proxy status: host proxy health, configured FIDO device selectors, current lease, and per-VM virtual-device state. `d2b usb security-key status`",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key status"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Security-key proxy session history: recent and active CTAP relay sessions. `d2b usb security-key sessions`",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key sessions"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Cancel a stuck security-key CTAP session. Accepts an explicit session ID or `cancel_current = true` to cancel whatever is active. `d2b usb security-key cancel [--current | <session-id>]`",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key cancel"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeyCancelRequest"
+            }
+          }
         }
       ]
     },
@@ -7678,6 +7765,63 @@
             },
             "payload": {
               "$ref": "#/definitions/GatewayDisplayOpResponse"
+            }
+          }
+        },
+        {
+          "description": "`d2b usb security-key status` response.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeyStatusResponse"
+            }
+          }
+        },
+        {
+          "description": "`d2b usb security-key sessions` response.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key sessions"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeySessionsResponse"
+            }
+          }
+        },
+        {
+          "description": "`d2b usb security-key cancel` response.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb security-key cancel"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecurityKeyCancelResponse"
             }
           }
         },
@@ -9016,6 +9160,390 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyApplyUdevRulesRequest": {
+      "description": "Broker request: apply udev group grants for configured FIDO hidraw nodes.\n\nCalled once during host activation (or on-demand when the device selector list changes) to update the udev rules that grant the `d2b-security-key` group ownership of the exact hidraw nodes matching the configured vendor/product/serial selectors.\n\nThe broker writes the generated rules to the designated path, does NOT issue a blanket udev reload, and records a targeted audit event. Udev rule application is deferred to the activation helper's normal `udevadm trigger` pass.",
+      "type": "object",
+      "required": [
+        "bundleUdevIntentRef"
+      ],
+      "properties": {
+        "bundleUdevIntentRef": {
+          "description": "Opaque bundle reference for the security-key udev intent. The broker resolves the exact rule text from the trusted bundle copy; no inline rule text is accepted on the wire.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyCancelRequest": {
+      "description": "Request payload for `d2b usb security-key cancel`.",
+      "type": "object",
+      "properties": {
+        "cancelCurrent": {
+          "description": "If true, cancel the current active session regardless of session ID (equivalent to `--current` on the CLI).",
+          "default": false,
+          "type": "boolean"
+        },
+        "sessionId": {
+          "description": "Session ID to cancel, or `None` to cancel the current active session (if any).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyCancelResponse": {
+      "description": "Response to `d2b usb security-key cancel`.",
+      "type": "object",
+      "required": [
+        "cancelled"
+      ],
+      "properties": {
+        "cancelled": {
+          "description": "Whether a session was found and cancelled.",
+          "type": "boolean"
+        },
+        "sessionId": {
+          "description": "Session ID that was cancelled, or `None` if no session was found.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyDeviceStatus": {
+      "description": "Host-side reachability status for one configured FIDO device selector.",
+      "type": "object",
+      "required": [
+        "brokerAccessible",
+        "label",
+        "present",
+        "productId",
+        "usbipBound",
+        "vendorId"
+      ],
+      "properties": {
+        "brokerAccessible": {
+          "description": "Whether the broker has successfully opened the hidraw node.",
+          "type": "boolean"
+        },
+        "label": {
+          "description": "Stable selector label from `d2b.host.usb.securityKey.devices`.",
+          "type": "string"
+        },
+        "present": {
+          "description": "Whether the device is currently present (sysfs-visible) on the host.",
+          "type": "boolean"
+        },
+        "productId": {
+          "description": "USB product ID (decimal).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "serial": {
+          "description": "Optional serial (from the NixOS selector configuration).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usbipBound": {
+          "description": "Whether the device is currently bound to the USBIP subsystem (diagnostic; security-key proxy and USBIP should not coexist for this device in phase 1).",
+          "type": "boolean"
+        },
+        "vendorId": {
+          "description": "USB vendor ID (decimal).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyLeaseState": {
+      "description": "Current exclusive CTAP relay lease state.\n\nAt most one VM holds the lease at any time in phase 1. The lease is advisory inside this DTO; the kernel OFD lock on the per-busid lock file is the authoritative mutual-exclusion mechanism.",
+      "type": "object",
+      "required": [
+        "acquiredAt",
+        "deviceLabel",
+        "vm"
+      ],
+      "properties": {
+        "acquiredAt": {
+          "description": "ISO 8601 timestamp when the lease was acquired.",
+          "type": "string"
+        },
+        "deviceLabel": {
+          "description": "Stable label of the FIDO device selector in use.",
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "Active session ID, if a CTAP session is in progress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "description": "VM that currently holds the security-key relay lease.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyOpenDeviceRequest": {
+      "description": "Broker request: open the FIDO hidraw node for the named device selector.\n\nThe broker resolves the stable device label against the trusted `host.json` security-key device table, performs the sysfs-presence and FIDO-class checks, opens the exact hidraw node, and returns the open fd via `SCM_RIGHTS`. The daemon receives the fd and holds it for the lifetime of the CTAP relay session.\n\nThis is the ONLY path by which the daemon may obtain a hidraw fd; no inline path, busid, or raw device node is accepted on the wire.",
+      "type": "object",
+      "required": [
+        "deviceLabel",
+        "sessionId"
+      ],
+      "properties": {
+        "deviceLabel": {
+          "description": "Stable device selector label (matches `d2b.host.usb.securityKey .devices[].label`). The broker resolves the physical hidraw node from the trusted bundle's device table using only this label.",
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "Session ID for audit correlation. The broker records this in the session-open audit event alongside the redacted device identity.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeySession": {
+      "description": "One CTAP HID relay session record.\n\nSessions are created when a guest begins a WebAuthn operation and retired on completion, cancellation, or timeout. The host daemon keeps a bounded ring-buffer of recent sessions for the `usb security-key sessions` surface.",
+      "type": "object",
+      "required": [
+        "deviceLabel",
+        "result",
+        "sessionId",
+        "startedAt",
+        "vm"
+      ],
+      "properties": {
+        "deviceLabel": {
+          "description": "Stable label of the FIDO device selector used.",
+          "type": "string"
+        },
+        "endedAt": {
+          "description": "ISO 8601 timestamp when the session ended, or `None` if still active.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "Session outcome.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SecurityKeySessionResult"
+            }
+          ]
+        },
+        "rpId": {
+          "description": "RP ID (relying-party domain, e.g. `login.example.com`) if safely parsed from the CTAP2 `authenticatorMakeCredential` or `authenticatorGetAssertion` command. `None` if the session is still in progress, if RP ID extraction failed, or for CTAP1/U2F sessions where the AppID is not surfaced here (privacy-sensitive detail; see audit records for authoritative RP data).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "description": "Opaque session identifier.",
+          "type": "string"
+        },
+        "startedAt": {
+          "description": "ISO 8601 timestamp when the session was created (lease acquired or requested).",
+          "type": "string"
+        },
+        "vm": {
+          "description": "VM that initiated this session.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeySessionResult": {
+      "description": "Terminal outcome of a CTAP HID relay session.",
+      "oneOf": [
+        {
+          "description": "Session is still active (no terminal outcome yet).",
+          "type": "string",
+          "enum": [
+            "in-progress"
+          ]
+        },
+        {
+          "description": "CTAP operation completed successfully.",
+          "type": "string",
+          "enum": [
+            "success"
+          ]
+        },
+        {
+          "description": "CTAP operation returned a CTAP error code.",
+          "type": "string",
+          "enum": [
+            "ctap-error"
+          ]
+        },
+        {
+          "description": "CTAP operation timed out (browser timeout or touch timeout).",
+          "type": "string",
+          "enum": [
+            "timeout"
+          ]
+        },
+        {
+          "description": "Session was cancelled by the operator (`d2b usb security-key cancel`).",
+          "type": "string",
+          "enum": [
+            "cancelled"
+          ]
+        },
+        {
+          "description": "Internal error (broker or vsock transport failure).",
+          "type": "string",
+          "enum": [
+            "internal-error"
+          ]
+        }
+      ]
+    },
+    "SecurityKeySessionsResponse": {
+      "description": "Response for `d2b usb security-key sessions`.",
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "description": "Recent and active sessions, newest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecurityKeySession"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyStatusResponse": {
+      "description": "Top-level response for `d2b usb security-key status`.",
+      "type": "object",
+      "required": [
+        "devices",
+        "hostProxyEnabled",
+        "vmStates"
+      ],
+      "properties": {
+        "currentLease": {
+          "description": "Current lease holder, if any VM holds the exclusive CTAP relay lease.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SecurityKeyLeaseState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "devices": {
+          "description": "Configured FIDO device selectors and their current host-side reachability.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecurityKeyDeviceStatus"
+          }
+        },
+        "hostProxyEnabled": {
+          "description": "Whether the host security-key proxy is configured and the broker can access the FIDO hidraw device(s).",
+          "type": "boolean"
+        },
+        "vmStates": {
+          "description": "Per-VM virtual device health summary for all opted-in VMs.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecurityKeyVmState"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityKeyVmSessionState": {
+      "description": "CTAP session state for a single VM.",
+      "oneOf": [
+        {
+          "description": "No CTAP session is active or pending for this VM.",
+          "type": "string",
+          "enum": [
+            "idle"
+          ]
+        },
+        {
+          "description": "The guest has issued a CTAP HID operation; the host broker is waiting to acquire the physical device lease.",
+          "type": "string",
+          "enum": [
+            "awaiting-lease"
+          ]
+        },
+        {
+          "description": "The host broker holds the device lease and is relaying CTAP HID traffic for this VM.",
+          "type": "string",
+          "enum": [
+            "active"
+          ]
+        },
+        {
+          "description": "The CTAP session completed (success or CTAP error); the virtual device is awaiting the next operation.",
+          "type": "string",
+          "enum": [
+            "completed"
+          ]
+        },
+        {
+          "description": "The CTAP session was cancelled (by the operator or by timeout).",
+          "type": "string",
+          "enum": [
+            "cancelled"
+          ]
+        }
+      ]
+    },
+    "SecurityKeyVmState": {
+      "description": "Per-VM security-key proxy health state.",
+      "type": "object",
+      "required": [
+        "enabled",
+        "sessionState",
+        "virtualDevicePresent",
+        "vm"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Whether the VM is opted in (`d2b.vms.<name>.usb.securityKey.enable`).",
+          "type": "boolean"
+        },
+        "sessionState": {
+          "description": "Current CTAP session state for this VM.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SecurityKeyVmSessionState"
+            }
+          ]
+        },
+        "virtualDevicePresent": {
+          "description": "Whether the virtual FIDO HID device is present inside the guest (`/dev/uhid`-based virtual hidraw device created by d2b-fido-front).",
+          "type": "boolean"
+        },
+        "vm": {
+          "description": "VM name.",
+          "type": "string"
         }
       },
       "additionalProperties": false

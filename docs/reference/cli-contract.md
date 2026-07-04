@@ -1132,7 +1132,7 @@ the daemon handler ships.
 
 | Argument | Semantics |
 | --- | --- |
-| `<vm>` | Required. VM name (must have `d2b.vms.<name>.usb.securityKey.enable = true`). |
+| `<vm>` | Required. VM name with the per-VM USB security-key option enabled. |
 
 **Exit codes**
 

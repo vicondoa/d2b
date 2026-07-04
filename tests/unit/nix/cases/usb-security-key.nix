@@ -1,28 +1,19 @@
-# Nix eval test cases for d2b.host.usb.securityKey and
-# d2b.vms.<vm>.usb.securityKey.
+# nix-unit eval cases for the USB security-key proxy option schema
+# (nixos-modules/options-host.nix + per-VM usb.securityKey.enable).
 #
-# These are scaffolded test cases that capture the eval-time invariants
-# described in docs/reference/components-usb-security-key.md and the plan.
-# They are written against the expected module shape; cases marked
-# `expectedError = true` assert eval-rejection of invalid configurations.
-#
-# SCAFFOLDING NOTE: These cases depend on nixos-modules/components/
-# usb-security-key.nix being present (the runtime implementation workstream).
-# Until that module exists, running `make test-unit` will fail on eval
-# because the options are undeclared. The cases are committed now so that:
-#   1. The test surface is defined alongside the docs, not after the fact.
-#   2. The implementation workstream can make them pass as a completion gate.
-#   3. The policy gate `usb_security_key_test_cases_exist` in
-#      packages/d2b-contract-tests/tests/policy_docs.rs can assert this
-#      file is present before the module lands.
-#
-# When the module is implemented, run:
-#   bash tests/tools/gen-nix-unit-pins.sh
-# to regenerate tests/unit/nix/pinned/ and add this file to the pin list.
+# Tests three properties:
+#   A. Positive: valid host + VM config evaluates without assertion
+#      failures; option values are set as expected.
+#   B. The eval-time assertion fires correctly for each of the three
+#      assertion categories (checked here as boolean expressions over
+#      `config.assertions`, not via mkBatch — the batch evaluator in
+#      eval-cases/assertions.nix covers the failure-message surface).
+#   C. Host-enabled with empty devices evaluates without error.
+#   D. The option defaults: host disabled, VM disabled.
 { mkEval, lib, ... }:
 
 let
-  # Minimal base NixOS module shared across cases.
+  # Minimal system fixture.
   base = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -36,208 +27,182 @@ let
       launcherUsers = [ "alice" ];
       yubikey.enable = false;
     };
-    d2b.envs.personal = {
+    d2b.envs.work = {
       lanSubnet = "10.20.0.0/24";
       uplinkSubnet = "192.0.2.0/30";
     };
-    d2b.vms.personal-dev = {
+    d2b.vms.corp-vm = {
       enable = true;
-      env = "personal";
+      env = "work";
       index = 10;
       ssh.user = "alice";
-      guest.control.enable = true;
       config = {
-        networking.hostName = lib.mkDefault "personal-dev";
+        networking.hostName = lib.mkDefault "corp-vm";
         users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
   };
 
-  evalSingle = overrides: mkEval ([ base ] ++ overrides);
+  # Valid FIDO device selector fixture.
+  fidoDevice = {
+    label = "yubikey-primary";
+    vendorId = 4176; # 0x1050, Yubico
+    productId = 1031; # 0x0407, YubiKey 5 NFC
+    serial = null;
+  };
 
-  # ---- helper predicates ---------------------------------------------------
+  # --- Eval helpers ---
+  evalWith = overrides: mkEval ([ base ] ++ overrides);
 
-  # True when the system has a FIDO udev rule under /run/udev/rules.d/.
-  hasFidoUdevRule = sys:
-    let
-      rules = sys.config.services.udev.extraRules or "";
-    in
-      lib.hasInfix "FIDO" rules || lib.hasInfix "d2b-fido" rules;
+  # Evaluate and check that NO assertions fail.
+  assertionsOf = sys: sys.config.assertions;
+  failingOf = sys:
+    lib.filter (a: !a.assertion) (assertionsOf sys);
+  hasNoFailures = sys: failingOf sys == [ ];
 
-  # True when the named VM bundle key is present in the rendered bundle.
-  # This is a proxy check; real contract tests use D2B_FIXTURES.
-  hasSecurityKeyCapability = sys: vm:
-    let
-      vms = sys.config.d2b.vms or { };
-    in
-      (vms.${vm} or { }).usb.securityKey.enable or false;
-
-  # ---- eval configs --------------------------------------------------------
-
-  # Neither host nor VM configured: disabled.
-  disabled = evalSingle [ ];
-
-  # Host enabled, no VM opted in.
-  hostOnly = evalSingle [
+  # Eval A: host + VM both enabled with a valid device selector.
+  validEnabled = evalWith [
     ({ lib, ... }: {
       d2b.host.usb.securityKey.enable = lib.mkForce true;
+      d2b.host.usb.securityKey.devices = [ fidoDevice ];
+      d2b.vms.corp-vm.usb.securityKey.enable = true;
     })
   ];
 
-  # Host and VM both enabled (well-formed).
-  bothEnabled = evalSingle [
-    ({ lib, ... }: {
-      d2b.host.usb.securityKey.enable = lib.mkForce true;
-      d2b.vms.personal-dev.usb.securityKey.enable = true;
-    })
-  ];
-
-  # VM enabled without host: should trigger assertion.
-  vmWithoutHost = evalSingle [
+  # Eval B-a: VM enabled but host disabled → assertion fails.
+  vmEnabledHostDisabled = evalWith [
     ({ lib, ... }: {
       d2b.host.usb.securityKey.enable = lib.mkForce false;
-      d2b.vms.personal-dev.usb.securityKey.enable = true;
+      d2b.vms.corp-vm.usb.securityKey.enable = true;
     })
   ];
 
-  # VM opts into both security-key and usbip.yubikey: mutual-exclusion should fire.
-  mutualExclusion = evalSingle [
+  # Eval B-b: both securityKey and usbip.yubikey set on same VM → fails.
+  vmBothSkAndUsbip = evalWith [
     ({ lib, ... }: {
-      d2b.host.usb.securityKey.enable = lib.mkForce true;
       d2b.site.yubikey.enable = lib.mkForce true;
-      d2b.vms.personal-dev = {
-        usb.securityKey.enable = true;
-        usbip.yubikey = true;
-        usbip.busids = [ "1-2" ];
-      };
+      d2b.host.usb.securityKey.enable = lib.mkForce true;
+      d2b.host.usb.securityKey.devices = [ fidoDevice ];
+      d2b.vms.corp-vm.usb.securityKey.enable = true;
+      d2b.vms.corp-vm.usbip.yubikey = true;
+      d2b.vms.corp-vm.guest.control.enable = true;
     })
   ];
 
-  # VM enabled without guest.control: should trigger assertion.
-  noGuestControl = evalSingle [
+  # Eval B-c: non-FIDO vendor in devices → assertion fails.
+  nonFidoVendor = evalWith [
     ({ lib, ... }: {
       d2b.host.usb.securityKey.enable = lib.mkForce true;
-      d2b.vms.personal-dev.guest.control.enable = lib.mkForce false;
-      d2b.vms.personal-dev.usb.securityKey.enable = true;
+      d2b.host.usb.securityKey.devices = [
+        {
+          label = "unknown";
+          vendorId = 4660; # 0x1234, not in FIDO allowlist
+          productId = 22136; # 0x5678
+        }
+      ];
     })
   ];
 
-  # Two VMs: both enabled — legal configuration.
-  twoVms = evalSingle [
+  # Eval B-d: duplicate labels → assertion fails.
+  duplicateLabels = evalWith [
     ({ lib, ... }: {
-      d2b.envs.work = {
-        lanSubnet = "10.21.0.0/24";
-        uplinkSubnet = "198.51.100.0/30";
-      };
-      d2b.vms.work-aad = {
-        enable = true;
-        env = "work";
-        index = 11;
-        ssh.user = "alice";
-        guest.control.enable = true;
-        usb.securityKey.enable = true;
-        config = {
-          networking.hostName = lib.mkDefault "work-aad";
-          users.users.alice = { isNormalUser = true; uid = 1000; };
-        };
-      };
       d2b.host.usb.securityKey.enable = lib.mkForce true;
-      d2b.vms.personal-dev.usb.securityKey.enable = true;
+      d2b.host.usb.securityKey.devices = [
+        { label = "same"; vendorId = 4176; productId = 1031; }
+        { label = "same"; vendorId = 4176; productId = 1032; }
+      ];
     })
   ];
 
+  # Eval C: host enabled, empty devices list — valid.
+  hostEnabledEmptyDevices = evalWith [
+    ({ lib, ... }: {
+      d2b.host.usb.securityKey.enable = lib.mkForce true;
+    })
+  ];
+
+  # Eval D: default state — both options off.
+  defaultState = evalWith [ ];
+
+  assertionMessageContains = sys: needle:
+    lib.any
+      (a: !a.assertion && lib.hasInfix needle a.message)
+      (assertionsOf sys);
 in
 {
-  # --- disabled: nothing opted in ------------------------------------------
-  "usb-security-key/disabled-host-option-absent" = {
-    expr = (disabled.config.d2b.host.usb.securityKey.enable or false);
+  # --- A: valid enabled config passes all assertions ---
+  "usb-security-key/valid-config-no-assertion-failures" = {
+    expr = hasNoFailures validEnabled;
+    expected = true;
+  };
+
+  "usb-security-key/valid-config-host-option-set" = {
+    expr = validEnabled.config.d2b.host.usb.securityKey.enable;
+    expected = true;
+  };
+
+  "usb-security-key/valid-config-vm-option-set" = {
+    expr = validEnabled.config.d2b.vms.corp-vm.usb.securityKey.enable;
+    expected = true;
+  };
+
+  "usb-security-key/valid-config-device-label-present" = {
+    expr =
+      (builtins.head validEnabled.config.d2b.host.usb.securityKey.devices).label;
+    expected = "yubikey-primary";
+  };
+
+  "usb-security-key/valid-config-device-vendor-id-correct" = {
+    expr =
+      (builtins.head validEnabled.config.d2b.host.usb.securityKey.devices).vendorId;
+    expected = 4176;
+  };
+
+  # --- B-a: VM enabled without host enable → assertion fires ---
+  "usb-security-key/vm-enabled-host-disabled-fails" = {
+    expr = assertionMessageContains vmEnabledHostDisabled
+      "d2b.vms.corp-vm.usb.securityKey.enable = true requires";
+    expected = true;
+  };
+
+  # --- B-b: securityKey + usbip.yubikey mutual exclusion ---
+  "usb-security-key/mutual-exclusion-with-usbip-fires" = {
+    expr = assertionMessageContains vmBothSkAndUsbip
+      "usb.securityKey.enable and usbip.yubikey";
+    expected = true;
+  };
+
+  # --- B-c: non-FIDO vendor rejected ---
+  "usb-security-key/non-fido-vendor-rejected" = {
+    expr = assertionMessageContains nonFidoVendor "not in the FIDO-class allowlist";
+    expected = true;
+  };
+
+  # --- B-d: duplicate labels rejected ---
+  "usb-security-key/duplicate-label-rejected" = {
+    expr = assertionMessageContains duplicateLabels "duplicate label";
+    expected = true;
+  };
+
+  # --- C: host enabled, empty devices — no assertion failures ---
+  "usb-security-key/host-enabled-empty-devices-valid" = {
+    expr = hasNoFailures hostEnabledEmptyDevices;
+    expected = true;
+  };
+
+  # --- D: default state — options off by default ---
+  "usb-security-key/host-default-disabled" = {
+    expr = defaultState.config.d2b.host.usb.securityKey.enable;
     expected = false;
   };
-  "usb-security-key/disabled-vm-option-absent" = {
-    expr = hasSecurityKeyCapability disabled "personal-dev";
+
+  "usb-security-key/vm-default-disabled" = {
+    expr = defaultState.config.d2b.vms.corp-vm.usb.securityKey.enable;
     expected = false;
   };
 
-  # --- host-only: host enabled, no VM opted in -----------------------------
-  "usb-security-key/host-only-option-present" = {
-    expr = (hostOnly.config.d2b.host.usb.securityKey.enable or false);
-    expected = true;
-  };
-  "usb-security-key/host-only-vm-not-opted-in" = {
-    expr = hasSecurityKeyCapability hostOnly "personal-dev";
-    expected = false;
-  };
-
-  # --- both-enabled: well-formed configuration -----------------------------
-  "usb-security-key/both-enabled-host-option-true" = {
-    expr = (bothEnabled.config.d2b.host.usb.securityKey.enable or false);
-    expected = true;
-  };
-  "usb-security-key/both-enabled-vm-opted-in" = {
-    expr = hasSecurityKeyCapability bothEnabled "personal-dev";
-    expected = true;
-  };
-
-  # --- vm-without-host: assertion must fire --------------------------------
-  # Bucket A: eval succeeds but config.assertions carries the failure.
-  "usb-security-key/vm-without-host-assertion-fires" = {
-    expr =
-      (vmWithoutHost.evalSucceeded or true)
-      && lib.any
-           (m: lib.hasInfix "usb.securityKey" m && lib.hasInfix "requires" m)
-           (vmWithoutHost.config.assertions or [ ]);
-    expected = true;
-  };
-
-  # --- mutual-exclusion: assertion must fire --------------------------------
-  "usb-security-key/mutual-exclusion-assertion-fires" = {
-    expr =
-      (mutualExclusion.evalSucceeded or true)
-      && lib.any
-           (m: lib.hasInfix "mutually exclusive" m
-               && lib.hasInfix "personal-dev" m)
-           (mutualExclusion.config.assertions or [ ]);
-    expected = true;
-  };
-
-  # --- no-guest-control: assertion must fire --------------------------------
-  "usb-security-key/no-guest-control-assertion-fires" = {
-    expr =
-      (noGuestControl.evalSucceeded or true)
-      && lib.any
-           (m: lib.hasInfix "guest.control" m)
-           (noGuestControl.config.assertions or [ ]);
-    expected = true;
-  };
-
-  # --- two-vm: both VMs opted in with host enabled — legal config ----------
-  "usb-security-key/two-vms-personal-dev-opted-in" = {
-    expr = hasSecurityKeyCapability twoVms "personal-dev";
-    expected = true;
-  };
-  "usb-security-key/two-vms-work-aad-opted-in" = {
-    expr = hasSecurityKeyCapability twoVms "work-aad";
-    expected = true;
-  };
-  "usb-security-key/two-vms-no-spurious-assertions" = {
-    expr = lib.all (a: a.assertion) (twoVms.config.assertions or [ ]);
-    expected = true;
-  };
-
-  # --- no process or OS markers leak into bundle/artifact text -------------
-  # Mirrors the pattern from tests/unit/nix/cases/requested-vm-config.nix.
-  "usb-security-key/no-process-markers-in-both-enabled" = {
-    expr =
-      let
-        # Probe the rendered NixOS config as text if possible.
-        # We use the option value directly; a real artifact check runs via
-        # D2B_FIXTURES in the Type-4 contract tests.
-        cfg = builtins.toJSON bothEnabled.config.d2b;
-      in
-        !(lib.hasInfix "W3fu" cfg)
-        && !(lib.hasInfix "P6" cfg)
-        && !(lib.hasInfix "ForbiddenLiveOSName" cfg)
-        && !(lib.hasInfix "autopilot" cfg);
-    expected = true;
+  "usb-security-key/host-default-devices-empty" = {
+    expr = defaultState.config.d2b.host.usb.securityKey.devices;
+    expected = [ ];
   };
 }
