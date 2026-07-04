@@ -201,6 +201,9 @@ deprecations ship one minor release before removal.
 - Security-key guest frontend now uses the correct Linux UHID event type
   numbers (`CREATE2 = 11`, `INPUT2 = 12`) so the virtual FIDO HID device is
   actually created rather than sending an input report to no device.
+- Security-key guest frontend now zero-extends short UHID events from the kernel
+  instead of treating lifecycle events shorter than the maximum union size as
+  fatal.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
