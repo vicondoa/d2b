@@ -9709,6 +9709,7 @@ mod tests {
                         vsock_host_socket: Some("/run/d2b/vms/corp-vm/agent-host.sock".to_owned()),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
                     ssh_user: Some("alice".to_owned()),
