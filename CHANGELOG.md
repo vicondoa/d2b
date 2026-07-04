@@ -190,6 +190,9 @@ deprecations ship one minor release before removal.
   returns.
 - Security-key accept-loop listener initialization now happens inside the
   daemon-owned Tokio runtime context instead of before the runtime is entered.
+- Security-key guest frontend now emits the correct UHID_CREATE2 layout
+  (`bus` is a 16-bit field), allowing the virtual FIDO HID device to register
+  with the guest kernel.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
