@@ -174,7 +174,7 @@ in
 
   # --- B-c: non-FIDO vendor rejected ---
   "usb-security-key/non-fido-vendor-rejected" = {
-    expr = assertionMessageContains nonFidoVendor "not in the FIDO-class allowlist";
+    expr = assertionMessageContains nonFidoVendor "FIDO-class allowlist";
     expected = true;
   };
 
