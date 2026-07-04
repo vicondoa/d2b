@@ -9972,7 +9972,8 @@ impl VmStartRunner<'_> {
             expected_gid,
             Arc::clone(&state),
             Arc::clone(&hidraw),
-        );
+        )
+        .map_err(|error| format!("sk-accept-loop:{error}"))?;
         self.state
             .security_key_sessions
             .lock()

@@ -51,6 +51,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -572,7 +573,7 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
     Ok(())
 }
 
-pub fn bind_accept_socket(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
+pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -581,13 +582,47 @@ pub fn bind_accept_socket(path: &Path) -> std::io::Result<tokio::net::UnixListen
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    tokio::net::UnixListener::bind(path)
+    StdUnixListener::bind(path)
+}
+
+pub struct SkAcceptAbort {
+    stop: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl std::fmt::Debug for SkAcceptAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkAcceptAbort").finish_non_exhaustive()
+    }
+}
+
+impl SkAcceptAbort {
+    fn new() -> (Self, tokio::sync::oneshot::Receiver<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                stop: parking_lot::Mutex::new(Some(tx)),
+            },
+            rx,
+        )
+    }
+
+    pub fn abort(&self) {
+        if let Some(tx) = self.stop.lock().take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+impl Drop for SkAcceptAbort {
+    fn drop(&mut self) {
+        self.abort();
+    }
 }
 
 #[derive(Debug)]
 pub struct SkAcceptHandle {
     pub state: Arc<parking_lot::Mutex<SecurityKeyState>>,
-    pub abort: tokio::task::AbortHandle,
+    pub abort: SkAcceptAbort,
 }
 
 #[derive(Debug, Default)]
@@ -608,33 +643,65 @@ impl SkSessionTable {
 }
 
 pub fn spawn_accept_loop(
-    listener: tokio::net::UnixListener,
+    listener: StdUnixListener,
     vm_id: String,
     expected_uid: u32,
     expected_gid: u32,
     state: Arc<parking_lot::Mutex<SecurityKeyState>>,
     hidraw: Arc<HidrawDevice>,
-) -> tokio::task::AbortHandle {
-    let task = tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    let vm_id = vm_id.clone();
-                    let state = Arc::clone(&state);
-                    let hidraw = Arc::clone(&hidraw);
-                    tokio::spawn(async move {
-                        run_connection(stream, vm_id, expected_uid, expected_gid, state, hidraw)
-                            .await;
-                    });
-                }
+) -> std::io::Result<SkAcceptAbort> {
+    listener.set_nonblocking(true)?;
+    let (abort, mut stop_rx) = SkAcceptAbort::new();
+    let thread_vm_id = vm_id.clone();
+    std::thread::Builder::new()
+        .name(format!("d2b-sk-accept-{vm_id}"))
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
                 Err(error) => {
-                    info!(vm = %vm_id, error = %error, "security-key: accept loop stopped");
-                    break;
+                    info!(vm = %thread_vm_id, error = %error, "security-key: accept runtime init failed");
+                    return;
                 }
-            }
-        }
-    });
-    task.abort_handle()
+            };
+            let listener = match tokio::net::UnixListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(error) => {
+                    info!(vm = %thread_vm_id, error = %error, "security-key: accept listener init failed");
+                    return;
+                }
+            };
+            runtime.block_on(async move {
+        loop {
+                    tokio::select! {
+                        _ = &mut stop_rx => {
+                            info!(vm = %thread_vm_id, "security-key: accept loop stopped by abort");
+                            break;
+                        }
+                        accepted = listener.accept() => {
+                            match accepted {
+                                Ok((stream, _addr)) => {
+                                    let vm_id = thread_vm_id.clone();
+                                    let state = Arc::clone(&state);
+                                    let hidraw = Arc::clone(&hidraw);
+                                    tokio::spawn(async move {
+                                        run_connection(stream, vm_id, expected_uid, expected_gid, state, hidraw)
+                                            .await;
+                                    });
+                                }
+                                Err(error) => {
+                                    info!(vm = %thread_vm_id, error = %error, "security-key: accept loop stopped");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        })?;
+    Ok(abort)
 }
 
 fn relay_join_error(error: tokio::task::JoinError) -> std::io::Error {
@@ -1235,33 +1302,31 @@ mod tests {
         let mut table = SkSessionTable::default();
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
 
-        let first_task = tokio::spawn(async { std::future::pending::<()>().await });
+        let (first_abort, first_rx) = SkAcceptAbort::new();
         table.register(
             "vm-a".to_owned(),
             SkAcceptHandle {
                 state: Arc::clone(&state),
-                abort: first_task.abort_handle(),
+                abort: first_abort,
             },
         );
 
-        let second_task = tokio::spawn(async { std::future::pending::<()>().await });
+        let (second_abort, second_rx) = SkAcceptAbort::new();
         table.register(
             "vm-a".to_owned(),
             SkAcceptHandle {
                 state,
-                abort: second_task.abort_handle(),
+                abort: second_abort,
             },
         );
 
-        let first_error = first_task.await.expect_err("first task should be aborted");
-        assert!(first_error.is_cancelled());
+        first_rx.await.expect("first accept loop should be aborted");
 
         if let Some(handle) = table.remove("vm-a") {
             handle.abort.abort();
         }
-        let second_error = second_task
+        second_rx
             .await
-            .expect_err("second task should be aborted during cleanup");
-        assert!(second_error.is_cancelled());
+            .expect("second accept loop should be aborted during cleanup");
     }
 }

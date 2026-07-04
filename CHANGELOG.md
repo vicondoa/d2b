@@ -185,6 +185,9 @@ deprecations ship one minor release before removal.
   even when the host udev group is not one of the fallback FIDO groups. The
   group allowlist remains required only for the descriptor-unreadable fallback
   path.
+- Security-key accept loops now run on a daemon-owned runtime thread so the
+  per-VM VSOCK socket remains listening after the VM-start readiness transaction
+  returns.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
