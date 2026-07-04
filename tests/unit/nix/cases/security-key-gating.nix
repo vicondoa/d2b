@@ -60,6 +60,7 @@ let
   # manifest helpers: parse vms.json text (the manifest per-VM entry)
   manifestData = cfg: builtins.fromJSON cfg.config.d2b._manifestPkg.text;
   vmManifest = cfg: vm: (manifestData cfg).${vm};
+  guestConfig = cfg: vm: cfg.config.d2b._computed.${vm}.config;
 
   # assertion helper: tryEval + check failing assertion message
   mkEvalCfg = overrides: (evalWith overrides).config;
@@ -107,6 +108,20 @@ in
       in
       skNode.role;
     expected = "security-key-frontend";
+  };
+
+  "security-key-gating/guest-udev-uses-plugdev" = {
+    expr =
+      let rules = (guestConfig enabledEval "corp-vm").services.udev.extraRules;
+      in
+      lib.hasInfix ''KERNELS=="0003:1050:0407.*"'' rules
+      && lib.hasInfix ''GROUP="plugdev"'' rules;
+    expected = true;
+  };
+
+  "security-key-gating/guest-declares-plugdev-group" = {
+    expr = (guestConfig enabledEval "corp-vm").users.groups ? plugdev;
+    expected = true;
   };
 
   # --- assertion: usbip.yubikey + security-key conflict ---
