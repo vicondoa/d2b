@@ -811,6 +811,110 @@ fn usb_dry_run_outputs_match_goldens() {
 }
 
 #[test]
+fn usb_security_key_dry_run_outputs_match_goldens() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    for (args, golden_name, label) in [
+        (
+            &[
+                "usb",
+                "security-key",
+                "cancel",
+                "--current",
+                "--dry-run",
+                "--human",
+            ][..],
+            "usb-security-key-cancel-current-dry-run-human.golden",
+            "usb security-key cancel --current --dry-run --human",
+        ),
+        (
+            &[
+                "usb",
+                "security-key",
+                "cancel",
+                "--current",
+                "--dry-run",
+                "--json",
+            ][..],
+            "usb-security-key-cancel-current-dry-run-json.golden",
+            "usb security-key cancel --current --dry-run --json",
+        ),
+        (
+            &[
+                "usb",
+                "security-key",
+                "test",
+                "corp-vm",
+                "--dry-run",
+                "--human",
+            ][..],
+            "usb-security-key-test-dry-run-human.golden",
+            "usb security-key test corp-vm --dry-run --human",
+        ),
+        (
+            &[
+                "usb",
+                "security-key",
+                "test",
+                "corp-vm",
+                "--dry-run",
+                "--json",
+            ][..],
+            "usb-security-key-test-dry-run-json.golden",
+            "usb security-key test corp-vm --dry-run --json",
+        ),
+    ] {
+        let out = env.run(args, &[]);
+        assert_matches_golden(&out, golden_name, label);
+    }
+}
+
+#[test]
+fn usb_security_key_status_not_yet_implemented() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let out = env.run(&["usb", "security-key", "status", "--json"], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(78),
+        "usb security-key status exits 78 (not-yet-implemented)"
+    );
+    assert!(out.stderr.is_empty(), "JSON mode error must go to stdout");
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "usb security-key status --json envelope: {e}\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    assert_eq!(envelope["code"], "not-yet-implemented");
+    assert_eq!(envelope["exitCode"], 78);
+}
+
+#[test]
+fn usb_security_key_sessions_not_yet_implemented() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let out = env.run(&["usb", "security-key", "sessions", "--json"], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(78),
+        "usb security-key sessions exits 78 (not-yet-implemented)"
+    );
+    assert!(out.stderr.is_empty(), "JSON mode error must go to stdout");
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "usb security-key sessions --json envelope: {e}\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    assert_eq!(envelope["code"], "not-yet-implemented");
+    assert_eq!(envelope["exitCode"], 78);
+}
+
+#[test]
 fn usb_probe_json_deserializes_to_public_output_contract() {
     let scratch = short_repo_tempdir(".cli-json.usb-probe.");
     let home = scratch.path().join("home");

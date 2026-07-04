@@ -1,13 +1,14 @@
-USB security-key CTAP/WebAuthn proxy status, sessions, and cancellation
+CTAP/WebAuthn security-key proxy status, sessions, and diagnostics
 
 Usage: d2b usb security-key <COMMAND>
 
 Commands:
-  status    Show configured security keys, per-VM virtual-device health, and active lease
-  sessions  List active and recent security-key request sessions
-  cancel    Cancel an in-progress or queued security-key request
-  test      Smoke-check virtual HID presence in a VM and host broker reachability
+  status    Show security-key proxy health, configured keys, and current lease
+  sessions  Show recent and active security-key request sessions
+  cancel    Cancel a security-key request session
+  test      Smoke-check that a VM's virtual security-key device and host broker are healthy
   help      Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help  Print help
+

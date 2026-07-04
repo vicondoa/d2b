@@ -985,6 +985,189 @@ command.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
+### `usb security-key status`
+
+**Synopsis:** `d2b usb security-key status [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--json` | boolean | `false` | Emit the structured security-key proxy status as JSON. |
+| `--human` | boolean | `false` | Force human-readable output on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| _(none)_ | Always returns the full proxy status: configured keys, per-VM virtual-device health, current lease, and USBIP conflict state. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success. | — |
+| `78` | The daemon handler for this command has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+
+**Human example**
+
+```text
+$ d2b usb security-key status
+# not yet available — exits 78 with not-yet-implemented envelope
+```
+
+**Status**
+
+This command is defined and CLI-stable. The live (non-dry-run) path exits 78
+with a `not-yet-implemented` envelope until the security-key proxy daemon
+handler ships. Use `d2b usb security-key test <vm> --dry-run` to preview
+the planned checks.
+
+Use the user-facing term "security key" in user-visible text; FIDO/CTAP
+terminology is reserved for diagnostics and technical documentation.
+
+### `usb security-key sessions`
+
+**Synopsis:** `d2b usb security-key sessions [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--json` | boolean | `false` | Emit the session list as JSON. |
+| `--human` | boolean | `false` | Force human-readable output. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| _(none)_ | Returns all recent and active security-key request sessions. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success. | — |
+| `78` | The daemon handler for this command has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+
+**Human example**
+
+```text
+$ d2b usb security-key sessions
+# not yet available — exits 78 with not-yet-implemented envelope
+```
+
+**Status**
+
+CLI-stable. Exits 78 with a `not-yet-implemented` envelope until the
+security-key proxy daemon handler ships.
+
+### `usb security-key cancel`
+
+**Synopsis:** `d2b usb security-key cancel {<session-id> | --current} [--dry-run | --apply] [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--current` | boolean | `false` | Cancel the currently active session. Mutually exclusive with `<session-id>`. |
+| `--dry-run` | boolean | `false` | Print the planned broker op without dispatching it. |
+| `--apply` | boolean | `false` | Dispatch the cancel through the daemon → broker path. |
+| `--json` | boolean | `false` | Emit structured output as JSON. |
+| `--human` | boolean | `false` | Force human-readable output on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `<session-id>` | Optional. Opaque session ID returned by `sessions`. Mutually exclusive with `--current`. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success (`--dry-run` or successful cancel). | — |
+| `2` | Neither `<session-id>` nor `--current` was provided; or neither `--dry-run` nor `--apply` was provided. | [`usage`](./error-codes.md#usage) |
+| `78` | `--apply`: the daemon handler has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+
+**Human example**
+
+```text
+$ d2b usb security-key cancel --current --dry-run
+d2b usb security-key cancel --dry-run: would send CancelSession(current) to the security-key proxy broker
+```
+
+**`--json` example**
+
+```json
+{
+  "command": "usb security-key cancel",
+  "mode": "dry-run",
+  "notes": "Dry-run preview; --apply dispatches the cancel through the daemon → broker SecurityKeyProxyCancelSession path.",
+  "planned": [
+    "SecurityKeyProxyCancelSession"
+  ],
+  "target": "current"
+}
+```
+
+**Status**
+
+`--dry-run` is fully implemented and golden-stable. `--apply` exits 78 until
+the daemon handler ships.
+
+### `usb security-key test`
+
+**Synopsis:** `d2b usb security-key test <vm> [--dry-run] [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--dry-run` | boolean | `false` | Print the planned checks without contacting the daemon. |
+| `--json` | boolean | `false` | Emit structured output as JSON. |
+| `--human` | boolean | `false` | Force human-readable output on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `<vm>` | Required. VM name (must have `d2b.vms.<name>.usb.securityKey.enable = true`). |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success (`--dry-run` or all checks passed). | — |
+| `78` | Live path: the daemon handler has not shipped yet. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+
+**Human example**
+
+```text
+$ d2b usb security-key test corp-vm --dry-run
+d2b usb security-key test --dry-run: would check virtual HID device presence in 'corp-vm' and confirm host broker sees the physical security key
+```
+
+**`--json` example**
+
+```json
+{
+  "command": "usb security-key test",
+  "mode": "dry-run",
+  "notes": "Dry-run preview; the live path queries the daemon for virtual-HID presence in the guest and physical-key visibility on the host broker.",
+  "planned": [
+    "CheckGuestVirtualHidDevice",
+    "CheckHostBrokerPhysicalKeyVisibility"
+  ],
+  "vm": "corp-vm"
+}
+```
+
+**Status**
+
+`--dry-run` is fully implemented and golden-stable. The live path exits 78
+until the daemon handler ships.
+
 ### `console`
 
 **Synopsis:** `d2b console <vm>`
