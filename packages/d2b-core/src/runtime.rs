@@ -349,7 +349,7 @@ impl From<&ProcessRole> for RuntimeServiceRole {
             ProcessRole::CloudHypervisorRunner | ProcessRole::QemuMediaRunner => Self::Hypervisor,
             ProcessRole::VsockRelay => Self::Network,
             ProcessRole::GuestSshReadiness | ProcessRole::GuestControlHealth => Self::GuestControl,
-            ProcessRole::Usbip => Self::Usb,
+            ProcessRole::Usbip | ProcessRole::SecurityKeyFrontend => Self::Usb,
             ProcessRole::OtelHostBridge => Self::Observability,
         }
     }

@@ -643,6 +643,20 @@ let
           autostart entries).
         '';
       }
+      {
+        assertion = !(vm.enable && vm.usbip.yubikey && vm.usb.securityKey.enable);
+        message = ''
+          d2b.vms.${name}: usbip.yubikey = true and
+          usb.securityKey.enable = true cannot both be enabled for
+          the same VM. Both features claim the same FIDO2 device
+          endpoint on the guest. Enable only one:
+           - usbip.yubikey = true: passthrough the physical YubiKey
+             USB device directly into the guest via USBIP.
+           - usb.securityKey.enable = true: run the CTAPHID virtual
+             UHID device frontend (connects to the host broker, does
+             not require physical USB device access inside the guest).
+        '';
+      }
       ])
     cfg.vms;
 
@@ -865,6 +879,14 @@ let
           message = ''
             d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with d2b USBIP/YubiKey passthrough declarations.
+          '';
+        }
+        {
+          assertion = !vm.usb.securityKey.enable;
+          message = ''
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b.vms.${name}.usb.securityKey.enable. The CTAPHID
+            security-key proxy requires the Cloud Hypervisor (nixos) runtime.
           '';
         }
         {

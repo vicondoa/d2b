@@ -1120,6 +1120,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-sk-frontend"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "tokio",
+ "tokio-vsock",
+]
+
+[[package]]
 name = "d2b-userd"
 version = "0.0.0-bootstrap"
 dependencies = [

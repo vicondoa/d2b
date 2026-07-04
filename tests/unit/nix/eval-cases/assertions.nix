@@ -585,5 +585,30 @@ shared.mkBatch {
     # cannot be triggered by a valid config. Verified: the old case config
     # produced corp-vm=1300 with sys-obs=1000 (the obs VM itself, which is
     # excluded from the collision set).
+
+    # security-key + usbip.yubikey mutual exclusion (both claim FIDO2 endpoint).
+    "security-key-yubikey-conflict" = {
+      expectedSubstring = "usbip.yubikey = true and";
+      override = (
+        { ... }:
+        {
+          d2b.vms.corp-vm.usbip.yubikey = true;
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+          d2b.vms.corp-vm.guest.control.enable = true;
+        }
+      );
+    };
+
+    # security-key + qemu-media runtime conflict.
+    "security-key-qemu-media-conflict" = {
+      expectedSubstring = "runtime.kind = \"qemu-media\" is incompatible";
+      override = (
+        { ... }:
+        {
+          d2b.vms.corp-vm.runtime.kind = "qemu-media";
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+        }
+      );
+    };
   };
 }

@@ -12,6 +12,36 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `d2b.vms.<name>.usb.securityKey.enable` option. When `true`, the guest
+  VM gets a virtual FIDO2 HID device via a CTAPHID UHID frontend relay
+  (`d2b-sk-frontend`). The guest-side binary opens `/dev/uhid`, creates a
+  virtual HID device, and relays 64-byte CTAPHID reports over an AF_VSOCK
+  connection to the host broker (VSOCK port 14320). Firefox and libfido2
+  discover the virtual `/dev/hidraw*` device via the `fido` group; no root
+  or physical USB access is required inside the guest.
+- `d2b-sk-frontend` static guest binary: fully static (musl) binary for the
+  guest CTAPHID UHID relay frontend. Implements exponential backoff VSOCK
+  reconnect (1 s–60 s), clean UHID device recreation across reconnects, and a
+  simple 4-byte length-prefix framing protocol. Uses VSOCK port 14320.
+- Host DAG node `sk-frontend` (role `security-key-frontend`): a no-runner
+  tracking node whose readiness predicate fires when the host broker's vsock
+  socket (`<stateDir>/vsock.sock_14320`) appears. Edge: `cloud-hypervisor →
+  sk-frontend`.
+- Mutual exclusion assertion: `d2b.vms.<name>.usbip.yubikey` and
+  `d2b.vms.<name>.usb.securityKey.enable` cannot both be `true` for the same VM
+  (both claim the FIDO2 device endpoint).
+- `qemu-media` runtime incompatibility assertion for `usb.securityKey.enable`
+  (the CTAPHID proxy requires the Cloud Hypervisor / nixos runtime).
+- `securityKeyVsockPort = 14320` constant added to `d2b` lib for use by host
+  broker and guest component modules.
+- Nix eval tests (`security-key-gating.nix`): manifest `securityKey` field
+  gating, DAG node presence/absence, assertion firing for the yubikey and
+  qemu-media conflicts.
+- Contract tests (`minijail_sk_frontend.rs`): source-grep assertions for the
+  sk-frontend minijail profile block in `minijail-profiles.nix`, including role,
+  seccompPolicyRef presence, and empty capability set; compile-time
+  `ProcessRole::SecurityKeyFrontend` variant and serde round-trip check.
+
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.

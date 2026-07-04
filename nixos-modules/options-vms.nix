@@ -810,6 +810,21 @@ in
           '';
         };
 
+        usb.securityKey.enable = lib.mkEnableOption ''
+          CTAPHID security-key proxy for this VM. Creates a virtual FIDO2
+          HID device inside the guest via the Linux UHID interface and
+          relays 64-byte CTAPHID reports over an AF_VSOCK connection to
+          the d2b host broker, which serialises access to the physical
+          security key. This allows Firefox and libfido2 inside the guest
+          to perform WebAuthn ceremonies without raw USB passthrough.
+
+          Requires `d2b.host.usb.securityKey.enable = true` at the site
+          level (enforced by an eval-time assertion). Mutually exclusive
+          with `usbip.yubikey` for the same VM — both cannot be declared
+          simultaneously (enforced by an eval-time assertion). Only
+          supported for `runtime.kind = "nixos"` VMs.
+        '';
+
         audio.enable = lib.mkEnableOption ''
           Host microphone + speaker, mediated via vhost-user-sound +
           PipeWire. Setting this only enables the *capability*: the

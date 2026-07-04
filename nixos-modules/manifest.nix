@@ -129,6 +129,9 @@ let
       tpm = isNixosRuntime && vm.tpm.enable;
       usbipYubikey = isNixosRuntime && vm.usbip.yubikey;
       audio = isNixosRuntime && vm.audio.enable;
+      # securityKey: true iff the CTAPHID proxy is enabled for this VM.
+      # Public-safe boolean emitted into vms.json.
+      securityKey = isNixosRuntime && vm.usb.securityKey.enable;
       tap = derivedTap;
       bridge = derivedBridge;
       env = envName;
@@ -547,6 +550,16 @@ let
           True iff `d2b.vms.<name>.audio.enable` is set. Live audio
           grant state lives in `audioStateFile`, not here — this flag
           only carries the capability bit.
+        '';
+      };
+
+      securityKey = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          True iff `d2b.vms.<name>.usb.securityKey.enable` is set.
+          When true, the guest has a virtual FIDO2/CTAPHID HID device
+          via the d2b security-key proxy. Public-safe capability bit
+          emitted into vms.json.
         '';
       };
 
