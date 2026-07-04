@@ -106,6 +106,7 @@ inventory. Private bundle artifacts live beside it and are documented in
     "tpm": false,
     "usbipYubikey": false,
     "audio": false,
+    "securityKey": false,
     "tap": "d2b-work",
     "bridge": "d2b-work" | null,
     "env": "work" | null,
@@ -156,6 +157,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `tpm` | boolean | yes | Mirror of `d2b.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `d2b.vms.<name>.usbip.yubikey`. `d2b usb attach\|detach\|probe` refuses to run when false. |
 | `audio` | boolean | yes | Mirror of `d2b.vms.<name>.audio.enable` (the capability bit). Live grant state lives in `audioStateFile`. |
+| `securityKey` | boolean | yes | Mirror of `d2b.vms.<name>.usb.securityKey.enable`. True when the VM receives the CTAPHID virtual security-key frontend. |
 | `tap` | string | yes | Host-side tap-device name. Derived: `<env>-l<index>` (workload), `<env>-u2` (net VM), or `vm-<name>` (legacy). |
 | `bridge` | string \| null | yes | Linux bridge the tap attaches to. Workload: `br-<env>-lan`. Net VM: `br-<env>-up`. Legacy hand-rolled VM: `null`. |
 | `env` | string \| null | yes | Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs. |
@@ -209,6 +211,8 @@ Version history:
   provider-aware guest shutdown policy. The daemon accepts v6 manifests during
   the rollout by treating missing lifecycle metadata as `{ enable = true,
   timeoutSeconds = null }` for supported local providers.
+- v7 additive: adds required per-VM `securityKey` capability metadata for the
+  CTAPHID security-key proxy.
 
 ### `_observability`
 

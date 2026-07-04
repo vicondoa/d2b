@@ -1,0 +1,9 @@
+Smoke-check virtual HID presence in a VM and host broker reachability
+
+Usage: d2b usb security-key test <VM>
+
+Arguments:
+  <VM>  VM name to test
+
+Options:
+  -h, --help  Print help

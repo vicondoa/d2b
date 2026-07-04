@@ -360,6 +360,9 @@ rec {
 
   guestControlVsockPort = 14318;
   observabilityOtlpVsockPort = 14317;
+  # AF_VSOCK port used by the d2b security-key CTAPHID relay frontend.
+  # The guest sk-frontend connects on this port to the host broker.
+  securityKeyVsockPort = 14320;
   observabilityStackVsockCid = 1000;
 
   # Deterministic per-VM Cloud Hypervisor vsock CID. Env-backed VMs

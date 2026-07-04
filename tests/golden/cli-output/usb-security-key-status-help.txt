@@ -1,0 +1,7 @@
+Show configured security keys, per-VM virtual-device health, and active lease
+
+Usage: d2b usb security-key status [OPTIONS]
+
+Options:
+  -o, --output <FORMAT>  Output format [default: human] [possible values: human, json]
+  -h, --help             Print help

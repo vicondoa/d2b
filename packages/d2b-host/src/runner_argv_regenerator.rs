@@ -220,6 +220,7 @@ pub fn regenerate_argv(
         | ProcessRole::GuestSshReadiness
         | ProcessRole::GuestControlHealth
         | ProcessRole::SwtpmPreStartFlush
+        | ProcessRole::SecurityKeyFrontend
         | ProcessRole::WaylandProxy => {
             unreachable!("non-wired runner role should be returned before generator dispatch")
         }
@@ -284,6 +285,7 @@ mod tests {
             | ProcessRole::GuestSshReadiness
             | ProcessRole::GuestControlHealth
             | ProcessRole::SwtpmPreStartFlush
+            | ProcessRole::SecurityKeyFrontend
             | ProcessRole::WaylandProxy => ExpectedRegeneratorClassification::NotYetWired,
         }
     }

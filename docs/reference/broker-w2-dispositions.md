@@ -30,6 +30,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenFuse | promoted-live | Opens the allowed FUSE device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
+| OpenHidrawSecurityKey | promoted-live | Resolves a configured FIDO security-key stable selector from the trusted bundle, opens the physical `hidraw` node, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
@@ -77,3 +78,5 @@ side-effect audit operation that never reaches the wire dispatcher).
 | UsbipUnbind | promoted-live | Resolves the current USBIP owner, revokes the backend ACL, and unbinds the device. | live in production broker |
 | ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |
 | ValidateBundle | callable-read-only | Sole validation entry point; calls `d2b_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |
+| SecurityKeyApplyUdevRules | stubbed-unimplemented | Writes broker-generated udev rules granting the `d2b-security-key` group ownership of the configured FIDO vendorId/productId/serial-matched hidraw nodes. No blanket hidraw access; a targeted audit event is recorded. | future work |
+| SecurityKeyOpenDevice | stubbed-unimplemented | Resolves the stable device-label selector against the trusted bundle's security-key device table, checks sysfs presence and FIDO class, opens the exact hidraw node, and returns the fd via SCM_RIGHTS for the CTAP relay session. | future work |

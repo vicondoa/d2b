@@ -2649,6 +2649,44 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 outcome.fd,
             ))
         }
+        RealBrokerRequest::OpenHidrawSecurityKey(req) => {
+            let outcome =
+                crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "OpenHidrawSecurityKey",
+                req.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.selector_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::OpenHidrawSecurityKey {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    selector_id: req.selector_id.clone(),
+                    device_class: outcome.device_class.clone(),
+                    resolved: true,
+                },
+            )?;
+            let response = BrokerResponse::OpenHidrawSecurityKey(
+                d2b_contracts::broker_wire::OpenHidrawSecurityKeyResponse {
+                    selector_resolved: outcome.selector_label,
+                    device_class: outcome.device_class,
+                },
+            );
+            Ok(DispatchResult::with_fd(response, outcome.fd))
+        }
+        RealBrokerRequest::SecurityKeyOpenDevice(_) => Err(BrokerError::Unimplemented {
+            operation: "SecurityKeyOpenDevice",
+            target_wave: "security-key-broker",
+        }),
+        RealBrokerRequest::SecurityKeyApplyUdevRules(_) => Err(BrokerError::Unimplemented {
+            operation: "SecurityKeyApplyUdevRules",
+            target_wave: "security-key-broker",
+        }),
         RealBrokerRequest::OpenKvm(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -7036,7 +7074,8 @@ fn runner_role_for_process_role(
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth => None,
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::SecurityKeyFrontend => None,
     }
 }
 
@@ -9670,6 +9709,7 @@ mod tests {
                         vsock_host_socket: Some("/run/d2b/vms/corp-vm/agent-host.sock".to_owned()),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
                     ssh_user: Some("alice".to_owned()),

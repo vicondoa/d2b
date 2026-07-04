@@ -540,6 +540,10 @@
         "runtime": {
           "$ref": "#/definitions/RuntimeMetadata"
         },
+        "securityKey": {
+          "default": false,
+          "type": "boolean"
+        },
         "shell": {
           "anyOf": [
             {

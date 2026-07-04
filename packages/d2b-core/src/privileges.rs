@@ -697,6 +697,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "usb security-key",
+        "VM/USB security-key",
+        "scoped",
+        &["d2b-launcher", "d2b-admin"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "debug bundle",
         "diagnostics",
         "scoped",
@@ -943,6 +953,19 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         "OpenFuse",
         "device",
         "per-role",
+        &["d2bd"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    // Resolves a configured FIDO security-key stable selector, opens
+    // the physical hidraw node as root, and returns the fd via
+    // SCM_RIGHTS. Long-lived CTAPHID session state lives in `d2bd`.
+    row(
+        "OpenHidrawSecurityKey",
+        "security-key",
+        "per-VM/per-selector",
         &["d2bd"],
         false,
         SecretAccess::None,
@@ -1403,6 +1426,28 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         "DiskInit",
         "disk",
         "per-VM",
+        &["d2bd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    // Security-key proxy operations. Typed stubs until the live
+    // host-broker handler for CTAP/FIDO HID relay is implemented.
+    row(
+        "SecurityKeyOpenDevice",
+        "security-key/hidraw",
+        "per-device-label",
+        &["d2bd"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "SecurityKeyApplyUdevRules",
+        "security-key/udev",
+        "host",
         &["d2bd"],
         true,
         SecretAccess::None,

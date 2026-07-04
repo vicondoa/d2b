@@ -548,6 +548,7 @@ mod tests {
                 vsock_host_socket: None,
             },
             runtime,
+            security_key: false,
             lifecycle: Default::default(),
             shell: None,
             ssh_user: None,

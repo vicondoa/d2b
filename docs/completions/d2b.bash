@@ -379,6 +379,21 @@ _d2b() {
             d2b__subcmd__help__subcmd__usb,probe)
                 cmd="d2b__subcmd__help__subcmd__usb__subcmd__probe"
                 ;;
+            d2b__subcmd__help__subcmd__usb,security-key)
+                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key"
+                ;;
+            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel"
+                ;;
+            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions"
+                ;;
+            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__test"
+                ;;
             d2b__subcmd__help__subcmd__vm,display)
                 cmd="d2b__subcmd__help__subcmd__vm__subcmd__display"
                 ;;
@@ -550,6 +565,9 @@ _d2b() {
             d2b__subcmd__usb,probe)
                 cmd="d2b__subcmd__usb__subcmd__probe"
                 ;;
+            d2b__subcmd__usb,security-key)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key"
+                ;;
             d2b__subcmd__usb__subcmd__help,attach)
                 cmd="d2b__subcmd__usb__subcmd__help__subcmd__attach"
                 ;;
@@ -561,6 +579,51 @@ _d2b() {
                 ;;
             d2b__subcmd__usb__subcmd__help,probe)
                 cmd="d2b__subcmd__usb__subcmd__help__subcmd__probe"
+                ;;
+            d2b__subcmd__usb__subcmd__help,security-key)
+                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key"
+                ;;
+            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__cancel"
+                ;;
+            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__sessions"
+                ;;
+            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__test"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key,cancel)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key,help)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key,sessions)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key,status)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__status"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key,test)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__test"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,cancel)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__cancel"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,help)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__help"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,sessions)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__sessions"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,status)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__status"
+                ;;
+            d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help,test)
+                cmd="d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__test"
                 ;;
             d2b__subcmd__vm,display)
                 cmd="d2b__subcmd__vm__subcmd__display"
@@ -2059,7 +2122,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__help__subcmd__usb)
-            opts="attach detach probe"
+            opts="attach detach probe security-key"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2103,6 +2166,76 @@ _d2b() {
         d2b__subcmd__help__subcmd__usb__subcmd__probe)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key)
+            opts="status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__status)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__help__subcmd__usb__subcmd__security__subcmd__key__subcmd__test)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -3131,7 +3264,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb)
-            opts="-h --help attach detach probe help"
+            opts="-h --help attach detach probe security-key help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3173,7 +3306,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__usb__subcmd__help)
-            opts="attach detach probe help"
+            opts="attach detach probe security-key help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3242,9 +3375,233 @@ _d2b() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key)
+            opts="status sessions cancel test"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__cancel)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__sessions)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__status)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__help__subcmd__security__subcmd__key__subcmd__test)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         d2b__subcmd__usb__subcmd__probe)
             opts="-h --json --human --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key)
+            opts="-h --help status sessions cancel test help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__cancel)
+            opts="-h --current --dry-run --apply --json --human --help [SESSION_ID]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help)
+            opts="status sessions cancel test help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__cancel)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__sessions)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__status)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__help__subcmd__test)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__sessions)
+            opts="-h --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__status)
+            opts="-h --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__usb__subcmd__security__subcmd__key__subcmd__test)
+            opts="-h --dry-run --json --human --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

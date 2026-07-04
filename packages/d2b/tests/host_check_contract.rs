@@ -108,6 +108,18 @@ fn derive_sysctls(host: &Value) -> Map<String, Value> {
     map
 }
 
+/// Reproduce the host-check pass fixture's loaded module set from the rendered
+/// host contract so new module requirements do not make the fixture stale.
+fn derive_loaded_modules(host: &Value) -> Vec<Value> {
+    host.get("kernelModules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|module| module.get("module").and_then(Value::as_str))
+        .map(|module| Value::String(module.to_owned()))
+        .collect()
+}
+
 /// `jq`-style `tostring`: integers render without a decimal point.
 fn stringify(value: Option<&Value>) -> String {
     match value {
@@ -122,16 +134,14 @@ fn stringify(value: Option<&Value>) -> String {
 /// The passing host-check fixture (mirrors
 /// `d2b_write_host_check_fixture_pass`), parameterised by the bundle-derived
 /// `sysctls` map.
-fn pass_fixture_value(sysctls: Map<String, Value>) -> Value {
+fn pass_fixture_value(host: &Value) -> Value {
+    let sysctls = derive_sysctls(host);
+    let loaded_modules = derive_loaded_modules(host);
     json!({
         "kernelRelease": "6.8.12-d2b",
         "cgroupV2Present": true,
         "cpuVendor": "intel",
-        "loadedModules": [
-            "kvm", "kvm_intel", "tun", "vhost_net", "fuse", "nf_tables", "bridge",
-            "br_netfilter", "i915", "amdgpu", "nvidia", "nvidia_modeset", "nvidia_uvm",
-            "nvidia_drm", "usbip_host"
-        ],
+        "loadedModules": Value::Array(loaded_modules),
         "nftHasD2bTable": true,
         "firewalldActive": false,
         "ufwActive": false,
@@ -231,7 +241,7 @@ impl Scenario {
         build_hermetic_bundle_tree(fixtures, &tree, drift);
 
         let host = read_host_json(fixtures);
-        let mut value = pass_fixture_value(derive_sysctls(&host));
+        let mut value = pass_fixture_value(&host);
         mutate(&mut value);
         let fixture = write_fixture(tmp.path(), fixture_name, &value);
 

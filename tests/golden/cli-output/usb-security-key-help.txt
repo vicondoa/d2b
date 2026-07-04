@@ -1,0 +1,13 @@
+CTAP/WebAuthn security-key proxy status, sessions, and diagnostics
+
+Usage: d2b usb security-key <COMMAND>
+
+Commands:
+  status    Show security-key proxy health, configured keys, and current lease
+  sessions  Show recent and active security-key request sessions
+  cancel    Cancel a security-key request session
+  test      Smoke-check that a VM's virtual security-key device and host broker are healthy
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

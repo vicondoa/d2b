@@ -240,6 +240,7 @@ mod tests {
                 vsock_host_socket: Some(format!("/run/d2b/vms/{name}/agent-host.sock")),
             },
             runtime: RuntimeMetadata::local_nixos(),
+            security_key: false,
             lifecycle: Default::default(),
             shell: None,
             ssh_user: Some("alice".to_owned()),

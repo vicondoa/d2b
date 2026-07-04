@@ -344,6 +344,7 @@
         "tpm",
         "usbipYubikey",
         "audio",
+        "securityKey",
         "tap",
         "bridge",
         "env",
@@ -389,6 +390,10 @@
         "audio": {
           "type": "boolean",
           "description": "True iff d2b.vms.<name>.audio.enable is set. Capability bit; live grant state lives in audioStateFile."
+        },
+        "securityKey": {
+          "type": "boolean",
+          "description": "True iff d2b.vms.<name>.usb.securityKey.enable is set. When true, the guest has a virtual FIDO2/CTAPHID HID device via the d2b security-key proxy. Public-safe capability bit emitted into vms.json."
         },
         "tap": {
           "type": "string",

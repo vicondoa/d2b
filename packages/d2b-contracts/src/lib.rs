@@ -12,6 +12,7 @@ pub mod guest_proto {
 }
 pub mod guest_wire;
 pub mod public_wire;
+pub mod security_key;
 pub mod terminal_wire;
 pub mod types;
 pub mod usbip;

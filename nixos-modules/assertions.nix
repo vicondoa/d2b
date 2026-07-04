@@ -643,6 +643,20 @@ let
           autostart entries).
         '';
       }
+      {
+        assertion = !(vm.enable && vm.usbip.yubikey && vm.usb.securityKey.enable);
+        message = ''
+          d2b.vms.${name}: usbip.yubikey = true and
+          usb.securityKey.enable = true cannot both be enabled for
+          the same VM. Both features claim the same FIDO2 device
+          endpoint on the guest. Enable only one:
+           - usbip.yubikey = true: passthrough the physical YubiKey
+             USB device directly into the guest via USBIP.
+           - usb.securityKey.enable = true: run the CTAPHID virtual
+             UHID device frontend (connects to the host broker, does
+             not require physical USB device access inside the guest).
+        '';
+      }
       ])
     cfg.vms;
 
@@ -865,6 +879,14 @@ let
           message = ''
             d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
             with d2b USBIP/YubiKey passthrough declarations.
+          '';
+        }
+        {
+          assertion = !vm.usb.securityKey.enable;
+          message = ''
+            d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
+            with d2b.vms.${name}.usb.securityKey.enable. The CTAPHID
+            security-key proxy requires the Cloud Hypervisor (nixos) runtime.
           '';
         }
         {
@@ -1266,6 +1288,102 @@ let
       })
     (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) cfg.vms);
 
+  # ---- USB security-key proxy assertions ----------------------------
+  #
+  # Three properties are enforced at eval time:
+  #   A. A VM that sets `usb.securityKey.enable = true` requires the
+  #      host to set `d2b.host.usb.securityKey.enable = true`.
+  #   B. A VM may NOT simultaneously set `usb.securityKey.enable` and
+  #      `usbip.yubikey = true` (phase-1 mutual exclusion; the same
+  #      physical key cannot be owned by both subsystems at once).
+  #   C. Every vendorId in `d2b.host.usb.securityKey.devices` must
+  #      fall within the FIDO-class vendor allowlist and device labels
+  #      must be unique within the host config.
+  #
+  # The runtime broker adds defence-in-depth (sysfs class probing,
+  # OFD lock exclusion), but the above three hold unconditionally at
+  # eval time.
+
+  hostSkEnabled = cfg.host.usb.securityKey.enable;
+
+  # Known FIDO/CTAP-class vendor IDs (decimal). Must stay in sync with
+  # options-host.nix's `knownFidoVendorIds` list.
+  knownFidoVendorIds = [
+    4176 2414 11415 8352 12675 1155
+    9601 6724 2652 6353 4292 1254
+    1267 9436
+  ];
+
+  # A — per-VM security-key requires host enable.
+  securityKeyHostRequiredAssertions = lib.mapAttrsToList
+    (name: vm:
+      {
+        assertion = !vm.enable || !vm.usb.securityKey.enable || hostSkEnabled;
+        message = ''
+          d2b.vms.${name}.usb.securityKey.enable = true requires
+          d2b.host.usb.securityKey.enable = true.
+          Set the host option to enable the security-key proxy subsystem
+          before opting any VM into it.
+        '';
+      })
+    cfg.vms;
+
+  # B — per-VM mutual exclusion: security-key proxy and USBIP YubiKey.
+  securityKeyUsbipMutualExclusionAssertions = lib.mapAttrsToList
+    (name: vm:
+      {
+        assertion =
+          !vm.enable
+          || !(vm.usb.securityKey.enable && vm.usbip.yubikey);
+        message = ''
+          d2b.vms.${name}: usb.securityKey.enable and usbip.yubikey
+          are mutually exclusive in phase 1. A VM cannot simultaneously
+          use the CTAP/WebAuthn security-key proxy and the USBIP YubiKey
+          passthrough for the same device. Disable one of the two options
+          for VM '${name}'.
+        '';
+      })
+    cfg.vms;
+
+  # C — host device selector validity assertions.
+  securityKeyDeviceAssertions =
+    let
+      devices = cfg.host.usb.securityKey.devices;
+
+      # Uniqueness of labels.
+      labels = map (d: d.label) devices;
+      duplicateLabels = lib.filter
+        (l: lib.count (x: x == l) labels > 1)
+        labels;
+
+      # FIDO-class vendor check.
+      nonFidoDevices = lib.filter
+        (d: !(lib.elem d.vendorId knownFidoVendorIds))
+        devices;
+    in
+    lib.optionals (devices != [ ]) ([
+      {
+        assertion = duplicateLabels == [ ];
+        message = ''
+          d2b.host.usb.securityKey.devices: duplicate label(s) found:
+          ${lib.concatStringsSep ", " (lib.unique duplicateLabels)}.
+          Each device selector must have a unique label.
+        '';
+      }
+      {
+        assertion = nonFidoDevices == [ ];
+        message = ''
+          d2b.host.usb.securityKey.devices: vendorId(s) not in the
+          FIDO-class allowlist: ${
+            lib.concatStringsSep ", " (map (d: "0x${lib.toHexString d.vendorId} (label: ${d.label})") nonFidoDevices)
+          }. Only known FIDO/CTAP security-key vendors are permitted.
+          Use host udev/sysfs inventory or `d2b usb probe` to verify your
+          device's vendorId, or add it to the framework allowlist if it is
+          a legitimate FIDO2 device.
+        '';
+      }
+    ]);
+
   deprecatedWaylandProxyBorderWarnings = lib.flatten (lib.mapAttrsToList
     (name: vm:
       let
@@ -1303,6 +1421,9 @@ in
     ++ gatewayCoordinateAssertions
     ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
+    ++ securityKeyHostRequiredAssertions
+    ++ securityKeyUsbipMutualExclusionAssertions
+    ++ securityKeyDeviceAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

@@ -211,6 +211,9 @@ enum UsbCommand {
     Detach(UsbDetachArgs),
     /// List daemon-declared USBIP session claims and qemu-media USB candidates.
     Probe(UsbProbeArgs),
+    /// CTAP/WebAuthn security-key proxy status, sessions, and diagnostics.
+    #[command(name = "security-key")]
+    SecurityKey(UsbSecurityKeyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -243,6 +246,69 @@ struct UsbDetachArgs {
 
 #[derive(Debug, Args)]
 struct UsbProbeArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct UsbSecurityKeyArgs {
+    #[command(subcommand)]
+    command: UsbSecurityKeyCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum UsbSecurityKeyCommand {
+    /// Show security-key proxy health, configured keys, and current lease.
+    Status(UsbSkStatusArgs),
+    /// Show recent and active security-key request sessions.
+    Sessions(UsbSkSessionsArgs),
+    /// Cancel a security-key request session.
+    Cancel(UsbSkCancelArgs),
+    /// Smoke-check that a VM's virtual security-key device and host broker are healthy.
+    Test(UsbSkTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct UsbSkStatusArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct UsbSkSessionsArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct UsbSkCancelArgs {
+    /// Session ID to cancel. Mutually exclusive with `--current`.
+    #[arg(conflicts_with = "current")]
+    session_id: Option<String>,
+    /// Cancel the currently active session.
+    #[arg(long, conflicts_with = "session_id")]
+    current: bool,
+    #[arg(long, conflicts_with = "apply")]
+    dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    apply: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+#[derive(Debug, Args)]
+struct UsbSkTestArgs {
+    vm: String,
+    #[arg(long)]
+    dry_run: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -2408,6 +2474,12 @@ fn dispatch(
             UsbCommand::Attach(args) => cmd_usb_attach(context, args),
             UsbCommand::Detach(args) => cmd_usb_detach(context, args),
             UsbCommand::Probe(args) => cmd_usb_probe(context, args),
+            UsbCommand::SecurityKey(args) => match &args.command {
+                UsbSecurityKeyCommand::Status(args) => cmd_usb_sk_status(context, args),
+                UsbSecurityKeyCommand::Sessions(args) => cmd_usb_sk_sessions(context, args),
+                UsbSecurityKeyCommand::Cancel(args) => cmd_usb_sk_cancel(context, args),
+                UsbSecurityKeyCommand::Test(args) => cmd_usb_sk_test(context, args),
+            },
         },
         NativeCommand::Console(args) => cmd_console(context, args, original_args),
         NativeCommand::Audio(args) => cmd_audio(context, args, original_args),
@@ -8483,6 +8555,130 @@ fn reason_code_label(code: public_wire::UsbipProbeDegradedReasonCode) -> &'stati
         public_wire::UsbipProbeDegradedReasonCode::ProbeIncomplete => "probe-incomplete",
         public_wire::UsbipProbeDegradedReasonCode::Unknown => "unknown",
     }
+}
+
+// ---- USB security-key proxy CLI ----
+//
+// Live (non-dry-run) paths return `not-yet-implemented` (exit 78) until the
+// d2bd security-key broker handler ships. All `--dry-run` paths are fully
+// implemented and stable; the planned-step output is the committed golden
+// contract for this CLI surface.
+
+fn usb_sk_json_mode(json: bool, human: bool) -> bool {
+    if human { false } else { json }
+}
+
+fn usb_sk_not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
+    host_error_envelope(
+        &format!("d2b usb security-key {verb} has no daemon-native handler yet"),
+        "not-yet-implemented",
+        78,
+        &format!("Native daemon dispatch for `d2b usb security-key {verb}`"),
+        "The security-key proxy daemon handler has not landed yet. \
+         The CLI surface, wire contracts, and dry-run plans are complete; \
+         the runtime broker implementation ships in a later workstream.",
+        "Track progress in CHANGELOG.md [Unreleased]. \
+         Use `d2b usb security-key <verb> --dry-run` to preview the planned actions.",
+        "docs/reference/error-codes.md#not-yet-implemented",
+    )
+}
+
+fn cmd_usb_sk_status(_context: &Context, args: &UsbSkStatusArgs) -> Result<i32, CliFailure> {
+    let json_mode = usb_sk_json_mode(args.json, args.human);
+    emit_host_error(&usb_sk_not_yet_implemented_envelope("status"), json_mode)
+}
+
+fn cmd_usb_sk_sessions(_context: &Context, args: &UsbSkSessionsArgs) -> Result<i32, CliFailure> {
+    let json_mode = usb_sk_json_mode(args.json, args.human);
+    emit_host_error(&usb_sk_not_yet_implemented_envelope("sessions"), json_mode)
+}
+
+fn cmd_usb_sk_cancel(_context: &Context, args: &UsbSkCancelArgs) -> Result<i32, CliFailure> {
+    let json_mode = usb_sk_json_mode(args.json, args.human);
+
+    // Require exactly one of: session_id (positional) or --current.
+    if args.session_id.is_none() && !args.current {
+        return Err(CliFailure::new(
+            2,
+            "d2b usb security-key cancel: provide either a session ID or --current".to_owned(),
+        ));
+    }
+
+    // Require exactly one of: --dry-run or --apply.
+    let flags = require_mutation_flag(
+        "usb security-key cancel",
+        args.dry_run,
+        args.apply,
+        json_mode,
+    )?;
+
+    let target = if args.current {
+        "current".to_owned()
+    } else {
+        args.session_id
+            .clone()
+            .unwrap_or_else(|| "current".to_owned())
+    };
+
+    if flags.apply {
+        return emit_host_error(&usb_sk_not_yet_implemented_envelope("cancel"), json_mode);
+    }
+
+    // --dry-run: emit the planned action without contacting the daemon.
+    let summary = serde_json::json!({
+        "command": "usb security-key cancel",
+        "mode": "dry-run",
+        "target": target,
+        "planned": ["SecurityKeyProxyCancelSession"],
+        "notes": "Dry-run preview; --apply dispatches the cancel through the \
+                  daemon → broker SecurityKeyProxyCancelSession path.",
+    });
+    if json_mode {
+        let mut rendered = serde_json::to_string_pretty(&summary)
+            .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+    } else {
+        print_stdout(&format!(
+            "d2b usb security-key cancel --dry-run: would send \
+             CancelSession({target}) to the security-key proxy broker\n"
+        ));
+    }
+    Ok(0)
+}
+
+fn cmd_usb_sk_test(_context: &Context, args: &UsbSkTestArgs) -> Result<i32, CliFailure> {
+    let json_mode = usb_sk_json_mode(args.json, args.human);
+    let vm = &args.vm;
+
+    if args.dry_run {
+        let summary = serde_json::json!({
+            "command": "usb security-key test",
+            "mode": "dry-run",
+            "vm": vm,
+            "planned": [
+                "CheckGuestVirtualHidDevice",
+                "CheckHostBrokerPhysicalKeyVisibility",
+            ],
+            "notes": "Dry-run preview; the live path queries the daemon for \
+                      virtual-HID presence in the guest and physical-key \
+                      visibility on the host broker.",
+        });
+        if json_mode {
+            let mut rendered = serde_json::to_string_pretty(&summary)
+                .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
+            rendered.push('\n');
+            print_stdout(&rendered);
+        } else {
+            print_stdout(&format!(
+                "d2b usb security-key test --dry-run: would check virtual HID device \
+                 presence in '{vm}' and confirm host broker sees the physical security key\n"
+            ));
+        }
+        return Ok(0);
+    }
+
+    emit_host_error(&usb_sk_not_yet_implemented_envelope("test"), json_mode)
 }
 
 // ---- managed-keys + trust verbs ----

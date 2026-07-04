@@ -19,6 +19,7 @@
 {
   imports = [
     ./options-site.nix
+    ./options-host.nix
     ./options-envs.nix
     ./options-vms.nix
     ./options-daemon.nix

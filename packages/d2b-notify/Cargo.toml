@@ -1,0 +1,20 @@
+[package]
+name = "d2b-notify"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "Reusable notification/event mechanism for d2b desktop UX"
+
+[lints]
+workspace = true
+
+[dependencies]
+getrandom = "0.2"
+serde = { workspace = true }
+serde_json.workspace = true
+schemars.workspace = true
+
+[[bin]]
+name = "d2b-sk-waybar-helper"
+path = "src/bin/waybar_helper.rs"

@@ -1080,6 +1080,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-notify"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "getrandom 0.2.17",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-provider-aca"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1117,6 +1127,14 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "d2b-sk-frontend"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "tokio",
+ "tokio-vsock",
 ]
 
 [[package]]

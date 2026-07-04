@@ -12,6 +12,164 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
+  `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
+  CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
+  or equivalent) over AF_VSOCK, without USB device ownership transfer. Each
+  opted-in VM receives a daemon-supervised virtual FIDO2 HID device
+  (`/dev/hidraw*`) via Linux `/dev/uhid`; browsers and `libfido2` treat it as
+  a normal local security key.
+- Added `d2b usb security-key status|sessions|cancel|test` subcommands for
+  lease inspection, session history, stuck-request cancellation, and
+  per-VM smoke checks.
+- Added structured notification/event emission for security-key lifecycle
+  events (ceremony start, user-presence wait, contention, failure, lease
+  revocation) through the d2b notification subsystem, with durable
+  `/run/d2b/usb-sk/events.jsonl` and a machine-readable
+  `/run/d2b/usb-sk/lease.json` state file.
+- Notification actions (`Cancel active request`, `Open status`) include
+  single-use, high-entropy nonces bound to session/action/expiry; `d2bd`
+  rejects missing, expired, reused, or mismatched action tokens.
+- Added eval-time assertions: `usb.securityKey.enable = true` and
+  `usbip.yubikey = true` are mutually exclusive for the same VM; per-VM
+  security-key opt-in requires the host `usb.securityKey.enable = true`;
+  per-VM opt-in requires `guest.control.enable = true`.
+- Added Diataxis documentation:
+  - How-to: [`docs/how-to/use-usb-security-key.md`](docs/how-to/use-usb-security-key.md)
+  - Migration: [`docs/how-to/migrate-usbip-yubikey-to-security-key.md`](docs/how-to/migrate-usbip-yubikey-to-security-key.md)
+  - Reference (options, CLI, event/notification JSON): [`docs/reference/components-usb-security-key.md`](docs/reference/components-usb-security-key.md), [`docs/reference/usb-security-key-events.md`](docs/reference/usb-security-key-events.md)
+  - Explanation (CTAP proxy architecture, why not USB sharing, comparison with USBIP and Qubes): [`docs/explanation/usb-security-key-architecture.md`](docs/explanation/usb-security-key-architecture.md)
+- Added the `d2b-notify` crate: a reusable notification/event mechanism for
+  d2b desktop UX, including:
+  - Typed `SecurityKeyEvent` enum covering all CTAP/WebAuthn ceremony
+    lifecycle phases: `Started`, `TouchNeeded`, `Busy`, `Queued`, `Blocked`,
+    `TimedOut`, `Failed`, `Canceled`, `Completed`.
+  - `ActionNonceStore`: single-use CSPRNG nonces (32 bytes, 64-char hex)
+    bound to `session_id`/`action_key`/expiry, with fail-closed validation
+    that prevents notification-action replay by hostile desktop clients.
+  - `SkNotifyState`: durable JSON state format (schema version 1) written by
+    the host runtime to `/run/d2b/notify/sk-state.json`; read by the Waybar
+    helper and `d2b-wlcontrol`.
+  - `WaybarBlock` + `waybar_block_from_state`: Waybar JSON-protocol block
+    derived from the current ceremony state, with per-state CSS classes
+    (`d2b-sk-idle`, `d2b-sk-touch`, `d2b-sk-busy`, `d2b-sk-active`).
+  - `WlcontrolSkStatus`: data contract for the `d2b-wlcontrol` status/action
+    surface, with pluggable per-ceremony action builder for nonce-backed
+    buttons.
+  - `d2b-sk-waybar-helper` binary: reads the durable state file and emits
+    one Waybar JSON line to stdout; suitable as a `custom/d2b-sk` `exec`
+    target.
+  - Pluggable `Notifier` trait + `RecordingNotifier` for hermetic tests;
+    per-event builders for all user-visible ceremony transitions.
+- Added `nixos-modules/notifications.nix`: NixOS module with options
+  `d2b.notifications.enable`, `d2b.notifications.statusHelper.{enable,
+  package,executablePath}`, `d2b.notifications.integrations.waybar.enable`,
+  `d2b.notifications.securityKey.{enable,staleEntryTtlSecs}`, and
+  `d2b.notifications.runtime.stateDir`; creates the
+  `/run/d2b/notify` tmpfiles directory on activation.
+- Added `d2b usb security-key` subcommand family exposing four operator surfaces
+  for the CTAP/WebAuthn security-key proxy feature:
+  - `d2b usb security-key status [--json|--human]` — show proxy health,
+    configured physical keys, per-VM virtual-device health, and current lease.
+  - `d2b usb security-key sessions [--json|--human]` — list recent and active
+    security-key request sessions, VM, RP ID, outcome, and timeout.
+  - `d2b usb security-key cancel {<session-id>|--current} [--dry-run|--apply]
+    [--json|--human]` — cancel a stuck security-key request session; `--dry-run`
+    shows the planned `SecurityKeyProxyCancelSession` broker op.
+  - `d2b usb security-key test <vm> [--dry-run] [--json|--human]` — smoke-check
+    that the guest virtual HID device and the host broker's physical-key
+    visibility are healthy; `--dry-run` shows the two planned checks.
+- Added USB security-key wire contract types in `d2b-contracts::public_wire`:
+  `UsbSecurityKeyStatusRequest/Response`, `UsbSecurityKeySessionsRequest/Response`,
+  `UsbSecurityKeyCancelRequest/Response`, `UsbSecurityKeyTestRequest/Response`,
+  and supporting DTOs (`UsbSkPhysicalKeyStatus`, `UsbSkVirtualDeviceStatus`,
+  `UsbSkLeaseStatus`, `UsbSkLeaseState`, `UsbSkSession`, `UsbSkSessionOutcome`,
+  `UsbSkTestCheck`).
+- Added CLI output types in `d2b-contracts::cli_output`:
+  `UsbSkStatusOutputV1`, `UsbSkSessionsOutputV1`, `UsbSkCancelDryRunOutputV1`,
+  `UsbSkTestDryRunOutputV1`.
+- Added CLI golden tests under `packages/d2b/tests/usb_sk_contract.rs` covering:
+  `usb security-key --help`, `cancel --current --dry-run`, `test <vm> --dry-run`,
+  and `not-yet-implemented` exit-78 envelope for all live paths.
+- Extended `packages/d2b/tests/cli_json_output_contract.rs` with
+  `usb_security_key_dry_run_outputs_match_goldens`,
+  `usb_security_key_status_not_yet_implemented`, and
+  `usb_security_key_sessions_not_yet_implemented` tests.
+- The use of "security key" as the user-facing term for CTAP/WebAuthn
+  authenticators is now established in CLI help, JSON envelopes, and docs.
+  The FIDO/CTAP terminology is reserved for diagnostic output and technical docs.
+
+  The live paths (`status`, `sessions`, `cancel --apply`, `test <vm>` without
+  `--dry-run`) emit exit 78 with a `not-yet-implemented` envelope until the
+  daemon broker handler lands in a later workstream.
+- Added `d2b.host.usb.securityKey.enable` and `d2b.host.usb.securityKey.devices`
+  (stable FIDO device selector submodule with `vendorId`, `productId`, `serial`,
+  and `label` fields) to declare the host USB security-key proxy.
+- Added `d2b.vms.<name>.usb.securityKey.enable` per-VM opt-in for CTAP/HID
+  relay to a host-proxied FIDO security key, guarded behind the new host option.
+- Eval-time assertions: VM `usb.securityKey.enable` requires the host proxy to
+  be enabled; `usb.securityKey.enable` and `usbip.yubikey` are mutually
+  exclusive for the same VM (phase-1 constraint); device `vendorId` values must
+  be within the FIDO-class allowlist; device labels must be unique.
+- Rust DTO module `d2b_contracts::security_key` with typed wire contracts:
+  `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`,
+  `SecurityKeyCancelRequest/Response`, `SecurityKeyEvent` (7 variants),
+  `SecurityKeyOpenDeviceRequest`, `SecurityKeyApplyUdevRulesRequest`, and
+  opaque-ID newtypes `SecurityKeySessionId` / `SecurityKeyDeviceLabel`.
+- `PublicRequest` / `PublicResponse` variants for `UsbSecurityKeyStatus`,
+  `UsbSecurityKeySessions`, and `UsbSecurityKeyCancel`.
+- `BrokerRequest` variants `SecurityKeyOpenDevice` and
+  `SecurityKeyApplyUdevRules` with `op_name()` dispatch arms.
+- `W3BrokerOperation::SecurityKeyOpenDevice` and
+  `W3BrokerOperation::SecurityKeyApplyUdevRules` with wire tags, flags, and
+  capability advertisement.
+- Privilege matrix rows for `usb security-key` (public) and the two new broker
+  operations; dispositions doc stubs for both broker ops.
+- `usb security-key status`, `usb security-key sessions`, and
+  `usb security-key cancel` CLI contract stubs in
+  `docs/reference/cli-contract.md` (daemon not yet wired, phase 1).
+- Nix-unit eval cases (`tests/unit/nix/cases/usb-security-key.nix`) and
+  assertion rejection cases for all new eval-time constraints.
+- Contract + policy tests in `packages/d2b-contract-tests/tests/usb_sk_contract.rs`
+  (20 tests).
+- Added `d2b.vms.<name>.usb.securityKey.enable` option. When `true`, the guest
+  VM gets a virtual FIDO2 HID device via a CTAPHID UHID frontend relay
+  (`d2b-sk-frontend`). The guest-side binary opens `/dev/uhid`, creates a
+  virtual HID device, and relays 64-byte CTAPHID reports over an AF_VSOCK
+  connection to the host broker (VSOCK port 14320). Firefox and libfido2
+  discover the virtual `/dev/hidraw*` device via the `fido` group; no root
+  or physical USB access is required inside the guest.
+- `d2b-sk-frontend` static guest binary: fully static (musl) binary for the
+  guest CTAPHID UHID relay frontend. Implements exponential backoff VSOCK
+  reconnect (1 s–60 s), clean UHID device recreation across reconnects, and a
+  simple 4-byte length-prefix framing protocol. Uses VSOCK port 14320.
+- Host DAG node `sk-frontend` (role `security-key-frontend`): a no-runner
+  tracking node whose readiness predicate fires when the host broker's vsock
+  socket (`<stateDir>/vsock.sock_14320`) appears. Edge: `cloud-hypervisor →
+  sk-frontend`.
+- Mutual exclusion assertion: `d2b.vms.<name>.usbip.yubikey` and
+  `d2b.vms.<name>.usb.securityKey.enable` cannot both be `true` for the same VM
+  (both claim the FIDO2 device endpoint).
+- `qemu-media` runtime incompatibility assertion for `usb.securityKey.enable`
+  (the CTAPHID proxy requires the Cloud Hypervisor / nixos runtime).
+- `securityKeyVsockPort = 14320` constant added to `d2b` lib for use by host
+  broker and guest component modules.
+- Nix eval tests (`security-key-gating.nix`): manifest `securityKey` field
+  gating, DAG node presence/absence, assertion firing for the yubikey and
+  qemu-media conflicts.
+- Contract tests (`minijail_sk_frontend.rs`): source-grep assertions for the
+  sk-frontend minijail profile block in `minijail-profiles.nix`, including role,
+  seccompPolicyRef presence, and empty capability set; compile-time
+  `ProcessRole::SecurityKeyFrontend` variant and serde round-trip check.
+- Added `OpenHidrawSecurityKey` broker op: resolves a configured FIDO security-key
+  stable selector, opens the physical `hidraw` node, and passes the fd to `d2bd` via
+  `SCM_RIGHTS`. Includes the privilege-matrix row, audit fields, and dispatch wiring.
+- Added `d2bd::security_key` session management module: CTAPHID relay with CID
+  isolation/translation, a one-active-ceremony-per-key lease state machine (default
+  120s ceremony timeout, 15s queue-wait timeout), length-prefixed 64-byte report
+  framing, and a `SO_PEERCRED`-based per-VM socket peer authentication check. Raw CTAP
+  payloads, PINs, and credential material are never logged.
+
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.

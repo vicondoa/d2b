@@ -64,11 +64,12 @@ complete -c d2b -n "__fish_d2b_using_subcommand status" -l json
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l human
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l check-bridges
 complete -c d2b -n "__fish_d2b_using_subcommand status" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe help" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
-complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l dry-run
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l apply
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from attach" -l json
@@ -82,9 +83,16 @@ complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -l json
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -l human
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from probe" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "status" -d 'Show security-key proxy health, configured keys, and current lease'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "sessions" -d 'Show recent and active security-key request sessions'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "cancel" -d 'Cancel a security-key request session'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "test" -d 'Smoke-check that a VM\'s virtual security-key device and host broker are healthy'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from security-key" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
+complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c d2b -n "__fish_d2b_using_subcommand console" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand audio; and not __fish_seen_subcommand_from status mic speaker off help" -l json -d 'Emit machine-readable JSON output'
@@ -448,6 +456,7 @@ complete -c d2b -n "__fish_d2b_using_subcommand help; and not __fish_seen_subcom
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "probe" -d 'List daemon-declared USBIP session claims and qemu-media USB candidates'
+complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from usb" -f -a "security-key" -d 'CTAP/WebAuthn security-key proxy status, sessions, and diagnostics'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "status" -d 'Show current grant state. With no VM, lists every audio-enabled VM'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "mic" -d 'Grant or revoke microphone access'
 complete -c d2b -n "__fish_d2b_using_subcommand help; and __fish_seen_subcommand_from audio" -f -a "speaker" -d 'Grant or revoke speaker access'

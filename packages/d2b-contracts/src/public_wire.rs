@@ -116,6 +116,20 @@ pub enum PublicRequest {
     /// through the ADR 0032 orchestrator.
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOp),
+    /// Security-key proxy status: host proxy health, configured FIDO device
+    /// selectors, current lease, and per-VM virtual-device state.
+    /// `d2b usb security-key status`
+    #[serde(rename = "usb security-key status")]
+    UsbSecurityKeyStatus,
+    /// Security-key proxy session history: recent and active CTAP relay
+    /// sessions. `d2b usb security-key sessions`
+    #[serde(rename = "usb security-key sessions")]
+    UsbSecurityKeySessions,
+    /// Cancel a stuck security-key CTAP session. Accepts an explicit
+    /// session ID or `cancel_current = true` to cancel whatever is active.
+    /// `d2b usb security-key cancel [--current | <session-id>]`
+    #[serde(rename = "usb security-key cancel")]
+    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -155,6 +169,15 @@ pub enum PublicResponse {
     Audio(AudioOpResponse),
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOpResponse),
+    /// `d2b usb security-key status` response.
+    #[serde(rename = "usb security-key status")]
+    UsbSecurityKeyStatus(crate::security_key::SecurityKeyStatusResponse),
+    /// `d2b usb security-key sessions` response.
+    #[serde(rename = "usb security-key sessions")]
+    UsbSecurityKeySessions(crate::security_key::SecurityKeySessionsResponse),
+    /// `d2b usb security-key cancel` response.
+    #[serde(rename = "usb security-key cancel")]
+    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelResponse),
     #[serde(rename = "error")]
     Error(Error),
 }
@@ -3417,4 +3440,215 @@ mod tests {
         let bad = serde_json::json!({ "vms": [], "extraField": true });
         serde_json::from_value::<AudioStatusArgs>(bad).expect_err("unknown field must be rejected");
     }
+}
+
+// ---- USB security-key proxy wire types (stub: daemon handler not yet implemented) ----
+//
+// These DTOs define the public-wire shape for the security-key proxy feature.
+// The CLI parses and renders them; the daemon will populate the response fields
+// once the broker runtime lands. Until then, the CLI emits the
+// `not-yet-implemented` envelope for all live (non-dry-run) paths.
+
+/// Request the security-key proxy status from the daemon.
+///
+/// The daemon returns configured physical keys, per-VM virtual-device health,
+/// the current active lease (if any), and whether any key is currently bound
+/// via USBIP elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyStatusRequest {
+    // no parameters — always returns full proxy status
+}
+
+/// Health of one physical security key as seen by the host broker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkPhysicalKeyStatus {
+    /// Stable sysfs-path selector (e.g. `/dev/hidraw0`), if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sysfs_path: Option<String>,
+    /// Whether the physical key is currently visible on the host.
+    pub present: bool,
+    /// Whether this key is currently bound via USBIP to a guest VM.
+    pub usbip_bound: bool,
+    /// VM that currently holds the USBIP claim for this key, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usbip_owner_vm: Option<String>,
+}
+
+/// Health of the virtual security-key device inside one guest VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkVirtualDeviceStatus {
+    /// VM name.
+    pub vm: String,
+    /// Whether `usb.securityKey` is enabled for this VM.
+    pub enabled: bool,
+    /// Whether the virtual HID device is currently healthy (visible to guests).
+    pub virtual_device_healthy: bool,
+    /// Guest-side path of the virtual HID device, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_device_path: Option<String>,
+}
+
+/// State of the active security-key lease (one in-flight CTAP ceremony).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbSkLeaseState {
+    /// No active or queued ceremony.
+    #[default]
+    Idle,
+    /// A CTAP ceremony is in flight for the active VM.
+    Active,
+    /// One or more VMs are waiting for the physical key to become free.
+    Queued,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Summary of the current active security-key lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkLeaseStatus {
+    pub state: UsbSkLeaseState,
+    /// VM that holds the active lease, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_vm: Option<String>,
+    /// Opaque session ID for cancellation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// ISO-8601 UTC expiry of the current lease, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Number of VMs queued behind the active lease.
+    pub queued_count: u32,
+}
+
+/// Response to [`UsbSecurityKeyStatusRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyStatusResponse {
+    /// Whether the host security-key proxy feature is enabled
+    /// (`d2b.host.usb.securityKey.enable`).
+    pub host_proxy_enabled: bool,
+    /// Physical security keys configured for the proxy.
+    pub physical_keys: Vec<UsbSkPhysicalKeyStatus>,
+    /// Per-VM virtual-device health for every security-key-enabled VM.
+    pub vm_devices: Vec<UsbSkVirtualDeviceStatus>,
+    /// Current active lease state.
+    pub lease: UsbSkLeaseStatus,
+}
+
+/// Request recent/active security-key request sessions from the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeySessionsRequest {
+    // no parameters — returns all recent and active sessions
+}
+
+/// Outcome of one completed or active security-key session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum UsbSkSessionOutcome {
+    /// CTAP ceremony completed successfully.
+    Success,
+    /// CTAP ceremony timed out without a response from the physical key.
+    Timeout,
+    /// Session was cancelled by the operator or by a subsequent request.
+    Cancelled,
+    /// The physical key or virtual device was not available.
+    DeviceUnavailable,
+    /// Session is still active.
+    Active,
+    #[serde(other)]
+    Unknown,
+}
+
+/// One security-key session record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkSession {
+    /// Opaque session ID (used with `cancel <session-id>`).
+    pub session_id: String,
+    /// VM that requested the ceremony.
+    pub vm: String,
+    /// Relying-party ID surfaced by the browser/CTAP layer, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rp_id: Option<String>,
+    /// Session outcome.
+    pub outcome: UsbSkSessionOutcome,
+    /// ISO-8601 UTC time when the session started.
+    pub started_at: String,
+    /// ISO-8601 UTC time when the session ended, if complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    /// Configured session timeout in seconds.
+    pub timeout_secs: u32,
+}
+
+/// Response to [`UsbSecurityKeySessionsRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeySessionsResponse {
+    pub sessions: Vec<UsbSkSession>,
+}
+
+/// Request the daemon to cancel one security-key session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyCancelRequest {
+    /// Session ID to cancel, or `None` when `--current` is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Cancel the currently active session regardless of ID.
+    pub current: bool,
+}
+
+/// Response to [`UsbSecurityKeyCancelRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyCancelResponse {
+    /// ID of the session that was cancelled, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancelled_session_id: Option<String>,
+    /// `true` when there was no active or matching session to cancel.
+    pub already_idle: bool,
+}
+
+/// Request a smoke test of the security-key proxy for a specific VM.
+///
+/// The daemon checks: (a) the guest virtual HID device is present and
+/// healthy; (b) the host broker can see the configured physical key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyTestRequest {
+    /// VM to test (must have `usb.securityKey.enable = true`).
+    pub vm: String,
+}
+
+/// One check result inside a [`UsbSecurityKeyTestResponse`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkTestCheck {
+    /// Short identifier for the check (e.g. `guest-virtual-hid`).
+    pub check: String,
+    /// Human-readable description of what was checked.
+    pub description: String,
+    /// Whether the check passed.
+    pub ok: bool,
+    /// Failure detail or remediation hint, when `ok == false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Response to [`UsbSecurityKeyTestRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSecurityKeyTestResponse {
+    /// VM that was tested.
+    pub vm: String,
+    /// Whether all checks passed.
+    pub ok: bool,
+    /// Per-check results.
+    pub checks: Vec<UsbSkTestCheck>,
 }

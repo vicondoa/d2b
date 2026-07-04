@@ -2410,7 +2410,8 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth => None,
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::SecurityKeyFrontend => None,
         ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
         ProcessRole::Swtpm => Some("swtpm"),
         ProcessRole::Virtiofsd => Some("virtiofsd"),
@@ -2463,7 +2464,8 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth => return None,
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::SecurityKeyFrontend => return None,
     };
     Some((
         format!("/run/current-system/sw/bin/{binary_name}"),
@@ -3256,6 +3258,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
                     ssh_user: Some("alice".to_owned()),

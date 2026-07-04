@@ -444,6 +444,138 @@ fn kernel_module_matrix_source_doc_parity() {
 }
 
 // ---------------------------------------------------------------------------
+// USB security-key docs scaffolding existence gate.
+//
+// Asserts that the docs scaffolding files for the USB security-key proxy
+// feature are present in the repo. This is a policy gate — it ensures the
+// docs/test surface does not silently disappear in a partial revert and that
+// the implementation workstream has a concrete target to make green.
+//
+// Checked files:
+//   * docs/how-to/use-usb-security-key.md
+//   * docs/how-to/migrate-usbip-yubikey-to-security-key.md
+//   * docs/reference/components-usb-security-key.md
+//   * docs/reference/usb-security-key-events.md
+//   * docs/explanation/usb-security-key-architecture.md
+//   * tests/unit/nix/cases/usb-security-key.nix
+//   * tests/golden/cli-output/usb-security-key-help.txt
+//   * tests/golden/cli-output/usb-security-key-status-help.txt
+//   * tests/golden/cli-output/usb-security-key-sessions-help.txt
+//   * tests/golden/cli-output/usb-security-key-cancel-help.txt
+//   * tests/golden/cli-output/usb-security-key-test-help.txt
+// ---------------------------------------------------------------------------
+#[test]
+fn usb_security_key_docs_scaffolding_present() {
+    let required = [
+        "docs/how-to/use-usb-security-key.md",
+        "docs/how-to/migrate-usbip-yubikey-to-security-key.md",
+        "docs/reference/components-usb-security-key.md",
+        "docs/reference/usb-security-key-events.md",
+        "docs/explanation/usb-security-key-architecture.md",
+        "tests/unit/nix/cases/usb-security-key.nix",
+        "tests/golden/cli-output/usb-security-key-help.txt",
+        "tests/golden/cli-output/usb-security-key-status-help.txt",
+        "tests/golden/cli-output/usb-security-key-sessions-help.txt",
+        "tests/golden/cli-output/usb-security-key-cancel-help.txt",
+        "tests/golden/cli-output/usb-security-key-test-help.txt",
+    ];
+    for rel in &required {
+        assert!(
+            repo_path_exists(rel),
+            "usb-security-key-docs-scaffolding: missing expected file: {rel}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// No process/autopilot markers in USB security-key docs.
+//
+// Asserts that the shipped security-key docs do not contain autopilot
+// process-pipeline markers (wave IDs, phase codes, fleet-execution artefacts,
+// or forbidden OS names). These must not appear in operator-visible docs.
+// ---------------------------------------------------------------------------
+#[test]
+fn usb_security_key_docs_no_process_markers() {
+    let doc_files = [
+        "docs/how-to/use-usb-security-key.md",
+        "docs/how-to/migrate-usbip-yubikey-to-security-key.md",
+        "docs/reference/components-usb-security-key.md",
+        "docs/reference/usb-security-key-events.md",
+        "docs/explanation/usb-security-key-architecture.md",
+    ];
+
+    // Forbidden patterns: autopilot/wave/fleet process markers and
+    // forbidden OS names that must not appear in user-facing docs.
+    let forbidden_patterns = [
+        "W3fu",
+        "ForbiddenLiveOSName",
+        "autopilot_marker",
+        "WAVE_ID",
+        "PHASE_MARKER",
+        "fleet_execution",
+    ];
+
+    let mut violations: Vec<String> = Vec::new();
+    for rel in &doc_files {
+        if !repo_path_exists(rel) {
+            continue; // existence is checked by the scaffolding gate above
+        }
+        let content = read_repo_file(rel);
+        for pattern in &forbidden_patterns {
+            for (idx, line) in content.lines().enumerate() {
+                if line.contains(pattern) {
+                    violations.push(format!(
+                        "{rel}:{}: process marker '{pattern}' must not appear in shipped docs: {line}",
+                        idx + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "usb-security-key-docs-no-process-markers: {} violation(s):\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// USB security-key CLI golden files are non-empty stubs.
+//
+// The CLI goldens are placeholder stubs committed alongside the docs. Each
+// must be a non-empty file (at minimum one line of expected help text)
+// so the contract test does not silently pass against an empty file after a
+// partial revert. The implementation workstream replaces the stubs with the
+// real `d2b usb security-key …` output once the CLI is implemented.
+// ---------------------------------------------------------------------------
+#[test]
+fn usb_security_key_cli_goldens_are_non_empty() {
+    let golden_files = [
+        "tests/golden/cli-output/usb-security-key-help.txt",
+        "tests/golden/cli-output/usb-security-key-status-help.txt",
+        "tests/golden/cli-output/usb-security-key-sessions-help.txt",
+        "tests/golden/cli-output/usb-security-key-cancel-help.txt",
+        "tests/golden/cli-output/usb-security-key-test-help.txt",
+    ];
+    for rel in &golden_files {
+        if !repo_path_exists(rel) {
+            continue; // existence checked by scaffolding gate
+        }
+        let content = read_repo_file(rel);
+        assert!(
+            !content.trim().is_empty(),
+            "usb-security-key-cli-goldens-non-empty: {rel} is empty; stubs must contain placeholder help text"
+        );
+        assert!(
+            content.contains("security-key") || content.contains("security key"),
+            "usb-security-key-cli-goldens-non-empty: {rel} does not mention 'security-key' or 'security key'; content:\n{content}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Migrated from tests/kernel-module-matrix-eval.sh (typed-error contract half).
 //
 // Asserts the fatal-typed-error contract: `packages/d2bd/src/typed_error.rs`

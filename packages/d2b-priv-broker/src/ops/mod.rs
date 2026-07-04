@@ -40,6 +40,9 @@ pub mod usbip_host;
 // Kernel-module + device-fd handoff ops.
 pub mod device;
 pub mod modprobe;
+// Security-key hidraw open op: resolves stable selector → opens
+// hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
+pub mod security_key;
 // Broker SpawnRunner preflight + spawn helper.
 pub mod spawn_runner;
 // Broker reconcile executors (nft / sysctl / hosts / ip route) with
