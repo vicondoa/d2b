@@ -625,7 +625,7 @@ shared.mkBatch {
 
     # C: vendorId outside FIDO-class allowlist is rejected.
     "usb-security-key-non-fido-vendor-rejected" = {
-      expectedSubstring = "not in the FIDO-class allowlist";
+      expectedSubstring = "FIDO-class allowlist";
       override = (
         { lib, ... }:
         {

@@ -45,6 +45,7 @@ let
   defaultEval = evalWith [ ];
   enabledEval = evalWith [
     ({ ... }: {
+      d2b.host.usb.securityKey.enable = true;
       d2b.vms.corp-vm.usb.securityKey.enable = true;
     })
   ];
@@ -58,8 +59,7 @@ let
 
   # manifest helpers: parse vms.json text (the manifest per-VM entry)
   manifestData = cfg: builtins.fromJSON cfg.config.d2b._manifestPkg.text;
-  vmManifest = cfg: vm:
-    builtins.head (builtins.filter (v: v.name == vm) (manifestData cfg).vms);
+  vmManifest = cfg: vm: (manifestData cfg).${vm};
 
   # assertion helper: tryEval + check failing assertion message
   mkEvalCfg = overrides: (evalWith overrides).config;

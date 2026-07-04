@@ -738,6 +738,7 @@
             "observability.nix"
             "readiness-waves.nix"
             "restart-policy.nix"
+            "usb-security-key.nix"
             "vm-eval-overlays.nix"
           ];
           nix-unit-network = [
@@ -752,6 +753,7 @@
             "external-vm-kind.nix"
             "niri-vm-borders.nix"
             "requested-vm-config.nix"
+            "security-key-gating.nix"
             "video-contract.nix"
           ];
           nix-unit-state = [
