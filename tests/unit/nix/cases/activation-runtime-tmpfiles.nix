@@ -362,8 +362,11 @@ in
   "activation-runtime-tmpfiles/store-sync-creates-only-run-leaf" = {
     expr =
       lib.hasInfix "mkdir /run/d2b/corp-vm" storeSyncText
-      && lib.hasInfix "chown root:root /run/d2b/corp-vm" storeSyncText
-      && lib.hasInfix "chmod 0755 /run/d2b/corp-vm" storeSyncText
+      && lib.hasInfix "refusing symlinked runtime leaf /run/d2b/corp-vm" storeSyncText
+      && lib.hasInfix "refusing non-directory runtime leaf /run/d2b/corp-vm" storeSyncText
+      && lib.hasInfix "enforce-dir-posture --path /run/d2b/corp-vm --uid 0 --gid 0 --mode 0755" storeSyncText
+      && !(lib.hasInfix "chown root:root /run/d2b/corp-vm" storeSyncText)
+      && !(lib.hasInfix "chmod 0755 /run/d2b/corp-vm" storeSyncText)
       && !(lib.hasInfix "mkdir -p /run/d2b/corp-vm" storeSyncText)
       && !(lib.hasInfix "install -d -m 0755 -o root -g root /run/d2b/corp-vm" storeSyncText);
     expected = true;

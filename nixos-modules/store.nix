@@ -50,6 +50,36 @@ let
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  cargoLock = {
+    lockFile = ../packages/Cargo.lock;
+    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+  };
+  prebuilt =
+    if cfg.site.usePrebuiltHostTools
+    then import ./prebuilt-packages.nix { inherit pkgs lib; }
+    else { };
+  activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "d2b-activation-helper";
+    version = "0.0.0-bootstrap";
+    src = packagesSrc;
+    inherit cargoLock;
+    cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      printf '[build]\nrustc-wrapper = ""\n' > .cargo/config.toml
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-activation-helper $out/bin/d2b-activation-helper 2>/dev/null \
+        || install -Dm755 target/release/d2b-activation-helper $out/bin/d2b-activation-helper
+      runHook postInstall
+    '';
+  };
+  activationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else activationHelperSourcePackage;
+  activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
 
   # spectrum-ch package (cloud-hypervisor v52 with virtio-gpu patches).
   # Provides ch-remote v52 used by the vfsd-watchdog direct-launch path.
@@ -861,11 +891,17 @@ in
             echo "d2bStoreSync: /run/d2b parent missing; tmpfiles/host runtime posture did not run" >&2
             exit 1
           fi
-          if [ ! -d /run/d2b/${name} ]; then
-            mkdir /run/d2b/${name}
+          if [ -L /run/d2b/${name} ]; then
+            echo "d2bStoreSync: refusing symlinked runtime leaf /run/d2b/${name}" >&2
+            exit 1
           fi
-          chown root:root /run/d2b/${name}
-          chmod 0755 /run/d2b/${name}
+          if [ ! -e /run/d2b/${name} ]; then
+            mkdir /run/d2b/${name}
+          elif [ ! -d /run/d2b/${name} ]; then
+            echo "d2bStoreSync: refusing non-directory runtime leaf /run/d2b/${name}" >&2
+            exit 1
+          fi
+          ${activationHelper} enforce-dir-posture --path /run/d2b/${name} --uid 0 --gid 0 --mode 0755
           ln -sfT ${gen} /run/d2b/${name}/next-generation
         '')
         vmGenPaths)}
