@@ -89,14 +89,15 @@ const FIDO_HID_DESCRIPTOR: &[u8] = &[
 //
 // uhid_create2_req:  128(name) + 64(phys) + 64(uniq) + 2(rd_size) +
 //                    2(bus) + 4(vendor) + 4(product) + 4(version) +
-//                    4(country) + 4096(rd_data) = 4372 bytes
+//                    4(country) + 4096(rd_data) + 1(dev_flags) + 7(pad)
+//                    = 4380 bytes
 // uhid_input2_req:   2(size) + 4096(data) = 4098 bytes
 // uhid_output_req:   4096(data) + 2(size) + 1(rtype) = 4099 bytes
 //
 // Total uhid_event:  4(type) + max(union) = 4(type) + 4371 = 4375 bytes
 // ---------------------------------------------------------------------------
 
-const UHID_CREATE2_PAYLOAD_LEN: usize = 128 + 64 + 64 + 2 + 2 + 4 + 4 + 4 + 4 + 4096;
+const UHID_CREATE2_PAYLOAD_LEN: usize = 128 + 64 + 64 + 2 + 2 + 4 + 4 + 4 + 4 + 4096 + 1 + 7;
 const UHID_INPUT2_PAYLOAD_LEN: usize = 2 + 4096;
 /// Full uhid_event size (type + union max).
 const UHID_EVENT_SIZE: usize = 4 + UHID_CREATE2_PAYLOAD_LEN;
@@ -261,6 +262,9 @@ fn build_create2_event(vm_id: &str) -> Vec<u8> {
     let mut rd_data = [0u8; 4096];
     rd_data[..FIDO_HID_DESCRIPTOR.len()].copy_from_slice(FIDO_HID_DESCRIPTOR);
     buf.extend_from_slice(&rd_data);
+    // dev_flags (__u8) + __pad[7]
+    buf.push(0);
+    buf.extend_from_slice(&[0u8; 7]);
 
     buf
 }
@@ -301,6 +305,7 @@ mod tests {
         let buf = build_create2_event("test-vm");
         // type(4) + name(128) + phys(64) + uniq(64) + rd_size(2) + bus(2)
         // + vendor(4) + product(4) + version(4) + country(4) + rd_data(4096)
+        // + dev_flags(1) + pad(7)
         assert_eq!(buf.len(), 4 + UHID_CREATE2_PAYLOAD_LEN);
     }
 

@@ -196,6 +196,8 @@ deprecations ship one minor release before removal.
 - Security-key host listener sockets now use mode `0770` so inherited per-VM
   ACLs can grant Cloud Hypervisor write/connect access without making the
   listener world-accessible.
+- Security-key guest frontend now writes the full UHID_CREATE2 payload,
+  including `dev_flags` and padding fields required by current Linux kernels.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
