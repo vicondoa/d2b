@@ -272,7 +272,7 @@ in
         chain postrouting {
           type nat hook postrouting priority 100; policy accept;
           oifname "eth0" masquerade
-          ${lib.optionalString m.homeLan.egress.enable ''
+          ${lib.optionalString (m.homeLan.egress.enable && m.homeLan.egress.masquerade) ''
           oifname "${homeIf}" masquerade
           ''}
         }

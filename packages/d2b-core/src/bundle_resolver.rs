@@ -74,7 +74,10 @@ use crate::host::{
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::{ManifestV04, VmEntry};
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
-use crate::processes::{ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag};
+use crate::processes::{
+    ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode, ProcessRole, ProcessesJson,
+    RoleProfile, VmProcessDag,
+};
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use sha2::Digest as _;
@@ -537,6 +540,18 @@ pub struct ResolvedTapIntent {
     pub net_handoff_mode: ChNetHandoffMode,
     pub owner_uid: u32,
     pub owner_gid: u32,
+}
+
+/// Bundle-resolved macvtap interface for a VMM runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMacvtapIntent {
+    pub vm_name: String,
+    pub role_id: String,
+    pub ifname: IfName,
+    pub parent_ifname: IfName,
+    pub mode: ProcessMacvtapMode,
+    pub mac: String,
+    pub fd: i32,
 }
 
 /// Bundle-resolved per-VM directory create plan.
@@ -1362,6 +1377,43 @@ impl BundleResolver {
             owner_uid: node.profile.uid,
             owner_gid: node.profile.gid,
         })
+    }
+
+    pub fn resolve_macvtap_intents(
+        &self,
+        vm_id: &str,
+        role_id: &str,
+    ) -> Result<Vec<ResolvedMacvtapIntent>, String> {
+        let node = self
+            .find_process_node(vm_id, role_id)
+            .ok_or_else(|| format!("missing process node vm={vm_id} role={role_id}"))?;
+        let mut next_fd = 10;
+        let mut out = Vec::new();
+        for iface in &node.network_interfaces {
+            if iface.type_ != ProcessNetworkInterfaceType::Macvtap {
+                continue;
+            }
+            let macvtap = iface.macvtap.as_ref().ok_or_else(|| {
+                format!(
+                    "macvtap interface {} for vm={vm_id} role={role_id} is missing macvtap metadata",
+                    iface.id
+                )
+            })?;
+            out.push(ResolvedMacvtapIntent {
+                vm_name: vm_id.to_owned(),
+                role_id: role_id.to_owned(),
+                ifname: IfName::new(iface.id.clone())
+                    .map_err(|err| format!("invalid macvtap ifname {}: {err}", iface.id))?,
+                parent_ifname: IfName::new(macvtap.link.clone()).map_err(|err| {
+                    format!("invalid macvtap parent ifname {}: {err}", macvtap.link)
+                })?,
+                mode: macvtap.mode,
+                mac: iface.mac.clone(),
+                fd: next_fd,
+            });
+            next_fd += 1;
+        }
+        Ok(out)
     }
 
     pub fn resolve_prepare_dir_intent(
@@ -2863,8 +2915,9 @@ mod tests {
     };
     use crate::minijail_profile::WritablePath;
     use crate::processes::{
-        DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
-        VmProcessInvariants,
+        DagEdge, NodeId, ProcessMacvtapInterface, ProcessMacvtapMode, ProcessNetworkInterface,
+        ProcessNetworkInterfaceType, ProcessNode, ProcessRole, ProcessesJson, RoleProfile,
+        VmProcessDag, VmProcessInvariants,
     };
     use crate::runtime::RuntimeMetadata;
     use serde::Serialize;
@@ -2983,6 +3036,7 @@ mod tests {
             profile: role_profile(1100, 1100, &[state_dir], "d2b.slice/media/host-reconcile"),
             readiness: Vec::new(),
             plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
         };
         let qemu = ProcessNode {
             id: NodeId("qemu-media".to_owned()),
@@ -2994,6 +3048,7 @@ mod tests {
             profile: role_profile(1200, 1200, &[state_dir], "d2b.slice/media/qemu-media"),
             readiness: Vec::new(),
             plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
         };
 
         assert!(score_writable_path(&qemu, true) > score_writable_path(&host, true));
@@ -3101,6 +3156,7 @@ mod tests {
                         ),
                         readiness: Vec::new(),
                         plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
                     },
                     ProcessNode {
                         id: NodeId("store-virtiofs-preflight".to_owned()),
@@ -3117,6 +3173,7 @@ mod tests {
                         ),
                         readiness: Vec::new(),
                         plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
                     },
                     ProcessNode {
                         id: NodeId("virtiofsd-ro-store".to_owned()),
@@ -3133,6 +3190,7 @@ mod tests {
                         ),
                         readiness: Vec::new(),
                         plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
                     },
                 ],
                 edges: vec![
@@ -3369,6 +3427,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["host-reconcile", "store-virtiofs-preflight"]
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolves_macvtap_intents_from_process_contract() {
+        let root = test_root("macvtap-intents");
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.processes.vms[0].nodes.push(ProcessNode {
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: Some("/run/current-system/sw/bin/cloud-hypervisor".to_owned()),
+            argv: vec![
+                "cloud-hypervisor".to_owned(),
+                "--net".to_owned(),
+                "tap=personal-u2,mac=02:00:00:00:00:01".to_owned(),
+                "fd=10,mac=02:00:00:00:00:02".to_owned(),
+            ],
+            env: Vec::new(),
+            profile: role_profile(
+                1200,
+                1200,
+                &["/var/lib/d2b/vms/personal-dev"],
+                "d2b.slice/personal-dev/cloud-hypervisor",
+            ),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: vec![
+                ProcessNetworkInterface {
+                    type_: ProcessNetworkInterfaceType::Tap,
+                    id: "personal-u2".to_owned(),
+                    mac: "02:00:00:00:00:01".to_owned(),
+                    macvtap: None,
+                },
+                ProcessNetworkInterface {
+                    type_: ProcessNetworkInterfaceType::Macvtap,
+                    id: "personal-h0".to_owned(),
+                    mac: "02:00:00:00:00:02".to_owned(),
+                    macvtap: Some(ProcessMacvtapInterface {
+                        link: "eno1".to_owned(),
+                        mode: ProcessMacvtapMode::Bridge,
+                    }),
+                },
+            ],
+        });
+
+        let intents = resolver
+            .resolve_macvtap_intents("personal-dev", "cloud-hypervisor")
+            .expect("macvtap intents resolve");
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].ifname.as_str(), "personal-h0");
+        assert_eq!(intents[0].parent_ifname.as_str(), "eno1");
+        assert_eq!(intents[0].mode, ProcessMacvtapMode::Bridge);
+        assert_eq!(intents[0].fd, 10);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3762,6 +3875,7 @@ mod tests {
                 profile,
                 readiness: Vec::new(),
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::new(),
             invariants: VmProcessInvariants {
@@ -3844,6 +3958,7 @@ mod tests {
                 profile: swtpm_profile,
                 readiness: Vec::new(),
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::new(),
             invariants: VmProcessInvariants {
@@ -3949,6 +4064,7 @@ mod tests {
                 profile: gpu_render_node_profile,
                 readiness: Vec::new(),
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::new(),
             invariants: VmProcessInvariants {
@@ -4067,6 +4183,7 @@ mod tests {
                 profile: audio_profile,
                 readiness: Vec::new(),
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::new(),
             invariants: VmProcessInvariants {

@@ -66,10 +66,65 @@ pub struct ProcessNode {
     /// Backward-compatible: omitted from JSON when empty (serde default).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan_ops: Vec<SpawnRunnerPlanOp>,
+    /// Network interfaces consumed by VMM runner roles.
+    ///
+    /// This mirrors the VMM-facing `--net` contract instead of forcing
+    /// the broker to infer every interface from legacy TAP naming rows.
+    /// In particular, macvtap needs parent/mode metadata so it can be
+    /// created/opened as macvtap and not silently downgraded to a TAP.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_interfaces: Vec<ProcessNetworkInterface>,
     /// Typed minijail metadata for this role.
     pub profile: RoleProfile,
     /// Readiness predicates that mark the role available.
     pub readiness: Vec<ReadinessPredicate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessNetworkInterface {
+    #[serde(rename = "type")]
+    pub type_: ProcessNetworkInterfaceType,
+    pub id: String,
+    pub mac: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macvtap: Option<ProcessMacvtapInterface>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessNetworkInterfaceType {
+    Tap,
+    Macvtap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessMacvtapInterface {
+    /// Lower host interface to attach to, e.g. `eno1`.
+    pub link: String,
+    /// macvtap/macvlan mode passed to `ip link ... type macvtap mode`.
+    pub mode: ProcessMacvtapMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessMacvtapMode {
+    Bridge,
+    Private,
+    Vepa,
+    Passthru,
+}
+
+impl ProcessMacvtapMode {
+    pub fn as_ip_arg(self) -> &'static str {
+        match self {
+            Self::Bridge => "bridge",
+            Self::Private => "private",
+            Self::Vepa => "vepa",
+            Self::Passthru => "passthru",
+        }
+    }
 }
 
 /// v1.2 additive plan operation emitted by `processes.json` for runner

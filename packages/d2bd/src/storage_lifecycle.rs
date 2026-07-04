@@ -572,6 +572,7 @@ mod tests {
                     argv: vec!["cloud-hypervisor".to_owned()],
                     env: Vec::new(),
                     plan_ops: Vec::new(),
+                    network_interfaces: Vec::new(),
                     profile: RoleProfile {
                         profile_id: "vm-corp-vm-cloud-hypervisor".to_owned(),
                         uid: 1000,

@@ -104,6 +104,7 @@ let
   workHomeLink = workNet.systemd.network.links."10-home";
   workGuestDhcp = workGuest.systemd.network.networks."10-eth-dhcp";
   workHomeIface = builtins.elemAt workNet.microvm.interfaces 2;
+  workHomeMac = workHomeIface.mac;
 
   hostBrUp = cfg.systemd.network.networks."20-br-work-up";
   hostBrUpRoute = builtins.head hostBrUp.routes;
@@ -132,6 +133,14 @@ let
 
   hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
   workHostEnv = builtins.head (builtins.filter (env: env.env == "work") hostJson.environments);
+  processesJson = cfg.d2b._bundle.processesJson.data;
+  workNetDag = builtins.head (builtins.filter (dag: dag.vm == "sys-work-net") processesJson.vms);
+  workNetChNode = builtins.head (builtins.filter (node: node.id == "cloud-hypervisor") workNetDag.nodes);
+  workNetHomeProcessIface = builtins.elemAt workNetChNode.networkInterfaces 2;
+  workNetHomeArgvFd =
+    lib.any
+      (arg: lib.hasInfix "fd=10" arg && lib.hasInfix "mac=${workHomeMac}" arg)
+      workNetChNode.argv;
   mdnsHomeInputRule = ''iifname "home0" udp dport 5353 accept'';
   mdnsLanInputRule = ''iifname "eth1" udp dport 5353 accept'';
 
@@ -264,6 +273,30 @@ in
         targetIp = "10.20.0.10";
         targetPort = 22;
       };
+    };
+  };
+  "net-vm-network/home-lan-process-contract-carries-macvtap" = {
+    expr = workNetHomeProcessIface;
+    expected = {
+      type = "macvtap";
+      id = "work-h0";
+      mac = workHomeMac;
+      macvtap = {
+        link = "eno1";
+        mode = "bridge";
+      };
+    };
+  };
+  "net-vm-network/home-lan-ch-argv-uses-macvtap-fd" = {
+    expr = {
+      hasFd = workNetHomeArgvFd;
+      hasPlainTap = lib.any
+        (arg: lib.hasInfix "mac=${workHomeMac}" arg && lib.hasInfix "tap=work-h0" arg)
+        workNetChNode.argv;
+    };
+    expected = {
+      hasFd = true;
+      hasPlainTap = false;
     };
   };
   "net-vm-network/safe-home-lan-default-off" = {

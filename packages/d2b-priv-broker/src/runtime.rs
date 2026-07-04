@@ -4925,6 +4925,41 @@ fn prepare_runner_preopened_fds(
     daemon_uid: u32,
     daemon_gid: u32,
 ) -> Result<RunnerPreopenedFds, BrokerError> {
+    if req.role == d2b_contracts::broker_wire::RunnerRole::CloudHypervisor {
+        let intents = resolver
+            .resolve_macvtap_intents(req.vm_id.as_str(), req.role_id.as_str())
+            .map_err(BrokerError::LiveHandler)?;
+        if intents.is_empty() {
+            return Ok(RunnerPreopenedFds {
+                child_fds: Vec::new(),
+                response_fds: Vec::new(),
+            });
+        }
+        let mut expected_fd = crate::sys::pidfd_sys::RENDER_NODE_INHERITED_FD;
+        let mut child_fds = Vec::with_capacity(intents.len());
+        for intent in intents {
+            if intent.fd != expected_fd {
+                return Err(BrokerError::LiveHandler(format!(
+                    "macvtap fd contract mismatch for {}: processes.json declares fd {}, broker would install fd {}",
+                    intent.ifname.as_str(),
+                    intent.fd,
+                    expected_fd
+                )));
+            }
+            let fd = crate::ops::tap::live_create_macvtap_fd(&intent)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            child_fds.push(fd);
+            expected_fd += 1;
+        }
+        let _ = audit_log;
+        let _ = daemon_uid;
+        let _ = daemon_gid;
+        return Ok(RunnerPreopenedFds {
+            child_fds,
+            response_fds: Vec::new(),
+        });
+    }
+
     if req.role != d2b_contracts::broker_wire::RunnerRole::QemuMedia {
         return Ok(RunnerPreopenedFds {
             child_fds: Vec::new(),
@@ -9543,6 +9578,7 @@ mod tests {
                             .build(),
                         readiness: Vec::new(),
                         plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
                     }],
                     edges: Vec::new(),
                     invariants: VmProcessInvariants {
@@ -9573,6 +9609,7 @@ mod tests {
                             .build(),
                         readiness: Vec::new(),
                         plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
                     }],
                     edges: Vec::new(),
                     invariants: VmProcessInvariants {
@@ -9791,6 +9828,7 @@ mod tests {
                 .build(),
             readiness: Vec::new(),
             plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
         });
         write_json_file(&bundle.processes_path, &processes);
 
@@ -12210,6 +12248,7 @@ mod tests {
                 .build(),
             readiness: Vec::new(),
             plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
         });
         write_json_file(&bundle.processes_path, &processes);
         let resolver = match try_load_resolver_with_policy(

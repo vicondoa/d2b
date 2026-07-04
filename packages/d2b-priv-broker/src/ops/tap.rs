@@ -21,7 +21,7 @@
 //! `nm-unmanaged-pre-create-required`.
 
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor, SystemLiveExec};
-use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::bundle_resolver::{BundleResolver, ResolvedMacvtapIntent};
 use d2b_core::host::{HostJson, TapRole};
 use d2b_core::host_w3::TapRoleW3;
 use d2b_core::manifest_v04::VmEntry;
@@ -273,6 +273,75 @@ pub fn live_create_persistent_tap(
         tap_ifname: intent.tap_ifname,
         fd: None,
     })
+}
+
+pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
+    let ip = ip_binary_path();
+    let create_args = build_macvtap_link_add_args(intent);
+    match run_ip_link(
+        &ip,
+        &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    ) {
+        Ok(()) => {}
+        Err(super::OpError::Io { path: _, detail }) if detail.contains("File exists") => {}
+        Err(err) => return Err(err),
+    }
+    run_ip_link(
+        &ip,
+        &[
+            "link",
+            "set",
+            "dev",
+            intent.ifname.as_str(),
+            "address",
+            intent.mac.as_str(),
+        ],
+    )?;
+    run_ip_link(&ip, &["link", "set", "dev", intent.ifname.as_str(), "up"])?;
+    let ifindex_path = PathBuf::from(format!("/sys/class/net/{}/ifindex", intent.ifname.as_str()));
+    let ifindex = std::fs::read_to_string(&ifindex_path)
+        .map_err(|err| super::OpError::Io {
+            path: ifindex_path.clone(),
+            detail: err.to_string(),
+        })?
+        .trim()
+        .parse::<u32>()
+        .map_err(|err| super::OpError::InvalidInput {
+            detail: format!(
+                "macvtap {} has invalid ifindex in {}: {err}",
+                intent.ifname.as_str(),
+                ifindex_path.display()
+            ),
+        })?;
+    let tap_path = macvtap_device_path(ifindex);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&tap_path)
+        .map_err(|err| super::OpError::Io {
+            path: tap_path.clone(),
+            detail: err.to_string(),
+        })?;
+    Ok(file.into())
+}
+
+fn build_macvtap_link_add_args(intent: &ResolvedMacvtapIntent) -> Vec<String> {
+    vec![
+        "link".to_owned(),
+        "add".to_owned(),
+        "link".to_owned(),
+        intent.parent_ifname.as_str().to_owned(),
+        "name".to_owned(),
+        intent.ifname.as_str().to_owned(),
+        "type".to_owned(),
+        "macvtap".to_owned(),
+        "mode".to_owned(),
+        intent.mode.as_ip_arg().to_owned(),
+    ]
+}
+
+fn macvtap_device_path(ifindex: u32) -> PathBuf {
+    PathBuf::from(format!("/dev/tap{ifindex}"))
 }
 
 fn attach_tap_to_bridge(
@@ -921,6 +990,27 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn macvtap_link_args_target_parent_without_bridge_master() {
+        let intent = ResolvedMacvtapIntent {
+            vm_name: "sys-work-net".to_owned(),
+            role_id: "cloud-hypervisor".to_owned(),
+            ifname: BundleIfName::new("work-h0").expect("macvtap ifname"),
+            parent_ifname: BundleIfName::new("eno1").expect("parent ifname"),
+            mode: d2b_core::processes::ProcessMacvtapMode::Bridge,
+            mac: "02:4A:E9:D5:17:03".to_owned(),
+            fd: 10,
+        };
+
+        let args = build_macvtap_link_add_args(&intent).join(" ");
+        assert_eq!(
+            args,
+            "link add link eno1 name work-h0 type macvtap mode bridge"
+        );
+        assert!(!args.contains(" master "));
+        assert_eq!(macvtap_device_path(42), PathBuf::from("/dev/tap42"));
     }
 
     #[test]

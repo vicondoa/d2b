@@ -505,6 +505,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                     "/run/d2b/vms/work-vm/api.sock".to_owned(),
                 )],
                 plan_ops: Vec::new(),
+                network_interfaces: Vec::new(),
             }],
             edges: Vec::<DagEdge>::new(),
             invariants: VmProcessInvariants {

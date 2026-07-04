@@ -1,5 +1,6 @@
 use crate::processes::{
-    NodeId, ProcessNode, ProcessRole, ReadinessPredicate, RoleProfile, SpawnRunnerPlanOp,
+    NodeId, ProcessNetworkInterface, ProcessNode, ProcessRole, ReadinessPredicate, RoleProfile,
+    SpawnRunnerPlanOp,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ pub struct ProcessNodeBuilder {
     argv: Vec<String>,
     env: Vec<String>,
     plan_ops: Vec<SpawnRunnerPlanOp>,
+    network_interfaces: Vec<ProcessNetworkInterface>,
     profile: RoleProfile,
     readiness: Vec<ReadinessPredicate>,
 }
@@ -28,6 +30,7 @@ impl ProcessNodeBuilder {
             argv: Vec::new(),
             env: Vec::new(),
             plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
             profile,
             readiness: Vec::new(),
         }
@@ -80,6 +83,14 @@ impl ProcessNodeBuilder {
 
     pub fn with_plan_op(mut self, plan_op: SpawnRunnerPlanOp) -> Self {
         self.plan_ops.push(plan_op);
+        self
+    }
+
+    pub fn with_network_interfaces(
+        mut self,
+        interfaces: impl IntoIterator<Item = ProcessNetworkInterface>,
+    ) -> Self {
+        self.network_interfaces = interfaces.into_iter().collect();
         self
     }
 
@@ -141,6 +152,7 @@ impl ProcessNodeBuilder {
             argv: self.argv,
             env: self.env,
             plan_ops: self.plan_ops,
+            network_interfaces: self.network_interfaces,
             profile: self.profile,
             readiness: self.readiness,
         })
