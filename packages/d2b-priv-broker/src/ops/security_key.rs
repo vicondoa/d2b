@@ -47,6 +47,9 @@ pub struct ResolvedSecurityKeySelector {
     pub selector_label: String,
     /// Resolved absolute path to the hidraw node.
     pub hidraw_path: PathBuf,
+    /// True when the HID report descriptor was readable and explicitly matched
+    /// the FIDO usage page. False means resolution used the udev-group fallback.
+    pub descriptor_verified: bool,
 }
 
 /// Outcome of a live `OpenHidrawSecurityKey` op.
@@ -65,7 +68,7 @@ pub fn live_open_hidraw_security_key(
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenHidrawSecurityKeyOutcome, OpError> {
     let resolved = resolve_selector(req.selector_id.as_str())?;
-    let fd = open_and_validate_hidraw(&resolved.hidraw_path)?;
+    let fd = open_and_validate_hidraw(&resolved.hidraw_path, resolved.descriptor_verified)?;
     Ok(LiveOpenHidrawSecurityKeyOutcome {
         fd,
         selector_label: resolved.selector_label,
@@ -78,9 +81,7 @@ pub fn live_open_hidraw_security_key(
 /// Returns the first device whose report descriptor contains the FIDO
 /// HID usage page, falling back to group ownership when the report
 /// descriptor can't be read (some kernels restrict `rdesc` to root).
-pub(crate) fn resolve_selector(
-    selector_id: &str,
-) -> Result<ResolvedSecurityKeySelector, OpError> {
+pub(crate) fn resolve_selector(selector_id: &str) -> Result<ResolvedSecurityKeySelector, OpError> {
     let sysfs_hidraw = Path::new("/sys/class/hidraw");
     let entries = std::fs::read_dir(sysfs_hidraw).map_err(|e| OpError::Io {
         path: sysfs_hidraw.to_owned(),
@@ -96,13 +97,14 @@ pub(crate) fn resolve_selector(
         let dev_path = PathBuf::from("/dev").join(&*name_str);
         let sysfs_path = entry.path();
 
-        if is_fido_device(&sysfs_path) {
+        if let Some(descriptor_verified) = fido_device_match(&sysfs_path) {
             return Ok(ResolvedSecurityKeySelector {
                 // Stable selector label combines the caller-supplied
                 // opaque id with the resolved sysfs index; no raw
                 // path leaks into audit/response fields.
                 selector_label: format!("{selector_id}:{name_str}"),
                 hidraw_path: dev_path,
+                descriptor_verified,
             });
         }
     }
@@ -115,12 +117,17 @@ pub(crate) fn resolve_selector(
 
 /// Check whether a sysfs hidraw entry is a FIDO-class device.
 fn is_fido_device(sysfs_entry: &Path) -> bool {
+    fido_device_match(sysfs_entry).is_some()
+}
+
+fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
     match std::fs::read(&rdesc_path) {
         Ok(rdesc) => {
             return rdesc
                 .windows(FIDO_USAGE_PAGE_LE.len())
-                .any(|w| w == FIDO_USAGE_PAGE_LE);
+                .any(|w| w == FIDO_USAGE_PAGE_LE)
+                .then_some(true);
         }
         Err(_) => {
             // Fall through to the distro udev-group fallback only when
@@ -131,18 +138,21 @@ fn is_fido_device(sysfs_entry: &Path) -> bool {
     let dev_name = sysfs_entry.file_name().unwrap_or_default();
     let dev_path = PathBuf::from("/dev").join(dev_name);
     let Ok(meta) = std::fs::metadata(&dev_path) else {
-        return false;
+        return None;
     };
     use std::os::unix::fs::MetadataExt;
     let gid = meta.gid();
     match nix::unistd::Group::from_gid(nix::unistd::Gid::from_raw(gid)) {
-        Ok(Some(group)) => ALLOWED_GROUPS.contains(&group.name.as_str()),
-        _ => false,
+        Ok(Some(group)) if ALLOWED_GROUPS.contains(&group.name.as_str()) => Some(false),
+        _ => None,
     }
 }
 
 /// Open the hidraw node with pre- and post-open safety checks.
-pub(crate) fn open_and_validate_hidraw(path: &Path) -> Result<OwnedFd, OpError> {
+pub(crate) fn open_and_validate_hidraw(
+    path: &Path,
+    descriptor_verified: bool,
+) -> Result<OwnedFd, OpError> {
     use std::fs::OpenOptions;
     use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 
@@ -155,7 +165,10 @@ pub(crate) fn open_and_validate_hidraw(path: &Path) -> Result<OwnedFd, OpError> 
     if !meta.file_type().is_char_device() {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
-            reason: format!("{}: resolved path is not a character device", path.display()),
+            reason: format!(
+                "{}: resolved path is not a character device",
+                path.display()
+            ),
         });
     }
     let gid = meta.gid();
@@ -164,7 +177,7 @@ pub(crate) fn open_and_validate_hidraw(path: &Path) -> Result<OwnedFd, OpError> 
         .flatten()
         .map(|g| g.name)
         .unwrap_or_else(|| gid.to_string());
-    if !ALLOWED_GROUPS.contains(&group_name.as_str()) {
+    if !descriptor_verified && !ALLOWED_GROUPS.contains(&group_name.as_str()) {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
             reason: format!(
@@ -195,7 +208,10 @@ pub(crate) fn open_and_validate_hidraw(path: &Path) -> Result<OwnedFd, OpError> 
     if !SFlag::from_bits_truncate(stat.st_mode).contains(SFlag::S_IFCHR) {
         return Err(OpError::Refused {
             operation: "OpenHidrawSecurityKey",
-            reason: format!("{}: post-open stat is not a character device", path.display()),
+            reason: format!(
+                "{}: post-open stat is not a character device",
+                path.display()
+            ),
         });
     }
 
@@ -235,8 +251,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
         std::fs::create_dir_all(&device_dir).expect("device dir");
-        std::fs::write(device_dir.join("report_descriptor"), [0x00, 0x01, 0x02, 0x03])
-            .expect("write descriptor");
+        std::fs::write(
+            device_dir.join("report_descriptor"),
+            [0x00, 0x01, 0x02, 0x03],
+        )
+        .expect("write descriptor");
 
         assert!(
             !is_fido_device(&tmp.path().join("hidraw0")),
@@ -249,17 +268,21 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
         std::fs::create_dir_all(&device_dir).expect("device dir");
-        std::fs::write(device_dir.join("report_descriptor"), [0x06, 0xD0, 0xF1, 0x09, 0x01])
-            .expect("write descriptor");
+        std::fs::write(
+            device_dir.join("report_descriptor"),
+            [0x06, 0xD0, 0xF1, 0x09, 0x01],
+        )
+        .expect("write descriptor");
 
         assert!(is_fido_device(&tmp.path().join("hidraw0")));
+        assert_eq!(fido_device_match(&tmp.path().join("hidraw0")), Some(true));
     }
 
     #[test]
     fn open_and_validate_hidraw_dev_null_fails_group_or_type_validation() {
         // /dev/null is a character device but is never owned by a FIDO
         // group, so it must be refused, not silently opened.
-        match open_and_validate_hidraw(Path::new("/dev/null")) {
+        match open_and_validate_hidraw(Path::new("/dev/null"), false) {
             Err(OpError::Refused { .. }) => {}
             Err(OpError::Io { .. }) => {
                 // Sandboxed environments without /dev/null access also
@@ -272,7 +295,7 @@ mod tests {
 
     #[test]
     fn open_and_validate_hidraw_missing_path_is_io_error() {
-        match open_and_validate_hidraw(Path::new("/nonexistent/hidraw-path")) {
+        match open_and_validate_hidraw(Path::new("/nonexistent/hidraw-path"), false) {
             Err(OpError::Io { .. }) => {}
             other => panic!("expected Io error for missing path, got {other:?}"),
         }
