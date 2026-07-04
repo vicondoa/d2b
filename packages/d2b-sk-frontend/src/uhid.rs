@@ -53,7 +53,7 @@ const UHID_GET_REPORT: u32 = 9;
 // ---------------------------------------------------------------------------
 
 /// USB bus type code.
-const BUS_USB: u8 = 3;
+const BUS_USB: u16 = 3;
 /// Yubico USB vendor ID.
 const FIDO_VENDOR_ID: u32 = 0x1050;
 /// YubiKey 5 USB product ID (virtual HID interface, FIDO2-only).
@@ -88,15 +88,15 @@ const FIDO_HID_DESCRIPTOR: &[u8] = &[
 // UHID event sizes (all __packed__ in the kernel header)
 //
 // uhid_create2_req:  128(name) + 64(phys) + 64(uniq) + 2(rd_size) +
-//                    1(bus) + 4(vendor) + 4(product) + 4(version) +
-//                    4(country) + 4096(rd_data) = 4371 bytes
+//                    2(bus) + 4(vendor) + 4(product) + 4(version) +
+//                    4(country) + 4096(rd_data) = 4372 bytes
 // uhid_input2_req:   2(size) + 4096(data) = 4098 bytes
 // uhid_output_req:   4096(data) + 2(size) + 1(rtype) = 4099 bytes
 //
 // Total uhid_event:  4(type) + max(union) = 4(type) + 4371 = 4375 bytes
 // ---------------------------------------------------------------------------
 
-const UHID_CREATE2_PAYLOAD_LEN: usize = 128 + 64 + 64 + 2 + 1 + 4 + 4 + 4 + 4 + 4096;
+const UHID_CREATE2_PAYLOAD_LEN: usize = 128 + 64 + 64 + 2 + 2 + 4 + 4 + 4 + 4 + 4096;
 const UHID_INPUT2_PAYLOAD_LEN: usize = 2 + 4096;
 /// Full uhid_event size (type + union max).
 const UHID_EVENT_SIZE: usize = 4 + UHID_CREATE2_PAYLOAD_LEN;
@@ -247,8 +247,8 @@ fn build_create2_event(vm_id: &str) -> Vec<u8> {
     // rd_size (__u16 LE)
     let rd_size = FIDO_HID_DESCRIPTOR.len() as u16;
     buf.extend_from_slice(&rd_size.to_le_bytes());
-    // bus (__u8)
-    buf.push(BUS_USB);
+    // bus (__u16 LE)
+    buf.extend_from_slice(&BUS_USB.to_le_bytes());
     // vendor (__u32 LE)
     buf.extend_from_slice(&FIDO_VENDOR_ID.to_le_bytes());
     // product (__u32 LE)
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn create2_event_length() {
         let buf = build_create2_event("test-vm");
-        // type(4) + name(128) + phys(64) + uniq(64) + rd_size(2) + bus(1)
+        // type(4) + name(128) + phys(64) + uniq(64) + rd_size(2) + bus(2)
         // + vendor(4) + product(4) + version(4) + country(4) + rd_data(4096)
         assert_eq!(buf.len(), 4 + UHID_CREATE2_PAYLOAD_LEN);
     }
@@ -320,11 +320,35 @@ mod tests {
     }
 
     #[test]
+    fn create2_identity_fields_are_aligned() {
+        let buf = build_create2_event("test-vm");
+        let bus_offset = 4 + 128 + 64 + 64 + 2;
+        let vendor_offset = bus_offset + 2;
+        let product_offset = vendor_offset + 4;
+
+        let bus = u16::from_le_bytes([buf[bus_offset], buf[bus_offset + 1]]);
+        let vendor = u32::from_le_bytes([
+            buf[vendor_offset],
+            buf[vendor_offset + 1],
+            buf[vendor_offset + 2],
+            buf[vendor_offset + 3],
+        ]);
+        let product = u32::from_le_bytes([
+            buf[product_offset],
+            buf[product_offset + 1],
+            buf[product_offset + 2],
+            buf[product_offset + 3],
+        ]);
+
+        assert_eq!(bus, BUS_USB);
+        assert_eq!(vendor, FIDO_VENDOR_ID);
+        assert_eq!(product, FIDO_PRODUCT_ID);
+    }
+
+    #[test]
     fn create2_descriptor_data_matches() {
         let buf = build_create2_event("test-vm");
-        // rd_data starts at offset: 260(rd_size offset) + 2(rd_size) + 1(bus) + 4(vendor)
-        //   + 4(product) + 4(version) + 4(country) = 279
-        let rd_start = 4 + 128 + 64 + 64 + 2 + 1 + 4 + 4 + 4 + 4;
+        let rd_start = 4 + 128 + 64 + 64 + 2 + 2 + 4 + 4 + 4 + 4;
         assert_eq!(
             &buf[rd_start..rd_start + FIDO_HID_DESCRIPTOR.len()],
             FIDO_HID_DESCRIPTOR
