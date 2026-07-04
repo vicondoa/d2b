@@ -252,6 +252,10 @@ mod tests {
         (store, token)
     }
 
+    fn test_nonce(byte: u8, len: usize) -> String {
+        String::from_utf8(vec![byte; len]).expect("test nonce bytes are ASCII")
+    }
+
     #[test]
     fn happy_path_validates_and_consumes() {
         let (mut store, token) = store_with_nonce("session-abc", "cancel");
@@ -309,9 +313,10 @@ mod tests {
     #[test]
     fn missing_token_is_not_found() {
         let mut store = ActionNonceStore::new();
+        let missing = test_nonce(b'd', NONCE_BYTES * 2);
         assert_eq!(
             store
-                .validate_and_consume("deadbeef", "session-abc", "cancel", BASE_TIME)
+                .validate_and_consume(&missing, "session-abc", "cancel", BASE_TIME)
                 .unwrap_err(),
             NonceError::NotFound
         );
@@ -330,7 +335,7 @@ mod tests {
 
     #[test]
     fn action_key_parse_round_trip() {
-        let nonce = "a".repeat(64);
+        let nonce = test_nonce(b'a', NONCE_BYTES * 2);
         let key = action_key_for("cancel", &nonce);
         let (action, parsed_nonce) = parse_action_key(&key).expect("must parse");
         assert_eq!(action, "cancel");
@@ -339,13 +344,14 @@ mod tests {
 
     #[test]
     fn action_key_parse_rejects_short_nonce() {
-        let short = action_key_for("cancel", "abc");
+        let short_nonce = test_nonce(b'a', 3);
+        let short = action_key_for("cancel", &short_nonce);
         assert!(parse_action_key(&short).is_none());
     }
 
     #[test]
     fn action_key_parse_rejects_non_hex_nonce() {
-        let bad = format!("d2b-sk-cancel:{}", "z".repeat(64));
+        let bad = format!("d2b-sk-cancel:{}", test_nonce(b'z', NONCE_BYTES * 2));
         assert!(parse_action_key(&bad).is_none());
     }
 

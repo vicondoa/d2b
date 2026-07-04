@@ -242,6 +242,11 @@ mod tests {
         vec![]
     }
 
+    fn test_nonce() -> String {
+        String::from_utf8(vec![b'a'; crate::nonce::NONCE_BYTES * 2])
+            .expect("test nonce bytes are ASCII")
+    }
+
     #[test]
     fn started_summary_is_stable() {
         let n = started("personal-dev", None, no_actions());
@@ -290,14 +295,16 @@ mod tests {
 
     #[test]
     fn cancel_action_has_expected_label() {
-        let a = NotificationAction::cancel("aabbccdd");
+        let nonce = test_nonce();
+        let a = NotificationAction::cancel(&nonce);
         assert_eq!(a.label, "Cancel request");
         assert!(a.action_key.starts_with("d2b-sk-cancel:"));
     }
 
     #[test]
     fn open_status_action_has_expected_label() {
-        let a = NotificationAction::open_status("aabbccdd");
+        let nonce = test_nonce();
+        let a = NotificationAction::open_status(&nonce);
         assert_eq!(a.label, "Open status");
         assert!(a.action_key.starts_with("d2b-sk-open-status:"));
     }
