@@ -1364,6 +1364,25 @@
           }
         },
         {
+          "description": "Resolve a configured FIDO security-key stable selector from the trusted bundle, open the physical hidraw node as root, and return the fd to `d2bd` via `SCM_RIGHTS`. `d2bd` manages the long-lived CTAPHID relay session; the broker only opens the device. The daemon names only `vm_id` and an opaque `selector_id` (resolved from the trusted bundle); the broker never names raw device paths on the wire.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenHidrawSecurityKey"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenHidrawSecurityKeyRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2651,6 +2670,25 @@
             },
             "payload": {
               "$ref": "#/definitions/QemuMediaHotplugResponse"
+            }
+          }
+        },
+        {
+          "description": "`OpenHidrawSecurityKey` response. The hidraw fd is returned via `SCM_RIGHTS` alongside this envelope. The response body carries only the resolved stable selector label (never the raw device path) so the audit log and daemon can correlate the fd to the configured key.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenHidrawSecurityKey"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenHidrawSecurityKeyResponse"
             }
           }
         },
@@ -6509,6 +6547,51 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenHidrawSecurityKeyRequest": {
+      "description": "Broker op that resolves a configured FIDO security-key stable selector and opens the physical hidraw node for `d2bd`. The daemon never names raw hidraw paths; the broker re-derives the node from its trusted bundle copy.",
+      "type": "object",
+      "required": [
+        "selectorId",
+        "vmId"
+      ],
+      "properties": {
+        "selectorId": {
+          "description": "Opaque stable-selector id that the broker resolves against its trusted bundle's security-key device registry.",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "description": "Opaque VM identifier from the trusted manifest.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenHidrawSecurityKeyResponse": {
+      "description": "Confirmation that the broker opened the security-key hidraw node. The hidraw fd itself is returned via `SCM_RIGHTS` on the same seqpacket frame; this body carries only scrubbed metadata.",
+      "type": "object",
+      "required": [
+        "deviceClass",
+        "selectorResolved"
+      ],
+      "properties": {
+        "deviceClass": {
+          "description": "Closed-set device-class label confirming the node is a FIDO-class HID device.",
+          "type": "string"
+        },
+        "selectorResolved": {
+          "description": "The stable selector label that was resolved (no raw path).",
+          "type": "string"
         }
       },
       "additionalProperties": false

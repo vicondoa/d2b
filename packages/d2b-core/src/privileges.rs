@@ -949,6 +949,19 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
+    // Resolves a configured FIDO security-key stable selector, opens
+    // the physical hidraw node as root, and returns the fd via
+    // SCM_RIGHTS. Long-lived CTAPHID session state lives in `d2bd`.
+    row(
+        "OpenHidrawSecurityKey",
+        "security-key",
+        "per-VM/per-selector",
+        &["d2bd"],
+        false,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
     row(
         "OpenDevice",
         "device",

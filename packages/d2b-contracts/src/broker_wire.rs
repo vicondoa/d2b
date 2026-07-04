@@ -43,6 +43,14 @@ pub enum BrokerRequest {
     OpenCgroupDir(OpenCgroupDirRequest),
     OpenDevice(OpenDeviceRequest),
     OpenFuse(OpenFuseRequest),
+    /// Resolve a configured FIDO security-key stable selector from the
+    /// trusted bundle, open the physical hidraw node as root, and
+    /// return the fd to `d2bd` via `SCM_RIGHTS`. `d2bd` manages the
+    /// long-lived CTAPHID relay session; the broker only opens the
+    /// device. The daemon names only `vm_id` and an opaque
+    /// `selector_id` (resolved from the trusted bundle); the broker
+    /// never names raw device paths on the wire.
+    OpenHidrawSecurityKey(OpenHidrawSecurityKeyRequest),
     OpenKvm(OpenKvmRequest),
     /// Enroll a physical USB block device for a qemu-media opaque ref.
     /// The daemon supplies only VM/ref plus the transient sysfs busid; the
@@ -225,6 +233,7 @@ impl BrokerRequest {
             Self::OpenCgroupDir(_) => "OpenCgroupDir",
             Self::OpenDevice(_) => "OpenDevice",
             Self::OpenFuse(_) => "OpenFuse",
+            Self::OpenHidrawSecurityKey(_) => "OpenHidrawSecurityKey",
             Self::OpenKvm(_) => "OpenKvm",
             Self::QemuMediaEnroll(_) => "QemuMediaEnroll",
             Self::QemuMediaRefreshRegistry(_) => "QemuMediaRefreshRegistry",
@@ -501,6 +510,12 @@ pub enum BrokerResponse {
     QemuMediaQuit(QemuMediaLifecycleResponse),
     QemuMediaAttach(QemuMediaHotplugResponse),
     QemuMediaDetach(QemuMediaHotplugResponse),
+    /// `OpenHidrawSecurityKey` response. The hidraw fd is returned via
+    /// `SCM_RIGHTS` alongside this envelope. The response body carries
+    /// only the resolved stable selector label (never the raw device
+    /// path) so the audit log and daemon can correlate the fd to the
+    /// configured key.
+    OpenHidrawSecurityKey(OpenHidrawSecurityKeyResponse),
     /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
@@ -1078,6 +1093,35 @@ pub struct OpenFuseRequest {
     pub role_id: RoleId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Broker op that resolves a configured FIDO security-key stable
+/// selector and opens the physical hidraw node for `d2bd`. The
+/// daemon never names raw hidraw paths; the broker re-derives the
+/// node from its trusted bundle copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenHidrawSecurityKeyRequest {
+    /// Opaque VM identifier from the trusted manifest.
+    pub vm_id: VmId,
+    /// Opaque stable-selector id that the broker resolves against
+    /// its trusted bundle's security-key device registry.
+    pub selector_id: String,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Confirmation that the broker opened the security-key hidraw node.
+/// The hidraw fd itself is returned via `SCM_RIGHTS` on the same
+/// seqpacket frame; this body carries only scrubbed metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenHidrawSecurityKeyResponse {
+    /// The stable selector label that was resolved (no raw path).
+    pub selector_resolved: String,
+    /// Closed-set device-class label confirming the node is a
+    /// FIDO-class HID device.
+    pub device_class: String,
 }
 
 /// The concrete `/var/lib/d2b/vms/<vm>` or `/run/d2b/<vm>` path

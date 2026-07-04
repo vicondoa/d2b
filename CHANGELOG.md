@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `OpenHidrawSecurityKey` broker op: resolves a configured FIDO security-key
+  stable selector, opens the physical `hidraw` node, and passes the fd to `d2bd` via
+  `SCM_RIGHTS`. Includes the privilege-matrix row, audit fields, and dispatch wiring.
+- Added `d2bd::security_key` session management module: CTAPHID relay with CID
+  isolation/translation, a one-active-ceremony-per-key lease state machine (default
+  120s ceremony timeout, 15s queue-wait timeout), length-prefixed 64-byte report
+  framing, and a `SO_PEERCRED`-based per-VM socket peer authentication check. Raw CTAP
+  payloads, PINs, and credential material are never logged.
+
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.

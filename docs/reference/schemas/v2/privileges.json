@@ -162,6 +162,7 @@
             "OpenCgroupDir",
             "OpenDevice",
             "OpenFuse",
+            "OpenHidrawSecurityKey",
             "OpenKvm",
             "OpenPidfd",
             "OpenVhostNet",

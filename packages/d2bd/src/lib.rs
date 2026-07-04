@@ -231,6 +231,13 @@ pub mod daemon_audit;
 /// semaphore + per-VM / global op locks.
 pub mod concurrency;
 
+// Host-side CTAPHID security-key proxy session management: CID
+// isolation/translation, one-ceremony-at-a-time lease state machine,
+// length-prefixed 64-byte report framing, and per-VM socket peer
+// (`SO_PEERCRED`) authentication. Consumes the hidraw fd handed off by
+// `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
+pub mod security_key;
+
 // ADR 0032: compile-only peer-module skeletons wiring the v2
 // constellation provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
