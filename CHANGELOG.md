@@ -182,8 +182,8 @@ deprecations ship one minor release before removal.
 ### Fixed
 
 - Security-key guest udev rules now match the virtual UHID FIDO device by its
-  HID parent identity so Firefox and libfido2 can open the guest `/dev/hidraw*`
-  node without root.
+  HID parent identity and grant the standard `plugdev` browser/FIDO access group
+  so Firefox and libfido2 can open the guest `/dev/hidraw*` node without root.
 - Security-key proxy broker now accepts descriptor-verified FIDO hidraw devices
   even when the host udev group is not one of the fallback FIDO groups. The
   group allowlist remains required only for the descriptor-unreadable fallback

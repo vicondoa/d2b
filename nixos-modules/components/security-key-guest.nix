@@ -4,7 +4,7 @@
 #
 # This module wires:
 #   - The `uhid` kernel module so the frontend binary can open /dev/uhid.
-#   - A `fido` group and udev rules granting group-readable access to
+#   - A `plugdev` group and udev rules granting group-readable access to
 #     /dev/hidraw* nodes so Firefox/libfido2 can access the virtual key
 #     without root.
 #   - The `d2b-sk-frontend` static binary from the framework packages.
@@ -45,19 +45,19 @@ in
     # Load the UHID kernel module so /dev/uhid is available.
     boot.kernelModules = [ "uhid" ];
 
-    # Create the fido group if not already declared.
-    # libfido2 and Firefox use this group for hidraw access.
-    users.groups.fido = { };
+    # Create the plugdev group if not already declared. Workload users that run
+    # browsers/libfido2 should join this same group for hidraw access.
+    users.groups.plugdev = { };
 
-    # udev rule: grant the `fido` group read/write access to the virtual
+    # udev rule: grant the `plugdev` group read/write access to the virtual
     # FIDO/CTAPHID HID raw device created by d2b-sk-frontend.
     #
     # The virtual device is a UHID HID parent whose kernel name encodes the
     # Yubico FIDO vendor/product pair used by d2b-sk-frontend.
     services.udev.extraRules = ''
-      # d2b security-key: grant fido group access to FIDO/CTAPHID HID raw nodes.
+      # d2b security-key: grant plugdev access to FIDO/CTAPHID HID raw nodes.
       # Match the virtual FIDO device created by d2b-sk-frontend.
-      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", SUBSYSTEMS=="hid", KERNELS=="0003:1050:0407.*", GROUP="fido", MODE="0660"
+      KERNEL=="hidraw*", SUBSYSTEM=="hidraw", SUBSYSTEMS=="hid", KERNELS=="0003:1050:0407.*", GROUP="plugdev", MODE="0660"
     '';
 
     # The d2b-sk-frontend service runs as the guest's login user so it has
