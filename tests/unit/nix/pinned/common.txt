@@ -24,7 +24,7 @@ activation-runtime-tmpfiles/state-root-posture
 activation-runtime-tmpfiles/storage-json-has-audio-lock-in-locks-dir
 activation-runtime-tmpfiles/storage-json-has-audio-state-dir
 activation-runtime-tmpfiles/storage-json-has-audio-state-file
-activation-runtime-tmpfiles/store-sync-no-run-dir-install
+activation-runtime-tmpfiles/store-sync-creates-only-run-leaf
 activation-runtime-tmpfiles/store-view-live-dir
 activation-runtime-tmpfiles/tpm-state-perms-tmpfiles-owned
 activation-runtime-tmpfiles/video-dir
