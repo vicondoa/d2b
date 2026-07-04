@@ -69,10 +69,7 @@ pub enum SecurityKeyEvent {
     /// when the CTAP layer transitions to the UP-required state; only
     /// available when the proxy is command-aware.
     #[serde(rename_all = "camelCase")]
-    TouchNeeded {
-        session_id: String,
-        vm_name: String,
-    },
+    TouchNeeded { session_id: String, vm_name: String },
 
     /// Another VM currently holds the security-key lease; this session is
     /// either waiting in the queue or was bumped.
@@ -105,10 +102,7 @@ pub enum SecurityKeyEvent {
 
     /// The ceremony reached the configured timeout without a successful touch.
     #[serde(rename_all = "camelCase")]
-    TimedOut {
-        session_id: String,
-        vm_name: String,
-    },
+    TimedOut { session_id: String, vm_name: String },
 
     /// The ceremony completed with a non-timeout failure.
     #[serde(rename_all = "camelCase")]
@@ -122,17 +116,11 @@ pub enum SecurityKeyEvent {
     /// The ceremony was explicitly canceled via `d2b usb security-key cancel`
     /// or the `Cancel request` notification action.
     #[serde(rename_all = "camelCase")]
-    Canceled {
-        session_id: String,
-        vm_name: String,
-    },
+    Canceled { session_id: String, vm_name: String },
 
     /// A previously active ceremony completed successfully.
     #[serde(rename_all = "camelCase")]
-    Completed {
-        session_id: String,
-        vm_name: String,
-    },
+    Completed { session_id: String, vm_name: String },
 }
 
 impl SecurityKeyEvent {

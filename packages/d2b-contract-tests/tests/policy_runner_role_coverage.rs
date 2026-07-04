@@ -92,6 +92,7 @@ const NON_RUNNER_ROLES: &[&str] = &[
     "SwtpmPreStartFlush",
     "GuestSshReadiness",
     "GuestControlHealth",
+    "SecurityKeyFrontend",
 ];
 
 fn process_role_variants() -> Vec<String> {

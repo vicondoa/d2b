@@ -222,6 +222,8 @@ pub struct VmEntry {
     pub net_vm: Option<String>,
     pub observability: VmObservability,
     pub runtime: RuntimeMetadata,
+    #[serde(default)]
+    pub security_key: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<VmShellMetadata>,
     pub ssh_user: Option<String>,

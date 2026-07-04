@@ -4,11 +4,11 @@
 //! the security-key CLI surface stays byte-stable against committed goldens under
 //! `tests/golden/cli-output/`:
 //!
-//!   * `usb security-key --help` → `usb-security-key-help.txt`
-//!   * `usb security-key cancel --current --dry-run` →
-//!       `usb-security-key-cancel-current-dry-run.txt`
-//!   * `usb security-key test corp-vm --dry-run` →
-//!       `usb-security-key-test-dry-run.txt`
+//! * `usb security-key --help` → `usb-security-key-help.txt`
+//! * `usb security-key cancel --current --dry-run` →
+//!   `usb-security-key-cancel-current-dry-run.txt`
+//! * `usb security-key test corp-vm --dry-run` →
+//!   `usb-security-key-test-dry-run.txt`
 //!
 //! The live (non-dry-run) paths — `status`, `sessions`, `cancel --apply`,
 //! `test <vm>` without `--dry-run` — require a daemon handler that has not
@@ -48,8 +48,14 @@ fn run_sk(fixtures: &str, args: &[&str]) -> std::process::Output {
         .env("D2B_BUNDLE_PATH", format!("{fixtures}/bundle.json"))
         // Point sockets at non-existent paths so dry-run/help paths don't
         // accidentally connect to the operator's live daemon.
-        .env("D2B_PUBLIC_SOCKET", format!("{fixtures}/__missing_public.sock"))
-        .env("D2B_BROKER_SOCKET", format!("{fixtures}/__missing_priv.sock"))
+        .env(
+            "D2B_PUBLIC_SOCKET",
+            format!("{fixtures}/__missing_public.sock"),
+        )
+        .env(
+            "D2B_BROKER_SOCKET",
+            format!("{fixtures}/__missing_priv.sock"),
+        )
         .output()
         .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
 }
@@ -68,8 +74,7 @@ fn assert_matches_golden(out: &std::process::Output, golden_name: &str, what: &s
     let actual = String::from_utf8_lossy(&out.stdout);
     let expected = golden(golden_name);
     assert_eq!(
-        actual,
-        expected,
+        actual, expected,
         "`d2b {what}` drifted from tests/golden/cli-output/{golden_name}:\n\
          --- expected ---\n{expected}\n--- actual ---\n{actual}"
     );
@@ -130,10 +135,7 @@ fn usb_security_key_test_dry_run_matches_golden() {
 // (not the full text) so the golden doesn't need to change when the handler
 // ships.
 
-fn assert_not_yet_implemented_json(
-    out: &std::process::Output,
-    what: &str,
-) {
+fn assert_not_yet_implemented_json(out: &std::process::Output, what: &str) {
     assert_eq!(
         out.status.code(),
         Some(78),

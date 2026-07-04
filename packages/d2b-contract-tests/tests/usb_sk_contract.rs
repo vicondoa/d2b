@@ -16,11 +16,11 @@ use d2b_contracts::{
     broker_wire::BrokerRequest,
     public_wire::{PublicRequest, PublicResponse},
     security_key::{
-        SecurityKeyCancelRequest, SecurityKeyDeviceLabel,
-        SecurityKeyDeviceStatus, SecurityKeyEvent, SecurityKeyLeaseState, SecurityKeyOpenDeviceRequest,
-        SecurityKeySession, SecurityKeySessionId, SecurityKeySessionResult, SecurityKeySessionsResponse,
-        SecurityKeyStatusResponse, SecurityKeyVmSessionState, SecurityKeyVmState,
-        SecurityKeyApplyUdevRulesRequest,
+        SecurityKeyApplyUdevRulesRequest, SecurityKeyCancelRequest, SecurityKeyDeviceLabel,
+        SecurityKeyDeviceStatus, SecurityKeyEvent, SecurityKeyLeaseState,
+        SecurityKeyOpenDeviceRequest, SecurityKeySession, SecurityKeySessionId,
+        SecurityKeySessionResult, SecurityKeySessionsResponse, SecurityKeyStatusResponse,
+        SecurityKeyVmSessionState, SecurityKeyVmState,
     },
 };
 use d2b_core::privileges_w3::W3BrokerOperation;
@@ -341,10 +341,7 @@ fn security_key_operations_in_dispositions_doc() {
     let doc = read_repo_file(DISPOSITIONS_DOC);
 
     for op in ["SecurityKeyOpenDevice", "SecurityKeyApplyUdevRules"] {
-        assert!(
-            doc.contains(op),
-            "{DISPOSITIONS_DOC} missing row for {op}"
-        );
+        assert!(doc.contains(op), "{DISPOSITIONS_DOC} missing row for {op}");
     }
 }
 

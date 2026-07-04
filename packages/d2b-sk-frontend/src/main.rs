@@ -34,9 +34,7 @@ mod vsock;
 use std::io;
 use std::path::PathBuf;
 
-use tokio::io::AsyncWriteExt;
-
-use framing::{CTAPHID_REPORT_LEN, read_frame, write_frame};
+use framing::{read_frame, write_frame};
 use uhid::{UhidDevice, UhidEvent};
 use vsock::{BackoffParams, SK_VSOCK_PORT, connect_with_backoff};
 
@@ -52,8 +50,8 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self, String> {
-        let vm_id = std::env::var("D2B_SK_VM_ID")
-            .map_err(|_| "D2B_SK_VM_ID is required".to_string())?;
+        let vm_id =
+            std::env::var("D2B_SK_VM_ID").map_err(|_| "D2B_SK_VM_ID is required".to_string())?;
         if vm_id.is_empty() {
             return Err("D2B_SK_VM_ID must not be empty".into());
         }
@@ -138,10 +136,7 @@ async fn relay_loop(dev: &mut UhidDevice, config: &Config, backoff: BackoffParam
         let stream = connect_with_backoff(config.vsock_port, backoff, &config.vm_id).await;
         let (mut vsock_rx, mut vsock_tx) = tokio::io::split(stream);
 
-        eprintln!(
-            "[d2b-sk-frontend/{}] relay active",
-            config.vm_id
-        );
+        eprintln!("[d2b-sk-frontend/{}] relay active", config.vm_id);
 
         match run_relay(dev, &mut vsock_rx, &mut vsock_tx, &config.vm_id).await {
             RelayOutcome::VsockDisconnected => {
@@ -241,8 +236,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use framing::write_frame;
-    use tokio::io::BufReader;
+    use framing::{CTAPHID_REPORT_LEN, write_frame};
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     /// Verify that a framed report flowing vsock→UHID reaches the correct
     /// UHID INPUT2 bytes via the relay's host→guest path.

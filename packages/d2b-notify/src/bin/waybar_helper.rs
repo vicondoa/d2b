@@ -28,7 +28,9 @@ use d2b_notify::{
 const DEFAULT_STATE_PATH: &str = "/run/d2b/notify/sk-state.json";
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_STATE_PATH.to_owned());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_STATE_PATH.to_owned());
 
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,

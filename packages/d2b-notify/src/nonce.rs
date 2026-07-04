@@ -244,10 +244,7 @@ mod tests {
 
     const BASE_TIME: u64 = 1_750_000_000;
 
-    fn store_with_nonce(
-        session_id: &str,
-        action_key: &str,
-    ) -> (ActionNonceStore, String) {
+    fn store_with_nonce(session_id: &str, action_key: &str) -> (ActionNonceStore, String) {
         let mut store = ActionNonceStore::new();
         let token = store
             .register(session_id, action_key, BASE_TIME)

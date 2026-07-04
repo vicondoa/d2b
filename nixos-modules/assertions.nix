@@ -1309,9 +1309,9 @@ let
   # Known FIDO/CTAP-class vendor IDs (decimal). Must stay in sync with
   # options-host.nix's `knownFidoVendorIds` list.
   knownFidoVendorIds = [
-    0x1050 0x096e 0x2c97 0x20a0 0x3183 0x0483
-    0x2581 0x1a44 0x0a5c 0x18d1 0x10c4 0x04e6
-    0x04f3 0x24dc
+    4176 2414 11415 8352 12675 1155
+    9601 6724 2652 6353 4292 1254
+    1267 9436
   ];
 
   # A — per-VM security-key requires host enable.

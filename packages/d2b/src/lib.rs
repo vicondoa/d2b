@@ -8590,10 +8590,7 @@ fn cmd_usb_sk_status(_context: &Context, args: &UsbSkStatusArgs) -> Result<i32, 
 
 fn cmd_usb_sk_sessions(_context: &Context, args: &UsbSkSessionsArgs) -> Result<i32, CliFailure> {
     let json_mode = usb_sk_json_mode(args.json, args.human);
-    emit_host_error(
-        &usb_sk_not_yet_implemented_envelope("sessions"),
-        json_mode,
-    )
+    emit_host_error(&usb_sk_not_yet_implemented_envelope("sessions"), json_mode)
 }
 
 fn cmd_usb_sk_cancel(_context: &Context, args: &UsbSkCancelArgs) -> Result<i32, CliFailure> {
@@ -8608,19 +8605,23 @@ fn cmd_usb_sk_cancel(_context: &Context, args: &UsbSkCancelArgs) -> Result<i32, 
     }
 
     // Require exactly one of: --dry-run or --apply.
-    let flags = require_mutation_flag("usb security-key cancel", args.dry_run, args.apply, json_mode)?;
+    let flags = require_mutation_flag(
+        "usb security-key cancel",
+        args.dry_run,
+        args.apply,
+        json_mode,
+    )?;
 
     let target = if args.current {
         "current".to_owned()
     } else {
-        args.session_id.clone().unwrap_or_else(|| "current".to_owned())
+        args.session_id
+            .clone()
+            .unwrap_or_else(|| "current".to_owned())
     };
 
     if flags.apply {
-        return emit_host_error(
-            &usb_sk_not_yet_implemented_envelope("cancel"),
-            json_mode,
-        );
+        return emit_host_error(&usb_sk_not_yet_implemented_envelope("cancel"), json_mode);
     }
 
     // --dry-run: emit the planned action without contacting the daemon.

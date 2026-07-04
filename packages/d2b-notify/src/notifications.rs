@@ -105,7 +105,11 @@ pub fn sanitize(input: &str, max_chars: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Build the notification for a [`SecurityKeyEvent::Started`] event.
-pub fn started(vm_name: &str, rp_id: Option<&str>, actions: Vec<NotificationAction>) -> Notification {
+pub fn started(
+    vm_name: &str,
+    rp_id: Option<&str>,
+    actions: Vec<NotificationAction>,
+) -> Notification {
     let vm = sanitize(vm_name, 64);
     let body = match rp_id {
         Some(rp) => format!(
@@ -137,9 +141,7 @@ pub fn busy(vm_name: &str, detail: &BusyDetail, actions: Vec<NotificationAction>
     let holder = sanitize(&detail.holder_vm, 64);
     Notification {
         summary: "Security key busy".to_owned(),
-        body: format!(
-            "{vm} is waiting — {holder} is currently using the security key."
-        ),
+        body: format!("{vm} is waiting — {holder} is currently using the security key."),
         actions,
     }
 }
@@ -176,7 +178,11 @@ pub fn canceled(vm_name: &str) -> Notification {
 }
 
 /// Build the notification for a [`SecurityKeyEvent::Blocked`] event.
-pub fn blocked(vm_name: &str, reason: &BlockReason, actions: Vec<NotificationAction>) -> Notification {
+pub fn blocked(
+    vm_name: &str,
+    reason: &BlockReason,
+    actions: Vec<NotificationAction>,
+) -> Notification {
     let vm = sanitize(vm_name, 64);
     let reason_text = match reason {
         BlockReason::KeyNotPresent => "the security key is not present",
@@ -210,11 +216,17 @@ pub fn emit_for_event<N: Notifier>(
             started(vm_name, rp_id.as_deref(), actions)
         }
         SecurityKeyEvent::TouchNeeded { vm_name, .. } => touch_needed(vm_name, actions),
-        SecurityKeyEvent::Busy { vm_name, detail, .. } => busy(vm_name, detail, actions),
+        SecurityKeyEvent::Busy {
+            vm_name, detail, ..
+        } => busy(vm_name, detail, actions),
         SecurityKeyEvent::TimedOut { vm_name, .. } => timed_out(vm_name, actions),
-        SecurityKeyEvent::Failed { vm_name, reason, .. } => failed(vm_name, reason, actions),
+        SecurityKeyEvent::Failed {
+            vm_name, reason, ..
+        } => failed(vm_name, reason, actions),
         SecurityKeyEvent::Canceled { vm_name, .. } => canceled(vm_name),
-        SecurityKeyEvent::Blocked { vm_name, reason, .. } => blocked(vm_name, reason, actions),
+        SecurityKeyEvent::Blocked {
+            vm_name, reason, ..
+        } => blocked(vm_name, reason, actions),
         // Queued and Completed are handled by is_user_visible() returning false above.
         SecurityKeyEvent::Queued { .. } | SecurityKeyEvent::Completed { .. } => return,
     };
@@ -298,7 +310,10 @@ mod tests {
             vm_name: "vm1".to_owned(),
         };
         emit_for_event(&mut rec, &completed, no_actions());
-        assert!(rec.notifications.is_empty(), "Completed must not emit a notification");
+        assert!(
+            rec.notifications.is_empty(),
+            "Completed must not emit a notification"
+        );
 
         let queued = SecurityKeyEvent::Queued {
             session_id: "s1".to_owned(),
@@ -306,7 +321,10 @@ mod tests {
             queue_position: 1,
         };
         emit_for_event(&mut rec, &queued, no_actions());
-        assert!(rec.notifications.is_empty(), "Queued must not emit a notification");
+        assert!(
+            rec.notifications.is_empty(),
+            "Queued must not emit a notification"
+        );
     }
 
     #[test]
@@ -377,8 +395,14 @@ mod tests {
             emit_for_event(&mut rec, event, no_actions());
         }
         for n in &rec.notifications {
-            assert!(!n.body.contains('\n'), "notification body must not contain newline");
-            assert!(!n.summary.contains('\n'), "notification summary must not contain newline");
+            assert!(
+                !n.body.contains('\n'),
+                "notification body must not contain newline"
+            );
+            assert!(
+                !n.summary.contains('\n'),
+                "notification summary must not contain newline"
+            );
         }
     }
 }

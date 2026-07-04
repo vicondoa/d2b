@@ -16,21 +16,20 @@ let
   #
   # Sources: FIDO Alliance member list + common CTAP2 authenticator vendors.
   knownFidoVendorIds = [
-    0x1050 # Yubico
-    0x096e # Feitian Technologies
-    0x2c97 # Ledger
-    0x20a0 # Clay Logic / Nitrokey
-    0x3183 # NEOWAVE
-    0x0483 # STMicroelectronics (used by several OTP tokens)
-    0x2581 # Plug-up International (Ledger Nano S)
-    0x1a44 # VASCO / OneSpan
-    0x0a5c # Broadcom / BRCM Bluetooth
-    0x18d1 # Google (Titan Key)
-    0x10c4 # Silicon Labs (used by some security keys)
-    0x04e6 # SCM Microsystems / identOS
-    0x04f3 # Elan Microelectronics (touch FIDO keys)
-    0x24dc # JNSE / JMicron FIDO
-    0x0483 # STMicro (overlaps; listed once, kept for clarity)
+    4176 # 0x1050, Yubico
+    2414 # 0x096e, Feitian Technologies
+    11415 # 0x2c97, Ledger
+    8352 # 0x20a0, Clay Logic / Nitrokey
+    12675 # 0x3183, NEOWAVE
+    1155 # 0x0483, STMicroelectronics
+    9601 # 0x2581, Plug-up International
+    6724 # 0x1a44, VASCO / OneSpan
+    2652 # 0x0a5c, Broadcom / BRCM Bluetooth
+    6353 # 0x18d1, Google / Titan Key
+    4292 # 0x10c4, Silicon Labs
+    1254 # 0x04e6, SCM Microsystems / identOS
+    1267 # 0x04f3, Elan Microelectronics
+    9436 # 0x24dc, JNSE / JMicron FIDO
   ];
 
   # Sub-type for one stable selector entry under `d2b.host.usb.securityKey.devices`.
@@ -42,7 +41,7 @@ let
     options = {
       vendorId = lib.mkOption {
         type = lib.types.ints.between 1 65535;
-        example = 0x1050;
+        example = 4176;
         description = ''
           USB vendor ID of the FIDO/CTAP security key (decimal integer or
           `0x`-prefixed hex literal). Must identify a device in the
@@ -57,7 +56,7 @@ let
 
       productId = lib.mkOption {
         type = lib.types.ints.between 1 65535;
-        example = 0x0407;
+        example = 1031;
         description = ''
           USB product ID of the security key. Together with
           `vendorId`, this pins the selector to a specific device model.
@@ -121,8 +120,8 @@ in
         [
           {
             label     = "yubikey-primary";
-            vendorId  = 0x1050;   # Yubico
-            productId = 0x0407;   # YubiKey 5 NFC
+            vendorId  = 4176;     # 0x1050, Yubico
+            productId = 1031;     # 0x0407, YubiKey 5 NFC
             serial    = null;     # match any serial
           }
         ]
@@ -145,4 +144,4 @@ in
     };
 
   };
-};
+}

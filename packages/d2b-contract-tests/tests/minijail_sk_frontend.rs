@@ -90,12 +90,8 @@ fn sk_frontend_profile_block_exists() {
 #[test]
 fn sk_frontend_profile_role_correct() {
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
-    let block = extract_block(
-        &src,
-        r#"profileIdFor name "sk-frontend""#,
-        r"^\s*};\s*$",
-    )
-    .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
+    let block = extract_block(&src, r#"profileIdFor name "sk-frontend""#, r"^\s*};\s*$")
+        .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
 
     assert!(
         any_line_matches(&block, r#"role\s*=\s*"security-key-frontend""#),
@@ -109,12 +105,8 @@ fn sk_frontend_profile_role_correct() {
 #[test]
 fn sk_frontend_profile_has_seccomp_policy_ref() {
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
-    let block = extract_block(
-        &src,
-        r#"profileIdFor name "sk-frontend""#,
-        r"^\s*};\s*$",
-    )
-    .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
+    let block = extract_block(&src, r#"profileIdFor name "sk-frontend""#, r"^\s*};\s*$")
+        .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
 
     assert!(
         any_line_matches(&block, r#"seccompPolicyRef\s*="#),
@@ -129,12 +121,8 @@ fn sk_frontend_profile_has_seccomp_policy_ref() {
 #[test]
 fn sk_frontend_profile_no_host_capabilities() {
     let src = read_repo_file(MINIJAIL_PROFILES_NIX);
-    let block = extract_block(
-        &src,
-        r#"profileIdFor name "sk-frontend""#,
-        r"^\s*};\s*$",
-    )
-    .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
+    let block = extract_block(&src, r#"profileIdFor name "sk-frontend""#, r"^\s*};\s*$")
+        .expect("could not extract sk-frontend profile block from minijail-profiles.nix");
 
     assert!(
         !any_line_matches(&block, r"capabilities\s*="),

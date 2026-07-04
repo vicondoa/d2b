@@ -122,7 +122,11 @@ fn derive_overall_status(state: &SkNotifyState) -> SkOverallStatus {
     if state.active.is_empty() {
         return SkOverallStatus::Idle;
     }
-    if state.active.iter().any(|s| s.last_event_kind == "touchNeeded") {
+    if state
+        .active
+        .iter()
+        .any(|s| s.last_event_kind == "touchNeeded")
+    {
         return SkOverallStatus::TouchNeeded;
     }
     if state.active.iter().any(|s| s.last_event_kind == "busy") {
@@ -223,7 +227,10 @@ mod tests {
             invocations += 1;
             vec![]
         });
-        assert_eq!(invocations, 2, "action builder must be called once per active ceremony");
+        assert_eq!(
+            invocations, 2,
+            "action builder must be called once per active ceremony"
+        );
     }
 
     #[test]

@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 /// cancellation, or timeout. The opaque string format is
 /// `sk-<vm>-<monotonic-counter>` on the host side; callers must
 /// treat it as opaque.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 pub struct SecurityKeySessionId(pub String);
 
@@ -62,7 +64,9 @@ impl SecurityKeySessionId {
 ///
 /// Must match `^[a-z][a-z0-9-]{0,62}$` — same constraint as the NixOS
 /// option `d2b.host.usb.securityKey.devices[].label`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 pub struct SecurityKeyDeviceLabel(pub String);
 
@@ -324,7 +328,9 @@ pub enum SecurityKeyEvent {
     },
     /// The physical security key was re-inserted and the broker can open
     /// it again.
-    DeviceReinserted { device_label: SecurityKeyDeviceLabel },
+    DeviceReinserted {
+        device_label: SecurityKeyDeviceLabel,
+    },
     /// A VM queued a CTAP request and is waiting for the current lease
     /// holder to finish (lease contention).
     SessionQueued {
@@ -432,8 +438,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&resp).expect("serialize");
-        let decoded: SecurityKeyStatusResponse =
-            serde_json::from_str(&json).expect("deserialize");
+        let decoded: SecurityKeyStatusResponse = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(resp, decoded);
     }
 
@@ -505,8 +510,7 @@ mod tests {
     #[test]
     fn cancel_request_defaults_to_not_cancel_current() {
         let json = r#"{"sessionId": "sk-corp-vm-1"}"#;
-        let req: SecurityKeyCancelRequest =
-            serde_json::from_str(json).expect("deserialize");
-        assert_eq!(req.cancel_current, false);
+        let req: SecurityKeyCancelRequest = serde_json::from_str(json).expect("deserialize");
+        assert!(!req.cancel_current);
     }
 }

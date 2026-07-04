@@ -3258,6 +3258,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
                     ssh_user: Some("alice".to_owned()),

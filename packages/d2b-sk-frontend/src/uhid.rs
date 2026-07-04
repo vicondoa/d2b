@@ -189,10 +189,7 @@ impl UhidDevice {
     }
 
     /// Inject a 64-byte CTAPHID input report (token response → browser).
-    pub async fn send_input_report(
-        &mut self,
-        data: &[u8; CTAPHID_REPORT_LEN],
-    ) -> io::Result<()> {
+    pub async fn send_input_report(&mut self, data: &[u8; CTAPHID_REPORT_LEN]) -> io::Result<()> {
         let buf = build_input2_event(data);
         self.file.write_all(&buf).await
     }
@@ -317,7 +314,10 @@ mod tests {
         // rd_data starts at offset: 260(rd_size offset) + 2(rd_size) + 1(bus) + 4(vendor)
         //   + 4(product) + 4(version) + 4(country) = 279
         let rd_start = 4 + 128 + 64 + 64 + 2 + 1 + 4 + 4 + 4 + 4;
-        assert_eq!(&buf[rd_start..rd_start + FIDO_HID_DESCRIPTOR.len()], FIDO_HID_DESCRIPTOR);
+        assert_eq!(
+            &buf[rd_start..rd_start + FIDO_HID_DESCRIPTOR.len()],
+            FIDO_HID_DESCRIPTOR
+        );
     }
 
     #[test]

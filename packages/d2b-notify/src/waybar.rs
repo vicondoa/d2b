@@ -53,9 +53,10 @@ pub fn waybar_block_from_state(state: &SkNotifyState) -> WaybarBlock {
     }
 
     let count = state.active.len();
-    let has_touch = state.active.iter().any(|s| {
-        s.last_event_kind == "touchNeeded" || s.last_event_kind == "started"
-    });
+    let has_touch = state
+        .active
+        .iter()
+        .any(|s| s.last_event_kind == "touchNeeded" || s.last_event_kind == "started");
     let has_busy = state.active.iter().any(|s| s.last_event_kind == "busy");
 
     let (icon, css_class) = if has_touch {
@@ -67,7 +68,7 @@ pub fn waybar_block_from_state(state: &SkNotifyState) -> WaybarBlock {
     };
 
     let text = if count == 1 {
-        format!("{icon}")
+        icon.to_owned()
     } else {
         format!("{icon} {count}")
     };
@@ -172,20 +173,22 @@ mod tests {
                 T0 + 1,
             );
         let block = waybar_block_from_state(&state);
-        assert!(block.text.contains('2'), "count should appear for 2 active ceremonies");
+        assert!(
+            block.text.contains('2'),
+            "count should appear for 2 active ceremonies"
+        );
     }
 
     #[test]
     fn tooltip_lists_active_vm_names() {
-        let state = SkNotifyState::empty(T0)
-            .apply(
-                &SecurityKeyEvent::Started {
-                    session_id: "s1".to_owned(),
-                    vm_name: "personal-dev".to_owned(),
-                    rp_id: None,
-                },
-                T0,
-            );
+        let state = SkNotifyState::empty(T0).apply(
+            &SecurityKeyEvent::Started {
+                session_id: "s1".to_owned(),
+                vm_name: "personal-dev".to_owned(),
+                rp_id: None,
+            },
+            T0,
+        );
         let block = waybar_block_from_state(&state);
         let tooltip = block.tooltip.unwrap();
         assert!(tooltip.contains("personal-dev"));

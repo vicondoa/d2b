@@ -285,7 +285,9 @@ impl LeaseState {
         match self {
             Self::Available => false,
             Self::Leased {
-                started_at, timeout, ..
+                started_at,
+                timeout,
+                ..
             } => started_at.elapsed() > *timeout,
         }
     }
@@ -404,7 +406,9 @@ pub struct HidrawDevice {
 
 impl HidrawDevice {
     pub fn from_owned_fd(fd: OwnedFd) -> Self {
-        Self { file: File::from(fd) }
+        Self {
+            file: File::from(fd),
+        }
     }
 
     /// Blocking read of a single 64-byte CTAPHID report from the
@@ -493,16 +497,14 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
     expected_gid: u32,
 ) -> Result<(), PeerAuthError> {
     use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    let peer = getsockopt(socket, PeerCredentials).map_err(|err| PeerAuthError::PeerCredentialIo {
-        detail: err.to_string(),
-    })?;
+    let peer =
+        getsockopt(socket, PeerCredentials).map_err(|err| PeerAuthError::PeerCredentialIo {
+            detail: err.to_string(),
+        })?;
     let peer_uid = peer.uid();
     let peer_gid = peer.gid();
     if peer_uid != expected_uid || peer_gid != expected_gid {
-        return Err(PeerAuthError::PeerCredentialMismatch {
-            peer_uid,
-            peer_gid,
-        });
+        return Err(PeerAuthError::PeerCredentialMismatch { peer_uid, peer_gid });
     }
     Ok(())
 }

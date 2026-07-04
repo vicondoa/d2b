@@ -1563,6 +1563,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "OpenHidrawSecurityKey",
+    "subject": "security-key",
+    "scope": "per-VM/per-selector",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "SecurityKeyApplyUdevRules",
     "subject": "security-key/udev",
     "scope": "host",

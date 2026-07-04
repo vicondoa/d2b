@@ -56,8 +56,8 @@ pub async fn connect_with_backoff(port: u32, params: BackoffParams, vm_id: &str)
                     "[d2b-sk-frontend/{vm_id}] vsock connect error: {e}; retry in {}s",
                     wait.as_secs()
                 );
-                let next_wait_secs = (wait.as_secs_f64() * params.factor)
-                    .min(params.max.as_secs_f64());
+                let next_wait_secs =
+                    (wait.as_secs_f64() * params.factor).min(params.max.as_secs_f64());
                 wait = Duration::from_secs_f64(next_wait_secs);
             }
         }

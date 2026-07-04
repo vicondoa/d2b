@@ -35,9 +35,7 @@ where
     if len != CTAPHID_REPORT_LEN {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "framing: expected length {CTAPHID_REPORT_LEN}, got {len}"
-            ),
+            format!("framing: expected length {CTAPHID_REPORT_LEN}, got {len}"),
         ));
     }
     let mut payload = [0u8; CTAPHID_REPORT_LEN];
@@ -46,10 +44,7 @@ where
 }
 
 /// Write one framed CTAPHID report to `writer`.
-pub async fn write_frame<W>(
-    writer: &mut W,
-    data: &[u8; CTAPHID_REPORT_LEN],
-) -> io::Result<()>
+pub async fn write_frame<W>(writer: &mut W, data: &[u8; CTAPHID_REPORT_LEN]) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
