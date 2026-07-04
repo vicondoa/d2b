@@ -811,28 +811,18 @@ in
         };
 
         usb.securityKey.enable = lib.mkEnableOption ''
-          USB security-key proxy for this VM.
+          CTAPHID security-key proxy for this VM. Creates a virtual FIDO2
+          HID device inside the guest via the Linux UHID interface and
+          relays 64-byte CTAPHID reports over an AF_VSOCK connection to
+          the d2b host broker, which serialises access to the physical
+          security key. This allows Firefox and libfido2 inside the guest
+          to perform WebAuthn ceremonies without raw USB passthrough.
 
-          When enabled, the d2b daemon will supervise a per-VM CTAP HID
-          frontend that creates a virtual FIDO security-key device
-          (`/dev/hidraw*`) inside the guest via `/dev/uhid`. Firefox and
-          other CTAP2-capable browsers in the guest will see it as a
-          local security key.
-
-          Requirements:
-          - `d2b.host.usb.securityKey.enable = true` must be set; the
-            eval-time assertion in `assertions.nix` enforces this.
-          - At least one device selector must be present in
-            `d2b.host.usb.securityKey.devices`.
-          - This VM must NOT also set `usbip.yubikey = true` for any
-            device also listed in the host security-key selector set;
-            security-key proxy and YubiKey USBIP are mutually exclusive
-            in phase 1 (enforced by the eval assertion).
-
-          The virtual device is named "d2b security key" inside the
-          guest. It is created at VM start and destroyed on clean
-          shutdown; Firefox's normal WebAuthn UI drives the interaction
-          without requiring any VM-side configuration.
+          Requires `d2b.host.usb.securityKey.enable = true` at the site
+          level (enforced by an eval-time assertion). Mutually exclusive
+          with `usbip.yubikey` for the same VM — both cannot be declared
+          simultaneously (enforced by an eval-time assertion). Only
+          supported for `runtime.kind = "nixos"` VMs.
         '';
 
         audio.enable = lib.mkEnableOption ''

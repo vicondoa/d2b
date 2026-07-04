@@ -47,6 +47,7 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "usbip",
     "usbipYubikey",
     "usbipdHostIp",
+    "securityKey",
     "observability",
     // `observability.enabled` (public-safe boolean) is nested under the per-VM
     // `observability` object in the current manifest; the bash allowlist

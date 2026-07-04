@@ -182,6 +182,13 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         "wayland_proxy_argv",
         RegeneratorWiring::NotYetWired,
     ),
+    row(
+        SecurityKeyFrontend,
+        RunnerLifecycleClass::ReadinessOnly,
+        None,
+        "runner_process::security_key_frontend",
+        RegeneratorWiring::NotYetWired,
+    ),
 ];
 
 const fn row(
@@ -221,6 +228,7 @@ pub const fn runner_process_metadata(role: &ProcessRole) -> &'static RunnerProce
         GuestControlHealth => &RUNNER_PROCESS_MATRIX[14],
         Usbip => &RUNNER_PROCESS_MATRIX[15],
         WaylandProxy => &RUNNER_PROCESS_MATRIX[16],
+        SecurityKeyFrontend => &RUNNER_PROCESS_MATRIX[17],
     }
 }
 
@@ -246,6 +254,7 @@ mod tests {
         GuestControlHealth,
         Usbip,
         WaylandProxy,
+        SecurityKeyFrontend,
     ];
 
     #[test]

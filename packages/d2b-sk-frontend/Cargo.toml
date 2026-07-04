@@ -1,0 +1,14 @@
+[package]
+name = "d2b-sk-frontend"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "d2b guest-side virtual FIDO/security-key UHID frontend"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
+tokio-vsock = "0.7.2"

@@ -221,6 +221,11 @@ pub enum ProcessRole {
     GuestControlHealth,
     /// USBIP proxy or attach helper.
     Usbip,
+    /// Guest-side CTAPHID relay frontend via UHID virtual HID device and
+    /// AF_VSOCK transport. Runs inside the guest VM and visible to the host
+    /// DAG as a component-specific role node that gates the broker vsock
+    /// endpoint readiness.
+    SecurityKeyFrontend,
     /// Host-jailed Wayland proxy. Runs as `d2b-<vm>-wlproxy`
     /// with the real host compositor socket bound read/write at a fixed
     /// in-jail upstream path and the per-VM proxy socket at

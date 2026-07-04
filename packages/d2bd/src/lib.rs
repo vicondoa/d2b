@@ -9509,7 +9509,8 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth => VmStartNodeMode::ReadinessOnly,
+        | ProcessRole::GuestControlHealth
+        | ProcessRole::SecurityKeyFrontend => VmStartNodeMode::ReadinessOnly,
     }
 }
 

@@ -611,8 +611,8 @@ shared.mkBatch {
           d2b.host.usb.securityKey.devices = [
             {
               label = "yubikey-primary";
-              vendorId = 0x1050;
-              productId = 0x0407;
+              vendorId = 4176; # 0x1050
+              productId = 1031; # 0x0407
             }
           ];
           d2b.site.yubikey.enable = lib.mkForce true;
@@ -633,8 +633,8 @@ shared.mkBatch {
           d2b.host.usb.securityKey.devices = [
             {
               label = "unknown-device";
-              vendorId = 0x1234; # not a known FIDO vendor
-              productId = 0x5678;
+              vendorId = 4660; # 0x1234, not a known FIDO vendor
+              productId = 22136; # 0x5678
             }
           ];
         }
@@ -651,15 +651,40 @@ shared.mkBatch {
           d2b.host.usb.securityKey.devices = [
             {
               label = "same-label";
-              vendorId = 0x1050;
-              productId = 0x0407;
+              vendorId = 4176;
+              productId = 1031;
             }
             {
               label = "same-label"; # duplicate
-              vendorId = 0x1050;
-              productId = 0x0408;
+              vendorId = 4176;
+              productId = 1032;
             }
           ];
+        }
+      );
+    };
+
+    # security-key + usbip.yubikey mutual exclusion (both claim FIDO2 endpoint).
+    "security-key-yubikey-conflict" = {
+      expectedSubstring = "usbip.yubikey = true and";
+      override = (
+        { ... }:
+        {
+          d2b.vms.corp-vm.usbip.yubikey = true;
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+          d2b.vms.corp-vm.guest.control.enable = true;
+        }
+      );
+    };
+
+    # security-key + qemu-media runtime conflict.
+    "security-key-qemu-media-conflict" = {
+      expectedSubstring = "runtime.kind = \"qemu-media\" is incompatible";
+      override = (
+        { ... }:
+        {
+          d2b.vms.corp-vm.runtime.kind = "qemu-media";
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
         }
       );
     };

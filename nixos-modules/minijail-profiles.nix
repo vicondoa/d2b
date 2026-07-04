@@ -677,14 +677,24 @@ let
         profileId = profileIdFor name "usbip";
         role = "usbip";
         principal = "d2bd";
-        # kernel-r2-4 corrected per-role cap matrix: Usbip = CAP_NET_RAW
-        # only (raw socket needed by the usbipd proxy bind on the host
-        # side; the per-busid sysfs bind/unbind is sysfs-write only and
-        # runs under the broker's privileged step, not under this
-        # profile).
         capabilities = [ "CAP_NET_RAW" ];
         seccompPolicyRef = "w1-usbip";
         cgroupSubtree = "d2b.slice/${name}/usbip";
+        controllers = serviceControllers;
+      };
+    }
+    // lib.optionalAttrs vm.usb.securityKey.enable {
+      # sk-frontend profile: this is a no-runner tracking node on the host.
+      # d2bd itself handles readiness probing (watching the vsock socket
+      # that the host broker creates). No process is spawned on the host
+      # side from this profile; the actual frontend runs inside the guest.
+      # Empty capabilities: the daemon only watches a path, no device access.
+      "${profileIdFor name "sk-frontend"}" = mkProfile {
+        profileId = profileIdFor name "sk-frontend";
+        role = "security-key-frontend";
+        principal = "d2bd";
+        seccompPolicyRef = "w1-guest-control-health";
+        cgroupSubtree = "d2b.slice/${name}/sk-frontend";
         controllers = serviceControllers;
       };
     };

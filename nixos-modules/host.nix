@@ -208,6 +208,7 @@ in
           ++ lib.optional vm'.graphics.enable ./components/graphics.nix
           ++ lib.optional vm'.tpm.enable ./components/tpm.nix
           ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
+          ++ lib.optional vm'.usb.securityKey.enable ./components/security-key-guest.nix
           ++ lib.optional vm'.audio.enable ./components/audio/guest.nix
           ++ lib.optional vm'.audit.enable ./components/audit.nix
           ++ lib.optional (vm'.graphics.enable && vm'.graphics.videoSidecar) ./components/video/guest.nix
