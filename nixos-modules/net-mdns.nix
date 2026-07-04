@@ -2,7 +2,7 @@
 
 let
   m = envMeta;
-  mdns = m.homeLan.mdns;
+  mdns = m.externalNetwork.mdns;
   avahiEnabled = mdns.enable || mdns.dnsmasqLocal.enable;
   bridgeEnabled = mdns.dnsmasqLocal.enable;
   bridgePort = mdns.dnsmasqLocal.port;
@@ -180,7 +180,7 @@ in
       enable = true;
       reflector = mdns.enable && mdns.reflector.enable;
       openFirewall = false;
-      allowInterfaces = [ "home0" "eth1" ];
+      allowInterfaces = [ "external0" "eth1" ];
       nssmdns4 = false;
       nssmdns6 = false;
     };

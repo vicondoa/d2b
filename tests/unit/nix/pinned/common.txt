@@ -391,7 +391,7 @@ net-vm-network/eth-dhcp-match-type-not-ether
 net-vm-network/home-lan-ch-argv-uses-macvtap-fd
 net-vm-network/home-lan-guest-dhcp
 net-vm-network/home-lan-guest-dhcp-routes-ignored
-net-vm-network/home-lan-guest-renamed-home0
+net-vm-network/home-lan-guest-renamed-external0
 net-vm-network/home-lan-host-json-contract
 net-vm-network/home-lan-host-nm-unmanaged-macvtap-only
 net-vm-network/home-lan-net-vm-macvtap-mode
@@ -437,7 +437,7 @@ net-vm-network/safe-home-lan-default-off
 net-vm-network/safe-lan-bridge-isolated-default
 net-vm-network/safe-net-avahi-disabled
 net-vm-network/safe-net-mdns-eth1-input-rule-absent
-net-vm-network/safe-net-mdns-home0-input-rule-absent
+net-vm-network/safe-net-mdns-external0-input-rule-absent
 net-vm-network/safe-net-mdns-local-resolver-service-absent
 net-vm-network/safe-nft-egress-accept-present
 net-vm-network/safe-nft-lan-to-lan-forward-absent
@@ -461,11 +461,13 @@ net-vm-network/work-net-avahi-open-firewall-disabled
 net-vm-network/work-net-avahi-reflector-enabled
 net-vm-network/work-net-dnsmasq-local-forward
 net-vm-network/work-net-mdns-eth1-input-rule
-net-vm-network/work-net-mdns-home0-input-rule
+net-vm-network/work-net-mdns-external0-input-rule
 net-vm-network/work-net-mdns-local-resolver-service
 net-vm-network/work-nft-egress-accept-present
 net-vm-network/work-nft-home-dhcp-client-only
 net-vm-network/work-nft-home-egress-accept-present
+net-vm-network/work-nft-home-egress-eth0-drop-before-internet
+net-vm-network/work-nft-home-egress-eth0-drop-guard-present
 net-vm-network/work-nft-home-egress-masquerade-present
 net-vm-network/work-nft-home-port-forward-dnat-present
 net-vm-network/work-nft-home-port-forward-filter-present

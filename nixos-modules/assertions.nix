@@ -940,10 +940,10 @@ let
       ])
     cfg.envs;
 
-  homeLanAssertions = lib.flatten (lib.mapAttrsToList
+  externalNetworkAssertions = lib.flatten (lib.mapAttrsToList
     (envName: env:
       let
-        homeLan = env.homeLan;
+        externalNetwork = env.externalNetwork;
         peerEnvCidrs = lib.flatten (lib.mapAttrsToList
           (peerName: peer:
             lib.optionals (peerName != envName) [
@@ -954,7 +954,7 @@ let
         sameEnvTargets = cfg._index.workloadNamesByEnv.${envName} or [ ];
         portForwards = lib.imap0
           (i: forward: { inherit i forward; })
-          homeLan.portForwards;
+          externalNetwork.portForwards;
         overlapsPeer = cidr:
           map
             (peer: {
@@ -965,7 +965,7 @@ let
             (lib.filter (peer: cidrOverlaps cidr peer.cidr) peerEnvCidrs);
         egressPeerOverlaps =
           lib.concatMap overlapsPeer
-            (lib.optionals homeLan.egress.enable homeLan.egress.allowedCidrs);
+            (lib.optionals externalNetwork.egress.enable externalNetwork.egress.allowedCidrs);
         portForwardPeerOverlaps = lib.flatten (map
           ({ i, forward }:
             map
@@ -975,41 +975,41 @@ let
       in
       [
         {
-          assertion = !(homeLan.attachment.enable && homeLan.attachment.interface == null);
+          assertion = !(externalNetwork.attachment.enable && externalNetwork.attachment.interface == null);
           message = ''
-            d2b.envs.${envName}.homeLan.attachment.enable requires an
-            explicit d2b.envs.${envName}.homeLan.attachment.interface.
+            d2b.envs.${envName}.externalNetwork.attachment.enable requires an
+            explicit d2b.envs.${envName}.externalNetwork.attachment.interface.
           '';
         }
         {
-          assertion = !(homeLan.attachment.enable
-            && homeLan.attachment.interface != null
-            && builtins.match "^[A-Za-z0-9_-]{1,15}$" homeLan.attachment.interface == null);
+          assertion = !(externalNetwork.attachment.enable
+            && externalNetwork.attachment.interface != null
+            && builtins.match "^[A-Za-z0-9_-]{1,15}$" externalNetwork.attachment.interface == null);
           message = ''
-            d2b.envs.${envName}.homeLan.attachment.interface must match
+            d2b.envs.${envName}.externalNetwork.attachment.interface must match
             Rust IfName syntax ^[A-Za-z0-9_-]{1,15}$ so generated
             host.json cannot pass Nix eval and fail bundle parsing later.
           '';
         }
         {
-          assertion = !(homeLan.egress.enable && !homeLan.attachment.enable);
+          assertion = !(externalNetwork.egress.enable && !externalNetwork.attachment.enable);
           message = ''
-            d2b.envs.${envName}.homeLan.egress.enable requires
-            d2b.envs.${envName}.homeLan.attachment.enable = true.
+            d2b.envs.${envName}.externalNetwork.egress.enable requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
           '';
         }
         {
-          assertion = !(homeLan.portForwards != [ ] && !homeLan.attachment.enable);
+          assertion = !(externalNetwork.portForwards != [ ] && !externalNetwork.attachment.enable);
           message = ''
-            d2b.envs.${envName}.homeLan.portForwards requires
-            d2b.envs.${envName}.homeLan.attachment.enable = true.
+            d2b.envs.${envName}.externalNetwork.portForwards requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
           '';
         }
         {
-          assertion = !(homeLan.mdns.enable && !homeLan.attachment.enable);
+          assertion = !(externalNetwork.mdns.enable && !externalNetwork.attachment.enable);
           message = ''
-            d2b.envs.${envName}.homeLan.mdns.enable requires
-            d2b.envs.${envName}.homeLan.attachment.enable = true.
+            d2b.envs.${envName}.externalNetwork.mdns.enable requires
+            d2b.envs.${envName}.externalNetwork.attachment.enable = true.
           '';
         }
       ]
@@ -1018,7 +1018,7 @@ let
           assertion =
             forward.vm != null || forward.targetIp != null;
           message = ''
-            d2b.envs.${envName}.homeLan.portForwards[${toString i}]
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString i}]
             must specify either vm or targetIp.
           '';
         })
@@ -1029,7 +1029,7 @@ let
             forward.vm == null
             || builtins.elem forward.vm sameEnvTargets;
           message = ''
-            d2b.envs.${envName}.homeLan.portForwards[${toString i}].vm
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString i}].vm
             must name an enabled VM in the same env. Got
             `${toString forward.vm}`; valid targets: ${
               lib.concatStringsSep ", " sameEnvTargets
@@ -1041,7 +1041,7 @@ let
         (overlap: {
           assertion = false;
           message = ''
-            d2b.envs.${envName}.homeLan.egress.allowedCidrs entry
+            d2b.envs.${envName}.externalNetwork.egress.allowedCidrs entry
             `${overlap.cidr}` overlaps peer d2b env
             ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
           '';
@@ -1051,7 +1051,7 @@ let
         (overlap: {
           assertion = false;
           message = ''
-            d2b.envs.${envName}.homeLan.portForwards[${toString overlap.i}].sourceCidrs
+            d2b.envs.${envName}.externalNetwork.portForwards[${toString overlap.i}].sourceCidrs
             entry `${overlap.cidr}` overlaps peer d2b env
             ${overlap.peerName}.${overlap.kind} (${overlap.peerCidr}).
           '';
@@ -1289,7 +1289,7 @@ in
     vmAssertions
     ++ qemuMediaAssertions
     ++ envAssertions
-    ++ homeLanAssertions
+    ++ externalNetworkAssertions
     ++ vsockAssertions
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions

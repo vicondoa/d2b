@@ -312,9 +312,9 @@ pub struct NetEnv {
     pub lan: LanPolicy,
     /// Forwarding blocklist derived from env config and host LAN CIDRs.
     pub net_vm_forward_blocklist: Vec<String>,
-    /// Optional home-LAN attachment contract for the env net VM.
+    /// Optional external network attachment contract for the env net VM.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub home_lan: Option<HomeLanPolicy>,
+    pub external_network: Option<ExternalNetworkPolicy>,
     /// TAP bridge-port flags by role.
     pub bridge_port_flags: Vec<BridgePortFlags>,
     /// Per-link IPv6-off sysctl contract.
@@ -327,38 +327,38 @@ pub struct NetEnv {
     pub usbip_backend_port: Option<u16>,
 }
 
-/// Home-LAN attachment and forwarding policy for one env net VM.
+/// External network attachment and forwarding policy for one env net VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HomeLanPolicy {
-    pub attachment: HomeLanAttachment,
-    pub egress: HomeLanEgress,
+pub struct ExternalNetworkPolicy {
+    pub attachment: ExternalNetworkAttachment,
+    pub egress: ExternalNetworkEgress,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub port_forwards: Vec<HomeLanPortForward>,
+    pub port_forwards: Vec<ExternalNetworkPortForward>,
 }
 
-/// Host and guest interface identity for the home-LAN NIC.
+/// Host and guest interface identity for the external network NIC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HomeLanAttachment {
-    pub mode: HomeLanAttachmentMode,
+pub struct ExternalNetworkAttachment {
+    pub mode: ExternalNetworkAttachmentMode,
     pub parent_interface: IfName,
     pub host_if_name: IfName,
     pub guest_if_name: IfName,
     pub mac_address: String,
-    pub macvtap_mode: HomeLanMacvtapMode,
-    pub ipv4: HomeLanIpv4,
+    pub macvtap_mode: ExternalNetworkMacvtapMode,
+    pub ipv4: ExternalNetworkIpv4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum HomeLanAttachmentMode {
+pub enum ExternalNetworkAttachmentMode {
     Macvtap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum HomeLanMacvtapMode {
+pub enum ExternalNetworkMacvtapMode {
     Bridge,
     Private,
     Vepa,
@@ -367,8 +367,8 @@ pub enum HomeLanMacvtapMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HomeLanIpv4 {
-    pub method: HomeLanIpv4Method,
+pub struct ExternalNetworkIpv4 {
+    pub method: ExternalNetworkIpv4Method,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -379,14 +379,14 @@ pub struct HomeLanIpv4 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum HomeLanIpv4Method {
+pub enum ExternalNetworkIpv4Method {
     Dhcp,
     Static,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HomeLanEgress {
+pub struct ExternalNetworkEgress {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_cidrs: Vec<String>,
@@ -394,8 +394,8 @@ pub struct HomeLanEgress {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HomeLanPortForward {
-    pub protocol: HomeLanPortForwardProtocol,
+pub struct ExternalNetworkPortForward {
+    pub protocol: ExternalNetworkPortForwardProtocol,
     pub listen_port: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm: Option<String>,
@@ -407,7 +407,7 @@ pub struct HomeLanPortForward {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum HomeLanPortForwardProtocol {
+pub enum ExternalNetworkPortForwardProtocol {
     Tcp,
     Udp,
 }

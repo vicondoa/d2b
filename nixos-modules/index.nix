@@ -22,12 +22,12 @@ let
     sortedAttrs (lib.filterAttrs (_: vm: vm.env == envName) enabledVms);
   workloadNamesInEnv = envName: sortedAttrNames (workloadsInEnv envName);
 
-  homeLanConfigured = env:
-    env.homeLan.enable
-    || env.homeLan.attachment.enable
-    || env.homeLan.egress.enable
-    || env.homeLan.portForwards != [ ]
-    || env.homeLan.mdns.enable;
+  externalNetworkConfigured = env:
+    env.externalNetwork.enable
+    || env.externalNetwork.attachment.enable
+    || env.externalNetwork.egress.enable
+    || env.externalNetwork.portForwards != [ ]
+    || env.externalNetwork.mdns.enable;
 
   netMeta = envName: net:
     let
@@ -55,9 +55,9 @@ let
       dhcpRangeEnd = subnetIp lanSubnet 254;
       netUplinkMac = mkMac envName "up" 2;
       netLanMac = mkMac envName "lan" 1;
-      homeLan =
+      externalNetwork =
         let
-          attachment = net.homeLan.attachment;
+          attachment = net.externalNetwork.attachment;
           envWorkloads = workloadsInEnv envName;
           homeMac =
             if attachment.macAddress != null
@@ -82,19 +82,19 @@ let
             };
         in
         {
-          enable = net.homeLan.enable;
+          enable = net.externalNetwork.enable;
           attachment = {
             inherit (attachment) enable interface mode macvtapMode;
             macAddress = homeMac;
             hostIfName = "${envName}-h0";
-            guestIfName = "home0";
+            guestIfName = "external0";
             ipv4 = attachment.ipv4;
           };
-          egress = net.homeLan.egress // {
-            allowedCidrs = sortNames (lib.unique net.homeLan.egress.allowedCidrs);
+          egress = net.externalNetwork.egress // {
+            allowedCidrs = sortNames (lib.unique net.externalNetwork.egress.allowedCidrs);
           };
-          portForwards = map resolveForward net.homeLan.portForwards;
-          mdns = net.homeLan.mdns;
+          portForwards = map resolveForward net.externalNetwork.portForwards;
+          mdns = net.externalNetwork.mdns;
         };
       workloads = lib.mapAttrs
         (vmName: vm: {
@@ -106,7 +106,7 @@ let
     };
 
   envMeta = lib.mapAttrs netMeta enabledEnvs;
-  homeLanEnvs = sortedAttrs (lib.filterAttrs (_: env: homeLanConfigured env) enabledEnvs);
+  externalNetworkEnvs = sortedAttrs (lib.filterAttrs (_: env: externalNetworkConfigured env) enabledEnvs);
 
   subset = pred: sortedAttrs (lib.filterAttrs pred enabledVms);
   subsetNames = pred: sortedAttrNames (subset pred);
@@ -247,10 +247,10 @@ let
     workloadNamesByEnv = lib.mapAttrs (envName: _: workloadNamesInEnv envName) enabledEnvs;
     envMeta = envMeta;
 
-    homeLan = {
-      envs = homeLanEnvs;
-      envNames = sortedAttrNames homeLanEnvs;
-      envMeta = lib.filterAttrs (envName: _: builtins.elem envName (sortedAttrNames homeLanEnvs)) envMeta;
+    externalNetwork = {
+      envs = externalNetworkEnvs;
+      envNames = sortedAttrNames externalNetworkEnvs;
+      envMeta = lib.filterAttrs (envName: _: builtins.elem envName (sortedAttrNames externalNetworkEnvs)) envMeta;
     };
 
     components = {

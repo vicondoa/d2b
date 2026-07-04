@@ -313,21 +313,21 @@ shared.mkBatch {
     };
 
     "home-lan-attachment-requires-host-interface" = {
-      expectedSubstring = "homeLan.attachment.enable requires";
+      expectedSubstring = "externalNetwork.attachment.enable requires";
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.attachment.enable = true;
+          d2b.envs.work.externalNetwork.attachment.enable = true;
         }
       );
     };
 
     "home-lan-attachment-interface-rust-safe-name" = {
-      expectedSubstring = "homeLan.attachment.interface must match";
+      expectedSubstring = "externalNetwork.attachment.interface must match";
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.attachment = {
+          d2b.envs.work.externalNetwork.attachment = {
             enable = true;
             interface = "eno1.100";
           };
@@ -336,21 +336,21 @@ shared.mkBatch {
     };
 
     "home-lan-egress-requires-attachment" = {
-      expectedSubstring = "homeLan.egress.enable requires";
+      expectedSubstring = "externalNetwork.egress.enable requires";
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.egress.enable = true;
+          d2b.envs.work.externalNetwork.egress.enable = true;
         }
       );
     };
 
     "home-lan-port-forward-requires-attachment" = {
-      expectedSubstring = "homeLan.portForwards requires";
+      expectedSubstring = "externalNetwork.portForwards requires";
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.portForwards = [{
+          d2b.envs.work.externalNetwork.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
             vm = "corp-vm";
@@ -361,11 +361,11 @@ shared.mkBatch {
     };
 
     "home-lan-mdns-requires-attachment" = {
-      expectedSubstring = "homeLan.mdns.enable requires";
+      expectedSubstring = "externalNetwork.mdns.enable requires";
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.mdns.enable = true;
+          d2b.envs.work.externalNetwork.mdns.enable = true;
         }
       );
     };
@@ -375,11 +375,11 @@ shared.mkBatch {
       override = (
         { ... }:
         {
-          d2b.envs.work.homeLan.attachment = {
+          d2b.envs.work.externalNetwork.attachment = {
             enable = true;
             interface = "eno1";
           };
-          d2b.envs.work.homeLan.portForwards = [{
+          d2b.envs.work.externalNetwork.portForwards = [{
             listenPort = 8443;
           }];
         }
@@ -401,11 +401,11 @@ shared.mkBatch {
             index = 10;
             ssh.user = "alice";
           };
-          d2b.envs.work.homeLan.attachment = {
+          d2b.envs.work.externalNetwork.attachment = {
             enable = true;
             interface = "eno1";
           };
-          d2b.envs.work.homeLan.portForwards = [{
+          d2b.envs.work.externalNetwork.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
             vm = "other-vm";
@@ -416,7 +416,7 @@ shared.mkBatch {
     };
 
     "home-lan-egress-peer-cidr-rejected" = {
-      expectedSubstring = "homeLan.egress.allowedCidrs entry";
+      expectedSubstring = "externalNetwork.egress.allowedCidrs entry";
       override = (
         { ... }:
         {
@@ -424,11 +424,11 @@ shared.mkBatch {
             lanSubnet = "10.30.0.0/24";
             uplinkSubnet = "198.51.100.0/30";
           };
-          d2b.envs.work.homeLan.attachment = {
+          d2b.envs.work.externalNetwork.attachment = {
             enable = true;
             interface = "eno1";
           };
-          d2b.envs.work.homeLan.egress = {
+          d2b.envs.work.externalNetwork.egress = {
             enable = true;
             allowedCidrs = [ "10.30.0.0/24" ];
           };
@@ -437,7 +437,7 @@ shared.mkBatch {
     };
 
     "home-lan-port-forward-source-peer-cidr-rejected" = {
-      expectedSubstring = "homeLan.portForwards[0].sourceCidrs";
+      expectedSubstring = "externalNetwork.portForwards[0].sourceCidrs";
       override = (
         { ... }:
         {
@@ -445,11 +445,11 @@ shared.mkBatch {
             lanSubnet = "10.30.0.0/24";
             uplinkSubnet = "198.51.100.0/30";
           };
-          d2b.envs.work.homeLan.attachment = {
+          d2b.envs.work.externalNetwork.attachment = {
             enable = true;
             interface = "eno1";
           };
-          d2b.envs.work.homeLan.portForwards = [{
+          d2b.envs.work.externalNetwork.portForwards = [{
             protocol = "tcp";
             listenPort = 8443;
             vm = "corp-vm";

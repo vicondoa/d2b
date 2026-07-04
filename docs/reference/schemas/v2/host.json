@@ -269,6 +269,183 @@
         }
       ]
     },
+    "ExternalNetworkAttachment": {
+      "description": "Host and guest interface identity for the external network NIC.",
+      "type": "object",
+      "required": [
+        "guestIfName",
+        "hostIfName",
+        "ipv4",
+        "macAddress",
+        "macvtapMode",
+        "mode",
+        "parentInterface"
+      ],
+      "properties": {
+        "guestIfName": {
+          "$ref": "#/definitions/IfName"
+        },
+        "hostIfName": {
+          "$ref": "#/definitions/IfName"
+        },
+        "ipv4": {
+          "$ref": "#/definitions/ExternalNetworkIpv4"
+        },
+        "macAddress": {
+          "type": "string"
+        },
+        "macvtapMode": {
+          "$ref": "#/definitions/ExternalNetworkMacvtapMode"
+        },
+        "mode": {
+          "$ref": "#/definitions/ExternalNetworkAttachmentMode"
+        },
+        "parentInterface": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExternalNetworkAttachmentMode": {
+      "type": "string",
+      "enum": [
+        "macvtap"
+      ]
+    },
+    "ExternalNetworkEgress": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "allowedCidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExternalNetworkIpv4": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "address": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gateway": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "$ref": "#/definitions/ExternalNetworkIpv4Method"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExternalNetworkIpv4Method": {
+      "type": "string",
+      "enum": [
+        "dhcp",
+        "static"
+      ]
+    },
+    "ExternalNetworkMacvtapMode": {
+      "type": "string",
+      "enum": [
+        "bridge",
+        "private",
+        "vepa",
+        "passthru"
+      ]
+    },
+    "ExternalNetworkPolicy": {
+      "description": "External network attachment and forwarding policy for one env net VM.",
+      "type": "object",
+      "required": [
+        "attachment",
+        "egress"
+      ],
+      "properties": {
+        "attachment": {
+          "$ref": "#/definitions/ExternalNetworkAttachment"
+        },
+        "egress": {
+          "$ref": "#/definitions/ExternalNetworkEgress"
+        },
+        "portForwards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExternalNetworkPortForward"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExternalNetworkPortForward": {
+      "type": "object",
+      "required": [
+        "listenPort",
+        "protocol",
+        "targetIp",
+        "targetPort"
+      ],
+      "properties": {
+        "listenPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "protocol": {
+          "$ref": "#/definitions/ExternalNetworkPortForwardProtocol"
+        },
+        "sourceCidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "targetIp": {
+          "type": "string"
+        },
+        "targetPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExternalNetworkPortForwardProtocol": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
     "FdOwnershipEntry": {
       "description": "Broker-opened fd ownership row.",
       "type": "object",
@@ -345,183 +522,6 @@
         "iptables-nft",
         "unknown",
         "none"
-      ]
-    },
-    "HomeLanAttachment": {
-      "description": "Host and guest interface identity for the home-LAN NIC.",
-      "type": "object",
-      "required": [
-        "guestIfName",
-        "hostIfName",
-        "ipv4",
-        "macAddress",
-        "macvtapMode",
-        "mode",
-        "parentInterface"
-      ],
-      "properties": {
-        "guestIfName": {
-          "$ref": "#/definitions/IfName"
-        },
-        "hostIfName": {
-          "$ref": "#/definitions/IfName"
-        },
-        "ipv4": {
-          "$ref": "#/definitions/HomeLanIpv4"
-        },
-        "macAddress": {
-          "type": "string"
-        },
-        "macvtapMode": {
-          "$ref": "#/definitions/HomeLanMacvtapMode"
-        },
-        "mode": {
-          "$ref": "#/definitions/HomeLanAttachmentMode"
-        },
-        "parentInterface": {
-          "$ref": "#/definitions/IfName"
-        }
-      },
-      "additionalProperties": false
-    },
-    "HomeLanAttachmentMode": {
-      "type": "string",
-      "enum": [
-        "macvtap"
-      ]
-    },
-    "HomeLanEgress": {
-      "type": "object",
-      "required": [
-        "enabled"
-      ],
-      "properties": {
-        "allowedCidrs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
-    "HomeLanIpv4": {
-      "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "address": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "dns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "gateway": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "method": {
-          "$ref": "#/definitions/HomeLanIpv4Method"
-        }
-      },
-      "additionalProperties": false
-    },
-    "HomeLanIpv4Method": {
-      "type": "string",
-      "enum": [
-        "dhcp",
-        "static"
-      ]
-    },
-    "HomeLanMacvtapMode": {
-      "type": "string",
-      "enum": [
-        "bridge",
-        "private",
-        "vepa",
-        "passthru"
-      ]
-    },
-    "HomeLanPolicy": {
-      "description": "Home-LAN attachment and forwarding policy for one env net VM.",
-      "type": "object",
-      "required": [
-        "attachment",
-        "egress"
-      ],
-      "properties": {
-        "attachment": {
-          "$ref": "#/definitions/HomeLanAttachment"
-        },
-        "egress": {
-          "$ref": "#/definitions/HomeLanEgress"
-        },
-        "portForwards": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/HomeLanPortForward"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "HomeLanPortForward": {
-      "type": "object",
-      "required": [
-        "listenPort",
-        "protocol",
-        "targetIp",
-        "targetPort"
-      ],
-      "properties": {
-        "listenPort": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "protocol": {
-          "$ref": "#/definitions/HomeLanPortForwardProtocol"
-        },
-        "sourceCidrs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "targetIp": {
-          "type": "string"
-        },
-        "targetPort": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "vm": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "HomeLanPortForwardProtocol": {
-      "type": "string",
-      "enum": [
-        "tcp",
-        "udp"
       ]
     },
     "HostChConfig": {
@@ -785,11 +785,11 @@
           "description": "Environment name from the public manifest.",
           "type": "string"
         },
-        "homeLan": {
-          "description": "Optional home-LAN attachment contract for the env net VM.",
+        "externalNetwork": {
+          "description": "Optional external network attachment contract for the env net VM.",
           "anyOf": [
             {
-              "$ref": "#/definitions/HomeLanPolicy"
+              "$ref": "#/definitions/ExternalNetworkPolicy"
             },
             {
               "type": "null"

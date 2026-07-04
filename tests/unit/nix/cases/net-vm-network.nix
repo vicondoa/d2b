@@ -40,7 +40,7 @@ let
       mtu = 1280;
       mssClamp = true;
       lan.allowEastWest = true;
-      homeLan = {
+      externalNetwork = {
         attachment = {
           enable = true;
           interface = "eno1";
@@ -65,7 +65,7 @@ let
     d2b.envs.quiet = {
       lanSubnet = "10.50.0.0/24";
       uplinkSubnet = "198.51.100.4/30";
-      homeLan = {
+      externalNetwork = {
         attachment = {
           enable = true;
           interface = "eno2";
@@ -126,11 +126,11 @@ let
   mssClampRule = "tcp flags syn tcp option maxseg size set rt mtu";
   lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
   lanToUplinkAcceptRule = ''iifname "eth1" oifname "eth0" ct state new accept'';
-  lanToHomeAcceptRule = ''iifname "eth1" oifname "home0" ip daddr 192.168.1.0/24 ct state new accept'';
-  homeLanEth0DropRule = ''iifname "eth1" oifname "eth0" ip daddr 192.168.1.0/24 drop'';
-  homeDnatRule = ''iifname "home0" tcp dport 2222 dnat to 10.20.0.10:22'';
-  homeForwardRule = ''iifname "home0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
-  homeMasqueradeRule = ''oifname "home0" masquerade'';
+  lanToHomeAcceptRule = ''iifname "eth1" oifname "external0" ip daddr 192.168.1.0/24 ct state new accept'';
+  externalNetworkEth0DropRule = ''iifname "eth1" oifname "eth0" ip daddr 192.168.1.0/24 drop'';
+  homeDnatRule = ''iifname "external0" tcp dport 2222 dnat to 10.20.0.10:22'';
+  homeForwardRule = ''iifname "external0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
+  homeMasqueradeRule = ''oifname "external0" masquerade'';
 
   hostJson = builtins.fromJSON cfg.d2b._bundle.hostJson.jsonText;
   workHostEnv = builtins.head (builtins.filter (env: env.env == "work") hostJson.environments);
@@ -142,7 +142,7 @@ let
     lib.any
       (arg: lib.hasInfix "fd=10" arg && lib.hasInfix "mac=${workHomeMac}" arg)
       workNetChNode.argv;
-  mdnsHomeInputRule = ''iifname "home0" udp dport 5353 accept'';
+  mdnsHomeInputRule = ''iifname "external0" udp dport 5353 accept'';
   mdnsLanInputRule = ''iifname "eth1" udp dport 5353 accept'';
 
   hasRule = ruleset: needle: lib.hasInfix needle ruleset;
@@ -215,7 +215,7 @@ in
     expected = "1280";
   };
 
-  # ---- home-LAN net VM attachment --------------------------------------
+  # ---- external network net VM attachment --------------------------------------
   "net-vm-network/home-lan-net-vm-third-interface-type" = {
     expr = workHomeIface.type;
     expected = "macvtap";
@@ -232,9 +232,9 @@ in
     expr = workHomeIface.macvtap.mode;
     expected = "bridge";
   };
-  "net-vm-network/home-lan-guest-renamed-home0" = {
+  "net-vm-network/home-lan-guest-renamed-external0" = {
     expr = workHomeLink.linkConfig.Name or null;
-    expected = "home0";
+    expected = "external0";
   };
   "net-vm-network/home-lan-guest-dhcp" = {
     expr = workHome.networkConfig.DHCP or null;
@@ -253,17 +253,17 @@ in
   };
   "net-vm-network/home-lan-host-json-contract" = {
     expr = {
-      parent = workHostEnv.homeLan.attachment.parentInterface;
-      hostIf = workHostEnv.homeLan.attachment.hostIfName;
-      guestIf = workHostEnv.homeLan.attachment.guestIfName;
-      egress = workHostEnv.homeLan.egress.enabled;
-      egressCidrs = workHostEnv.homeLan.egress.allowedCidrs;
-      forward = builtins.head workHostEnv.homeLan.portForwards;
+      parent = workHostEnv.externalNetwork.attachment.parentInterface;
+      hostIf = workHostEnv.externalNetwork.attachment.hostIfName;
+      guestIf = workHostEnv.externalNetwork.attachment.guestIfName;
+      egress = workHostEnv.externalNetwork.egress.enabled;
+      egressCidrs = workHostEnv.externalNetwork.egress.allowedCidrs;
+      forward = builtins.head workHostEnv.externalNetwork.portForwards;
     };
     expected = {
       parent = "eno1";
       hostIf = "work-h0";
-      guestIf = "home0";
+      guestIf = "external0";
       egress = true;
       egressCidrs = [ "192.168.1.0/24" ];
       forward = {
@@ -302,7 +302,7 @@ in
   };
   "net-vm-network/safe-home-lan-default-off" = {
     expr = {
-      optionDefault = cfg.d2b.envs.safe.homeLan.enable;
+      optionDefault = cfg.d2b.envs.safe.externalNetwork.enable;
       hasGuestNetwork = builtins.hasAttr "10-home" safeNet.systemd.network.networks;
       hasGuestLink = builtins.hasAttr "10-home" safeNet.systemd.network.links;
       interfaceCount = builtins.length safeNet.microvm.interfaces;
@@ -316,7 +316,7 @@ in
   };
   "net-vm-network/obs-home-lan-default-off" = {
     expr = {
-      optionDefault = cfg.d2b.envs.obs.homeLan.enable;
+      optionDefault = cfg.d2b.envs.obs.externalNetwork.enable;
       hasGuestNetwork = builtins.hasAttr "10-home" obsNet.systemd.network.networks;
       hasGuestLink = builtins.hasAttr "10-home" obsNet.systemd.network.links;
       interfaceCount = builtins.length obsNet.microvm.interfaces;
@@ -383,11 +383,11 @@ in
     expected = true;
   };
   "net-vm-network/work-nft-home-egress-eth0-drop-guard-present" = {
-    expr = hasRule workRuleset homeLanEth0DropRule;
+    expr = hasRule workRuleset externalNetworkEth0DropRule;
     expected = true;
   };
   "net-vm-network/work-nft-home-egress-eth0-drop-before-internet" = {
-    expr = beforeRule workRuleset homeLanEth0DropRule lanToUplinkAcceptRule;
+    expr = beforeRule workRuleset externalNetworkEth0DropRule lanToUplinkAcceptRule;
     expected = true;
   };
   "net-vm-network/work-nft-home-egress-masquerade-present" = {
@@ -403,7 +403,7 @@ in
     expected = true;
   };
   "net-vm-network/work-nft-home-dhcp-client-only" = {
-    expr = hasRule workRuleset ''iifname "home0" udp sport 67 udp dport 68 accept'';
+    expr = hasRule workRuleset ''iifname "external0" udp sport 67 udp dport 68 accept'';
     expected = true;
   };
   "net-vm-network/host-avahi-not-enabled" = {
@@ -453,7 +453,7 @@ in
     expected = false;
   };
 
-  # ---- home-LAN mDNS is net-VM scoped and opt-in -----------------------
+  # ---- external network mDNS is net-VM scoped and opt-in -----------------------
   "net-vm-network/host-avahi-disabled" = {
     expr = cfg.services.avahi.enable;
     expected = false;
@@ -486,13 +486,13 @@ in
   };
   "net-vm-network/work-net-avahi-interfaces" = {
     expr = workNet.services.avahi.allowInterfaces;
-    expected = [ "home0" "eth1" ];
+    expected = [ "external0" "eth1" ];
   };
   "net-vm-network/safe-net-avahi-disabled" = {
     expr = safeNet.services.avahi.enable;
     expected = false;
   };
-  "net-vm-network/work-net-mdns-home0-input-rule" = {
+  "net-vm-network/work-net-mdns-external0-input-rule" = {
     expr = hasRule workRuleset mdnsHomeInputRule;
     expected = true;
   };
@@ -500,7 +500,7 @@ in
     expr = hasRule workRuleset mdnsLanInputRule;
     expected = true;
   };
-  "net-vm-network/safe-net-mdns-home0-input-rule-absent" = {
+  "net-vm-network/safe-net-mdns-external0-input-rule-absent" = {
     expr = hasRule safeRuleset mdnsHomeInputRule;
     expected = false;
   };

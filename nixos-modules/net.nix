@@ -19,19 +19,19 @@
 
 let
   m = envMeta;
-  homeAttachment = m.homeLan.attachment;
-  homeLanEnabled = homeAttachment.enable;
+  homeAttachment = m.externalNetwork.attachment;
+  externalNetworkEnabled = homeAttachment.enable;
   homeIf = homeAttachment.guestIfName;
-  homePortForwards = m.homeLan.portForwards;
+  homePortForwards = m.externalNetwork.portForwards;
   homeSourceMatch = pf:
     lib.optionalString (pf.sourceCidrs != [ ])
       "ip saddr { ${lib.concatStringsSep ", " pf.sourceCidrs} } ";
   homeEgressRules = lib.concatMapStringsSep "\n          "
     (cidr: ''iifname "eth1" oifname "${homeIf}" ip daddr ${cidr} ct state new accept'')
-    m.homeLan.egress.allowedCidrs;
+    m.externalNetwork.egress.allowedCidrs;
   homeEgressUplinkDropRules = lib.concatMapStringsSep "\n          "
     (cidr: ''iifname "eth1" oifname "eth0" ip daddr ${cidr} drop'')
-    m.homeLan.egress.allowedCidrs;
+    m.externalNetwork.egress.allowedCidrs;
   homeDnatRules = lib.concatMapStringsSep "\n          "
     (pf: ''iifname "${homeIf}" ${homeSourceMatch pf}${pf.protocol} dport ${toString pf.listenPort} dnat to ${pf.targetIp}:${toString pf.targetPort}'')
     homePortForwards;
@@ -102,7 +102,7 @@ in
         MTUBytes = toString m.mtu;
       };
     };
-  } // lib.optionalAttrs homeLanEnabled {
+  } // lib.optionalAttrs externalNetworkEnabled {
     "10-home" = {
       matchConfig.MACAddress = homeAttachment.macAddress;
       networkConfig = {
@@ -131,11 +131,11 @@ in
             Gateway = homeAttachment.ipv4.gateway;
             Metric = 2048;
           }
-        ] ++ lib.optionals m.homeLan.egress.enable (map (cidr: {
+        ] ++ lib.optionals m.externalNetwork.egress.enable (map (cidr: {
           Destination = cidr;
           Gateway = homeAttachment.ipv4.gateway;
           Metric = 256;
-        }) m.homeLan.egress.allowedCidrs)
+        }) m.externalNetwork.egress.allowedCidrs)
       );
       linkConfig = {
         RequiredForOnline = "no";
@@ -158,7 +158,7 @@ in
       matchConfig.MACAddress = m.netLanMac;
       linkConfig.Name = "eth1";
     };
-  } // lib.optionalAttrs homeLanEnabled {
+  } // lib.optionalAttrs externalNetworkEnabled {
     "10-home" = {
       matchConfig.MACAddress = homeAttachment.macAddress;
       linkConfig.Name = homeIf;
@@ -198,12 +198,12 @@ in
           # LAN: DHCP + DNS for workload VMs.
           iifname "eth1" udp dport { 53, 67 } accept
           iifname "eth1" tcp dport 53 accept
-          ${lib.optionalString homeLanEnabled ''
-          # Home LAN: DHCP client replies for home0 only.
+          ${lib.optionalString externalNetworkEnabled ''
+          # External network: DHCP client replies for external0 only.
           iifname "${homeIf}" udp sport 67 udp dport 68 accept
           ''}
 
-          ${lib.optionalString (m.homeLan.mdns.enable || m.homeLan.mdns.dnsmasqLocal.enable) ''
+          ${lib.optionalString (m.externalNetwork.mdns.enable || m.externalNetwork.mdns.dnsmasqLocal.enable) ''
           # mDNS is only opened inside opted-in net VMs; host firewall
           # state remains untouched.
           iifname "${homeIf}" udp dport 5353 accept
@@ -253,8 +253,8 @@ in
             (cidr: ''iifname "eth1" oifname "eth0" ip daddr ${cidr} drop'')
             m.hostBlocklist}
 
-          ${lib.optionalString m.homeLan.egress.enable ''
-          # If an allowed home-LAN CIDR is off-link or missing a home0 route,
+          ${lib.optionalString m.externalNetwork.egress.enable ''
+          # If an allowed external network CIDR is off-link or missing a external0 route,
           # fail closed instead of leaking it through the internet uplink.
           ${homeEgressUplinkDropRules}
           ''}
@@ -262,13 +262,13 @@ in
           # Workload → internet: allowed (NAT'd by postrouting below).
           iifname "eth1" oifname "eth0" ct state new accept
 
-          ${lib.optionalString m.homeLan.egress.enable ''
-          # Workload → home LAN: explicit CIDR opt-in, NAT'd behind home0.
+          ${lib.optionalString m.externalNetwork.egress.enable ''
+          # Workload → external network: explicit CIDR opt-in, NAT'd behind external0.
           ${homeEgressRules}
           ''}
 
           ${lib.optionalString (homePortForwards != [ ]) ''
-          # Home LAN → workload VMs: explicit DNAT forwards only.
+          # External network → workload VMs: explicit DNAT forwards only.
           ${homeForwardRules}
           ''}
         }
@@ -287,7 +287,7 @@ in
         chain postrouting {
           type nat hook postrouting priority 100; policy accept;
           oifname "eth0" masquerade
-          ${lib.optionalString (m.homeLan.egress.enable && m.homeLan.egress.masquerade) ''
+          ${lib.optionalString (m.externalNetwork.egress.enable && m.externalNetwork.egress.masquerade) ''
           oifname "${homeIf}" masquerade
           ''}
         }
@@ -504,7 +504,7 @@ in
         id = "${m.name}-l1";
         mac = m.netLanMac;
       }
-    ] ++ lib.optional homeLanEnabled {
+    ] ++ lib.optional externalNetworkEnabled {
       type = homeAttachment.mode;
       id = homeAttachment.hostIfName;
       mac = homeAttachment.macAddress;

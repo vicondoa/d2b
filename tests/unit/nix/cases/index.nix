@@ -41,7 +41,7 @@ let
       lan.allowEastWest = true;
       mtu = 1280;
       mssClamp = true;
-      homeLan = {
+      externalNetwork = {
         enable = true;
         attachment = {
           enable = true;
@@ -207,9 +207,9 @@ in
 
   "index/home-lan-metadata" = {
     expr = {
-      envNames = index.homeLan.envNames;
-      alpha = index.envMeta.alpha.homeLan;
-      alphaFromHomeLanIndex = index.homeLan.envMeta.alpha.homeLan;
+      envNames = index.externalNetwork.envNames;
+      alpha = index.envMeta.alpha.externalNetwork;
+      alphaFromExternalNetworkIndex = index.externalNetwork.envMeta.alpha.externalNetwork;
     };
     expected = {
       envNames = [ "alpha" ];
@@ -222,7 +222,7 @@ in
           macvtapMode = "bridge";
           macAddress = "02:4A:E9:D5:17:03";
           hostIfName = "alpha-h0";
-          guestIfName = "home0";
+          guestIfName = "external0";
           ipv4 = {
             method = "dhcp";
             address = null;
@@ -253,7 +253,7 @@ in
           publishWorkstation = true;
         };
       };
-      alphaFromHomeLanIndex = {
+      alphaFromExternalNetworkIndex = {
         enable = true;
         attachment = {
           enable = true;
@@ -262,7 +262,7 @@ in
           macvtapMode = "bridge";
           macAddress = "02:4A:E9:D5:17:03";
           hostIfName = "alpha-h0";
-          guestIfName = "home0";
+          guestIfName = "external0";
           ipv4 = {
             method = "dhcp";
             address = null;

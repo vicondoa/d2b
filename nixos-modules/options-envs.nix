@@ -8,7 +8,7 @@
 { lib, config, ... }:
 
 let
-  homeLanStaticAddressType = lib.types.submodule {
+  externalNetworkStaticAddressType = lib.types.submodule {
     freeformType = null;
     options = {
       address = lib.mkOption {
@@ -16,7 +16,7 @@ let
         example = "192.168.1.50/24";
         description = ''
           Static IPv4 address, in CIDR notation, for the generated
-          net VM's home-LAN interface when `address.mode = "static"`.
+          net VM's external network interface when `address.mode = "static"`.
         '';
       };
 
@@ -24,48 +24,48 @@ let
         type = lib.types.nullOr lib.types.str;
         default = null;
         example = "192.168.1.1";
-        description = "Optional IPv4 default gateway for static home-LAN addressing.";
+        description = "Optional IPv4 default gateway for static external network addressing.";
       };
 
       dns = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
         example = [ "192.168.1.1" ];
-        description = "Optional DNS resolvers for static home-LAN addressing.";
+        description = "Optional DNS resolvers for static external network addressing.";
       };
     };
   };
 
-  homeLanAddressType = lib.types.submodule {
+  externalNetworkAddressType = lib.types.submodule {
     freeformType = null;
     options = {
       mode = lib.mkOption {
         type = lib.types.enum [ "dhcp" "static" ];
         default = "dhcp";
-        description = "How the generated net VM obtains its home-LAN address.";
+        description = "How the generated net VM obtains its external network address.";
       };
 
       static = lib.mkOption {
-        type = lib.types.nullOr homeLanStaticAddressType;
+        type = lib.types.nullOr externalNetworkStaticAddressType;
         default = null;
         description = "Static address details used when `mode = \"static\"`.";
       };
     };
   };
 
-  homeLanPortForwardType = lib.types.submodule {
+  externalNetworkPortForwardType = lib.types.submodule {
     freeformType = null;
     options = {
       protocol = lib.mkOption {
         type = lib.types.enum [ "tcp" "udp" ];
         default = "tcp";
-        description = "Layer-4 protocol to forward from home0.";
+        description = "Layer-4 protocol to forward from external0.";
       };
 
       listenPort = lib.mkOption {
         type = lib.types.port;
         example = 2222;
-        description = "Port on sys-<env>-net's home0 address.";
+        description = "Port on sys-<env>-net's external0 address.";
       };
 
       vm = lib.mkOption {
@@ -93,7 +93,7 @@ let
         default = [ ];
         example = [ "192.168.1.0/24" ];
         description = ''
-          Optional home-LAN source CIDR allowlist for this forward. Entries
+          Optional external network source CIDR allowlist for this forward. Entries
           must not overlap peer d2b env CIDRs.
         '';
       };
@@ -157,8 +157,8 @@ in
 
         lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires d2b.site.allowUnsafeEastWest = true)";
 
-        homeLan = {
-          enable = lib.mkEnableOption "home-LAN policy metadata for this env";
+        externalNetwork = {
+          enable = lib.mkEnableOption "external network policy metadata for this env";
 
           attachment = {
             enable = lib.mkEnableOption "a separate net-VM NIC on the host LAN";
@@ -168,7 +168,7 @@ in
               default = null;
               example = "eno1";
               description = ''
-                Physical host interface that the net VM's home-LAN NIC is
+                Physical host interface that the net VM's external network NIC is
                 attached to. The host interface stays managed by the host's
                 existing network stack; d2b does not bridge or reconfigure it.
               '';
@@ -177,7 +177,7 @@ in
             mode = lib.mkOption {
               type = lib.types.enum [ "macvtap" ];
               default = "macvtap";
-              description = "Host attachment mode for the net VM home-LAN NIC.";
+              description = "Host attachment mode for the net VM external network NIC.";
             };
 
             macvtapMode = lib.mkOption {
@@ -190,7 +190,7 @@ in
               type = lib.types.nullOr lib.types.str;
               default = null;
               description = ''
-                Optional fixed MAC for the net VM's home-LAN NIC. When null,
+                Optional fixed MAC for the net VM's external network NIC. When null,
                 d2b derives a deterministic locally-administered MAC from the
                 env name.
               '';
@@ -200,7 +200,7 @@ in
               method = lib.mkOption {
                 type = lib.types.enum [ "dhcp" "static" ];
                 default = "dhcp";
-                description = "How sys-<env>-net configures home0 inside the guest.";
+                description = "How sys-<env>-net configures external0 inside the guest.";
               };
 
               address = lib.mkOption {
@@ -214,20 +214,20 @@ in
                 type = lib.types.nullOr lib.types.str;
                 default = null;
                 example = "192.168.1.1";
-                description = "Optional static default gateway for home0.";
+                description = "Optional static default gateway for external0.";
               };
 
               dns = lib.mkOption {
                 type = lib.types.listOf lib.types.str;
                 default = [ ];
                 example = [ "192.168.1.1" ];
-                description = "Optional static DNS servers for home0.";
+                description = "Optional static DNS servers for external0.";
               };
             };
           };
 
           egress = {
-            enable = lib.mkEnableOption "workload-initiated home-LAN access NATed behind sys-<env>-net's home0 address";
+            enable = lib.mkEnableOption "workload-initiated external network access NATed behind sys-<env>-net's external0 address";
 
             allowedCidrs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
@@ -235,7 +235,7 @@ in
               defaultText = lib.literalExpression "config.d2b.hostLanCidrs";
               example = [ "192.168.1.0/24" ];
               description = ''
-                Home-LAN CIDRs this env may reach through the generated net VM.
+                External network CIDRs this env may reach through the generated net VM.
                 Entries must not overlap peer d2b env CIDRs.
               '';
             };
@@ -243,12 +243,12 @@ in
             masquerade = lib.mkOption {
               type = lib.types.bool;
               default = true;
-              description = "Whether the generated net VM should masquerade home-LAN egress.";
+              description = "Whether the generated net VM should masquerade external network egress.";
             };
           };
 
           portForwards = lib.mkOption {
-            type = lib.types.listOf homeLanPortForwardType;
+            type = lib.types.listOf externalNetworkPortForwardType;
             default = [ ];
             example = lib.literalExpression ''
               [
@@ -262,7 +262,7 @@ in
               ]
             '';
             description = ''
-              Explicit DNAT rules from sys-<env>-net home0 to workload VMs on
+              Explicit DNAT rules from sys-<env>-net external0 to workload VMs on
               eth1. Empty by default; no SSH or other service is exposed unless
               a forward is declared here.
             '';
@@ -282,7 +282,7 @@ in
             publishWorkstation = lib.mkOption {
               type = lib.types.bool;
               default = false;
-              description = "Whether the generated net VM should publish workstation presence on the home LAN.";
+              description = "Whether the generated net VM should publish workstation presence on the external network.";
             };
 
             dnsmasqLocal.port = lib.mkOption {
