@@ -666,14 +666,14 @@ pub fn spawn_accept_loop(
                     return;
                 }
             };
-            let listener = match tokio::net::UnixListener::from_std(listener) {
-                Ok(listener) => listener,
-                Err(error) => {
-                    info!(vm = %thread_vm_id, error = %error, "security-key: accept listener init failed");
-                    return;
-                }
-            };
             runtime.block_on(async move {
+                let listener = match tokio::net::UnixListener::from_std(listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        info!(vm = %thread_vm_id, error = %error, "security-key: accept listener init failed");
+                        return;
+                    }
+                };
         loop {
                     tokio::select! {
                         _ = &mut stop_rx => {

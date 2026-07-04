@@ -188,6 +188,8 @@ deprecations ship one minor release before removal.
 - Security-key accept loops now run on a daemon-owned runtime thread so the
   per-VM VSOCK socket remains listening after the VM-start readiness transaction
   returns.
+- Security-key accept-loop listener initialization now happens inside the
+  daemon-owned Tokio runtime context instead of before the runtime is entered.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
