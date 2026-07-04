@@ -204,6 +204,8 @@ deprecations ship one minor release before removal.
 - Security-key guest frontend now zero-extends short UHID events from the kernel
   instead of treating lifecycle events shorter than the maximum union size as
   fatal.
+- Security-key host relay now prefixes physical hidraw writes with a zero report
+  ID byte, matching Linux hidraw/libfido2 behavior for unnumbered FIDO reports.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
