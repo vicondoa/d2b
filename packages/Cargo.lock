@@ -1133,6 +1133,7 @@ dependencies = [
 name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "libc",
  "tokio",
  "tokio-vsock",
 ]
