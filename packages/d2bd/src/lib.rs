@@ -25584,6 +25584,7 @@ mod broker_dispatch_tests {
                 owner_gid: 12345,
                 if_absent: true,
             }],
+            network_interfaces: Vec::new(),
             profile: d2b_core::test_support::RoleProfileBuilder::new()
                 .with_profile_id("ch-runner")
                 .with_uid(0)
