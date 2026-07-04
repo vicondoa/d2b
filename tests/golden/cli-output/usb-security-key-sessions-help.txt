@@ -1,0 +1,8 @@
+List active and recent security-key request sessions
+
+Usage: d2b usb security-key sessions [OPTIONS]
+
+Options:
+  -o, --output <FORMAT>  Output format [default: human] [possible values: human, json]
+      --limit <N>        Maximum number of sessions to return [default: 20]
+  -h, --help             Print help

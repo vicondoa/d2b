@@ -1,0 +1,10 @@
+Cancel an in-progress or queued security-key request
+
+Usage: d2b usb security-key cancel [OPTIONS] [SESSION_ID]
+
+Arguments:
+  [SESSION_ID]  Session ID to cancel (from `d2b usb security-key sessions`)
+
+Options:
+      --current  Cancel the currently active ceremony instead of specifying a session ID
+  -h, --help     Print help
