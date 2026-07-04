@@ -158,12 +158,6 @@ impl UhidDevice {
                 format!("short uhid event header: {n} bytes"),
             ));
         }
-        if n < UHID_EVENT_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                format!("short uhid event: expected {UHID_EVENT_SIZE} bytes, got {n}"),
-            ));
-        }
         let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
         let payload = &buf[4..];
         let event = match event_type {
@@ -402,5 +396,16 @@ mod tests {
     #[test]
     fn fido_descriptor_is_valid_length() {
         assert_eq!(FIDO_HID_DESCRIPTOR.len(), 34);
+    }
+
+    #[test]
+    fn short_lifecycle_event_is_zero_extended() {
+        let mut buf = [0u8; UHID_EVENT_SIZE];
+        buf[..4].copy_from_slice(&UHID_START.to_le_bytes());
+        let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert!(matches!(
+            event_type,
+            UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE
+        ));
     }
 }
