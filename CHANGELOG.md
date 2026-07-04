@@ -21,6 +21,12 @@ deprecations ship one minor release before removal.
   interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
   forwarding.
 
+### Fixed
+
+- Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
+  leaves before writing `next-generation`, without recursively creating or
+  changing the `/run/d2b` parent posture.
+
 ### Changed
 
 - `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,

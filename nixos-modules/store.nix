@@ -857,7 +857,15 @@ in
       set -u
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: gen: ''
-          install -d -m 0755 -o root -g root /run/d2b/${name}
+          if [ ! -d /run/d2b ]; then
+            echo "d2bStoreSync: /run/d2b parent missing; tmpfiles/host runtime posture did not run" >&2
+            exit 1
+          fi
+          if [ ! -d /run/d2b/${name} ]; then
+            mkdir /run/d2b/${name}
+          fi
+          chown root:root /run/d2b/${name}
+          chmod 0755 /run/d2b/${name}
           ln -sfT ${gen} /run/d2b/${name}/next-generation
         '')
         vmGenPaths)}
