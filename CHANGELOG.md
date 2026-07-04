@@ -193,6 +193,9 @@ deprecations ship one minor release before removal.
 - Security-key guest frontend now emits the correct UHID_CREATE2 layout
   (`bus` is a 16-bit field), allowing the virtual FIDO HID device to register
   with the guest kernel.
+- Security-key host listener sockets now use mode `0770` so inherited per-VM
+  ACLs can grant Cloud Hypervisor write/connect access without making the
+  listener world-accessible.
 - Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
   leaves before writing `next-generation`, without recursively creating or
   changing the `/run/d2b` parent posture.
