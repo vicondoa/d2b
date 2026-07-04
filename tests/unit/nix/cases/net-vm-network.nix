@@ -127,6 +127,7 @@ let
   lanToLanForwardRule = ''iifname "eth1" oifname "eth1" ct state new accept'';
   lanToUplinkAcceptRule = ''iifname "eth1" oifname "eth0" ct state new accept'';
   lanToHomeAcceptRule = ''iifname "eth1" oifname "home0" ip daddr 192.168.1.0/24 ct state new accept'';
+  homeLanEth0DropRule = ''iifname "eth1" oifname "eth0" ip daddr 192.168.1.0/24 drop'';
   homeDnatRule = ''iifname "home0" tcp dport 2222 dnat to 10.20.0.10:22'';
   homeForwardRule = ''iifname "home0" oifname "eth1" ip daddr 10.20.0.10 tcp dport 22 ct state new accept'';
   homeMasqueradeRule = ''oifname "home0" masquerade'';
@@ -379,6 +380,14 @@ in
   };
   "net-vm-network/work-nft-home-egress-accept-present" = {
     expr = hasRule workRuleset lanToHomeAcceptRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-egress-eth0-drop-guard-present" = {
+    expr = hasRule workRuleset homeLanEth0DropRule;
+    expected = true;
+  };
+  "net-vm-network/work-nft-home-egress-eth0-drop-before-internet" = {
+    expr = beforeRule workRuleset homeLanEth0DropRule lanToUplinkAcceptRule;
     expected = true;
   };
   "net-vm-network/work-nft-home-egress-masquerade-present" = {

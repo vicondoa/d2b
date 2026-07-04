@@ -31,9 +31,12 @@ use d2b_host::netlink::{
     LinkKind, LinkSpec, NetlinkBackend, NetlinkError, TapOwner, fake::FakeBackend,
     ipv6_off_sequence, readback_bridge_port_flags,
 };
+use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 /// Outcome of the prior `ApplyNmUnmanaged` op for the same ifname
 /// set, threaded into [`create_tap`] via [`TapCreateGate`]. The wire
@@ -316,15 +319,37 @@ pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd,
             ),
         })?;
     let tap_path = macvtap_device_path(ifindex);
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&tap_path)
-        .map_err(|err| super::OpError::Io {
-            path: tap_path.clone(),
-            detail: err.to_string(),
-        })?;
+    let file = open_macvtap_device_with_udev_wait(&tap_path)?;
     Ok(file.into())
+}
+
+fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<std::fs::File, super::OpError> {
+    let mut last_error = None;
+    for _ in 0..100 {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(tap_path)
+        {
+            Ok(file) => return Ok(file),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                last_error = Some(err);
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => {
+                return Err(super::OpError::Io {
+                    path: tap_path.to_path_buf(),
+                    detail: err.to_string(),
+                });
+            }
+        }
+    }
+    Err(super::OpError::Io {
+        path: tap_path.to_path_buf(),
+        detail: last_error
+            .map(|err| format!("timed out waiting for udev-created macvtap device: {err}"))
+            .unwrap_or_else(|| "timed out waiting for udev-created macvtap device".to_owned()),
+    })
 }
 
 fn build_macvtap_link_add_args(intent: &ResolvedMacvtapIntent) -> Vec<String> {

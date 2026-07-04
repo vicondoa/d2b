@@ -29,6 +29,9 @@ let
   homeEgressRules = lib.concatMapStringsSep "\n          "
     (cidr: ''iifname "eth1" oifname "${homeIf}" ip daddr ${cidr} ct state new accept'')
     m.homeLan.egress.allowedCidrs;
+  homeEgressUplinkDropRules = lib.concatMapStringsSep "\n          "
+    (cidr: ''iifname "eth1" oifname "eth0" ip daddr ${cidr} drop'')
+    m.homeLan.egress.allowedCidrs;
   homeDnatRules = lib.concatMapStringsSep "\n          "
     (pf: ''iifname "${homeIf}" ${homeSourceMatch pf}${pf.protocol} dport ${toString pf.listenPort} dnat to ${pf.targetIp}:${toString pf.targetPort}'')
     homePortForwards;
@@ -122,12 +125,18 @@ in
       addresses = lib.optionals (homeAttachment.ipv4.method == "static") [
         { Address = homeAttachment.ipv4.address; }
       ];
-      routes = lib.optionals (homeAttachment.ipv4.method == "static" && homeAttachment.ipv4.gateway != null) [
-        {
+      routes = lib.optionals (homeAttachment.ipv4.method == "static" && homeAttachment.ipv4.gateway != null) (
+        [
+          {
+            Gateway = homeAttachment.ipv4.gateway;
+            Metric = 2048;
+          }
+        ] ++ lib.optionals m.homeLan.egress.enable (map (cidr: {
+          Destination = cidr;
           Gateway = homeAttachment.ipv4.gateway;
-          Metric = 2048;
-        }
-      ];
+          Metric = 256;
+        }) m.homeLan.egress.allowedCidrs)
+      );
       linkConfig = {
         RequiredForOnline = "no";
       } // lib.optionalAttrs (m.mtu != null) {
@@ -243,6 +252,12 @@ in
           ${lib.concatMapStringsSep "\n          "
             (cidr: ''iifname "eth1" oifname "eth0" ip daddr ${cidr} drop'')
             m.hostBlocklist}
+
+          ${lib.optionalString m.homeLan.egress.enable ''
+          # If an allowed home-LAN CIDR is off-link or missing a home0 route,
+          # fail closed instead of leaking it through the internet uplink.
+          ${homeEgressUplinkDropRules}
+          ''}
 
           # Workload → internet: allowed (NAT'd by postrouting below).
           iifname "eth1" oifname "eth0" ct state new accept
