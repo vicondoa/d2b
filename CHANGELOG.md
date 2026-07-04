@@ -12,6 +12,33 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
+  `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
+  CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
+  or equivalent) over AF_VSOCK, without USB device ownership transfer. Each
+  opted-in VM receives a daemon-supervised virtual FIDO2 HID device
+  (`/dev/hidraw*`) via Linux `/dev/uhid`; browsers and `libfido2` treat it as
+  a normal local security key.
+- Added `d2b usb security-key status|sessions|cancel|test` subcommands for
+  lease inspection, session history, stuck-request cancellation, and
+  per-VM smoke checks.
+- Added structured notification/event emission for security-key lifecycle
+  events (ceremony start, user-presence wait, contention, failure, lease
+  revocation) through the d2b notification subsystem, with durable
+  `/run/d2b/usb-sk/events.jsonl` and a machine-readable
+  `/run/d2b/usb-sk/lease.json` state file.
+- Notification actions (`Cancel active request`, `Open status`) include
+  single-use, high-entropy nonces bound to session/action/expiry; `d2bd`
+  rejects missing, expired, reused, or mismatched action tokens.
+- Added eval-time assertions: `usb.securityKey.enable = true` and
+  `usbip.yubikey = true` are mutually exclusive for the same VM; per-VM
+  security-key opt-in requires the host `usb.securityKey.enable = true`;
+  per-VM opt-in requires `guest.control.enable = true`.
+- Added Diataxis documentation:
+  - How-to: [`docs/how-to/use-usb-security-key.md`](docs/how-to/use-usb-security-key.md)
+  - Migration: [`docs/how-to/migrate-usbip-yubikey-to-security-key.md`](docs/how-to/migrate-usbip-yubikey-to-security-key.md)
+  - Reference (options, CLI, event/notification JSON): [`docs/reference/components-usb-security-key.md`](docs/reference/components-usb-security-key.md), [`docs/reference/usb-security-key-events.md`](docs/reference/usb-security-key-events.md)
+  - Explanation (CTAP proxy architecture, why not USB sharing, comparison with USBIP and Qubes): [`docs/explanation/usb-security-key-architecture.md`](docs/explanation/usb-security-key-architecture.md)
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.
