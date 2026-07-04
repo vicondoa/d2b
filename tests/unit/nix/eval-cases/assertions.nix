@@ -585,5 +585,83 @@ shared.mkBatch {
     # cannot be triggered by a valid config. Verified: the old case config
     # produced corp-vm=1300 with sys-obs=1000 (the obs VM itself, which is
     # excluded from the collision set).
+
+    # ---- USB security-key assertions -----
+
+    # A: per-VM securityKey requires host enable.
+    "usb-security-key-vm-requires-host-enable" = {
+      expectedSubstring = "d2b.vms.corp-vm.usb.securityKey.enable = true requires";
+      override = (
+        { lib, ... }:
+        {
+          # host NOT enabled
+          d2b.host.usb.securityKey.enable = lib.mkForce false;
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+        }
+      );
+    };
+
+    # B: per-VM securityKey and usbip.yubikey are mutually exclusive.
+    "usb-security-key-usbip-mutual-exclusion" = {
+      expectedSubstring = "usb.securityKey.enable and usbip.yubikey";
+      override = (
+        { lib, ... }:
+        {
+          d2b.host.usb.securityKey.enable = lib.mkForce true;
+          d2b.host.usb.securityKey.devices = [
+            {
+              label = "yubikey-primary";
+              vendorId = 0x1050;
+              productId = 0x0407;
+            }
+          ];
+          d2b.site.yubikey.enable = lib.mkForce true;
+          d2b.vms.corp-vm.usb.securityKey.enable = true;
+          d2b.vms.corp-vm.usbip.yubikey = true;
+          d2b.vms.corp-vm.guest.control.enable = true;
+        }
+      );
+    };
+
+    # C: vendorId outside FIDO-class allowlist is rejected.
+    "usb-security-key-non-fido-vendor-rejected" = {
+      expectedSubstring = "not in the FIDO-class allowlist";
+      override = (
+        { lib, ... }:
+        {
+          d2b.host.usb.securityKey.enable = lib.mkForce true;
+          d2b.host.usb.securityKey.devices = [
+            {
+              label = "unknown-device";
+              vendorId = 0x1234; # not a known FIDO vendor
+              productId = 0x5678;
+            }
+          ];
+        }
+      );
+    };
+
+    # C: duplicate device labels are rejected.
+    "usb-security-key-duplicate-label-rejected" = {
+      expectedSubstring = "duplicate label";
+      override = (
+        { lib, ... }:
+        {
+          d2b.host.usb.securityKey.enable = lib.mkForce true;
+          d2b.host.usb.securityKey.devices = [
+            {
+              label = "same-label";
+              vendorId = 0x1050;
+              productId = 0x0407;
+            }
+            {
+              label = "same-label"; # duplicate
+              vendorId = 0x1050;
+              productId = 0x0408;
+            }
+          ];
+        }
+      );
+    };
   };
 }

@@ -191,6 +191,8 @@
             "RunKeysRotate",
             "RunMigrate",
             "RunRotateKnownHost",
+            "SecurityKeyApplyUdevRules",
+            "SecurityKeyOpenDevice",
             "SeedDnsmasqLease",
             "SetBridgePortFlags",
             "SetSocketAcl",
@@ -264,6 +266,7 @@
             "usb attach",
             "usb detach",
             "usb probe",
+            "usb security-key",
             "vm",
             "vm display"
           ]

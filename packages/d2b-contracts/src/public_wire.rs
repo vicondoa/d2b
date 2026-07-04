@@ -116,6 +116,20 @@ pub enum PublicRequest {
     /// through the ADR 0032 orchestrator.
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOp),
+    /// Security-key proxy status: host proxy health, configured FIDO device
+    /// selectors, current lease, and per-VM virtual-device state.
+    /// `d2b usb security-key status`
+    #[serde(rename = "usb security-key status")]
+    UsbSecurityKeyStatus,
+    /// Security-key proxy session history: recent and active CTAP relay
+    /// sessions. `d2b usb security-key sessions`
+    #[serde(rename = "usb security-key sessions")]
+    UsbSecurityKeySessions,
+    /// Cancel a stuck security-key CTAP session. Accepts an explicit
+    /// session ID or `cancel_current = true` to cancel whatever is active.
+    /// `d2b usb security-key cancel [--current | <session-id>]`
+    #[serde(rename = "usb security-key cancel")]
+    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -155,6 +169,15 @@ pub enum PublicResponse {
     Audio(AudioOpResponse),
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOpResponse),
+    /// `d2b usb security-key status` response.
+    #[serde(rename = "usb security-key status")]
+    UsbSecurityKeyStatus(crate::security_key::SecurityKeyStatusResponse),
+    /// `d2b usb security-key sessions` response.
+    #[serde(rename = "usb security-key sessions")]
+    UsbSecurityKeySessions(crate::security_key::SecurityKeySessionsResponse),
+    /// `d2b usb security-key cancel` response.
+    #[serde(rename = "usb security-key cancel")]
+    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelResponse),
     #[serde(rename = "error")]
     Error(Error),
 }

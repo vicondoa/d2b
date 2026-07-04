@@ -196,6 +196,25 @@ pub enum BrokerRequest {
     /// the target path, size, mode, and ownership from the trusted
     /// bundle — the daemon names only the opaque `vm_id`.
     DiskInit(DiskInitRequest),
+    /// Open the FIDO/CTAP hidraw node for the named device selector.
+    ///
+    /// The broker resolves the stable device label against the trusted
+    /// bundle security-key device table, performs sysfs-presence and
+    /// FIDO-class checks, opens the exact hidraw node, and returns
+    /// the fd via `SCM_RIGHTS`. The daemon holds the fd for the CTAP
+    /// relay session lifetime.
+    ///
+    /// Typed stub — live handler target: `live_security_key_open_device`.
+    SecurityKeyOpenDevice(crate::security_key::SecurityKeyOpenDeviceRequest),
+    /// Apply udev group grants for configured FIDO hidraw nodes.
+    ///
+    /// Writes broker-generated udev rules granting the
+    /// `d2b-security-key` group ownership of the configured
+    /// vendor/product/serial-matched hidraw nodes. Called once during
+    /// host activation or when the device selector list changes.
+    ///
+    /// Typed stub — live handler target: `live_security_key_apply_udev_rules`.
+    SecurityKeyApplyUdevRules(crate::security_key::SecurityKeyApplyUdevRulesRequest),
 }
 
 impl BrokerRequest {
@@ -274,6 +293,8 @@ impl BrokerRequest {
             Self::OwnershipMatrixCheck(_) => "OwnershipMatrixCheck",
             Self::SshHostKeyPreflight(_) => "SshHostKeyPreflight",
             Self::DiskInit(_) => "DiskInit",
+            Self::SecurityKeyOpenDevice(_) => "SecurityKeyOpenDevice",
+            Self::SecurityKeyApplyUdevRules(_) => "SecurityKeyApplyUdevRules",
         }
     }
 

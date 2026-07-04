@@ -704,6 +704,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "usb security-key",
+    "subject": "VM/USB security-key",
+    "scope": "scoped",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "debug bundle",
     "subject": "diagnostics",
     "scope": "scoped",
@@ -1529,6 +1542,30 @@ let
     "operation": "DiskInit",
     "subject": "disk",
     "scope": "per-VM",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "SecurityKeyOpenDevice",
+    "subject": "security-key/hidraw",
+    "scope": "per-device-label",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "SecurityKeyApplyUdevRules",
+    "subject": "security-key/udev",
+    "scope": "host",
     "allowedGroups": [
       "d2bd"
     ],

@@ -77,3 +77,5 @@ side-effect audit operation that never reaches the wire dispatcher).
 | UsbipUnbind | promoted-live | Resolves the current USBIP owner, revokes the backend ACL, and unbinds the device. | live in production broker |
 | ValidateLockSpec | promoted-live | Resolves the trusted sync contract row and validates lock policy without mutating host state. | live in production broker |
 | ValidateBundle | callable-read-only | Sole validation entry point; calls `d2b_core::manifest::validate_bundle` and logs only opaque metadata. | live read-only callable |
+| SecurityKeyApplyUdevRules | stubbed-unimplemented | Writes broker-generated udev rules granting the `d2b-security-key` group ownership of the configured FIDO vendorId/productId/serial-matched hidraw nodes. No blanket hidraw access; a targeted audit event is recorded. | future work |
+| SecurityKeyOpenDevice | stubbed-unimplemented | Resolves the stable device-label selector against the trusted bundle's security-key device table, checks sysfs presence and FIDO class, opens the exact hidraw node, and returns the fd via SCM_RIGHTS for the CTAP relay session. | future work |

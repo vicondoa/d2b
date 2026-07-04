@@ -1,5 +1,3 @@
-# nix-unit case-presence pins (common — present on every system).
-# Regenerate with: make nix-unit-pin
 activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
 activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation
 activation-runtime-tmpfiles/audio-lock-in-locks-dir
@@ -63,6 +61,10 @@ assertions/state-dir-override-rejected
 assertions/static-ip-and-env-mutually-exclusive
 assertions/store-state-dir-override-rejected
 assertions/uplinksubnet-wrong-mask
+assertions/usb-security-key-duplicate-label-rejected
+assertions/usb-security-key-non-fido-vendor-rejected
+assertions/usb-security-key-usbip-mutual-exclusion
+assertions/usb-security-key-vm-requires-host-enable
 assertions/vm-env-disabled
 assertions/vm-env-missing
 assertions/vm-index-duplicate
@@ -483,6 +485,7 @@ net-vm-network/work-nft-safe-uplink-drop-before-egress-accept
 net-vm-network/work-nft-safe-uplink-drop-present
 net-vm-network/work-uplink-address
 net-vm-network/work-uplink-mtu
+# nix-unit case-presence pins (common — present on every system).
 observability/obs-alerting-surface
 observability/obs-audit-surface
 observability/obs-cid-cross-env-noncollision
@@ -578,6 +581,7 @@ readiness-waves/has-p6
 readiness-waves/has-p7
 readiness-waves/p0-implemented-default
 readiness-waves/p0-validated-default
+# Regenerate with: make nix-unit-pin
 requested-vm-config/boot-selector-and-hotplug-source-coexist
 requested-vm-config/dark-env-declared
 requested-vm-config/dark-live-manual-qemu-media
@@ -651,6 +655,19 @@ usbip-gating/vm-enabled-site-disabled-kernel-module-absent
 usbip-gating/vm-enabled-site-disabled-proxy-absent
 usbip-gating/vm-enabled-site-disabled-proxy-firewall-rule-absent
 usbip-gating/vm-enabled-site-disabled-socket-absent
+usb-security-key/duplicate-label-rejected
+usb-security-key/host-default-devices-empty
+usb-security-key/host-default-disabled
+usb-security-key/host-enabled-empty-devices-valid
+usb-security-key/mutual-exclusion-with-usbip-fires
+usb-security-key/non-fido-vendor-rejected
+usb-security-key/valid-config-device-label-present
+usb-security-key/valid-config-device-vendor-id-correct
+usb-security-key/valid-config-host-option-set
+usb-security-key/valid-config-no-assertion-failures
+usb-security-key/valid-config-vm-option-set
+usb-security-key/vm-default-disabled
+usb-security-key/vm-enabled-host-disabled-fails
 vm-eval-overlays/guest-inherits-host-overlays
 volume-mounts/disk-init-absolute
 volume-mounts/disk-init-non-ext4

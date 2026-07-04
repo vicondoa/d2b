@@ -12,6 +12,37 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `d2b.host.usb.securityKey.enable` and `d2b.host.usb.securityKey.devices`
+  (stable FIDO device selector submodule with `vendorId`, `productId`, `serial`,
+  and `label` fields) to declare the host USB security-key proxy.
+- Added `d2b.vms.<name>.usb.securityKey.enable` per-VM opt-in for CTAP/HID
+  relay to a host-proxied FIDO security key, guarded behind the new host option.
+- Eval-time assertions: VM `usb.securityKey.enable` requires the host proxy to
+  be enabled; `usb.securityKey.enable` and `usbip.yubikey` are mutually
+  exclusive for the same VM (phase-1 constraint); device `vendorId` values must
+  be within the FIDO-class allowlist; device labels must be unique.
+- Rust DTO module `d2b_contracts::security_key` with typed wire contracts:
+  `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`,
+  `SecurityKeyCancelRequest/Response`, `SecurityKeyEvent` (7 variants),
+  `SecurityKeyOpenDeviceRequest`, `SecurityKeyApplyUdevRulesRequest`, and
+  opaque-ID newtypes `SecurityKeySessionId` / `SecurityKeyDeviceLabel`.
+- `PublicRequest` / `PublicResponse` variants for `UsbSecurityKeyStatus`,
+  `UsbSecurityKeySessions`, and `UsbSecurityKeyCancel`.
+- `BrokerRequest` variants `SecurityKeyOpenDevice` and
+  `SecurityKeyApplyUdevRules` with `op_name()` dispatch arms.
+- `W3BrokerOperation::SecurityKeyOpenDevice` and
+  `W3BrokerOperation::SecurityKeyApplyUdevRules` with wire tags, flags, and
+  capability advertisement.
+- Privilege matrix rows for `usb security-key` (public) and the two new broker
+  operations; dispositions doc stubs for both broker ops.
+- `usb security-key status`, `usb security-key sessions`, and
+  `usb security-key cancel` CLI contract stubs in
+  `docs/reference/cli-contract.md` (daemon not yet wired, phase 1).
+- Nix-unit eval cases (`tests/unit/nix/cases/usb-security-key.nix`) and
+  assertion rejection cases for all new eval-time constraints.
+- Contract + policy tests in `packages/d2b-contract-tests/tests/usb_sk_contract.rs`
+  (20 tests).
+
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.

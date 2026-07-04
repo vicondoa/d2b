@@ -985,6 +985,110 @@ command.
 
 - There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
+### `usb security-key status`
+
+**Synopsis:** `d2b usb security-key status [--human] [--json]`
+
+Read-only status surface for the host USB security-key proxy. Reports host proxy health, configured FIDO device selectors and their reachability, the current lease holder (if any), and the per-VM virtual-device health for all opted-in VMs.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--json` | boolean | `false` | Emit the structured JSON response. |
+| `--human` | boolean | `false` | Force the human table on stdout. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success. | — |
+| `1` | `d2bd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
+
+**`--json` example** (shape; daemon not yet wired):
+
+```json
+{
+  "kind": "usb security-key status",
+  "payload": {
+    "hostProxyEnabled": true,
+    "devices": [
+      {
+        "label": "yubikey-primary",
+        "vendorId": 4176,
+        "productId": 1031,
+        "present": true,
+        "brokerAccessible": true,
+        "usbipBound": false
+      }
+    ],
+    "currentLease": null,
+    "vmStates": [
+      {
+        "vm": "corp-vm",
+        "enabled": true,
+        "virtualDevicePresent": true,
+        "sessionState": "idle"
+      }
+    ]
+  }
+}
+```
+
+**Native** — typed stub: `d2b usb security-key status` routes through the daemon `UsbSecurityKeyStatus` public-wire request and renders the `SecurityKeyStatusResponse` contract. The daemon-side handler is not yet wired (phase 1 contracts workstream).
+
+### `usb security-key sessions`
+
+**Synopsis:** `d2b usb security-key sessions [--human] [--json]`
+
+Show recent and active CTAP HID relay sessions. Reports session ID, VM, device label, RP ID (if parsed), result, and start/end timestamps. Sessions are newest-first. The daemon keeps a bounded ring-buffer.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--json` | boolean | `false` | Emit the structured JSON session list. |
+| `--human` | boolean | `false` | Force the human table on stdout. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Success. | — |
+| `1` | `d2bd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
+
+**Native** — typed stub: `d2b usb security-key sessions` routes through the daemon `UsbSecurityKeySessions` public-wire request and renders the `SecurityKeySessionsResponse` contract. The daemon-side handler is not yet wired (phase 1 contracts workstream).
+
+### `usb security-key cancel`
+
+**Synopsis:** `d2b usb security-key cancel [<session-id> | --current]`
+
+Cancel a stuck CTAP HID relay session. Pass a session ID to cancel a specific session, or `--current` to cancel whatever is active. Useful when a browser has timed out but the host proxy has not yet retired the session.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--current` | boolean | `false` | Cancel the currently active session regardless of session ID. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `session-id` | Optional opaque session ID (e.g. `sk-corp-vm-42`). If omitted, `--current` is required. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Session cancelled (or no session was active). | — |
+| `1` | `d2bd` is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `2` | Unsupported invocation shape or missing session-id/--current. | [`usage`](./error-codes.md#usage) |
+
+**Native** — typed stub: `d2b usb security-key cancel` routes through the daemon `UsbSecurityKeyCancel` public-wire request and renders the `SecurityKeyCancelResponse` contract. The daemon-side handler is not yet wired (phase 1 contracts workstream).
+
 ### `console`
 
 **Synopsis:** `d2b console <vm>`
@@ -3151,6 +3255,9 @@ detached state lives in guestd's detached registry).
 | `usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
 | `usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
 | `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
+| `usb security-key status` | `rust-native` | Routes `UsbSecurityKeyStatus` through `d2bd`; renders `SecurityKeyStatusResponse`. Daemon handler not yet wired (phase 1 contracts workstream). |
+| `usb security-key sessions` | `rust-native` | Routes `UsbSecurityKeySessions` through `d2bd`; renders `SecurityKeySessionsResponse`. Daemon handler not yet wired (phase 1 contracts workstream). |
+| `usb security-key cancel` | `rust-native` | Routes `UsbSecurityKeyCancel` through `d2bd`; renders `SecurityKeyCancelResponse`. Daemon handler not yet wired (phase 1 contracts workstream). |
 | `console` | `rust-native` | The Rust CLI owns help / argument validation and attaches to the daemon-native foreground console handoff via `ConsoleOp`, with provider-capability-aware streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio status` | `rust-native` | The Rust CLI dispatches `AudioOp::Status` and renders provider-capability-aware per-target audio state/errors across Cloud Hypervisor, qemu-media, and ACA; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio mic` | `rust-native` | The Rust CLI dispatches microphone grant/revoke through `AudioOp::Mute`, persisting policy and applying host/guest enforcement according to provider capability. |

@@ -54,6 +54,12 @@ pub enum W3BrokerOperation {
     GuestControlSign,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
+    /// Open the FIDO/CTAP hidraw node for the broker-configured device
+    /// selector. Typed stub until the live host-broker handler is implemented.
+    SecurityKeyOpenDevice,
+    /// Apply udev group grants for configured FIDO hidraw nodes.
+    /// Typed stub until the live host-broker handler is implemented.
+    SecurityKeyApplyUdevRules,
 }
 
 impl W3BrokerOperation {
@@ -83,6 +89,8 @@ impl W3BrokerOperation {
             Self::GuestControlSign => "GuestControlSign",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
+            Self::SecurityKeyOpenDevice => "SecurityKeyOpenDevice",
+            Self::SecurityKeyApplyUdevRules => "SecurityKeyApplyUdevRules",
         }
     }
 
@@ -112,6 +120,8 @@ impl W3BrokerOperation {
             Self::GuestControlSign,
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
+            Self::SecurityKeyOpenDevice,
+            Self::SecurityKeyApplyUdevRules,
         ]
     }
 
@@ -172,6 +182,19 @@ impl W3BrokerOperation {
             Self::UsbipBindFirewallRule => W3OperationFlags {
                 audit: true,
                 destructive: false,
+                secret_access: false,
+            },
+            // SecurityKeyOpenDevice: opens a single FIDO hidraw fd; read-only
+            // from the broker's perspective (no state mutation, no secret data).
+            Self::SecurityKeyOpenDevice => W3OperationFlags {
+                audit: true,
+                destructive: false,
+                secret_access: false,
+            },
+            // SecurityKeyApplyUdevRules: writes udev rules (host mutation).
+            Self::SecurityKeyApplyUdevRules => W3OperationFlags {
+                audit: true,
+                destructive: true,
                 secret_access: false,
             },
         }
