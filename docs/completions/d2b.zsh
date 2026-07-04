@@ -93,6 +93,98 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__usb__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-usb-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'()--current[Cancel the currently active session]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id -- Session ID to cancel. Mutually exclusive with `--current`:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--dry-run[]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-usb-security-key-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_d2b__subcmd__usb__subcmd__help_commands" \
@@ -116,6 +208,38 @@ _arguments "${_arguments_options[@]}" : \
 (probe)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+":: :_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-usb-help-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -1299,6 +1423,38 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+":: :_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-help-usb-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
         esac
     ;;
 esac
@@ -2338,6 +2494,7 @@ _d2b__subcmd__help__subcmd__usb_commands() {
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
 'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
+'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
     )
     _describe -t commands 'd2b help usb commands' commands "$@"
 }
@@ -2355,6 +2512,36 @@ _d2b__subcmd__help__subcmd__usb__subcmd__detach_commands() {
 _d2b__subcmd__help__subcmd__usb__subcmd__probe_commands() {
     local commands; commands=()
     _describe -t commands 'd2b help usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands] )) ||
+_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands() {
+    local commands; commands=(
+'status:Show security-key proxy health, configured keys, and current lease' \
+'sessions:Show recent and active security-key request sessions' \
+'cancel:Cancel a security-key request session' \
+'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+    )
+    _describe -t commands 'd2b help usb security-key commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__cancel_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help usb security-key cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help usb security-key sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help usb security-key status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help usb security-key test commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__help__subcmd__vm_commands] )) ||
 _d2b__subcmd__help__subcmd__vm_commands() {
@@ -2777,6 +2964,7 @@ _d2b__subcmd__usb_commands() {
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
 'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
+'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b usb commands' commands "$@"
@@ -2797,6 +2985,7 @@ _d2b__subcmd__usb__subcmd__help_commands() {
 'attach:Bind a host USB busid to a VM via the native daemon path' \
 'detach:Unbind a host USB busid from a VM via the native daemon path' \
 'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
+'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b usb help commands' commands "$@"
@@ -2821,10 +3010,107 @@ _d2b__subcmd__usb__subcmd__help__subcmd__probe_commands() {
     local commands; commands=()
     _describe -t commands 'd2b usb help probe commands' commands "$@"
 }
+(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands] )) ||
+_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands() {
+    local commands; commands=(
+'status:Show security-key proxy health, configured keys, and current lease' \
+'sessions:Show recent and active security-key request sessions' \
+'cancel:Cancel a security-key request session' \
+'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+    )
+    _describe -t commands 'd2b usb help security-key commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__cancel_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb help security-key cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb help security-key sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb help security-key status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb help security-key test commands' commands "$@"
+}
 (( $+functions[_d2b__subcmd__usb__subcmd__probe_commands] )) ||
 _d2b__subcmd__usb__subcmd__probe_commands() {
     local commands; commands=()
     _describe -t commands 'd2b usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key_commands() {
+    local commands; commands=(
+'status:Show security-key proxy health, configured keys, and current lease' \
+'sessions:Show recent and active security-key request sessions' \
+'cancel:Cancel a security-key request session' \
+'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'd2b usb security-key commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__cancel_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands() {
+    local commands; commands=(
+'status:Show security-key proxy health, configured keys, and current lease' \
+'sessions:Show recent and active security-key request sessions' \
+'cancel:Cancel a security-key request session' \
+'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'd2b usb security-key help commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__cancel_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__cancel_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key help cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__help_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key help help commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__sessions_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key help sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__status_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key help status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__test_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key help test commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__usb__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b usb security-key test commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__vm_commands] )) ||
 _d2b__subcmd__vm_commands() {
