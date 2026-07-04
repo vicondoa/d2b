@@ -124,7 +124,7 @@ in
     expected = true;
   };
 
-  "security-key-gating/guest-activation-users-after-etc" = {
+  "security-key-gating/guest-activation-refreshes-users-after-etc" = {
     expr =
       let
         activation = (guestConfig enabledEval "corp-vm").system.activationScripts;
@@ -135,7 +135,10 @@ in
       in
       activation ? d2bEnsureEtcForUsers
       && ensureText != ""
-      && builtins.elem "etc" activation.users.deps;
+      && activation ? d2bRefreshUsersAfterEtc
+      && builtins.elem "d2bEnsureEtcForUsers" activation.users.deps
+      && builtins.elem "etc" activation.d2bRefreshUsersAfterEtc.deps
+      && builtins.match ".*update-users-groups\\.pl.*" activation.d2bRefreshUsersAfterEtc.text != null;
     expected = true;
   };
 
