@@ -9471,7 +9471,7 @@ mod tests {
                     effective_east_west: false,
                 },
                 net_vm_forward_blocklist: vec!["0.0.0.0/0".to_owned()],
-                home_lan: None,
+                external_network: None,
                 bridge_port_flags: vec![
                     BridgePortFlags {
                         role: TapRole::WorkloadLan,

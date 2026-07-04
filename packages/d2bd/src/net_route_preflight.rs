@@ -428,7 +428,7 @@ mod tests {
                 effective_east_west: false,
             },
             net_vm_forward_blocklist: Vec::new(),
-            home_lan: None,
+            external_network: None,
             bridge_port_flags: Vec::new(),
             ipv6_sysctls: Vec::new(),
             usbip_busid_locks: Vec::new(),

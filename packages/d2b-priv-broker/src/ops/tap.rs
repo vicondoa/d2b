@@ -946,7 +946,7 @@ mod tests {
                     effective_east_west: false,
                 },
                 net_vm_forward_blocklist: Vec::new(),
-                home_lan: None,
+                external_network: None,
                 bridge_port_flags: vec![HostBridgePortFlags {
                     role: TapRole::WorkloadLan,
                     isolated: true,
