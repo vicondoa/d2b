@@ -104,6 +104,9 @@ The contracts. Stable interfaces a consumer can depend on.
   - [`reference/components-usbip.md`](./reference/components-usbip.md) —
     `d2b.vms.<vm>.usbip.*` (YubiKey USBIP passthrough) plus the
     per-env host-side backend/proxy runners.
+  - [`reference/components-usb-security-key.md`](./reference/components-usb-security-key.md) —
+    `d2b.host.usb.securityKey.*` and
+    `d2b.vms.<vm>.usb.securityKey.*` (CTAPHID/WebAuthn proxy).
   - [`reference/components-audio.md`](./reference/components-audio.md) —
     `d2b.vms.<vm>.audio.*` (vhost-user-sound + PipeWire) plus
     the `d2b audio` CLI surface.
@@ -145,6 +148,10 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 - [`how-to/troubleshoot-usbip.md`](./how-to/troubleshoot-usbip.md) —
   configure USBIP prerequisites, interpret degraded probe/status rows, and
   recover claimed YubiKeys after VM restart.
+- [`how-to/use-usb-security-key.md`](./how-to/use-usb-security-key.md) —
+  configure the CTAPHID/WebAuthn security-key proxy for Firefox/browser logins.
+- [`how-to/migrate-usbip-yubikey-to-security-key.md`](./how-to/migrate-usbip-yubikey-to-security-key.md) —
+  move browser WebAuthn usage from YubiKey USBIP passthrough to the proxy.
 - [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) —
   port an existing `microvm.nix` deployment onto `d2b`: option
   mapping, step-by-step procedure, troubleshooting.

@@ -60,9 +60,7 @@ in
     # uaccess-style matching is not needed — group ownership is enough.
     services.udev.extraRules = ''
       # d2b security-key: grant fido group access to FIDO/CTAPHID HID raw nodes.
-      SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="1050", GROUP="fido", MODE="0660"
-      # Match virtual FIDO devices (d2b-sk-frontend uhid device) and any
-      # other HID device with the FIDO Alliance usage page reported via phys.
+      # Match only the virtual FIDO device created by d2b-sk-frontend.
       KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{phys}=="d2b-sk*", GROUP="fido", MODE="0660"
     '';
 
@@ -77,6 +75,7 @@ in
       description = "d2b virtual FIDO/CTAPHID security-key frontend (vm ${name})";
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" "systemd-udev-settle.service" ];
+      startLimitIntervalSec = 0;
       # Do not require the udev settle: the uhid module may not be loaded
       # yet at service start, but the binary will retry on failure.
 
@@ -93,10 +92,6 @@ in
         # Wait 2s before the first restart attempt to avoid spinning on a
         # kernel that is still loading the uhid module.
         RestartSec = "2s";
-        # Increase the rate-limit window so transient failures don't trigger
-        # start-limit-hit.
-        StartLimitIntervalSec = "60s";
-        StartLimitBurst = 10;
         # Not privileged: runs as root only to open /dev/uhid (mode 0600
         # root:root on some kernels). If the guest sets uhid to 0660
         # root:input, we can drop to the login user with

@@ -44,7 +44,7 @@ the transition path.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `d2b.host.usb.securityKey.enable` | `bool` | `false` | Enable the host-side security-key broker. Required before any VM can opt in. When `false`, no broker socket is created and no udev rules for FIDO-class HID devices are installed. |
-| `d2b.host.usb.securityKey.devices` | `listOf deviceSelector` | `[]` (all FIDO2) | Restrict broker access to specific physical devices. An empty list matches all FIDO2-class HID devices (usage-page `0xF1D0`, vendor `1050`). See [Device selectors](#device-selectors). |
+| `d2b.host.usb.securityKey.devices` | `listOf deviceSelector` | `[]` | Restrict broker access to specific physical devices. An empty list grants no security-key access until selectors are declared. See [Device selectors](#device-selectors). |
 | `d2b.host.usb.securityKey.ceremony.timeoutSecs` | `int` | `120` | Maximum seconds the broker waits for a user-presence touch before cancelling an active CTAP ceremony and returning `CTAPHID_ERROR` to the guest. |
 | `d2b.host.usb.securityKey.queue.timeoutSecs` | `int` | `15` | Maximum seconds a second VM's request waits while another ceremony is in progress. When this elapses, the queued VM receives an immediate timeout error. |
 | `d2b.host.usb.securityKey.notifications.enable` | `bool` | `true` | Emit desktop notifications for ceremony start, touch-wait, contention, and failure events via the d2b notification subsystem. |
@@ -75,23 +75,22 @@ The following conditions are enforced at NixOS eval time (before any build):
 ## Device selectors
 
 `d2b.host.usb.securityKey.devices` is a list of selector objects. An empty
-list (the default) matches all FIDO2-class HID devices. Supported selector
-forms:
+list (the default) grants no device access. Each selector must include a
+stable label, USB vendor/product IDs, and an optional serial:
 
 ```nix
-# Match by udev by-id symlink (most stable across reboots)
-{ selector = "by-id"; id = "usb-Yubico_YubiKey_OTP+FIDO+CCID_XXXXXXXXXXXX-if00"; }
-
-# Match by vendor/product/serial (stable for permanently-registered keys)
-{ selector = "vpid"; vendor = "0x1050"; product = "0x0407"; serial = "XXXXXXXXXXXX"; }
-
-# Match any device from a specific vendor (use with care: broad)
-{ selector = "vendor"; vendor = "0x1050"; }
+{
+  label = "yubikey-primary";
+  vendorId = 4176;  # 0x1050, Yubico
+  productId = 1031; # 0x0407, YubiKey 5 NFC
+  serial = null;    # or "XXXXXXXXXXXX" to disambiguate identical keys
+}
 ```
 
 > **Note:** Raw `/dev/hidrawN` paths are not supported as selectors because
 > device indices change across reboots and when other HID devices are added or
-> removed. Use one of the stable selector forms above.
+> removed. Broad vendor-only selectors are not supported; each configured
+> device must name a specific vendor/product pair from the FIDO allowlist.
 
 ## Host-side resources (broker-owned, not NixOS module-declared)
 

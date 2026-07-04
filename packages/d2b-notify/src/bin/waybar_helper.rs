@@ -24,6 +24,7 @@ use d2b_notify::{
     state::SkNotifyState,
     waybar::{print_waybar_block, waybar_block_from_state},
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_STATE_PATH: &str = "/run/d2b/notify/sk-state.json";
 
@@ -43,17 +44,25 @@ fn main() {
         }
     };
 
-    let state = match SkNotifyState::from_json(&raw) {
+    let mut state = match SkNotifyState::from_json(&raw) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("d2b-sk-waybar-helper: {e}");
             std::process::exit(2);
         }
     };
+    state.prune_stale_active(now_secs());
 
     let block = waybar_block_from_state(&state);
     if let Err(e) = print_waybar_block(&block) {
         eprintln!("d2b-sk-waybar-helper: output error: {e}");
         std::process::exit(2);
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }

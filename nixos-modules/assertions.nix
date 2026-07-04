@@ -1377,9 +1377,9 @@ let
           FIDO-class allowlist: ${
             lib.concatStringsSep ", " (map (d: "0x${lib.toHexString d.vendorId} (label: ${d.label})") nonFidoDevices)
           }. Only known FIDO/CTAP security-key vendors are permitted.
-          Use `d2b usb security-key probe` to verify your device's
-          vendorId, or add it to the framework allowlist if it is a
-          legitimate FIDO2 device.
+          Use host udev/sysfs inventory or `d2b usb probe` to verify your
+          device's vendorId, or add it to the framework allowlist if it is
+          a legitimate FIDO2 device.
         '';
       }
     ]);

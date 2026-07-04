@@ -50,7 +50,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -414,21 +414,9 @@ pub struct HidrawDevice {
 
 impl HidrawDevice {
     pub fn from_owned_fd(fd: OwnedFd) -> Self {
-        let _ = Self::clear_nonblocking(&fd);
         Self {
             file: File::from(fd),
         }
-    }
-
-    fn clear_nonblocking<F: AsRawFd>(fd: &F) -> std::io::Result<()> {
-        use nix::fcntl::{FcntlArg, OFlag, fcntl};
-
-        let raw_fd = fd.as_raw_fd();
-        let flags = fcntl(raw_fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
-        let mut flags = OFlag::from_bits_truncate(flags);
-        flags.remove(OFlag::O_NONBLOCK);
-        fcntl(raw_fd, FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
-        Ok(())
     }
 
     /// Blocking read of a single 64-byte CTAPHID report from the
@@ -443,6 +431,31 @@ impl HidrawDevice {
     /// physical token. Call from `tokio::task::spawn_blocking`.
     pub fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
         (&self.file).write_all(report)
+    }
+}
+
+fn track_response_cid(report: &CtaphidReport, cids: &parking_lot::Mutex<HashSet<u32>>) {
+    if report[0..4] != CTAPHID_BROADCAST_CID.to_be_bytes()
+        || report[4] != CTAPHID_INIT
+        || u16::from_be_bytes([report[5], report[6]]) < 17
+    {
+        return;
+    }
+    let allocated = u32::from_be_bytes([report[15], report[16], report[17], report[18]]);
+    if allocated != 0 && allocated != CTAPHID_BROADCAST_CID {
+        cids.lock().insert(allocated);
+    }
+}
+
+async fn read_hidraw_report_polling(hidraw: &HidrawDevice) -> std::io::Result<CtaphidReport> {
+    loop {
+        match hidraw.read_report() {
+            Ok(report) => return Ok(report),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -676,52 +689,34 @@ pub(crate) async fn run_connection(
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
 
-    let active_host_cid = Arc::new(parking_lot::Mutex::new(None::<u32>));
-    let cid_translator = Arc::new(parking_lot::Mutex::new(CidTranslator::new()));
+    let active_cids = Arc::new(parking_lot::Mutex::new(HashSet::<u32>::new()));
     let (mut stream_reader, mut stream_writer) = stream.into_split();
 
     let mut guest_to_hidraw = tokio::spawn({
-        let active_host_cid = Arc::clone(&active_host_cid);
-        let cid_translator = Arc::clone(&cid_translator);
+        let active_cids = Arc::clone(&active_cids);
         let hidraw = Arc::clone(&hidraw);
         async move {
             loop {
-                let mut report = match recv_report_async(&mut stream_reader).await {
+                let report = match recv_report_async(&mut stream_reader).await {
                     Ok(report) => report,
                     Err(error) if relay_eof(&error) => return Ok(()),
                     Err(error) => return Err(error),
                 };
 
-                let host_cid = {
-                    let packet = parse_ctaphid_report(&report);
-                    let mut translator = cid_translator.lock();
-                    match packet {
-                        CtaphidPacket::Init(packet) => {
-                            let host_cid = if packet.cid == CTAPHID_BROADCAST_CID {
-                                translator.alloc_host_cid(packet.cid)
-                            } else {
-                                translator.guest_to_host(packet.cid).ok_or_else(|| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        "unknown guest cid",
-                                    )
-                                })?
-                            };
-                            *active_host_cid.lock() = Some(host_cid);
-                            host_cid
-                        }
-                        CtaphidPacket::Cont(packet) => {
-                            translator.guest_to_host(packet.cid).ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    "unknown guest cid",
-                                )
-                            })?
-                        }
+                match parse_ctaphid_report(&report) {
+                    CtaphidPacket::Init(packet)
+                        if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
+                    {
+                        active_cids.lock().insert(packet.cid);
                     }
-                };
+                    CtaphidPacket::Cont(packet)
+                        if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
+                    {
+                        active_cids.lock().insert(packet.cid);
+                    }
+                    _ => {}
+                }
 
-                report[0..4].copy_from_slice(&host_cid.to_be_bytes());
                 let hidraw = Arc::clone(&hidraw);
                 tokio::task::spawn_blocking(move || hidraw.write_report(&report))
                     .await
@@ -733,28 +728,18 @@ pub(crate) async fn run_connection(
     });
 
     let mut hidraw_to_guest = tokio::spawn({
-        let cid_translator = Arc::clone(&cid_translator);
+        let active_cids = Arc::clone(&active_cids);
         let hidraw = Arc::clone(&hidraw);
         async move {
             loop {
-                let hidraw = Arc::clone(&hidraw);
-                let mut report = match tokio::task::spawn_blocking(move || hidraw.read_report())
-                    .await
-                    .map_err(relay_join_error)?
-                {
-                    Ok(report) => report,
+                let report = match read_hidraw_report_polling(&hidraw).await {
+                    Ok(report) => {
+                        track_response_cid(&report, &active_cids);
+                        report
+                    }
                     Err(error) if relay_eof(&error) => return Ok(()),
                     Err(error) => return Err(error),
                 };
-
-                let host_cid = u32::from_be_bytes([report[0], report[1], report[2], report[3]]);
-                let guest_cid = {
-                    let translator = cid_translator.lock();
-                    translator.host_to_guest(host_cid).ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown host cid")
-                    })?
-                };
-                report[0..4].copy_from_slice(&guest_cid.to_be_bytes());
                 send_report_async(&mut stream_writer, &report).await?;
             }
             #[allow(unreachable_code)]
@@ -790,9 +775,9 @@ pub(crate) async fn run_connection(
         let _ = guest_to_hidraw.await;
     }
 
-    let cancel_host_cid = { *active_host_cid.lock() };
-    if let Some(host_cid) = cancel_host_cid {
-        let cancel_packet = build_cancel_packet(host_cid);
+    let cancel_cids: Vec<u32> = active_cids.lock().iter().copied().collect();
+    for cid in cancel_cids {
+        let cancel_packet = build_cancel_packet(cid);
         let hidraw = Arc::clone(&hidraw);
         let _ = tokio::task::spawn_blocking(move || hidraw.write_report(&cancel_packet)).await;
     }

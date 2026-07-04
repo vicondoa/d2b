@@ -44,17 +44,22 @@ Add the following to your d2b host configuration:
 d2b.host.usb.securityKey = {
   enable = true;
   # Optional: restrict to specific device stable selectors.
-  # Defaults to all FIDO2-class HID devices (vendor 1050, usage-page 0xF1D0).
+  # Defaults to no configured devices until a selector is declared.
   # devices = [
-  #   { selector = "by-id"; id = "FIDO:1050:0407:..."; }
+  #   {
+  #     label = "yubikey-primary";
+  #     vendorId = 4176;  # 0x1050, Yubico
+  #     productId = 1031; # 0x0407, YubiKey 5 NFC
+  #     serial = null;   # or the device serial when needed
+  #   }
   # ];
 };
 ```
 
-> **Why `by-id` selectors?** Raw `/dev/hidrawN` paths depend on probe order
-> and change across reboots. Use stable selectors (`by-id`, `by-serial`, or
-> vendor/product/serial tuples) so the broker resolves the same physical
-> device consistently. See the
+> **Why stable selectors?** Raw `/dev/hidrawN` paths depend on probe order
+> and change across reboots. Use a stable `label` plus
+> `vendorId`/`productId`/optional `serial` so the broker resolves the same
+> physical device consistently. See the
 > [option reference](../reference/components-usb-security-key.md#device-selectors)
 > for selector forms.
 
@@ -143,9 +148,9 @@ d2b usb security-key sessions
 Cancel a stuck or timed-out request:
 
 ```bash
-d2b usb security-key cancel --current
+d2b usb security-key cancel --current --apply
 # or by session ID:
-d2b usb security-key cancel <session-id>
+d2b usb security-key cancel <session-id> --apply
 ```
 
 ## Contention: two VMs requesting at the same time

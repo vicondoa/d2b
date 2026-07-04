@@ -49,7 +49,7 @@ let
           Google Titan 0x18d1, etc.). Raw vendor IDs outside the known
           FIDO-class set are rejected at eval time.
 
-          Use `d2b usb security-key probe` at runtime to discover the
+          Use host udev/sysfs inventory or `d2b usb probe` to identify the
           vendorId of a plugged-in token.
         '';
       };

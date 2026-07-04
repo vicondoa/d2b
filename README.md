@@ -29,8 +29,8 @@ d2b gives you boundaries without device juggling:
 - **Isolated store views:** each guest sees a per-VM `/nix/store`
   hardlink farm containing only its own closure.
 - **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
-  and virtiofs file sharing are broker-supervised per-VM sidecars
-  instead of ad-hoc host services.
+  CTAPHID security-key proxying, and virtiofs file sharing are
+  broker-supervised per-VM sidecars instead of ad-hoc host services.
 - **One Wayland desktop:** graphical realms integrate with the host
   compositor without asking you to live in a separate desktop.
 - **Shared UI colors:** d2b can emit a compositor-agnostic JSON and
@@ -92,6 +92,8 @@ table of the doc-friendly example aliases (`personal-dev`,
 `graphics-workstation`, `multi-env`) plus the manual integration path.
 For reconnectable interactive shells, see
 [Use persistent guest shells](./docs/how-to/use-persistent-shells.md).
+For browser WebAuthn with a host-attached YubiKey/security key, see
+[Use the USB security-key proxy](./docs/how-to/use-usb-security-key.md).
 
 ## Who this is for
 

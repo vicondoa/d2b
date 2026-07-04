@@ -79,6 +79,9 @@ pub struct SkNotifyState {
 impl SkNotifyState {
     /// Maximum number of terminal entries retained in `recent_terminal`.
     pub const MAX_RECENT_TERMINAL: usize = 8;
+    /// Active entries older than this are ignored by status consumers unless a
+    /// newer broker event refreshes them.
+    pub const ACTIVE_STALE_AFTER_SECS: u64 = 300;
 
     /// Construct an empty state.
     pub fn empty(now_secs: u64) -> Self {
@@ -94,6 +97,7 @@ impl SkNotifyState {
     ///
     /// The caller is responsible for writing the updated state to disk.
     pub fn apply(mut self, event: &SecurityKeyEvent, now_secs: u64) -> Self {
+        self.prune_stale_active(now_secs);
         self.updated_at = now_secs;
         let summary = CeremonySummary::from_event(event, now_secs);
 
@@ -115,6 +119,14 @@ impl SkNotifyState {
             }
         }
         self
+    }
+
+    /// Drop active entries whose last event is too old to represent a live
+    /// ceremony. This keeps Waybar/wlcontrol from showing a stuck active key
+    /// forever if the broker crashes before emitting a terminal event.
+    pub fn prune_stale_active(&mut self, now_secs: u64) {
+        self.active
+            .retain(|s| now_secs.saturating_sub(s.last_event_at) <= Self::ACTIVE_STALE_AFTER_SECS);
     }
 
     /// Serialize to a compact JSON string.
@@ -256,6 +268,28 @@ mod tests {
             .apply(&timed_out("s2", "vm"), T0 + 3);
         assert_eq!(state.recent_terminal[0].session_id, "s2");
         assert_eq!(state.recent_terminal[1].session_id, "s1");
+    }
+
+    #[test]
+    fn stale_active_entries_are_pruned_when_applying_events() {
+        let state = SkNotifyState::empty(T0)
+            .apply(&started("stale", "vm1"), T0)
+            .apply(
+                &started("fresh", "vm2"),
+                T0 + SkNotifyState::ACTIVE_STALE_AFTER_SECS + 1,
+            );
+
+        assert_eq!(state.active.len(), 1);
+        assert_eq!(state.active[0].session_id, "fresh");
+    }
+
+    #[test]
+    fn explicit_prune_removes_stale_active_entries() {
+        let mut state = SkNotifyState::empty(T0).apply(&started("stale", "vm1"), T0);
+
+        state.prune_stale_active(T0 + SkNotifyState::ACTIVE_STALE_AFTER_SECS + 1);
+
+        assert!(state.active.is_empty());
     }
 
     #[test]
