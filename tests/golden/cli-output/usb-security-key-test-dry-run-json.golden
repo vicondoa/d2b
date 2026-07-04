@@ -1,0 +1,11 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+{
+  "command": "usb security-key test",
+  "mode": "dry-run",
+  "notes": "Dry-run preview; the live path queries the daemon for virtual-HID presence in the guest and physical-key visibility on the host broker.",
+  "planned": [
+    "CheckGuestVirtualHidDevice",
+    "CheckHostBrokerPhysicalKeyVisibility"
+  ],
+  "vm": "corp-vm"
+}

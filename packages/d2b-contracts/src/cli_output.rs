@@ -687,3 +687,55 @@ pub struct VmAudioSetOutputV1 {
     /// Whether the channel is muted after the operation.
     pub muted: bool,
 }
+
+// ---- USB security-key proxy CLI output types (version 1) ----
+//
+// These types are the stable JSON contract for `d2b usb security-key ...`
+// output. They use `deny_unknown_fields` to catch schema drift early.
+// The daemon runtime that populates them will ship in a later workstream.
+
+/// Output for `d2b usb security-key status --json` (version 1).
+///
+/// While the daemon handler is not yet implemented, the CLI emits the
+/// `not-yet-implemented` error envelope instead of this type. This type
+/// defines the expected shape for when the handler ships.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkStatusOutputV1 {
+    pub command: String,
+    pub host_proxy_enabled: bool,
+    pub physical_keys: Vec<crate::public_wire::UsbSkPhysicalKeyStatus>,
+    pub vm_devices: Vec<crate::public_wire::UsbSkVirtualDeviceStatus>,
+    pub lease: crate::public_wire::UsbSkLeaseStatus,
+}
+
+/// Output for `d2b usb security-key sessions --json` (version 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkSessionsOutputV1 {
+    pub command: String,
+    pub sessions: Vec<crate::public_wire::UsbSkSession>,
+}
+
+/// Output for `d2b usb security-key cancel --dry-run --json` (version 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkCancelDryRunOutputV1 {
+    pub command: String,
+    pub mode: String,
+    /// `"current"` or the explicit session ID.
+    pub target: String,
+    pub planned: Vec<String>,
+    pub notes: String,
+}
+
+/// Output for `d2b usb security-key test --dry-run --json` (version 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsbSkTestDryRunOutputV1 {
+    pub command: String,
+    pub mode: String,
+    pub vm: String,
+    pub planned: Vec<String>,
+    pub notes: String,
+}

@@ -1,0 +1,1 @@
+d2b usb security-key test --dry-run: would check virtual HID device presence in 'corp-vm' and confirm host broker sees the physical security key

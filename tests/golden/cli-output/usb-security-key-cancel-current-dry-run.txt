@@ -1,0 +1,1 @@
+d2b usb security-key cancel --dry-run: would send CancelSession(current) to the security-key proxy broker

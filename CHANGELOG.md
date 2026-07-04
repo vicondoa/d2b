@@ -12,6 +12,42 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `d2b usb security-key` subcommand family exposing four operator surfaces
+  for the CTAP/WebAuthn security-key proxy feature:
+  - `d2b usb security-key status [--json|--human]` — show proxy health,
+    configured physical keys, per-VM virtual-device health, and current lease.
+  - `d2b usb security-key sessions [--json|--human]` — list recent and active
+    security-key request sessions, VM, RP ID, outcome, and timeout.
+  - `d2b usb security-key cancel {<session-id>|--current} [--dry-run|--apply]
+    [--json|--human]` — cancel a stuck security-key request session; `--dry-run`
+    shows the planned `SecurityKeyProxyCancelSession` broker op.
+  - `d2b usb security-key test <vm> [--dry-run] [--json|--human]` — smoke-check
+    that the guest virtual HID device and the host broker's physical-key
+    visibility are healthy; `--dry-run` shows the two planned checks.
+- Added USB security-key wire contract types in `d2b-contracts::public_wire`:
+  `UsbSecurityKeyStatusRequest/Response`, `UsbSecurityKeySessionsRequest/Response`,
+  `UsbSecurityKeyCancelRequest/Response`, `UsbSecurityKeyTestRequest/Response`,
+  and supporting DTOs (`UsbSkPhysicalKeyStatus`, `UsbSkVirtualDeviceStatus`,
+  `UsbSkLeaseStatus`, `UsbSkLeaseState`, `UsbSkSession`, `UsbSkSessionOutcome`,
+  `UsbSkTestCheck`).
+- Added CLI output types in `d2b-contracts::cli_output`:
+  `UsbSkStatusOutputV1`, `UsbSkSessionsOutputV1`, `UsbSkCancelDryRunOutputV1`,
+  `UsbSkTestDryRunOutputV1`.
+- Added CLI golden tests under `packages/d2b/tests/usb_sk_contract.rs` covering:
+  `usb security-key --help`, `cancel --current --dry-run`, `test <vm> --dry-run`,
+  and `not-yet-implemented` exit-78 envelope for all live paths.
+- Extended `packages/d2b/tests/cli_json_output_contract.rs` with
+  `usb_security_key_dry_run_outputs_match_goldens`,
+  `usb_security_key_status_not_yet_implemented`, and
+  `usb_security_key_sessions_not_yet_implemented` tests.
+- The use of "security key" as the user-facing term for CTAP/WebAuthn
+  authenticators is now established in CLI help, JSON envelopes, and docs.
+  The FIDO/CTAP terminology is reserved for diagnostic output and technical docs.
+
+  The live paths (`status`, `sessions`, `cancel --apply`, `test <vm>` without
+  `--dry-run`) emit exit 78 with a `not-yet-implemented` envelope until the
+  daemon broker handler lands in a later workstream.
+
 - Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
   surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
   policy.
