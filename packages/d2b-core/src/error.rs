@@ -274,6 +274,7 @@ pub enum Error {
     Internal(InternalError),
     Bundle(BundleError),
     Audio(AudioError),
+    PublicEnvelope(ErrorEnvelope),
 }
 
 impl Error {
@@ -373,7 +374,7 @@ impl Error {
         &ERROR_KIND_RECORDS
     }
 
-    pub const fn kind(&self) -> Kind {
+    pub fn kind(&self) -> Kind {
         match self {
             Self::Authz(error) => error.kind(),
             Self::Wire(error) => error.kind(),
@@ -382,11 +383,15 @@ impl Error {
             Self::Internal(error) => error.kind(),
             Self::Bundle(error) => error.kind(),
             Self::Audio(error) => error.kind(),
+            Self::PublicEnvelope(envelope) => envelope.kind,
         }
     }
 
-    pub const fn code(&self) -> u8 {
-        self.kind().exit_code()
+    pub fn code(&self) -> u8 {
+        match self {
+            Self::PublicEnvelope(envelope) => envelope.code,
+            _ => self.kind().exit_code(),
+        }
     }
 
     pub fn message(&self) -> String {
@@ -398,23 +403,33 @@ impl Error {
             Self::Internal(error) => error.message(),
             Self::Bundle(error) => error.message(),
             Self::Audio(error) => error.message(),
+            Self::PublicEnvelope(envelope) => envelope.message.clone(),
         }
     }
 
-    pub const fn message_template(&self) -> &'static str {
+    pub fn message_template(&self) -> &'static str {
         self.kind().message_template()
     }
 
-    pub const fn remediation(&self) -> &'static str {
-        self.kind().remediation()
+    pub fn remediation(&self) -> &str {
+        match self {
+            Self::PublicEnvelope(envelope) => envelope.remediation.as_str(),
+            _ => self.kind().remediation(),
+        }
     }
 
     pub fn docs_anchor(&self) -> String {
-        format!("docs/reference/error-codes.md{}", self.kind().docs_anchor())
+        match self {
+            Self::PublicEnvelope(envelope) => envelope.docs_anchor.clone(),
+            _ => format!("docs/reference/error-codes.md{}", self.kind().docs_anchor()),
+        }
     }
 
-    pub const fn owning_command(&self) -> &'static str {
-        self.kind().owning_command()
+    pub fn owning_command(&self) -> &str {
+        match self {
+            Self::PublicEnvelope(envelope) => envelope.owning_command.as_str(),
+            _ => self.kind().owning_command(),
+        }
     }
 }
 
@@ -914,9 +929,9 @@ impl JsonSchema for SemverRange {
     }
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct ErrorEnvelope {
+pub struct ErrorEnvelope {
     kind: Kind,
     code: u8,
     message: String,
@@ -939,6 +954,22 @@ impl Serialize for Error {
             owning_command: self.owning_command().to_owned(),
         }
         .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Error {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let envelope = ErrorEnvelope::deserialize(deserializer)?;
+        if envelope.code != envelope.kind.exit_code() {
+            return Err(serde::de::Error::custom(format!(
+                "error envelope code {} does not match kind {}",
+                envelope.code, envelope.kind
+            )));
+        }
+        Ok(Self::PublicEnvelope(envelope))
     }
 }
 

@@ -132,7 +132,7 @@ pub enum PublicRequest {
     UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelRequest),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
 pub enum PublicResponse {
     #[serde(rename = "capabilities")]
@@ -2007,7 +2007,7 @@ pub enum MutatingVerbOutcome {
     InvalidRequest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilitiesResponse {
     pub broker_socket: String,
@@ -2017,7 +2017,7 @@ pub struct CapabilitiesResponse {
     pub selected_version: Version,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthStatusResponse {
     pub allowed_subcommands: Vec<String>,
@@ -2026,7 +2026,7 @@ pub struct AuthStatusResponse {
     pub sockets: Vec<SocketReachability>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListResponse {
     pub vms: Vec<ListEntry>,
@@ -2034,7 +2034,7 @@ pub struct ListResponse {
     pub read_model: Option<PublicReadModelMetadata>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusResponse {
     pub entries: Vec<VmStatus>,
@@ -2054,13 +2054,13 @@ pub struct PublicReadModelMetadata {
     pub deep_refresh: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditResponse {
     pub entries: Vec<AuditEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostCheckResponse {
     pub exit_code: u8,
@@ -2571,10 +2571,11 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelPercent, MutationFlags, PublicRequest, RuntimeSummary, VmLifecycleRequest,
-        VmLifecycleState,
+        LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
+        VmLifecycleRequest, VmLifecycleState,
     };
-    use crate::{decode_frame, encode_frame};
+    use crate::{FeatureFlag, Version, decode_frame, encode_frame};
+    use d2b_core::error::Error;
     use d2b_core::{
         processes::ProcessRole,
         runtime::{RuntimeOperationCapabilities, RuntimeServiceRole, RuntimeServiceSummary},
@@ -2584,6 +2585,98 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn public_response_deserializes_success_envelopes() {
+        let capability_value = serde_json::json!({
+            "kind": "capabilities",
+            "payload": {
+                "brokerSocket": "/run/d2b/priv.sock",
+                "capabilities": ["typed-errors"],
+                "publicSocket": "/run/d2b/public.sock",
+                "serverVersion": "1.2.3",
+                "selectedVersion": "1.2.0"
+            }
+        });
+        let decoded: PublicResponse =
+            serde_json::from_value(capability_value.clone()).expect("capabilities decodes");
+        match decoded {
+            PublicResponse::Capabilities(response) => {
+                assert_eq!(response.broker_socket, "/run/d2b/priv.sock");
+                assert_eq!(
+                    response.capabilities,
+                    vec![FeatureFlag::new("typed-errors").expect("valid feature")]
+                );
+                assert_eq!(
+                    response.server_version,
+                    Version::new("1.2.3").expect("valid version")
+                );
+            }
+            other => panic!("unexpected response variant: {other:?}"),
+        }
+
+        for value in [
+            serde_json::json!({
+                "kind": "auth status",
+                "payload": {
+                    "allowedSubcommands": ["list"],
+                    "deniedSubcommands": [{"command": "audit", "reason": "admin only"}],
+                    "role": "launcher",
+                    "sockets": [{"reachable": true, "socket": "/run/d2b/public.sock"}]
+                }
+            }),
+            serde_json::json!({"kind": "list", "payload": {"vms": []}}),
+            serde_json::json!({"kind": "status", "payload": {"entries": []}}),
+            serde_json::json!({
+                "kind": "audit",
+                "payload": {
+                    "entries": [{
+                        "action": "vm-start",
+                        "result": "ok",
+                        "scope": "vm:corp-vm",
+                        "timestamp": "2026-07-05T18:00:00Z"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "kind": "host check",
+                "payload": {
+                    "exitCode": 0,
+                    "findings": [{
+                        "check": "bridge",
+                        "message": "ok",
+                        "remediation": "none",
+                        "severity": "Pass"
+                    }]
+                }
+            }),
+        ] {
+            serde_json::from_value::<PublicResponse>(value).expect("public response decodes");
+        }
+    }
+
+    #[test]
+    fn public_response_deserializes_error_envelope_losslessly() {
+        let response = PublicResponse::Error(Error::broker_validation_failed("opaque target"));
+        let value = serde_json::to_value(&response).expect("error response serializes");
+
+        let decoded: PublicResponse =
+            serde_json::from_value(value.clone()).expect("error response decodes");
+        let PublicResponse::Error(error) = decoded else {
+            panic!("expected error response");
+        };
+
+        assert_eq!(error.kind(), Error::broker_validation_failed("x").kind());
+        assert_eq!(error.code(), 31);
+        assert_eq!(
+            error.message(),
+            "broker validation failed for opaque target opaque target"
+        );
+        assert_eq!(
+            serde_json::to_value(PublicResponse::Error(error)).unwrap(),
+            value
+        );
     }
 
     #[test]

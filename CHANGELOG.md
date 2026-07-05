@@ -15,6 +15,9 @@ deprecations ship one minor release before removal.
 - Documented the stable public-socket discovery contract for persistent shells
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
+- Added typed deserialization support for public daemon response envelopes so
+  downstream clients can parse `PublicResponse` DTOs without falling back to
+  untyped JSON.
 - Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
   `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
   CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
