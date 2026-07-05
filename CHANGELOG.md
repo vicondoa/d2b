@@ -183,9 +183,9 @@ deprecations ship one minor release before removal.
 
 - Guest VMs now cap persistent systemd journals by default so `/var/log/journal`
   cannot fill small per-VM `/var` images and corrupt NixOS activation state.
-- Security-key host relay now runs blocking physical hidraw reads on a blocking
-  worker thread so the single-thread per-VM accept-loop runtime can still forward
-  guest CTAPHID requests to the token.
+- Security-key host relay now drives the physical hidraw fd through
+  cancellation-safe `AsyncFd` I/O so guest disconnects cannot leave orphaned
+  reader threads racing future sessions.
 - Security-key guest frontend now strips the kernel-supplied zero report-ID byte
   from UHID output reports before forwarding CTAPHID frames to the host broker.
 - Security-key guest udev rules now match the virtual UHID FIDO device by its

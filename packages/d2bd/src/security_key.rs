@@ -40,12 +40,11 @@
 //!
 //! ## Blocking I/O
 //!
-//! [`HidrawDevice`] wraps the fd handed off by the broker in a plain
-//! `std::fs::File` (a safe `OwnedFd -> File` conversion — this crate's
-//! workspace lints `forbid(unsafe_code)`, so no raw fd reconstruction
-//! is used). Reads/writes against it should be dispatched via
-//! `tokio::task::spawn_blocking` so the async executor is never
-//! stalled waiting for user touch.
+//! [`HidrawDevice`] wraps the fd handed off by the broker in
+//! `AsyncFd<std::fs::File>` (a safe `OwnedFd -> File` conversion — this
+//! crate's workspace lints `forbid(unsafe_code)`, so no raw fd reconstruction
+//! is used). Reads/writes are cancellation-safe and rely on the broker opening
+//! the physical hidraw node with `O_NONBLOCK`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -58,7 +57,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd};
 use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
@@ -411,30 +410,57 @@ impl SecurityKeyState {
 /// no raw fd reconstruction is used anywhere in this module.
 #[derive(Debug)]
 pub struct HidrawDevice {
-    file: File,
+    file: AsyncFd<File>,
 }
 
 impl HidrawDevice {
-    pub fn from_owned_fd(fd: OwnedFd) -> Self {
-        Self {
-            file: File::from(fd),
+    pub fn from_owned_fd(fd: OwnedFd) -> std::io::Result<Self> {
+        Ok(Self {
+            file: AsyncFd::new(File::from(fd))?,
+        })
+    }
+
+    /// Read a single 64-byte CTAPHID report from the physical token.
+    pub async fn read_report(&self) -> std::io::Result<CtaphidReport> {
+        loop {
+            let mut guard = self.file.readable().await?;
+            match guard.try_io(|inner| {
+                let mut file = inner.get_ref();
+                let mut report = [0u8; CTAPHID_REPORT_SIZE];
+                match file.read(&mut report) {
+                    Ok(CTAPHID_REPORT_SIZE) => Ok(report),
+                    Ok(0) => Err(std::io::ErrorKind::UnexpectedEof.into()),
+                    Ok(n) => Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!("short hidraw report: {n} bytes"),
+                    )),
+                    Err(error) => Err(error),
+                }
+            }) {
+                Ok(result) => return result,
+                Err(_would_block) => continue,
+            }
         }
     }
 
-    /// Blocking read of a single 64-byte CTAPHID report from the
-    /// physical token. Call from `tokio::task::spawn_blocking`.
-    pub fn read_report(&self) -> std::io::Result<CtaphidReport> {
-        let mut report = [0u8; CTAPHID_REPORT_SIZE];
-        (&self.file).read_exact(&mut report)?;
-        Ok(report)
-    }
-
-    /// Blocking write of a single 64-byte CTAPHID report to the
-    /// physical token. Call from `tokio::task::spawn_blocking`.
-    pub fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
+    /// Write a single 64-byte CTAPHID report to the physical token.
+    pub async fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
         let mut hidraw_report = [0u8; CTAPHID_REPORT_SIZE + 1];
         hidraw_report[1..].copy_from_slice(report);
-        (&self.file).write_all(&hidraw_report)
+        let mut buf = hidraw_report.as_slice();
+        while !buf.is_empty() {
+            let mut guard = self.file.writable().await?;
+            match guard.try_io(|inner| {
+                let mut file = inner.get_ref();
+                file.write(buf)
+            }) {
+                Ok(Ok(0)) => return Err(std::io::ErrorKind::WriteZero.into()),
+                Ok(Ok(n)) => buf = &buf[n..],
+                Ok(Err(error)) => return Err(error),
+                Err(_would_block) => continue,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -453,11 +479,7 @@ fn track_response_cid(report: &CtaphidReport, cids: &parking_lot::Mutex<HashSet<
 
 async fn read_hidraw_report_polling(hidraw: Arc<HidrawDevice>) -> std::io::Result<CtaphidReport> {
     loop {
-        let hidraw = Arc::clone(&hidraw);
-        match tokio::task::spawn_blocking(move || hidraw.read_report())
-            .await
-            .map_err(relay_join_error)?
-        {
+        match hidraw.read_report().await {
             Ok(report) => return Ok(report),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -713,10 +735,6 @@ pub fn spawn_accept_loop(
     Ok(abort)
 }
 
-fn relay_join_error(error: tokio::task::JoinError) -> std::io::Error {
-    std::io::Error::other(format!("relay task join error: {error}"))
-}
-
 fn relay_eof(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
@@ -793,10 +811,7 @@ pub(crate) async fn run_connection(
                     _ => {}
                 }
 
-                let hidraw = Arc::clone(&hidraw);
-                tokio::task::spawn_blocking(move || hidraw.write_report(&report))
-                    .await
-                    .map_err(relay_join_error)??;
+                hidraw.write_report(&report).await?;
             }
             #[allow(unreachable_code)]
             Ok::<(), std::io::Error>(())
@@ -855,7 +870,7 @@ pub(crate) async fn run_connection(
     for cid in cancel_cids {
         let cancel_packet = build_cancel_packet(cid);
         let hidraw = Arc::clone(&hidraw);
-        let _ = tokio::task::spawn_blocking(move || hidraw.write_report(&cancel_packet)).await;
+        let _ = hidraw.write_report(&cancel_packet).await;
     }
 
     state.lock().release_lease(&vm_id, lease_id);
@@ -896,12 +911,9 @@ mod tests {
     }
 
     fn dev_null_hidraw() -> Arc<HidrawDevice> {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .open("/dev/null")
-            .expect("open /dev/null");
-        Arc::new(HidrawDevice::from_owned_fd(file.into()))
+        let (left, _right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        left.set_nonblocking(true).expect("left nonblocking");
+        Arc::new(HidrawDevice::from_owned_fd(left.into()).expect("wrap socket fd"))
     }
 
     fn current_peer_ids() -> (u32, u32) {
@@ -1186,54 +1198,52 @@ mod tests {
     // Hidraw device wrapper (hermetic: uses /dev/null, no unsafe)
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn hidraw_device_from_owned_fd_wraps_without_unsafe() {
-        let file = File::open("/dev/null").expect("open /dev/null");
-        let fd: OwnedFd = file.into();
-        let device = HidrawDevice::from_owned_fd(fd);
-        // /dev/null reads always return EOF (0 bytes); read_exact on a
-        // 64-byte buffer against it must fail with UnexpectedEof, not
-        // panic or hang.
-        let err = device.read_report().unwrap_err();
+    #[tokio::test]
+    async fn hidraw_device_from_owned_fd_wraps_without_unsafe() {
+        let (left, right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        left.set_nonblocking(true).expect("left nonblocking");
+        drop(right);
+        let fd: OwnedFd = left.into();
+        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
+        let err = device.read_report().await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
-    #[test]
-    fn hidraw_device_write_report_to_dev_null_succeeds() {
-        let file = File::options()
-            .write(true)
-            .open("/dev/null")
-            .expect("open /dev/null for write");
-        let fd: OwnedFd = file.into();
-        let device = HidrawDevice::from_owned_fd(fd);
+    #[tokio::test]
+    async fn hidraw_device_write_report_to_socket_succeeds() {
+        let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        left.set_nonblocking(true).expect("left nonblocking");
+        let fd: OwnedFd = left.into();
+        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
         let report = build_error_report(1, CTAPHID_ERR_INVALID_CMD);
-        device.write_report(&report).expect("write to /dev/null");
+        device.write_report(&report).await.expect("write report");
+
+        let mut written = [0u8; CTAPHID_REPORT_SIZE + 1];
+        right
+            .read_exact(&mut written)
+            .expect("read report from peer socket");
+        assert_eq!(written[0], 0);
+        assert_eq!(&written[1..], &report);
     }
 
-    #[test]
-    fn hidraw_device_write_report_prefixes_report_id() {
-        let dir = test_scratch_dir("hidraw-write-prefix");
-        let path = dir.join("hidraw.out");
-        let file = File::options()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&path)
-            .expect("scratch file writable");
-        let fd: OwnedFd = file.into();
-        let device = HidrawDevice::from_owned_fd(fd);
+    #[tokio::test]
+    async fn hidraw_device_write_report_prefixes_report_id() {
+        let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        left.set_nonblocking(true).expect("left nonblocking");
+        let fd: OwnedFd = left.into();
+        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
         let report = build_init_packet(CTAPHID_BROADCAST_CID, CTAPHID_INIT, 8, &[1, 2, 3, 4]);
 
-        device.write_report(&report).expect("write report");
+        device.write_report(&report).await.expect("write report");
         drop(device);
 
-        let written = fs::read(&path).expect("read scratch file");
+        let mut written = [0u8; CTAPHID_REPORT_SIZE + 1];
+        right
+            .read_exact(&mut written)
+            .expect("read report from peer socket");
         assert_eq!(written.len(), CTAPHID_REPORT_SIZE + 1);
         assert_eq!(written[0], 0, "hidraw write must include report ID prefix");
         assert_eq!(&written[1..], &report);
-
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // -----------------------------------------------------------------------
