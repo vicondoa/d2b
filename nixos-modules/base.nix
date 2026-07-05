@@ -80,6 +80,14 @@ in
   networking.firewall.enable = lib.mkDefault true;
   networking.firewall.allowedTCPPorts = [ 22 ];
 
+  # d2b VMs commonly persist /var in a small ext4 image. Keep journals bounded
+  # so logs cannot starve NixOS activation state such as /var/lib/nixos/*-map.
+  services.journald.extraConfig = lib.mkDefault ''
+    SystemMaxUse=512M
+    SystemKeepFree=512M
+    RuntimeMaxUse=128M
+  '';
+
   time.timeZone = lib.mkDefault "America/Los_Angeles";
   i18n.defaultLocale = lib.mkDefault "en_US.UTF-8";
 
