@@ -124,10 +124,12 @@ in
     expected = true;
   };
 
-  "security-key-gating/guest-activation-refreshes-users-after-etc" = {
+  "security-key-gating/guest-refreshes-users-after-switch-root" = {
     expr =
       let
-        activation = (guestConfig enabledEval "corp-vm").system.activationScripts;
+        guest = guestConfig enabledEval "corp-vm";
+        activation = guest.system.activationScripts;
+        service = guest.systemd.services.d2b-refresh-users-after-switch-root;
         ensureText =
           if builtins.isAttrs activation.d2bEnsureEtcForUsers
           then activation.d2bEnsureEtcForUsers.text or ""
@@ -135,10 +137,12 @@ in
       in
       activation ? d2bEnsureEtcForUsers
       && ensureText != ""
-      && activation ? d2bRefreshUsersAfterEtc
       && builtins.elem "d2bEnsureEtcForUsers" activation.users.deps
-      && builtins.elem "etc" activation.d2bRefreshUsersAfterEtc.deps
-      && builtins.match ".*update-users-groups\\.pl.*" activation.d2bRefreshUsersAfterEtc.text != null;
+      && builtins.elem "sysinit.target" service.wantedBy
+      && builtins.elem "sockets.target" service.before
+      && service.unitConfig.DefaultDependencies == false
+      && service.serviceConfig.Type == "oneshot"
+      && builtins.match ".*update-users-groups\\.pl.*" activation.users.text != null;
     expected = true;
   };
 
