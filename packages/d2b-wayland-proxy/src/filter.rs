@@ -78,7 +78,7 @@ use wl_proxy::{
 use crate::{
     bridge::{
         BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
-        BridgeTransferKind, BridgeTransferMetadata,
+        BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
     },
     clipboard::{
         ClipboardGlobalDisposition, ClipboardMimePolicy, ClipboardRoute, MimeDecision,
@@ -227,7 +227,7 @@ struct VirtualOffer {
 
 #[derive(Debug)]
 struct PendingBridgeHandoff {
-    fd: OwnedFd,
+    fd: LocalTransferFd,
     metadata: BridgeTransferMetadata,
 }
 
@@ -569,17 +569,33 @@ impl VirtualClipboardState {
 
     fn handoff_via_bridge(&mut self, fd: &OwnedFd, metadata: &BridgeTransferMetadata) {
         self.flush_pending_bridge_handoffs();
+        let local_fd = match rustix::io::fcntl_dupfd_cloexec(fd, 0) {
+            Ok(fd) => LocalTransferFd::new(fd),
+            Err(error) => {
+                let vm = self.vm_name.clone();
+                let error = bounded_error_detail(error.to_string());
+                self.diag
+                    .borrow_mut()
+                    .warn("clipboard-bridge", "handoff-fd-dup-failed", || {
+                        format!(
+                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-fd-dup-failed error={error}"
+                        )
+                    });
+                return;
+            }
+        };
         if !self.pending_bridge_handoffs.is_empty() {
-            self.enqueue_bridge_handoff(fd, metadata);
+            self.enqueue_bridge_handoff(local_fd, metadata);
             self.ensure_bridge_connected();
             return;
         }
         let Some(bridge) = self.ensure_bridge_connected() else {
-            self.enqueue_bridge_handoff(fd, metadata);
+            self.enqueue_bridge_handoff(local_fd, metadata);
             return;
         };
-        match bridge.handoff_transfer_fd(fd, metadata) {
+        match bridge.handoff_transfer_fd(&local_fd, metadata) {
             crate::bridge::HandoffStatus::Delivered => {
+                let _ = local_fd.close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                     self.vm_name,
@@ -588,11 +604,16 @@ impl VirtualClipboardState {
                 );
             }
             crate::bridge::HandoffStatus::Backpressure => {
-                self.enqueue_bridge_handoff(fd, metadata);
+                self.enqueue_bridge_handoff(local_fd, metadata);
             }
             crate::bridge::HandoffStatus::Failed(error) => {
+                let status = crate::bridge::HandoffStatus::Failed(error);
+                let error = match status {
+                    crate::bridge::HandoffStatus::Failed(error) => error,
+                    _ => unreachable!(),
+                };
+                let _ = local_fd.close_after_handoff(crate::bridge::HandoffStatus::Failed(error));
                 self.mark_bridge_disconnected();
-                self.enqueue_bridge_handoff(fd, metadata);
                 self.ensure_bridge_connected();
                 let vm = self.vm_name.clone();
                 let kind = metadata.kind;
@@ -609,7 +630,7 @@ impl VirtualClipboardState {
         }
     }
 
-    fn enqueue_bridge_handoff(&mut self, fd: &OwnedFd, metadata: &BridgeTransferMetadata) {
+    fn enqueue_bridge_handoff(&mut self, fd: LocalTransferFd, metadata: &BridgeTransferMetadata) {
         if self.pending_bridge_handoffs.len() >= MAX_PENDING_BRIDGE_HANDOFFS {
             let vm = self.vm_name.clone();
             let kind = metadata.kind;
@@ -623,24 +644,9 @@ impl VirtualClipboardState {
                 });
             return;
         }
-        let dup_fd = match rustix::io::fcntl_dupfd_cloexec(fd, 0) {
-            Ok(fd) => fd,
-            Err(error) => {
-                let vm = self.vm_name.clone();
-                let error = bounded_error_detail(error.to_string());
-                self.diag
-                    .borrow_mut()
-                    .warn("clipboard-bridge", "handoff-fd-dup-failed", || {
-                        format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-fd-dup-failed error={error}"
-                        )
-                    });
-                return;
-            }
-        };
         self.pending_bridge_handoffs
             .push_back(PendingBridgeHandoff {
-                fd: dup_fd,
+                fd,
                 metadata: metadata.clone(),
             });
     }
@@ -668,6 +674,9 @@ impl VirtualClipboardState {
     ) -> PendingHandoffStep {
         match status {
             crate::bridge::HandoffStatus::Delivered => {
+                let _ = pending
+                    .fd
+                    .close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] vm={} event=clipboard-bridge reason=queued-handoff-delivered kind={:?} mime={}",
                     self.vm_name,
@@ -1509,6 +1518,7 @@ impl WlSeatHandler for FilterSeatHandler {
         id.set_handler(FilterPointerHandler {
             decoration: self.decoration.clone(),
             focus: PointerFocus::None,
+            target_surface: None,
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1526,6 +1536,7 @@ impl WlSeatHandler for FilterSeatHandler {
             decoration: self.decoration.clone(),
             suppressed_ids: HashSet::new(),
             forwarded_ids: HashSet::new(),
+            wrapper_forwarded_ids: HashSet::new(),
             pending_forwarded_frame: false,
         });
         slf.send_get_touch(id);
@@ -1612,6 +1623,7 @@ impl WlKeyboardHandler for FilterKeyboardHandler {
 struct FilterPointerHandler {
     decoration: SharedDecorationManager,
     focus: PointerFocus,
+    target_surface: Option<Rc<WlSurface>>,
     pending_forwarded_frame: bool,
 }
 
@@ -1650,6 +1662,7 @@ impl WlPointerHandler for FilterPointerHandler {
     ) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client()) {
+                self.target_surface = Some(target.clone());
                 if let Some(x) = wrapper_content_pointer_x(surface_x) {
                     self.focus = PointerFocus::WrapperContent;
                     self.pending_forwarded_frame = true;
@@ -1659,14 +1672,17 @@ impl WlPointerHandler for FilterPointerHandler {
                 }
             } else {
                 self.focus = PointerFocus::None;
+                self.target_surface = None;
             }
             return;
         }
         if !surface_belongs_to_receiver(surface, slf.client()) {
             self.focus = PointerFocus::None;
+            self.target_surface = None;
             return;
         }
         self.focus = PointerFocus::Direct;
+        self.target_surface = Some(surface.clone());
         self.pending_forwarded_frame = true;
         slf.send_enter(serial, surface, surface_x, surface_y);
     }
@@ -1680,13 +1696,16 @@ impl WlPointerHandler for FilterPointerHandler {
                 slf.send_leave(serial, &target);
             }
             self.focus = PointerFocus::None;
+            self.target_surface = None;
             return;
         }
         if !surface_belongs_to_receiver(surface, slf.client()) {
             self.focus = PointerFocus::None;
+            self.target_surface = None;
             return;
         }
         self.focus = PointerFocus::None;
+        self.target_surface = None;
         self.pending_forwarded_frame = true;
         slf.send_leave(serial, surface);
     }
@@ -1700,7 +1719,28 @@ impl WlPointerHandler for FilterPointerHandler {
     ) {
         if !receiver_has_client(slf.client()) {
             self.focus = PointerFocus::None;
+            self.target_surface = None;
             self.pending_forwarded_frame = false;
+            return;
+        }
+        if self.focus == PointerFocus::WrapperContent
+            && wrapper_content_pointer_x(surface_x).is_none()
+        {
+            self.focus = PointerFocus::Rail;
+            self.pending_forwarded_frame = true;
+            if let Some(target) = &self.target_surface {
+                slf.send_leave(0, target);
+            }
+            return;
+        }
+        if self.focus == PointerFocus::Rail {
+            if let Some(x) = wrapper_content_pointer_x(surface_x) {
+                self.focus = PointerFocus::WrapperContent;
+                self.pending_forwarded_frame = true;
+                if let Some(target) = &self.target_surface {
+                    slf.send_enter(0, target, x, surface_y);
+                }
+            }
             return;
         }
         let Some(x) = pointer_motion_x_for_focus(self.focus, surface_x) else {
@@ -1831,6 +1871,7 @@ struct FilterTouchHandler {
     decoration: SharedDecorationManager,
     suppressed_ids: HashSet<i32>,
     forwarded_ids: HashSet<i32>,
+    wrapper_forwarded_ids: HashSet<i32>,
     pending_forwarded_frame: bool,
 }
 
@@ -1848,12 +1889,20 @@ impl WlTouchHandler for FilterTouchHandler {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client()) {
-                self.suppressed_ids.insert(id);
+                if let Some(adjusted_x) = wrapper_content_pointer_x(x) {
+                    self.forwarded_ids.insert(id);
+                    self.wrapper_forwarded_ids.insert(id);
+                    self.pending_forwarded_frame = true;
+                    slf.send_down(serial, time, &target, id, adjusted_x, y);
+                } else {
+                    self.suppressed_ids.insert(id);
+                }
             }
             return;
         }
@@ -1869,6 +1918,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
@@ -1876,6 +1926,7 @@ impl WlTouchHandler for FilterTouchHandler {
             return;
         }
         self.forwarded_ids.remove(&id);
+        self.wrapper_forwarded_ids.remove(&id);
         self.pending_forwarded_frame = true;
         slf.send_up(serial, time, id);
     }
@@ -1884,6 +1935,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
@@ -1891,13 +1943,19 @@ impl WlTouchHandler for FilterTouchHandler {
             return;
         }
         self.pending_forwarded_frame = true;
-        slf.send_motion(time, id, x, y);
+        let adjusted_x = if self.wrapper_forwarded_ids.contains(&id) {
+            wrapper_content_pointer_x(x).unwrap_or(Fixed::ZERO)
+        } else {
+            x
+        };
+        slf.send_motion(time, id, adjusted_x, y);
     }
 
     fn handle_shape(&mut self, slf: &Rc<WlTouch>, id: i32, major: Fixed, minor: Fixed) {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
@@ -1912,6 +1970,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
@@ -1931,11 +1990,13 @@ impl WlTouchHandler for FilterTouchHandler {
         }
         if self.forwarded_ids.is_empty() {
             self.suppressed_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
         self.forwarded_ids.clear();
         self.suppressed_ids.clear();
+        self.wrapper_forwarded_ids.clear();
         self.pending_forwarded_frame = false;
         slf.send_cancel();
     }
@@ -1944,6 +2005,7 @@ impl WlTouchHandler for FilterTouchHandler {
         if !receiver_has_client(slf.client()) {
             self.suppressed_ids.clear();
             self.forwarded_ids.clear();
+            self.wrapper_forwarded_ids.clear();
             self.pending_forwarded_frame = false;
             return;
         }
@@ -2755,9 +2817,12 @@ fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
     )
     .map_err(errno_to_io)?;
     let addr = UnixAddr::new(path).map_err(errno_to_io)?;
-    connect(fd.as_raw_fd(), &addr)
-        .map(|()| UnixStream::from(fd))
-        .map_err(errno_to_io)
+    match connect(fd.as_raw_fd(), &addr) {
+        Ok(()) | Err(nix::errno::Errno::EINPROGRESS | nix::errno::Errno::EAGAIN) => {
+            Ok(UnixStream::from(fd))
+        }
+        Err(error) => Err(errno_to_io(error)),
+    }
 }
 
 fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {

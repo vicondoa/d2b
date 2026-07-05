@@ -233,8 +233,15 @@ pub enum HandoffStatus {
 /// release their local copy after the bridge reports delivered/deferred/failed,
 /// never while payload bytes and ancillary FDs can still be separated by
 /// backpressure.
+#[derive(Debug)]
 pub struct LocalTransferFd {
     fd: Option<OwnedFd>,
+}
+
+impl From<UnixStream> for LocalTransferFd {
+    fn from(value: UnixStream) -> Self {
+        Self::new(value.into())
+    }
 }
 
 impl LocalTransferFd {
@@ -246,12 +253,18 @@ impl LocalTransferFd {
         drop(self.fd.take());
         status
     }
+
+    fn as_owned_fd(&self) -> &OwnedFd {
+        self.fd
+            .as_ref()
+            .expect("fd present until close_after_handoff")
+    }
 }
 
 pub trait BridgeHandoff {
     fn handoff_transfer_fd(
         &mut self,
-        fd: &OwnedFd,
+        fd: &LocalTransferFd,
         metadata: &BridgeTransferMetadata,
     ) -> HandoffStatus;
 }
@@ -273,10 +286,10 @@ pub enum BridgeTransferKind {
 impl BridgeHandoff for UnixStream {
     fn handoff_transfer_fd(
         &mut self,
-        local_fd: &OwnedFd,
+        local_fd: &LocalTransferFd,
         metadata: &BridgeTransferMetadata,
     ) -> HandoffStatus {
-        let raw_fd = local_fd.as_raw_fd();
+        let raw_fd = local_fd.as_owned_fd().as_raw_fd();
         let frame = bridge_frame(metadata);
         let iov = [IoSlice::new(frame.as_bytes())];
         let fds = [raw_fd];
@@ -505,7 +518,7 @@ mod tests {
     fn bridge_handoff_sends_fd_with_scm_rights() {
         let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
-        let local: OwnedFd = local.into();
+        let local = LocalTransferFd::new(local.into());
         let metadata = BridgeTransferMetadata {
             vm_name: "work".to_owned(),
             mime_type: "text/plain".to_owned(),
@@ -517,7 +530,7 @@ mod tests {
             bridge.handoff_transfer_fd(&local, &metadata),
             HandoffStatus::Delivered
         );
-        drop(local);
+        let _ = local.close_after_handoff(HandoffStatus::Delivered);
 
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
