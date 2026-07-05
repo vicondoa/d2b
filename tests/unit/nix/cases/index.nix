@@ -205,6 +205,15 @@ in
     };
   };
 
+  "index/guest-journal-bounded" = {
+    expr = cfg.d2b._computed.zed.config.services.journald.extraConfig;
+    expected = ''
+      SystemMaxUse=512M
+      SystemKeepFree=512M
+      RuntimeMaxUse=128M
+    '';
+  };
+
   "index/home-lan-metadata" = {
     expr = {
       envNames = index.externalNetwork.envNames;
