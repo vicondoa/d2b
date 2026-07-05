@@ -275,6 +275,11 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
   proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
   the VM rail and guest content together without copying guest buffers.
+- `d2b-wayland-proxy` treats `ENOTCONN` during nonblocking clipboard bridge
+  handoff as retryable backpressure, preserving pending FDs until the bridge
+  socket finishes connecting.
+- Added host-integration coverage for the live `d2b-wayland-proxy`
+  AF_UNIX client-to-upstream relay path.
 - Updated the Windows notification transitive dependency to remove the runtime
   `quick-xml` advisory path, and documented a temporary build-time
   `wayland-scanner` advisory exception until that code generator publishes a

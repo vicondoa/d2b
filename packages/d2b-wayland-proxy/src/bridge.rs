@@ -320,7 +320,10 @@ fn handoff_status_from_sendmsg_result(
 }
 
 fn is_would_block_errno(error: nix::errno::Errno) -> bool {
-    error == nix::errno::Errno::EAGAIN
+    matches!(
+        error,
+        nix::errno::Errno::EAGAIN | nix::errno::Errno::ENOTCONN
+    )
 }
 
 pub fn recv_flags_are_fail_closed(flags: nix::sys::socket::MsgFlags) -> bool {
@@ -502,6 +505,10 @@ mod tests {
     fn sendmsg_backpressure_is_not_fatal_handoff_failure() {
         assert_eq!(
             handoff_status_from_sendmsg_result(Err(nix::errno::Errno::EAGAIN), 128),
+            HandoffStatus::Backpressure
+        );
+        assert_eq!(
+            handoff_status_from_sendmsg_result(Err(nix::errno::Errno::ENOTCONN), 128),
             HandoffStatus::Backpressure
         );
         assert_eq!(
