@@ -15,6 +15,9 @@ use std::{
 };
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
+pub const SCM_RIGHTS_MIN_FDS: usize = 28;
+pub const SCM_RIGHTS_MIN_CONTROL_BYTES: usize = 256;
+pub const SCM_RIGHTS_CONTROL_FD_SLOTS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
@@ -225,7 +228,11 @@ pub enum HandoffStatus {
 }
 
 /// Owns a local transfer FD until the bridge handoff attempt reaches a terminal
-/// result. Dropping the wrapper closes the proxy's local copy on every path.
+/// result. Dropping the wrapper closes the proxy's local copy on every path,
+/// acting as the CloseAttach barrier for clipboard transfers: callers may only
+/// release their local copy after the bridge reports delivered/deferred/failed,
+/// never while payload bytes and ancillary FDs can still be separated by
+/// backpressure.
 pub struct LocalTransferFd {
     fd: Option<OwnedFd>,
 }
@@ -301,6 +308,10 @@ fn handoff_status_from_sendmsg_result(
 
 fn is_would_block_errno(error: nix::errno::Errno) -> bool {
     error == nix::errno::Errno::EAGAIN
+}
+
+pub fn recv_flags_are_fail_closed(flags: nix::sys::socket::MsgFlags) -> bool {
+    !flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC)
 }
 
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
@@ -510,14 +521,17 @@ mod tests {
 
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
-        let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+        let mut cmsg_space = vec![0_u8; SCM_RIGHTS_MIN_CONTROL_BYTES];
+        assert!(SCM_RIGHTS_CONTROL_FD_SLOTS >= SCM_RIGHTS_MIN_FDS);
+        assert!(cmsg_space.len() >= SCM_RIGHTS_MIN_CONTROL_BYTES);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
             &mut iov,
             Some(&mut cmsg_space),
-            nix::sys::socket::MsgFlags::empty(),
+            nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
+        assert!(recv_flags_are_fail_closed(msg.flags));
         let bytes = msg.bytes;
         let mut saw_fd = false;
         for cmsg in msg.cmsgs().expect("cmsgs") {
@@ -535,6 +549,16 @@ mod tests {
         assert!(frame.contains("\"vm_name\":\"work\""));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
+    }
+
+    #[test]
+    fn ctruncated_scm_rights_receive_is_fail_closed() {
+        assert!(!recv_flags_are_fail_closed(
+            nix::sys::socket::MsgFlags::MSG_CTRUNC
+        ));
+        assert!(recv_flags_are_fail_closed(
+            nix::sys::socket::MsgFlags::empty()
+        ));
     }
 
     #[test]

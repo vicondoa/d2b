@@ -18,6 +18,12 @@ deprecations ship one minor release before removal.
 - Added typed deserialization support for public daemon response envelopes so
   downstream clients can parse `PublicResponse` DTOs without falling back to
   untyped JSON.
+- Exported `packages.<system>.d2b-wayland-proxy` and added a supported
+  `--host-terminal` launch path for VM-bound host terminals. The launcher creates
+  randomized single-use Wayland and WezTerm mux sockets under a private
+  `$XDG_RUNTIME_DIR` directory, waits for proxy readiness before launching the
+  foreground child, preserves d2b clipboard mediation, and keeps privileged
+  Wayland globals hidden.
 - Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
   `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
   CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey

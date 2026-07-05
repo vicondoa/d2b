@@ -13,6 +13,7 @@
 
 use std::{
     cell::RefCell,
+    ffi::OsString,
     io,
     os::unix::net::UnixListener,
     path::PathBuf,
@@ -30,6 +31,10 @@ use d2b_wayland_proxy::{
     diag::{DiagRateLimiter, bounded_error_detail},
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
     policy::{FilterPolicy, PolicyInput},
+    terminal::{
+        TerminalChild, TerminalRuntime, child_exit_code, chmod_socket_strict,
+        unlink_stale_socket_path,
+    },
 };
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
@@ -43,11 +48,11 @@ const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 struct Args {
     /// Path of the Unix socket to create and accept client connections on.
     #[arg(long)]
-    listen: PathBuf,
+    listen: Option<PathBuf>,
 
     /// Path of the upstream host compositor socket to connect to.
     #[arg(long)]
-    connect: String,
+    connect: Option<String>,
 
     /// VM name, e.g. `work`. Used in app-id prefix, title prefix, and logs.
     #[arg(long, value_name = "VM")]
@@ -152,6 +157,18 @@ struct Args {
         default_value = "top-left"
     )]
     border_label_position: LabelPosition,
+
+    /// Launch a foreground WezTerm child through a randomized single-use proxy socket.
+    #[arg(long = "host-terminal")]
+    host_terminal: bool,
+
+    /// Terminal program to launch in --host-terminal mode.
+    #[arg(long = "terminal-program", default_value = "wezterm")]
+    terminal_program: OsString,
+
+    /// Arguments passed to the terminal program after `--` in --host-terminal mode.
+    #[arg(last = true, allow_hyphen_values = true)]
+    terminal_args: Vec<OsString>,
 }
 
 fn parse_max_version(s: &str) -> Result<(String, u32), String> {
@@ -274,34 +291,55 @@ fn main() {
         );
     }
 
+    let upstream = resolve_upstream(&args).unwrap_or_else(|e| {
+        eprintln!("d2b-wayland-proxy: {e}");
+        std::process::exit(1);
+    });
+
+    let terminal_runtime = if args.host_terminal {
+        Some(TerminalRuntime::prepare(&args.vm_name).unwrap_or_else(|e| {
+            eprintln!("d2b-wayland-proxy: failed to prepare host-terminal runtime: {e}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+    let listen_path = resolve_listen_path(&args, terminal_runtime.as_ref()).unwrap_or_else(|e| {
+        eprintln!("d2b-wayland-proxy: {e}");
+        std::process::exit(1);
+    });
+
     // Step 3: prove the upstream compositor is reachable before exposing a
     // listen socket. Each accepted client gets its own upstream connection below.
-    match build_state(&args.connect) {
+    match build_state(&upstream) {
         Ok(_) => {}
         Err(e) => {
             eprintln!(
                 "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
-                args.connect
+                upstream
             );
             std::process::exit(1);
         }
     }
 
     // Step 4: create the listen socket AFTER successful upstream connect.
-    let listen_path = &args.listen;
-
     // Remove a stale socket if present so restart cycles are idempotent.
-    if listen_path.exists()
-        && let Err(e) = std::fs::remove_file(listen_path)
-    {
-        eprintln!(
-            "d2b-wayland-proxy: failed to remove stale socket `{}`: {e}",
-            listen_path.display()
-        );
-        std::process::exit(1);
+    if listen_path.exists() {
+        let stale_result = if terminal_runtime.is_some() {
+            unlink_stale_socket_path(&listen_path)
+        } else {
+            std::fs::remove_file(&listen_path)
+        };
+        if let Err(e) = stale_result {
+            eprintln!(
+                "d2b-wayland-proxy: failed to remove stale socket `{}`: {e}",
+                listen_path.display()
+            );
+            std::process::exit(1);
+        }
     }
 
-    let listener = match UnixListener::bind(listen_path) {
+    let listener = match UnixListener::bind(&listen_path) {
         Ok(l) => l,
         Err(e) => {
             eprintln!(
@@ -311,16 +349,78 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if terminal_runtime.is_some() {
+        if let Err(e) = chmod_socket_strict(&listen_path) {
+            eprintln!(
+                "d2b-wayland-proxy: failed to secure listen socket `{}`: {e}",
+                listen_path.display()
+            );
+            std::process::exit(1);
+        }
+    }
 
     log::info!(
         "[d2b-wlproxy] vm={} listening on {} upstream={}",
         args.vm_name,
         listen_path.display(),
-        args.connect
+        upstream
     );
 
+    let mut terminal_child = terminal_runtime.as_ref().map(|runtime| {
+        TerminalChild::spawn(&args.terminal_program, &args.terminal_args, runtime).unwrap_or_else(
+            |e| {
+                eprintln!("d2b-wayland-proxy: failed to launch host terminal child: {e}");
+                std::process::exit(1);
+            },
+        )
+    });
+    if terminal_child.is_some() {
+        log::info!(
+            "[d2b-wlproxy] vm={} event=host-terminal-launched mux=per-vm",
+            args.vm_name
+        );
+    }
+
     // Step 5: dispatch loop.
-    accept_loop(listener, args.connect, policy, bridge_config, border_config);
+    let exit_code = accept_loop(
+        listener,
+        upstream,
+        policy,
+        bridge_config,
+        border_config,
+        terminal_child.as_mut(),
+    );
+    if let Some(child) = terminal_child.as_mut()
+        && exit_code != 0
+    {
+        child.terminate();
+    }
+    drop(terminal_runtime);
+    std::process::exit(exit_code);
+}
+
+fn resolve_upstream(args: &Args) -> Result<String, String> {
+    if let Some(connect) = &args.connect {
+        return Ok(connect.clone());
+    }
+    if args.host_terminal {
+        return Ok(std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_owned()));
+    }
+    Err("--connect is required unless --host-terminal is used".to_owned())
+}
+
+fn resolve_listen_path(
+    args: &Args,
+    terminal_runtime: Option<&TerminalRuntime>,
+) -> Result<PathBuf, String> {
+    match (&args.listen, terminal_runtime) {
+        (Some(path), None) => Ok(path.clone()),
+        (Some(_), Some(_)) => {
+            Err("--listen cannot be combined with randomized --host-terminal mode".to_owned())
+        }
+        (None, Some(runtime)) => Ok(runtime.listen_socket().to_owned()),
+        (None, None) => Err("--listen is required unless --host-terminal is used".to_owned()),
+    }
 }
 
 fn accept_loop(
@@ -329,7 +429,8 @@ fn accept_loop(
     policy: FilterPolicy,
     bridge_config: BridgeConfig,
     border_config: BorderConfig,
-) {
+    mut terminal_child: Option<&mut TerminalChild>,
+) -> i32 {
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
         std::process::exit(1);
@@ -370,6 +471,20 @@ fn accept_loop(
     let mut last_diag_flush = Instant::now();
     let mut listener_backoff_until: Option<Instant> = None;
     while state.is_not_destroyed() {
+        if let Some(child) = terminal_child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    state.destroy();
+                    diag.borrow_mut().flush_suppressed();
+                    return child_exit_code(status);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("[d2b-wlproxy] vm={vm} event=host-terminal-wait error={error}");
+                    break;
+                }
+            }
+        }
         let (listener_ready, _state_ready, bridge_ready) = {
             let now = Instant::now();
             let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
@@ -383,6 +498,7 @@ fn accept_loop(
                 listener_backoff_until,
                 clipboard_ref.bridge_retry_deadline(),
                 now,
+                terminal_child.is_some(),
             );
             let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
                 PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
@@ -500,6 +616,7 @@ fn accept_loop(
     }
     state.destroy();
     diag.borrow_mut().flush_suppressed();
+    0
 }
 
 fn is_recoverable_accept_error(error: &io::Error) -> bool {
@@ -535,6 +652,7 @@ fn accept_poll_timeout_ms(
     listener_backoff_until: Option<Instant>,
     bridge_retry_until: Option<Instant>,
     now: Instant,
+    watching_child: bool,
 ) -> i32 {
     let backoff_timeout = listener_backoff_until
         .map(|until| until.saturating_duration_since(now))
@@ -542,9 +660,15 @@ fn accept_poll_timeout_ms(
     let bridge_timeout = bridge_retry_until
         .map(|until| until.saturating_duration_since(now))
         .unwrap_or(diag_timeout);
+    let child_timeout = if watching_child {
+        Duration::from_millis(100)
+    } else {
+        diag_timeout
+    };
     diag_timeout
         .min(backoff_timeout)
         .min(bridge_timeout)
+        .min(child_timeout)
         .as_millis()
         .min(i32::MAX as u128) as i32
 }
@@ -625,6 +749,40 @@ mod tests {
     }
 
     #[test]
+    fn host_terminal_cli_does_not_require_static_listen_or_connect() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--host-terminal",
+            "--vm-name",
+            "work",
+            "--",
+            "start",
+            "--always-new-process",
+        ])
+        .expect("parse args");
+
+        assert!(args.host_terminal);
+        assert!(args.listen.is_none());
+        assert!(args.connect.is_none());
+        assert_eq!(
+            args.terminal_args,
+            vec![
+                OsString::from("start"),
+                OsString::from("--always-new-process")
+            ]
+        );
+    }
+
+    #[test]
+    fn regular_proxy_still_requires_explicit_listen_and_connect() {
+        let args = Args::try_parse_from(["d2b-wayland-proxy", "--vm-name", "work"])
+            .expect("deferred validation keeps clap errors friendly");
+
+        assert!(resolve_listen_path(&args, None).is_err());
+        assert!(resolve_upstream(&args).is_err());
+    }
+
+    #[test]
     fn interrupted_accept_is_recoverable() {
         let err = io::Error::from_raw_os_error(libc::EINTR);
         assert!(is_recoverable_accept_error(&err));
@@ -656,7 +814,13 @@ mod tests {
             PollFlags::IN | PollFlags::ERR | PollFlags::HUP
         );
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), None, now),
+            accept_poll_timeout_ms(
+                Duration::from_secs(60),
+                Some(backoff_until),
+                None,
+                now,
+                false,
+            ),
             50
         );
         assert_eq!(
@@ -665,6 +829,7 @@ mod tests {
                 Some(now + Duration::from_secs(5)),
                 Some(now + Duration::from_millis(25)),
                 now,
+                false,
             ),
             25
         );
@@ -678,8 +843,17 @@ mod tests {
             now
         ));
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now),
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now, false),
             0
+        );
+    }
+
+    #[test]
+    fn child_watch_bounds_accept_poll_timeout() {
+        let now = Instant::now();
+        assert_eq!(
+            accept_poll_timeout_ms(Duration::from_secs(60), None, None, now, true),
+            100
         );
     }
 

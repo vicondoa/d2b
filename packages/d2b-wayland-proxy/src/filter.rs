@@ -3000,14 +3000,16 @@ mod tests {
         assert_eq!(clipboard.pending_handoff_count_for_tests(), 0);
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
-        let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+        let mut cmsg_space = vec![0_u8; crate::bridge::SCM_RIGHTS_MIN_CONTROL_BYTES];
+        assert!(crate::bridge::SCM_RIGHTS_CONTROL_FD_SLOTS >= crate::bridge::SCM_RIGHTS_MIN_FDS);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
             &mut iov,
             Some(&mut cmsg_space),
-            nix::sys::socket::MsgFlags::empty(),
+            nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
+        assert!(crate::bridge::recv_flags_are_fail_closed(msg.flags));
         assert!(msg.bytes > 0);
         for cmsg in msg.cmsgs().expect("cmsgs") {
             if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {

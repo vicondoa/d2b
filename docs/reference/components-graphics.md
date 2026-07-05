@@ -62,6 +62,37 @@ protocol features remain disabled until the proxy can validate seat-bound
 requests safely, avoiding guest application crashes from invalid forwarded
 text-input requests under Niri-backed cross-domain Wayland.
 
+## Host-app terminal proxy mode
+
+The flake exports `packages.<system>.d2b-wayland-proxy` for host tools such as
+`d2b-wlterm` that must resolve the supported proxy binary without relying on an
+internal package path or the operator's `PATH`. The binary also has a
+foreground host-terminal launch path:
+
+```bash
+d2b-wayland-proxy --host-terminal --vm-name work --border-enable -- wezterm start
+```
+
+In this mode the proxy derives the upstream compositor from `--connect` or
+`$WAYLAND_DISPLAY`, creates a randomized single-use listen socket below
+`$XDG_RUNTIME_DIR/d2b-wayland-proxy/<vm>/`, forces that directory to `0700`,
+removes only stale socket files at the selected paths, and chmods the listen
+socket to `0600` before launching the child. `WAYLAND_DISPLAY` is set to the
+single-use proxy socket and `WEZTERM_UNIX_SOCKET` is set to a randomized
+per-VM mux socket, so the terminal does not reuse the operator's global WezTerm
+daemon. The proxy opens a close-on-exec pidfd for the child, waits in the
+foreground, and removes the single-use socket paths when the process exits.
+
+The same Wayland security policy applies to the terminal child: ordinary
+application globals needed by WezTerm remain available, privileged globals such
+as layer-shell, screencopy, virtual input, session-lock, and compositor control
+stay hidden, and the host compositor's raw `wl_data_device_manager` is never
+forwarded. Clipboard traffic stays on the d2b virtual clipboard path and must
+cross the `d2b-clipd` bridge/picker policy rather than granting unmediated host
+clipboard access. Proxy diagnostics remain bounded metadata only; they do not
+log Wayland payload bytes, clipboard contents, raw fd handles, shell names, or
+unbounded titles.
+
 Site-level dependency:
 
 | Option | Type | Required when | Description |
