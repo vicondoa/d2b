@@ -183,6 +183,9 @@ deprecations ship one minor release before removal.
 
 - Guest VMs now cap persistent systemd journals by default so `/var/log/journal`
   cannot fill small per-VM `/var` images and corrupt NixOS activation state.
+- Security-key host relay now runs blocking physical hidraw reads on a blocking
+  worker thread so the single-thread per-VM accept-loop runtime can still forward
+  guest CTAPHID requests to the token.
 - Security-key guest udev rules now match the virtual UHID FIDO device by its
   HID parent identity and grant the standard `plugdev` browser/FIDO access group
   so Firefox and libfido2 can open the guest `/dev/hidraw*` node without root.
