@@ -158,7 +158,7 @@ in
         ls -ld / /etc /var /var/lib || true
         mkdir -p /etc
         chmod 0755 /etc
-        printf '%s\n' '${usersGroupsJson}' > /run/d2b-users-groups.json
+        printf '%s\n' ${lib.escapeShellArg usersGroupsJson} > /run/d2b-users-groups.json
         wc -c /run/d2b-users-groups.json
         od -An -tx1 -N32 /run/d2b-users-groups.json
         echo "d2b-refresh-users: before generated users snippet"
