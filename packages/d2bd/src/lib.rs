@@ -9959,10 +9959,7 @@ impl VmStartRunner<'_> {
         close_received_fds(&received_fds);
 
         let (selector_resolved, hidraw_fd) = result?;
-        let hidraw = Arc::new(
-            security_key::HidrawDevice::from_owned_fd(hidraw_fd?)
-                .map_err(|error| format!("sk-hidraw-asyncfd:{error}"))?,
-        );
+        let hidraw = security_key::HidrawDevice::from_owned_fd(hidraw_fd?);
         let mut security_key_state = security_key::SecurityKeyState::new(selector_resolved);
         security_key_state.enabled_vms.insert(vm.to_owned());
         let state = Arc::new(parking_lot::Mutex::new(security_key_state));
@@ -9974,7 +9971,7 @@ impl VmStartRunner<'_> {
             expected_uid,
             expected_gid,
             Arc::clone(&state),
-            Arc::clone(&hidraw),
+            hidraw,
         )
         .map_err(|error| format!("sk-accept-loop:{error}"))?;
         self.state
