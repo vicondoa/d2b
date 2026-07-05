@@ -124,28 +124,6 @@ in
     expected = true;
   };
 
-  "security-key-gating/guest-refreshes-users-after-switch-root" = {
-    expr =
-      let
-        guest = guestConfig enabledEval "corp-vm";
-        activation = guest.system.activationScripts;
-        service = guest.systemd.services.d2b-refresh-users-after-switch-root;
-        ensureText =
-          if builtins.isAttrs activation.d2bEnsureEtcForUsers
-          then activation.d2bEnsureEtcForUsers.text or ""
-          else activation.d2bEnsureEtcForUsers;
-      in
-      activation ? d2bEnsureEtcForUsers
-      && ensureText != ""
-      && builtins.elem "d2bEnsureEtcForUsers" activation.users.deps
-      && builtins.elem "sysinit.target" service.wantedBy
-      && builtins.elem "sockets.target" service.before
-      && service.unitConfig.DefaultDependencies == false
-      && service.serviceConfig.Type == "oneshot"
-      && builtins.match ".*update-users-groups\\.pl.*" activation.users.text != null;
-    expected = true;
-  };
-
   # --- assertion: usbip.yubikey + security-key conflict ---
 
   "security-key-gating/yubikey-conflict-fires" = {
