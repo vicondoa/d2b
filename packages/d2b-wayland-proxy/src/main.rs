@@ -349,14 +349,14 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if terminal_runtime.is_some() {
-        if let Err(e) = chmod_socket_strict(&listen_path) {
-            eprintln!(
-                "d2b-wayland-proxy: failed to secure listen socket `{}`: {e}",
-                listen_path.display()
-            );
-            std::process::exit(1);
-        }
+    if terminal_runtime.is_some()
+        && let Err(e) = chmod_socket_strict(&listen_path)
+    {
+        eprintln!(
+            "d2b-wayland-proxy: failed to secure listen socket `{}`: {e}",
+            listen_path.display()
+        );
+        std::process::exit(1);
     }
 
     log::info!(

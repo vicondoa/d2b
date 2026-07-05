@@ -542,7 +542,7 @@ mod tests {
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
         let mut cmsg_space = vec![0_u8; SCM_RIGHTS_MIN_CONTROL_BYTES];
-        assert!(SCM_RIGHTS_CONTROL_FD_SLOTS >= SCM_RIGHTS_MIN_FDS);
+        const { assert!(SCM_RIGHTS_CONTROL_FD_SLOTS >= SCM_RIGHTS_MIN_FDS) };
         assert!(cmsg_space.len() >= SCM_RIGHTS_MIN_CONTROL_BYTES);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
