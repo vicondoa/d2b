@@ -187,9 +187,9 @@ deprecations ship one minor release before removal.
 - Security-key guest frontend now drives `/dev/uhid` through nonblocking
   `AsyncFd` I/O instead of `tokio::fs::File`, avoiding `ESPIPE` failures on
   character devices during CTAPHID response injection.
-- d2b guest activation now creates `/etc` before NixOS user/group activation,
+- d2b guests now refresh declarative users/groups immediately after switch-root,
   preventing fresh microVM root overlays from booting without `/etc/passwd` and
-  `/etc/group`.
+  `/etc/group` when cold-boot activation ran in the initrd.
 - Security-key proxy broker now accepts descriptor-verified FIDO hidraw devices
   even when the host udev group is not one of the fallback FIDO groups. The
   group allowlist remains required only for the descriptor-unreadable fallback
