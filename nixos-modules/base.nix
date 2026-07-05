@@ -115,11 +115,15 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
       ExecStart = pkgs.writeShellScript "d2b-refresh-users-after-switch-root" ''
-        set -euo pipefail
+        set -euxo pipefail
         mkdir -p /etc
         chmod 0755 /etc
         ${config.system.activationScripts.users.text}
+        test -s /etc/passwd
+        test -s /etc/group
       '';
     };
   };
