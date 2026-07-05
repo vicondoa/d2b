@@ -168,9 +168,7 @@ impl UhidDevice {
                 //   data[4096], size(__u16), rtype(__u8)
                 let size = u16::from_le_bytes([payload[4096], payload[4097]]) as usize;
                 let rtype = payload[4098];
-                let clamped = size.min(CTAPHID_REPORT_LEN);
-                let mut data = [0u8; CTAPHID_REPORT_LEN];
-                data[..clamped].copy_from_slice(&payload[..clamped]);
+                let data = parse_output_report(payload, size);
                 UhidEvent::Output {
                     _rtype: rtype,
                     data,
@@ -307,6 +305,22 @@ fn build_input2_event(data: &[u8; CTAPHID_REPORT_LEN]) -> Vec<u8> {
     buf
 }
 
+fn parse_output_report(payload: &[u8], size: usize) -> [u8; CTAPHID_REPORT_LEN] {
+    let start = if size == CTAPHID_REPORT_LEN + 1 && payload.first() == Some(&0) {
+        1
+    } else {
+        0
+    };
+    let available = payload.len().saturating_sub(start);
+    let copy_len = size
+        .saturating_sub(start)
+        .min(CTAPHID_REPORT_LEN)
+        .min(available);
+    let mut data = [0u8; CTAPHID_REPORT_LEN];
+    data[..copy_len].copy_from_slice(&payload[start..start + copy_len]);
+    data
+}
+
 fn build_get_report_reply_error(id: u32) -> Vec<u8> {
     // uhid_get_report_reply_req: id(__u32), err(__u16), size(__u16), data[4096]
     // UHID_GET_REPORT_REPLY = 10
@@ -422,6 +436,39 @@ mod tests {
         // data starts at offset 4(type) + 2(size) = 6
         assert_eq!(buf[6], 0xde);
         assert_eq!(buf[6 + 63], 0xad);
+    }
+
+    #[test]
+    fn output_report_preserves_plain_64_byte_report() {
+        let mut payload = [0u8; 4099];
+        payload[0] = 0xff;
+        payload[1] = 0xff;
+        payload[2] = 0xff;
+        payload[3] = 0xff;
+        payload[4] = 0x86;
+        payload[63] = 0xee;
+
+        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN);
+
+        assert_eq!(&report[..5], &[0xff, 0xff, 0xff, 0xff, 0x86]);
+        assert_eq!(report[63], 0xee);
+    }
+
+    #[test]
+    fn output_report_strips_zero_report_id_prefix() {
+        let mut payload = [0u8; 4099];
+        payload[0] = 0x00;
+        payload[1] = 0xff;
+        payload[2] = 0xff;
+        payload[3] = 0xff;
+        payload[4] = 0xff;
+        payload[5] = 0x86;
+        payload[64] = 0xee;
+
+        let report = parse_output_report(&payload, CTAPHID_REPORT_LEN + 1);
+
+        assert_eq!(&report[..5], &[0xff, 0xff, 0xff, 0xff, 0x86]);
+        assert_eq!(report[63], 0xee);
     }
 
     #[test]
