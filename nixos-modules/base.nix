@@ -158,6 +158,12 @@ in
         ls -ld / /etc /var /var/lib || true
         mkdir -p /etc
         chmod 0755 /etc
+        mkdir -p /var/lib/nixos
+        for map in /var/lib/nixos/uid-map /var/lib/nixos/gid-map /var/lib/nixos/auto-subuid-map; do
+          if [ -e "$map" ] && ! head -c 1 "$map" | grep -q '{'; then
+            mv "$map" "$map.corrupt.$(date +%s)"
+          fi
+        done
         printf '%s\n' ${lib.escapeShellArg usersGroupsJson} > /run/d2b-users-groups.json
         wc -c /run/d2b-users-groups.json
         od -An -tx1 -N32 /run/d2b-users-groups.json
