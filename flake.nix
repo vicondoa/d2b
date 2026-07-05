@@ -252,6 +252,12 @@
           cargoBuildFlags = [ "--package" "d2b-clipd" "--bin" "d2b-clipd" ];
           doCheck = false;
         };
+        d2b-wayland-proxy = rustWorkspace {
+          pname = "d2b-wayland-proxy";
+          cargoBuildFlags = [ "--package" "d2b-wayland-proxy" "--bin" "d2b-wayland-proxy" ];
+          doCheck = false;
+          meta.mainProgram = "d2b-wayland-proxy";
+        };
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };

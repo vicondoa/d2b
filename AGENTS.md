@@ -331,9 +331,27 @@ flake and is composed per-VM:
 - [`vicondoa/entrablau.nix`][entrablau] — Microsoft Entra ID
   joins (Himmelblau + TPM-bound machine credential).
 
-The composition pattern is intentionally one-way: sibling flakes
-know nothing about d2b, and d2b knows nothing about them.
-Consumers compose them on a specific workload VM:
+Optional **desktop companion** pieces also live in sibling flakes:
+
+- `vicondoa/d2b-toolkit` — shared Rust/Nix client DTOs, public-socket
+  framing, redaction wrappers, Wayland color parsing, and Waybar helpers for
+  desktop integrations.
+- `vicondoa/d2b-wlterm` — Home Manager module and user-session launcher for
+  persistent guest shells.
+- `vicondoa/weezterm` — WeezTerm package/provider integration used by the
+  terminal launcher when a d2b-aware terminal build is desired.
+
+Consumer flakes that combine these pieces keep a single nixpkgs and toolkit
+revision by using `inputs.d2b.inputs.nixpkgs.follows = "nixpkgs"`,
+`inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs"`, and
+`inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit"` (same for
+WeezTerm). The exact copy-paste boilerplate lives in
+[`docs/how-to/configure-desktop-terminal-integration.md`](./docs/how-to/configure-desktop-terminal-integration.md).
+
+The composition pattern is intentionally one-way: d2b core does not import
+identity, workload, or desktop companion flakes. Identity/workload flakes can
+stay d2b-agnostic; desktop companions consume only d2b's public CLI/socket
+contracts. Consumers compose workload modules on a specific VM:
 
 ```nix
 d2b.vms.work.config.imports = [

@@ -15,6 +15,9 @@ use std::{
 };
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
+pub const SCM_RIGHTS_MIN_FDS: usize = 28;
+pub const SCM_RIGHTS_MIN_CONTROL_BYTES: usize = 256;
+pub const SCM_RIGHTS_CONTROL_FD_SLOTS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
@@ -225,9 +228,20 @@ pub enum HandoffStatus {
 }
 
 /// Owns a local transfer FD until the bridge handoff attempt reaches a terminal
-/// result. Dropping the wrapper closes the proxy's local copy on every path.
+/// result. Dropping the wrapper closes the proxy's local copy on every path,
+/// acting as the CloseAttach barrier for clipboard transfers: callers may only
+/// release their local copy after the bridge reports delivered/deferred/failed,
+/// never while payload bytes and ancillary FDs can still be separated by
+/// backpressure.
+#[derive(Debug)]
 pub struct LocalTransferFd {
     fd: Option<OwnedFd>,
+}
+
+impl From<UnixStream> for LocalTransferFd {
+    fn from(value: UnixStream) -> Self {
+        Self::new(value.into())
+    }
 }
 
 impl LocalTransferFd {
@@ -239,12 +253,18 @@ impl LocalTransferFd {
         drop(self.fd.take());
         status
     }
+
+    fn as_owned_fd(&self) -> &OwnedFd {
+        self.fd
+            .as_ref()
+            .expect("fd present until close_after_handoff")
+    }
 }
 
 pub trait BridgeHandoff {
     fn handoff_transfer_fd(
         &mut self,
-        fd: &OwnedFd,
+        fd: &LocalTransferFd,
         metadata: &BridgeTransferMetadata,
     ) -> HandoffStatus;
 }
@@ -266,10 +286,10 @@ pub enum BridgeTransferKind {
 impl BridgeHandoff for UnixStream {
     fn handoff_transfer_fd(
         &mut self,
-        local_fd: &OwnedFd,
+        local_fd: &LocalTransferFd,
         metadata: &BridgeTransferMetadata,
     ) -> HandoffStatus {
-        let raw_fd = local_fd.as_raw_fd();
+        let raw_fd = local_fd.as_owned_fd().as_raw_fd();
         let frame = bridge_frame(metadata);
         let iov = [IoSlice::new(frame.as_bytes())];
         let fds = [raw_fd];
@@ -300,7 +320,14 @@ fn handoff_status_from_sendmsg_result(
 }
 
 fn is_would_block_errno(error: nix::errno::Errno) -> bool {
-    error == nix::errno::Errno::EAGAIN
+    matches!(
+        error,
+        nix::errno::Errno::EAGAIN | nix::errno::Errno::ENOTCONN
+    )
+}
+
+pub fn recv_flags_are_fail_closed(flags: nix::sys::socket::MsgFlags) -> bool {
+    !flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC)
 }
 
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
@@ -481,6 +508,10 @@ mod tests {
             HandoffStatus::Backpressure
         );
         assert_eq!(
+            handoff_status_from_sendmsg_result(Err(nix::errno::Errno::ENOTCONN), 128),
+            HandoffStatus::Backpressure
+        );
+        assert_eq!(
             handoff_status_from_sendmsg_result(Ok(64), 128),
             HandoffStatus::Failed(None)
         );
@@ -494,7 +525,7 @@ mod tests {
     fn bridge_handoff_sends_fd_with_scm_rights() {
         let (mut bridge, peer) = UnixStream::pair().expect("bridge socket pair");
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
-        let local: OwnedFd = local.into();
+        let local = LocalTransferFd::new(local.into());
         let metadata = BridgeTransferMetadata {
             vm_name: "work".to_owned(),
             mime_type: "text/plain".to_owned(),
@@ -506,18 +537,21 @@ mod tests {
             bridge.handoff_transfer_fd(&local, &metadata),
             HandoffStatus::Delivered
         );
-        drop(local);
+        let _ = local.close_after_handoff(HandoffStatus::Delivered);
 
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
-        let mut cmsg_space = nix::cmsg_space!([i32; 1]);
+        let mut cmsg_space = vec![0_u8; SCM_RIGHTS_MIN_CONTROL_BYTES];
+        const { assert!(SCM_RIGHTS_CONTROL_FD_SLOTS >= SCM_RIGHTS_MIN_FDS) };
+        assert!(cmsg_space.len() >= SCM_RIGHTS_MIN_CONTROL_BYTES);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
             &mut iov,
             Some(&mut cmsg_space),
-            nix::sys::socket::MsgFlags::empty(),
+            nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
+        assert!(recv_flags_are_fail_closed(msg.flags));
         let bytes = msg.bytes;
         let mut saw_fd = false;
         for cmsg in msg.cmsgs().expect("cmsgs") {
@@ -535,6 +569,16 @@ mod tests {
         assert!(frame.contains("\"vm_name\":\"work\""));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
+    }
+
+    #[test]
+    fn ctruncated_scm_rights_receive_is_fail_closed() {
+        assert!(!recv_flags_are_fail_closed(
+            nix::sys::socket::MsgFlags::MSG_CTRUNC
+        ));
+        assert!(recv_flags_are_fail_closed(
+            nix::sys::socket::MsgFlags::empty()
+        ));
     }
 
     #[test]

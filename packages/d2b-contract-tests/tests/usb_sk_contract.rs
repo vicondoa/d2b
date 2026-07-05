@@ -252,13 +252,8 @@ fn public_response_usb_security_key_status_round_trips() {
         vm_states: vec![],
     });
     let json = serde_json::to_string(&resp).expect("serialize");
-    // PublicResponse is Serialize only (no Deserialize), so assert tag is present
-    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
-    assert_eq!(
-        value.get("kind").and_then(|v| v.as_str()),
-        Some("usb security-key status"),
-        "unexpected kind tag in: {json}"
-    );
+    let decoded: PublicResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(resp, decoded);
 }
 
 // ---------------------------------------------------------------------------

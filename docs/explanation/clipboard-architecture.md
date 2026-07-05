@@ -53,6 +53,11 @@ sufficient for per-VM `d2b-<vm>-wlproxy` ACLs or lifecycle cleanup.
 
 The bridge is local-only, validates peer credentials, and may use `SCM_RIGHTS`
 between d2b components. Transfer FDs never go to the picker.
+The Wayland proxy keeps transfer FDs as owned descriptors while they are queued;
+short `sendmsg` results or `EAGAIN` keep the metadata frame and ancillary FD
+coupled until an atomic retry succeeds, and any truncated control-message
+receive is treated as fail-closed by d2b receivers. Clipboard logs identify only
+bounded metadata such as VM, MIME label, transfer kind, and reason code.
 
 ## Guest Wayland clipboard virtualization
 

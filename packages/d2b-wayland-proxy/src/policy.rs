@@ -12,6 +12,8 @@
 
 use std::collections::HashMap;
 
+const MAX_REWRITTEN_LABEL_CHARS: usize = 256;
+
 /// The action to apply for a Wayland global interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalAction {
@@ -333,12 +335,13 @@ impl FilterPolicy {
     ///   `d2b.<this>.d2b.<other>....` — spoof prevention.
     /// - Otherwise prepend our prefix unconditionally.
     pub fn rewrite_app_id(&self, guest_value: &str) -> String {
+        let guest_value = sanitize_rewritten_label(guest_value);
         if self.app_id_prefix.is_empty() {
-            return guest_value.to_owned();
+            return guest_value;
         }
         // Already has our exact prefix — pass through.
         if guest_value.starts_with(&self.app_id_prefix) {
-            return guest_value.to_owned();
+            return guest_value;
         }
         // Prepend our prefix (covers both plain values and cross-VM spoofs).
         format!("{}{}", self.app_id_prefix, guest_value)
@@ -348,13 +351,42 @@ impl FilterPolicy {
     ///
     /// Prepends `title_prefix` unless already present (idempotent).
     pub fn rewrite_title(&self, guest_value: &str) -> String {
+        let guest_value = sanitize_rewritten_label(guest_value);
         if self.title_prefix.is_empty() {
-            return guest_value.to_owned();
+            return guest_value;
         }
         if guest_value.starts_with(&self.title_prefix) {
-            return guest_value.to_owned();
+            return guest_value;
         }
         format!("{}{}", self.title_prefix, guest_value)
+    }
+}
+
+fn sanitize_rewritten_label(value: &str) -> String {
+    let mut sanitized = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            while let Some(next) = chars.peek().copied() {
+                chars.next();
+                if next.is_ascii_alphabetic() || next == 'm' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        sanitized.push(ch);
+        if sanitized.chars().count() >= MAX_REWRITTEN_LABEL_CHARS {
+            break;
+        }
+    }
+    if sanitized.is_empty() {
+        "unnamed".to_owned()
+    } else {
+        sanitized
     }
 }
 
@@ -816,6 +848,13 @@ mod tests {
         assert_eq!(p.rewrite_app_id("org.example.app"), "org.example.app");
     }
 
+    #[test]
+    fn app_id_rewrite_sanitizes_control_sequences() {
+        let p = policy_for("work");
+        let rewritten = p.rewrite_app_id("org.example.\u{1b}[31mevil\napp");
+        assert_eq!(rewritten, "d2b.work.org.example.evilapp");
+    }
+
     // --- title prefix tests ---
 
     #[test]
@@ -839,6 +878,17 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(p.rewrite_title("Firefox"), "Firefox");
+    }
+
+    #[test]
+    fn title_rewrite_sanitizes_and_truncates_guest_value() {
+        let p = policy_for("work");
+        let input = format!("{}\u{1b}[31m\n{}", "A".repeat(300), "tail");
+        let rewritten = p.rewrite_title(&input);
+        assert!(rewritten.starts_with("[work] "));
+        assert!(!rewritten.contains('\u{1b}'));
+        assert!(!rewritten.contains('\n'));
+        assert!(rewritten.chars().count() <= "[work] ".chars().count() + MAX_REWRITTEN_LABEL_CHARS);
     }
 
     // --- version cap tests ---

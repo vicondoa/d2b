@@ -166,6 +166,9 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   configure, enter, and recover realm gateway guests.
 - [`how-to/use-persistent-shells.md`](./how-to/use-persistent-shells.md) —
   enable, attach, detach, reattach, list, and kill persistent named guest shells.
+- [`how-to/configure-desktop-terminal-integration.md`](./how-to/configure-desktop-terminal-integration.md) —
+  wire the sibling toolkit, launcher, and terminal flakes to d2b's public shell
+  surface with aligned flake inputs.
 - [`how-to/migrate-d2b-v1-2-to-v2.md`](./how-to/migrate-d2b-v1-2-to-v2.md) —
   migrate from local-only or implicit realm metadata to explicit gateway-backed
   realm policy.

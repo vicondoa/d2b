@@ -12,6 +12,21 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documented the stable public-socket discovery contract for persistent shells
+  so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
+  `ShellOp::List` without scraping human CLI output or leaking terminal state.
+- Added typed deserialization support for public daemon response envelopes so
+  downstream clients can parse `PublicResponse` DTOs without falling back to
+  untyped JSON.
+- Exported `packages.<system>.d2b-wayland-proxy` and added a supported
+  `--host-terminal` launch path for VM-bound host terminals. The launcher creates
+  randomized single-use Wayland and WezTerm mux sockets under a private
+  `$XDG_RUNTIME_DIR` directory, waits for proxy readiness before launching the
+  foreground child, preserves d2b clipboard mediation, and keeps privileged
+  Wayland globals hidden.
+- Documented the optional desktop terminal integration stack (`d2b-toolkit`,
+  `d2b-wlterm`, and WeezTerm) with exact flake-input follow boilerplate,
+  Home Manager wiring, Waybar setup, and validation commands.
 - Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
   `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
   CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
@@ -263,6 +278,11 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
   proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
   the VM rail and guest content together without copying guest buffers.
+- `d2b-wayland-proxy` treats `ENOTCONN` during nonblocking clipboard bridge
+  handoff as retryable backpressure, preserving pending FDs until the bridge
+  socket finishes connecting.
+- Added host-integration coverage for the live `d2b-wayland-proxy`
+  AF_UNIX client-to-upstream relay path.
 - Updated the Windows notification transitive dependency to remove the runtime
   `quick-xml` advisory path, and documented a temporary build-time
   `wayland-scanner` advisory exception until that code generator publishes a
