@@ -47,6 +47,37 @@ The public daemon wire exposes `PublicRequest::Shell(ShellOp)` and
 `Kill` requires a name. `Attach` and `Detach` may omit the name so the VM's
 configured default can be resolved by the daemon/guest.
 
+## Local discovery contract
+
+Local desktop clients such as `d2b-wlterm` do not need to scrape human CLI
+output. They discover candidate local VMs through the public `List` or `Status`
+response, preferring `runtime.operationCapabilities.guest.shell == true` when
+present and otherwise the legacy `runtimeCapabilities[]` entry `shell`. They
+then issue `ShellOp::List { vm }` over the same public socket for each candidate
+VM.
+
+The current stable list payload is intentionally minimal:
+
+- `defaultName`;
+- `sessions[].name`;
+- `sessions[].state`;
+- `sessions[].attached`;
+- `sessions[].isDefault`.
+
+That is sufficient for local VM/session discovery and for rendering an
+open/stop control surface. The contract does not currently expose attached
+owner identity, session handles, last activity timestamps, terminal titles, or
+cwd. Those fields are reserved until they can be proven non-leaky and useful;
+clients should treat their absence as intentional rather than falling back to
+logs, metrics, audit records, or terminal output scraping.
+
+If `ShellOp::List` returns a typed shell error, clients should surface the
+closed wire `kind` (`guest-control-shell-capability-unavailable`,
+`guest-control-shell-transport-unavailable`, and so on) and avoid retry loops
+that would attach to or create a shell. Older daemons that do not understand the
+`shell` public-socket frame fail closed; the CLI maps that class to exit code
+`70`.
+
 ## States and close causes
 
 Shell session states are closed enum values:
