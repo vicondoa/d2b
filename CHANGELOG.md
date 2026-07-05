@@ -24,6 +24,9 @@ deprecations ship one minor release before removal.
   `$XDG_RUNTIME_DIR` directory, waits for proxy readiness before launching the
   foreground child, preserves d2b clipboard mediation, and keeps privileged
   Wayland globals hidden.
+- Documented the optional desktop terminal integration stack (`d2b-toolkit`,
+  `d2b-wlterm`, and WeezTerm) with exact flake-input follow boilerplate,
+  Home Manager wiring, Waybar setup, and validation commands.
 - Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
   `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
   CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
