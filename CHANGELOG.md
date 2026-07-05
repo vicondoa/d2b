@@ -186,6 +186,8 @@ deprecations ship one minor release before removal.
 - Security-key host relay now runs blocking physical hidraw reads on a blocking
   worker thread so the single-thread per-VM accept-loop runtime can still forward
   guest CTAPHID requests to the token.
+- Security-key guest frontend now strips the kernel-supplied zero report-ID byte
+  from UHID output reports before forwarding CTAPHID frames to the host broker.
 - Security-key guest udev rules now match the virtual UHID FIDO device by its
   HID parent identity and grant the standard `plugdev` browser/FIDO access group
   so Firefox and libfido2 can open the guest `/dev/hidraw*` node without root.
