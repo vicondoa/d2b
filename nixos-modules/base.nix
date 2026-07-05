@@ -10,6 +10,39 @@
 
 let
   cfg = config.d2b;
+  usersGroupsJsonPath =
+    let
+      matches = builtins.match ".*update-users-groups\\.pl ([^[:space:]\n]+).*" config.system.activationScripts.users.text;
+    in
+    if matches == null then null else builtins.head matches;
+  usersGroupsJson = builtins.toJSON {
+    inherit (config.users) mutableUsers;
+    groups = lib.mapAttrsToList (name: group: {
+      inherit name;
+      gid = group.gid or null;
+      members = group.members or [ ];
+    }) config.users.groups;
+    users = lib.mapAttrsToList (name: user: {
+      inherit name;
+      autoSubUidGidRange = user.autoSubUidGidRange or false;
+      createHome = user.createHome or false;
+      description = user.description or "";
+      expires = user.expires or null;
+      group = user.group or "nogroup";
+      hashedPassword = user.hashedPassword or null;
+      hashedPasswordFile = user.hashedPasswordFile or null;
+      home = user.home or "/var/empty";
+      homeMode = user.homeMode or "700";
+      initialHashedPassword = user.initialHashedPassword or null;
+      initialPassword = user.initialPassword or null;
+      isSystemUser = user.isSystemUser or false;
+      password = user.password or null;
+      shell = user.shell or null;
+      subGidRanges = user.subGidRanges or [ ];
+      subUidRanges = user.subUidRanges or [ ];
+      uid = user.uid or null;
+    }) config.users.users;
+  };
 in
 {
   options.d2b.sshUser = lib.mkOption {
@@ -125,8 +158,14 @@ in
         ls -ld / /etc /var /var/lib || true
         mkdir -p /etc
         chmod 0755 /etc
+        cat > /run/d2b-users-groups.json <<'D2B_USERS_GROUPS_JSON'
+        ${usersGroupsJson}
+        D2B_USERS_GROUPS_JSON
         echo "d2b-refresh-users: before generated users snippet"
-        ${config.system.activationScripts.users.text}
+        ${builtins.replaceStrings
+          (lib.optional (usersGroupsJsonPath != null) usersGroupsJsonPath)
+          (lib.optional (usersGroupsJsonPath != null) "/run/d2b-users-groups.json")
+          config.system.activationScripts.users.text}
         echo "d2b-refresh-users: after generated users snippet"
         ls -l /etc/passwd /etc/group /etc/shadow || true
         test -s /etc/passwd
