@@ -119,11 +119,19 @@ in
       StandardError = "journal+console";
       ExecStart = pkgs.writeShellScript "d2b-refresh-users-after-switch-root" ''
         set -euxo pipefail
+        exec > >(tee /dev/console) 2>&1
+        echo "d2b-refresh-users: start"
+        pwd
+        ls -ld / /etc /var /var/lib || true
         mkdir -p /etc
         chmod 0755 /etc
+        echo "d2b-refresh-users: before generated users snippet"
         ${config.system.activationScripts.users.text}
+        echo "d2b-refresh-users: after generated users snippet"
+        ls -l /etc/passwd /etc/group /etc/shadow || true
         test -s /etc/passwd
         test -s /etc/group
+        echo "d2b-refresh-users: complete"
       '';
     };
   };
