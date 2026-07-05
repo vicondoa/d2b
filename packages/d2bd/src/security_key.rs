@@ -40,11 +40,11 @@
 //!
 //! ## Blocking I/O
 //!
-//! [`HidrawDevice`] wraps the fd handed off by the broker in
-//! `AsyncFd<std::fs::File>` (a safe `OwnedFd -> File` conversion — this
-//! crate's workspace lints `forbid(unsafe_code)`, so no raw fd reconstruction
-//! is used). Reads/writes are cancellation-safe and rely on the broker opening
-//! the physical hidraw node with `O_NONBLOCK`.
+//! [`HidrawDevice`] wraps the fd handed off by the broker in a plain
+//! `std::fs::File` until the accept-loop runtime starts. The accept loop then
+//! registers it as `AsyncFd<std::fs::File>` on the same Tokio reactor that
+//! performs relay I/O. Reads/writes are cancellation-safe and rely on the
+//! broker opening the physical hidraw node with `O_NONBLOCK`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -410,13 +410,33 @@ impl SecurityKeyState {
 /// no raw fd reconstruction is used anywhere in this module.
 #[derive(Debug)]
 pub struct HidrawDevice {
-    file: AsyncFd<File>,
+    file: File,
 }
 
 impl HidrawDevice {
-    pub fn from_owned_fd(fd: OwnedFd) -> std::io::Result<Self> {
+    pub fn from_owned_fd(fd: OwnedFd) -> Self {
+        Self {
+            file: File::from(fd),
+        }
+    }
+
+    fn into_async_fd(self) -> std::io::Result<AsyncHidrawDevice> {
+        Ok(AsyncHidrawDevice {
+            file: AsyncFd::new(self.file)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct AsyncHidrawDevice {
+    file: AsyncFd<File>,
+}
+
+impl AsyncHidrawDevice {
+    #[cfg(test)]
+    fn from_file(file: File) -> std::io::Result<Self> {
         Ok(Self {
-            file: AsyncFd::new(File::from(fd))?,
+            file: AsyncFd::new(file)?,
         })
     }
 
@@ -477,7 +497,9 @@ fn track_response_cid(report: &CtaphidReport, cids: &parking_lot::Mutex<HashSet<
     }
 }
 
-async fn read_hidraw_report_polling(hidraw: Arc<HidrawDevice>) -> std::io::Result<CtaphidReport> {
+async fn read_hidraw_report_polling(
+    hidraw: Arc<AsyncHidrawDevice>,
+) -> std::io::Result<CtaphidReport> {
     loop {
         match hidraw.read_report().await {
             Ok(report) => return Ok(report),
@@ -679,7 +701,7 @@ pub fn spawn_accept_loop(
     expected_uid: u32,
     expected_gid: u32,
     state: Arc<parking_lot::Mutex<SecurityKeyState>>,
-    hidraw: Arc<HidrawDevice>,
+    hidraw: HidrawDevice,
 ) -> std::io::Result<SkAcceptAbort> {
     listener.set_nonblocking(true)?;
     let (abort, mut stop_rx) = SkAcceptAbort::new();
@@ -698,6 +720,13 @@ pub fn spawn_accept_loop(
                 }
             };
             runtime.block_on(async move {
+                let hidraw = match hidraw.into_async_fd() {
+                    Ok(hidraw) => Arc::new(hidraw),
+                    Err(error) => {
+                        info!(vm = %thread_vm_id, error = %error, "security-key: hidraw async fd init failed");
+                        return;
+                    }
+                };
                 let listener = match tokio::net::UnixListener::from_std(listener) {
                     Ok(listener) => listener,
                     Err(error) => {
@@ -750,7 +779,7 @@ pub(crate) async fn run_connection(
     expected_uid: u32,
     expected_gid: u32,
     state: Arc<parking_lot::Mutex<SecurityKeyState>>,
-    hidraw: Arc<HidrawDevice>,
+    hidraw: Arc<AsyncHidrawDevice>,
 ) {
     if let Err(error) = authenticate_peer(&stream, expected_uid, expected_gid) {
         info!(
@@ -910,10 +939,12 @@ mod tests {
         )
     }
 
-    fn dev_null_hidraw() -> Arc<HidrawDevice> {
+    fn test_hidraw() -> Arc<AsyncHidrawDevice> {
         let (left, _right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
         left.set_nonblocking(true).expect("left nonblocking");
-        Arc::new(HidrawDevice::from_owned_fd(left.into()).expect("wrap socket fd"))
+        Arc::new(
+            AsyncHidrawDevice::from_file(File::from(OwnedFd::from(left))).expect("wrap socket fd"),
+        )
     }
 
     fn current_peer_ids() -> (u32, u32) {
@@ -1204,7 +1235,7 @@ mod tests {
         left.set_nonblocking(true).expect("left nonblocking");
         drop(right);
         let fd: OwnedFd = left.into();
-        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
+        let device = AsyncHidrawDevice::from_file(File::from(fd)).expect("wrap socket fd");
         let err = device.read_report().await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
@@ -1214,7 +1245,7 @@ mod tests {
         let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
         left.set_nonblocking(true).expect("left nonblocking");
         let fd: OwnedFd = left.into();
-        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
+        let device = AsyncHidrawDevice::from_file(File::from(fd)).expect("wrap socket fd");
         let report = build_error_report(1, CTAPHID_ERR_INVALID_CMD);
         device.write_report(&report).await.expect("write report");
 
@@ -1231,7 +1262,7 @@ mod tests {
         let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
         left.set_nonblocking(true).expect("left nonblocking");
         let fd: OwnedFd = left.into();
-        let device = HidrawDevice::from_owned_fd(fd).expect("wrap socket fd");
+        let device = AsyncHidrawDevice::from_file(File::from(fd)).expect("wrap socket fd");
         let report = build_init_packet(CTAPHID_BROADCAST_CID, CTAPHID_INIT, 8, &[1, 2, 3, 4]);
 
         device.write_report(&report).await.expect("write report");
@@ -1292,7 +1323,7 @@ mod tests {
         let (stream, _peer) = tokio_socket_pair();
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
         state.lock().enabled_vms.insert("vm-a".to_owned());
-        let hidraw = dev_null_hidraw();
+        let hidraw = test_hidraw();
         let (wrong_uid, wrong_gid) = mismatched_ids();
 
         tokio::time::timeout(
@@ -1314,7 +1345,7 @@ mod tests {
     async fn run_connection_rejects_disabled_vm() {
         let (stream, _peer) = tokio_socket_pair();
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
-        let hidraw = dev_null_hidraw();
+        let hidraw = test_hidraw();
         let (uid, gid) = current_peer_ids();
 
         tokio::time::timeout(
@@ -1331,7 +1362,7 @@ mod tests {
         let mut inner = SecurityKeyState::new("selector");
         inner.enabled_vms.insert("vm-a".to_owned());
         let state = Arc::new(parking_lot::Mutex::new(inner));
-        let hidraw = dev_null_hidraw();
+        let hidraw = test_hidraw();
         let (uid, gid) = current_peer_ids();
 
         drop(peer);
