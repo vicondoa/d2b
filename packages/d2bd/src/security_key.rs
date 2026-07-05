@@ -451,9 +451,13 @@ fn track_response_cid(report: &CtaphidReport, cids: &parking_lot::Mutex<HashSet<
     }
 }
 
-async fn read_hidraw_report_polling(hidraw: &HidrawDevice) -> std::io::Result<CtaphidReport> {
+async fn read_hidraw_report_polling(hidraw: Arc<HidrawDevice>) -> std::io::Result<CtaphidReport> {
     loop {
-        match hidraw.read_report() {
+        let hidraw = Arc::clone(&hidraw);
+        match tokio::task::spawn_blocking(move || hidraw.read_report())
+            .await
+            .map_err(relay_join_error)?
+        {
             Ok(report) => return Ok(report),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -804,7 +808,7 @@ pub(crate) async fn run_connection(
         let hidraw = Arc::clone(&hidraw);
         async move {
             loop {
-                let report = match read_hidraw_report_polling(&hidraw).await {
+                let report = match read_hidraw_report_polling(Arc::clone(&hidraw)).await {
                     Ok(report) => {
                         track_response_cid(&report, &active_cids);
                         report
