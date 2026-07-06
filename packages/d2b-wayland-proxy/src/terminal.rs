@@ -53,8 +53,15 @@ impl TerminalRuntime {
         &self.mux_socket
     }
 
+    pub fn runtime_dir(&self) -> &Path {
+        &self.root
+    }
+
     pub fn wayland_display_value(&self) -> OsString {
-        self.listen_socket.as_os_str().to_owned()
+        self.listen_socket
+            .file_name()
+            .expect("listen socket has a file name")
+            .to_owned()
     }
 
     fn prepare_in_with_token(runtime_dir: &Path, vm_name: &str, token: &str) -> io::Result<Self> {
@@ -154,6 +161,7 @@ pub fn terminal_command(program: &OsStr, args: &[OsString], runtime: &TerminalRu
     let mut command = Command::new(program);
     command
         .args(args)
+        .env("XDG_RUNTIME_DIR", runtime.runtime_dir())
         .env("WAYLAND_DISPLAY", runtime.wayland_display_value())
         .env("WEZTERM_UNIX_SOCKET", runtime.mux_socket())
         .stdin(Stdio::inherit())
@@ -170,10 +178,10 @@ fn ensure_runtime_parent(runtime_dir: &Path) -> io::Result<()> {
             "XDG_RUNTIME_DIR must be a real directory",
         ));
     }
-    if metadata.permissions().mode() & 0o077 != 0 {
+    if metadata.permissions().mode() & 0o007 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "XDG_RUNTIME_DIR must not be group/world accessible",
+            "XDG_RUNTIME_DIR must not be world accessible",
         ));
     }
     Ok(())
@@ -352,8 +360,12 @@ mod tests {
         let env = command.get_envs().collect::<Vec<_>>();
 
         assert!(env.iter().any(|(key, value)| {
+            *key == OsStr::new("XDG_RUNTIME_DIR")
+                && value == &Some(runtime.runtime_dir().as_os_str())
+        }));
+        assert!(env.iter().any(|(key, value)| {
             *key == OsStr::new("WAYLAND_DISPLAY")
-                && value == &Some(runtime.listen_socket().as_os_str())
+                && value == &Some(OsStr::new("wayland-abc123.sock"))
         }));
         assert!(env.iter().any(|(key, value)| {
             *key == OsStr::new("WEZTERM_UNIX_SOCKET")

@@ -278,6 +278,10 @@ deprecations ship one minor release before removal.
 - `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
   proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
   the VM rail and guest content together without copying guest buffers.
+- `d2b-wayland-proxy --host-terminal` now launches child terminals with a
+  private runtime directory and relative `WAYLAND_DISPLAY`, while accepting
+  ACL-protected user runtime directories, so host terminals connect to the
+  intended single-use proxy socket.
 - `d2b-wayland-proxy` treats `ENOTCONN` during nonblocking clipboard bridge
   handoff as retryable backpressure, preserving pending FDs until the bridge
   socket finishes connecting.
