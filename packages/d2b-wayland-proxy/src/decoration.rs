@@ -1119,6 +1119,7 @@ struct WrapperToplevel {
     pending_window_geometry: Option<WindowGeometry>,
     current_window_geometry: Option<WindowGeometry>,
     current_configure: ConfigureSize,
+    wrapper_configured: bool,
 }
 
 impl WrapperToplevel {
@@ -1435,6 +1436,7 @@ impl DecorationManager {
 
         let wrapper_surface = compositor.new_send_create_surface();
         wrapper_surface.set_forward_to_client(false);
+        let initial_wrapper_surface = wrapper_surface.clone();
         let wrapper_xdg_surface = wm_base.new_send_get_xdg_surface(&wrapper_surface);
         wrapper_xdg_surface.set_forward_to_client(false);
         let wrapper_toplevel = wrapper_xdg_surface.new_send_get_toplevel();
@@ -1444,7 +1446,6 @@ impl DecorationManager {
         guest_subsurface.send_set_position(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0), 0);
         guest_subsurface.send_place_below(&wrapper_surface);
         guest_subsurface.send_set_desync();
-        wrapper_surface.send_commit();
 
         guest_xdg_surface.set_forward_to_server(false);
         guest_toplevel.set_forward_to_server(false);
@@ -1476,7 +1477,9 @@ impl DecorationManager {
             pending_window_geometry: None,
             current_window_geometry: None,
             current_configure: ConfigureSize::new(0, 0),
+            wrapper_configured: false,
         });
+        initial_wrapper_surface.send_commit();
         true
     }
 
@@ -1538,6 +1541,7 @@ impl DecorationManager {
             return false;
         };
         wrapper.wrapper_xdg_surface.send_ack_configure(serial);
+        wrapper.wrapper_configured = true;
         true
     }
 
@@ -1888,6 +1892,9 @@ impl DecorationManager {
         else {
             return;
         };
+        if !wrapper.wrapper_configured {
+            return;
+        }
         wrapper.guest_subsurface.send_set_position(
             wrapper_geometry.guest_offset.x,
             wrapper_geometry.guest_offset.y,
