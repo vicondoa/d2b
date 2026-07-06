@@ -82,6 +82,30 @@ identity never authorizes d2b operations. Every cross-realm operation uses
 end-to-end realm identity, session authentication, capability negotiation,
 operation/stream policy, idempotency, and bounded audit above the relay.
 
+The operator-facing CLI and desktop tools talk to the **realm layer**, not to a
+single implied local `d2bd`. The implementation may keep a local-root realm
+access socket as the default entrypoint, but that entrypoint is a resolver, not
+a byte proxy for host-local realms. It resolves the target realm, checks local
+alias rules, and returns the target realm's access binding. For a host-local
+realm, clients connect directly to that realm's Unix socket so OS DAC,
+`SO_PEERCRED`, `SCM_RIGHTS`, and local FD-passing semantics are preserved. If an
+implementation must bridge an accepted local connection, it must pass the
+client connection or equivalent authenticated identity by fd handoff; it must
+not proxy bytes in a way that makes the target realm authenticate the local root
+instead of the original operator.
+
+For remote or provider-backed realms, the local-root resolver may initiate the
+approved realm-tree transport because those paths already use semantic
+operation/stream frames and realm-session authentication. The resolver still
+does not collapse all realms back into one host daemon or bypass the target
+realm's own authorization, broker, state, and audit boundary.
+
+This should be mostly transparent to operators. Existing local commands remain
+short through a default realm or explicit aliases, while cross-realm operations
+use the realm-qualified `*.d2b` target names. The user-visible change is target
+naming and clearer capability denials, not a second CLI or separate
+realm-specific toolchain.
+
 ## Realm model
 
 A realm has:
@@ -248,7 +272,10 @@ Bare VM names remain convenience aliases only within a statically configured
 default realm or explicit local alias table. Dynamic relay discovery never
 changes the meaning of a bare target. If a bare alias conflicts with another
 configured local alias, the command fails closed with a helpful error listing
-the conflicting canonical addresses:
+the conflicting canonical addresses. The resolver also rejects unqualified
+targets that collide with any configured/running local realm workload visible to
+the local root, even when one match is in the default realm. Remote relay
+discovery does not participate in bare-name lookup.
 
 ```text
 d2b vm up dev
@@ -266,6 +293,14 @@ browser.work.d2b           work           host-local        running
 api.payments.work.d2b      work/payments  azure-vm:build    running
 session.aca.work.d2b       work           aca:sandbox       running
 ```
+
+The CLI parser, shell clients, and desktop helpers must all consume this same
+target model. They must not scrape human output, infer the current VM from a
+single local daemon, or assume a local socket path uniquely identifies the
+target realm. Machine-readable APIs expose canonical realm addresses, resolved
+placement metadata, access bindings, and capability preflight status so tools
+can remain transparent when a VM moves from local host placement to a
+remote/provider placement inside the same realm.
 
 ## Trust bootstrap and identity
 
@@ -392,7 +427,12 @@ counts. Telemetry export uses explicit per-realm observability configuration:
 either a realm-local secured metrics endpoint, OTLP export from the realm, or a
 local-root scrape/forwarding path authorized for metrics only. The export path
 must not grant access to realm provider credentials, raw audit payloads, or
-control sockets. The local-root host-resource allocator also emits bounded
+control sockets. Desktop clients that initiate realm operations create or
+propagate W3C Trace Context and log the correlation id locally through their
+normal diagnostics channel before calling the realm access layer. Canonical
+target addresses may appear in audit records, but metrics must not label on the
+full `<vm>.<realm>...d2b` address; metric labels use bounded operation kind,
+realm path, placement kind, and outcome enums. The local-root host-resource allocator also emits bounded
 audit records and low-cardinality metrics for allocation grants, denials,
 conflicts, reconciliation, reclamation, and quarantine decisions.
 
@@ -433,6 +473,36 @@ The architecture should pursue local d2b parity where feasible:
 Some local features cannot cross every provider boundary safely. The correct
 behavior is an explicit capability denial with actionable operator text, not a
 best-effort fallback.
+
+### Desktop and companion tools
+
+Realm-native routing applies to every d2b-facing desktop tool, not just the
+`d2b` binary:
+
+- `d2b-wlcontrol` queries and acts through the realm access layer so realm,
+  VM/window identity, capability status, and policy denials match CLI behavior.
+- `d2b-clip-picker` and the trusted clipboard authority use canonical realm VM
+  addresses in picker metadata, provenance labels, policy decisions, and audit
+  records. Picker selection never implies direct host-to-VM clipboard access;
+  [ADR 0042](0042-d2b-clipboard-authority-and-picker-split.md) authority still
+  decides whether the selected transfer is allowed. Clipboard target lists
+  include preflight capability status so denied destinations can be hidden,
+  disabled, or explained before the operator selects them.
+- `d2b-wlterm` resolves shell/session targets through the realm access layer and
+  receives canonical target addresses from public APIs rather than assuming the
+  local daemon's VM namespace.
+
+These tools should preserve the local UX when a target is in the default realm,
+but every user-visible object that can cross a realm boundary must carry or
+derive the canonical `<vm>.<realm>[.<ancestor>...].d2b` identity. A tool that
+does not understand realm-qualified identities must fail closed for
+cross-realm targets rather than silently falling back to local-only behavior.
+Canonical realm identities shown by Wayland, clipboard, and desktop tools are
+asserted only by trusted d2b components such as the realm daemon, broker, or
+Wayland/clipboard proxy. Guest-provided window titles, app ids, MIME
+parameters, clipboard metadata, and other payload-derived labels must never be
+accepted as authoritative realm or VM identity and must not become audit or
+metric labels.
 
 ## Provider model
 
@@ -482,6 +552,14 @@ The new surface should describe:
 - policy bundle;
 - key/enrollment material references;
 - default workload namespace and env/network membership.
+
+The client/user-session surface must also be declarative. A `programs.d2b` or
+equivalent module configures the CLI and desktop helpers with the local-root
+realm access socket, default realm, explicit aliases, and any per-user desktop
+integration settings. `d2b.realms.<name>` exposes an `allowedUsers` or
+equivalent authorization surface that provisions the distinct Unix groups or
+ACLs needed for those users to connect directly to host-local realm sockets
+without routing through the local root as a proxy.
 
 NixOS module evaluation is the primary place to reject declared conflicts:
 
@@ -598,6 +676,7 @@ host-centric entrypoint model:
 | `d2b.gateways` Nix surface | `d2b.realms` with provider/placement fields. |
 | `<workload>.<node>.<realm>.d2b` target | `<vm>.<realm>[.<ancestor>...].d2b`; placement resolved inside the realm. |
 | Remote node registry as gateway-owned state | Realm-owned provider/node/workload registry. |
+| CLI talking directly to one local daemon namespace | CLI and desktop tools talk to a realm access layer that resolves and dispatches to the owning realm controller. |
 
 Existing local VM state must be migrated deliberately. A release implementing
 this ADR should prefer adopting all pre-realm local VMs into a configured
@@ -637,17 +716,21 @@ The first implementation plan after ADR acceptance should proceed in waves:
    socket/state/audit paths and global host-resource arbitration.
 3. Replace the current target parser/resolver with realm-qualified
    `<vm>.<realm>[.<ancestor>...].d2b` semantics.
-4. Add realm identity, enrollment, controller-generation keys, rotation, and
+4. Move CLI, public API clients, and desktop helpers (`d2b-wlcontrol`,
+   `d2b-clip-picker` integration, `d2b-wlterm`) onto the realm access layer so
+   they consume canonical addresses and capability-denial results instead of a
+   single local daemon namespace.
+5. Add realm identity, enrollment, controller-generation keys, rotation, and
    revocation.
-5. Implement dynamic relay discovery and tree route admission using loopback
+6. Implement dynamic relay discovery and tree route admission using loopback
    and local-TCP tests first.
-6. Route core operation families: lifecycle, exec, persistent shell, logs, and
+7. Route core operation families: lifecycle, exec, persistent shell, logs, and
    Wayland/display.
-7. Move provider-managed sandbox support behind the shared realm protocol and
+8. Move provider-managed sandbox support behind the shared realm protocol and
    capability model.
-8. Retire `d2b.gateways` or transform it into short-lived migration support for
+9. Retire `d2b.gateways` or transform it into short-lived migration support for
    `d2b.realms`.
-9. Update the Diataxis documentation tree: explanation docs for realm-native
+10. Update the Diataxis documentation tree: explanation docs for realm-native
    architecture, reference docs for `d2b.realms` and target addresses, how-to
    migration guidance for existing `d2b.gateways` and local VM users, and the
    CHANGELOG breaking-change entry.
@@ -668,6 +751,11 @@ testing to the end. Required validation includes:
 - positive routing tests proving core operations such as lifecycle, exec,
   persistent shell, logs, and Wayland/display successfully traverse authorized
   realm boundaries with mock or hermetic providers before full VM tests;
+- client contract tests proving the CLI, `d2b-wlcontrol`, clipboard picker
+  integration, and `d2b-wlterm` consume canonical realm target addresses and
+  fail closed on unsupported cross-realm targets; host-local client tests must
+  prove direct realm-socket connection preserves `SO_PEERCRED` and `SCM_RIGHTS`
+  rather than proxying through the local root;
 - trust-lifecycle tests for realm key rotation, controller-generation
   revocation, parent-pushed revocation lists, and forced teardown of active
   sessions/streams on revocation;
