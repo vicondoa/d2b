@@ -196,6 +196,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
+  toplevel has acked its initial configure before attaching the VM identity rail,
+  preventing Wayland compositors from rejecting proxied WeezTerm windows during
+  startup.
 - Guest VMs now cap persistent systemd journals by default so `/var/log/journal`
   cannot fill small per-VM `/var` images and corrupt NixOS activation state.
 - Security-key host relay now drives the physical hidraw fd through
