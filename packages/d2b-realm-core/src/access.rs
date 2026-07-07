@@ -11,8 +11,9 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Maximum bytes in a Linux `sockaddr_un.sun_path` socket path.
-pub const MAX_UNIX_SOCKET_PATH_LEN: usize = 108;
+/// Maximum bytes in a pathname Linux `sockaddr_un.sun_path`, reserving the
+/// trailing NUL.
+pub const MAX_UNIX_SOCKET_PATH_LEN: usize = 107;
 /// Maximum bytes in a non-secret access-binding reference.
 pub const MAX_ACCESS_REF_LEN: usize = 128;
 
@@ -261,12 +262,17 @@ mod tests {
 
     #[test]
     fn unix_socket_path_rejects_kernel_incompatible_paths() {
-        assert!(UnixSocketPath::parse(format!("/{}", "x".repeat(107))).is_some());
-        assert!(UnixSocketPath::parse(format!("/{}", "x".repeat(108))).is_none());
+        let max_valid = format!("/{}", "x".repeat(MAX_UNIX_SOCKET_PATH_LEN - 1));
+        assert_eq!(max_valid.len(), 107);
+        assert!(UnixSocketPath::parse(max_valid).is_some());
+
+        let too_long = format!("/{}", "x".repeat(MAX_UNIX_SOCKET_PATH_LEN));
+        assert_eq!(too_long.len(), 108);
+        assert!(UnixSocketPath::parse(&too_long).is_none());
         assert!(UnixSocketPath::parse("\0abstract").is_none());
         assert!(UnixSocketPath::parse("@abstract").is_none());
 
-        let overlong = format!("\"/{}\"", "x".repeat(108));
+        let overlong = format!("\"{too_long}\"");
         assert!(serde_json::from_str::<UnixSocketPath>(&overlong).is_err());
     }
 }

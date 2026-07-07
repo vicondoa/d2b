@@ -319,7 +319,7 @@ impl JsonSchema for CapabilitySet {
 /// bounded so audit records can cite the negotiated set without expanding it
 /// into every event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityNegotiation {
     /// Capability negotiation schema version.
     pub schema_version: u32,
@@ -356,6 +356,7 @@ impl<'de> Deserialize<'de> for CapabilityNegotiation {
 mod tests {
     use super::*;
     use crate::token::MAX_PROTOCOL_TOKEN_LEN;
+    use schemars::{schema::Schema, schema_for};
 
     #[test]
     fn absent_capability_is_not_advertised() {
@@ -447,6 +448,16 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn capability_negotiation_schema_denies_unknown_outer_fields() {
+        let schema = schema_for!(CapabilityNegotiation);
+        let additional_properties = schema
+            .schema
+            .object
+            .and_then(|object| object.additional_properties);
+        assert_eq!(additional_properties.as_deref(), Some(&Schema::Bool(false)));
     }
 
     #[test]
