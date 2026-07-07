@@ -418,6 +418,7 @@ mod tests {
             privileges_path: "privileges.json".to_owned(),
             storage_path: storage_contract.as_ref().map(|_| "storage.json".to_owned()),
             sync_path: sync_contract.as_ref().map(|_| "sync.json".to_owned()),
+            allocator_path: None,
             closures: Vec::new(),
             minijail_profiles: Vec::new(),
             managed_keys: Default::default(),

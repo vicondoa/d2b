@@ -54,6 +54,12 @@
       "$ref": "#/definitions/ControllerGenerationId"
     },
     {
+      "$ref": "#/definitions/AllocatorLeaseId"
+    },
+    {
+      "$ref": "#/definitions/HostResourceId"
+    },
+    {
       "$ref": "#/definitions/EnrollmentId"
     },
     {
@@ -279,6 +285,78 @@
       "$ref": "#/definitions/AuditSinkHealth"
     },
     {
+      "$ref": "#/definitions/HostResourceKind"
+    },
+    {
+      "$ref": "#/definitions/LeaseOwner"
+    },
+    {
+      "$ref": "#/definitions/ResourceShareMode"
+    },
+    {
+      "$ref": "#/definitions/ResourceAcquisitionOrder"
+    },
+    {
+      "$ref": "#/definitions/LeaseResourceRequest"
+    },
+    {
+      "$ref": "#/definitions/ResourceAcquisitionKey"
+    },
+    {
+      "$ref": "#/definitions/ResourceDelegation"
+    },
+    {
+      "$ref": "#/definitions/GrantedHostResource"
+    },
+    {
+      "$ref": "#/definitions/AllocatorLeaseState"
+    },
+    {
+      "$ref": "#/definitions/AllocatorLease"
+    },
+    {
+      "$ref": "#/definitions/AllocatorReasonCode"
+    },
+    {
+      "$ref": "#/definitions/AllocatorConflict"
+    },
+    {
+      "$ref": "#/definitions/LeaseAllocationResponse"
+    },
+    {
+      "$ref": "#/definitions/LeaseAllocationRequest"
+    },
+    {
+      "$ref": "#/definitions/LeaseAllocationResult"
+    },
+    {
+      "$ref": "#/definitions/AllocatorEventKind"
+    },
+    {
+      "$ref": "#/definitions/AllocatorEventMetadata"
+    },
+    {
+      "$ref": "#/definitions/PersistedResourceLease"
+    },
+    {
+      "$ref": "#/definitions/ResourceObservationSource"
+    },
+    {
+      "$ref": "#/definitions/ObservedResourceState"
+    },
+    {
+      "$ref": "#/definitions/ObservedHostResource"
+    },
+    {
+      "$ref": "#/definitions/ReconciliationDecision"
+    },
+    {
+      "$ref": "#/definitions/ReconciliationRecord"
+    },
+    {
+      "$ref": "#/definitions/ReconciliationReport"
+    },
+    {
       "$ref": "#/definitions/ConstellationError"
     },
     {
@@ -384,6 +462,169 @@
         }
       },
       "additionalProperties": false
+    },
+    "AllocatorConflict": {
+      "description": "Conflict metadata returned on denial. Only opaque ids and closed reasons.",
+      "type": "object",
+      "required": [
+        "kind",
+        "reason",
+        "resource_id"
+      ],
+      "properties": {
+        "existing_lease": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllocatorLeaseId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/HostResourceKind"
+        },
+        "reason": {
+          "$ref": "#/definitions/AllocatorReasonCode"
+        },
+        "resource_id": {
+          "$ref": "#/definitions/HostResourceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorEventKind": {
+      "description": "Bounded allocator audit/metric event kind.",
+      "type": "string",
+      "enum": [
+        "grant",
+        "denial",
+        "conflict",
+        "reconciliation",
+        "reclamation",
+        "quarantine"
+      ]
+    },
+    "AllocatorEventMetadata": {
+      "description": "Bounded allocator event metadata. Carries no paths, interface names, command output, or credentials.",
+      "type": "object",
+      "required": [
+        "correlation_id",
+        "event",
+        "operation_id",
+        "owner"
+      ],
+      "properties": {
+        "correlation_id": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "event": {
+          "$ref": "#/definitions/AllocatorEventKind"
+        },
+        "operation_id": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "owner": {
+          "$ref": "#/definitions/LeaseOwner"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllocatorReasonCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HostResourceKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorLease": {
+      "description": "Persisted allocator lease record.",
+      "type": "object",
+      "required": [
+        "lease_id",
+        "owner",
+        "resources",
+        "state"
+      ],
+      "properties": {
+        "lease_id": {
+          "$ref": "#/definitions/AllocatorLeaseId"
+        },
+        "owner": {
+          "$ref": "#/definitions/LeaseOwner"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GrantedHostResource"
+          },
+          "maxItems": 32,
+          "minItems": 1
+        },
+        "state": {
+          "$ref": "#/definitions/AllocatorLeaseState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorLeaseId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "AllocatorLeaseState": {
+      "description": "Allocator lease lifecycle state.",
+      "type": "string",
+      "enum": [
+        "granted",
+        "reconciled",
+        "quarantined",
+        "reclaimed",
+        "denied"
+      ]
+    },
+    "AllocatorReasonCode": {
+      "description": "Closed, low-cardinality allocator denial/conflict/quarantine reasons.",
+      "type": "string",
+      "enum": [
+        "resource-conflict",
+        "ownership-conflict",
+        "acquisition-order-violation",
+        "invalid-request",
+        "capacity-exhausted",
+        "drift-detected",
+        "reconcile-mismatch",
+        "owner-not-live",
+        "policy-denied",
+        "unsupported-kind",
+        "storage-contract-violation",
+        "kernel-state-unknown"
+      ]
     },
     "AuditChainCheckFailure": {
       "description": "Closed audit-chain verification failure.",
@@ -2368,6 +2609,35 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "GrantedHostResource": {
+      "description": "One resource granted under a lease.",
+      "type": "object",
+      "required": [
+        "acquisition_order",
+        "delegation",
+        "kind",
+        "resource_id",
+        "share"
+      ],
+      "properties": {
+        "acquisition_order": {
+          "$ref": "#/definitions/ResourceAcquisitionOrder"
+        },
+        "delegation": {
+          "$ref": "#/definitions/ResourceDelegation"
+        },
+        "kind": {
+          "$ref": "#/definitions/HostResourceKind"
+        },
+        "resource_id": {
+          "$ref": "#/definitions/HostResourceId"
+        },
+        "share": {
+          "$ref": "#/definitions/ResourceShareMode"
+        }
+      },
+      "additionalProperties": false
+    },
     "Handshake": {
       "description": "Negotiated wire/codec version and capability advertisement exchanged at the start of a peer session.",
       "type": "object",
@@ -2470,6 +2740,26 @@
         "malformed-handshake"
       ]
     },
+    "HostResourceId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "HostResourceKind": {
+      "description": "Closed host-resource kinds the local root allocator can arbitrate.",
+      "type": "string",
+      "enum": [
+        "bridge",
+        "tap",
+        "veth-pair",
+        "nftables-table",
+        "nftables-partition",
+        "cgroup-subtree",
+        "host-file-partition",
+        "namespace-boundary"
+      ]
+    },
     "IdempotencyKey": {
       "type": "string",
       "maxLength": 128,
@@ -2536,6 +2826,226 @@
           "allOf": [
             {
               "$ref": "#/definitions/RealmKeyRole"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LeaseAllocationRequest": {
+      "description": "Mutating lease allocation request. Idempotency is mandatory.",
+      "type": "object",
+      "required": [
+        "correlation_id",
+        "idempotency_key",
+        "operation_id",
+        "owner",
+        "resources"
+      ],
+      "properties": {
+        "correlation_id": {
+          "description": "Cross-realm correlation id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
+        "idempotency_key": {
+          "description": "Caller-generated dedup key for at-least-once delivery.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IdempotencyKey"
+            }
+          ]
+        },
+        "operation_id": {
+          "description": "Per-attempt operation id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        },
+        "owner": {
+          "description": "Lease owner realm/controller generation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LeaseOwner"
+            }
+          ]
+        },
+        "resources": {
+          "description": "Requested host resources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LeaseResourceRequest"
+          },
+          "maxItems": 32,
+          "minItems": 1
+        },
+        "trace": {
+          "description": "Optional bounded trace metadata.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LeaseAllocationResponse": {
+      "description": "Allocator response to a typed lease request.",
+      "type": "object",
+      "required": [
+        "correlation_id",
+        "operation_id",
+        "result"
+      ],
+      "properties": {
+        "correlation_id": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "operation_id": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "result": {
+          "$ref": "#/definitions/LeaseAllocationResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LeaseAllocationResult": {
+      "description": "Granted or fail-closed denied allocation result.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "lease",
+            "status"
+          ],
+          "properties": {
+            "lease": {
+              "$ref": "#/definitions/AllocatorLease"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "granted"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "conflicts",
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AllocatorConflict"
+              },
+              "maxItems": 16
+            },
+            "reason": {
+              "$ref": "#/definitions/AllocatorReasonCode"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "denied"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LeaseOwner": {
+      "description": "The realm-controller generation that owns a lease.",
+      "type": "object",
+      "required": [
+        "controller_generation",
+        "realm"
+      ],
+      "properties": {
+        "controller_generation": {
+          "description": "Active controller generation that requested the lease.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "node": {
+          "description": "Realm node/broker identity, when the caller has one bound.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Owning realm path.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LeaseResourceRequest": {
+      "description": "One resource requested from the local-root allocator.",
+      "type": "object",
+      "required": [
+        "acquisition_order",
+        "kind",
+        "resource_id",
+        "share"
+      ],
+      "properties": {
+        "acquisition_order": {
+          "description": "Total acquisition order metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceAcquisitionOrder"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Resource kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HostResourceKind"
+            }
+          ]
+        },
+        "resource_id": {
+          "description": "Opaque requested resource/partition id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HostResourceId"
+            }
+          ]
+        },
+        "share": {
+          "description": "Sharing contract.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceShareMode"
             }
           ]
         }
@@ -2704,6 +3214,42 @@
         }
       },
       "additionalProperties": false
+    },
+    "ObservedHostResource": {
+      "description": "Host-resource observation from the live system side of reconciliation.",
+      "type": "object",
+      "required": [
+        "kind",
+        "resource_id",
+        "source",
+        "state"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HostResourceKind"
+        },
+        "resource_id": {
+          "$ref": "#/definitions/HostResourceId"
+        },
+        "source": {
+          "$ref": "#/definitions/ResourceObservationSource"
+        },
+        "state": {
+          "$ref": "#/definitions/ObservedResourceState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedResourceState": {
+      "description": "Kernel/host-observed state for one resource id.",
+      "type": "string",
+      "enum": [
+        "present",
+        "missing",
+        "foreign-owner",
+        "ambiguous",
+        "inaccessible"
+      ]
     },
     "OpaquePayload": {
       "type": "array",
@@ -2920,6 +3466,27 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PersistedResourceLease": {
+      "description": "Persisted resource lease metadata from the allocator ledger.",
+      "type": "object",
+      "required": [
+        "lease_id",
+        "owner",
+        "state"
+      ],
+      "properties": {
+        "lease_id": {
+          "$ref": "#/definitions/AllocatorLeaseId"
+        },
+        "owner": {
+          "$ref": "#/definitions/LeaseOwner"
+        },
+        "state": {
+          "$ref": "#/definitions/AllocatorLeaseState"
         }
       },
       "additionalProperties": false
@@ -3352,6 +3919,311 @@
         }
       },
       "additionalProperties": false
+    },
+    "ReconciliationDecision": {
+      "description": "Reconciliation decision for a persisted/live observation pair.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "decision"
+          ],
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "reconciled"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "quarantine"
+              ]
+            },
+            "reason": {
+              "$ref": "#/definitions/AllocatorReasonCode"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "reclaim"
+              ]
+            },
+            "reason": {
+              "$ref": "#/definitions/AllocatorReasonCode"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "deny"
+              ]
+            },
+            "reason": {
+              "$ref": "#/definitions/AllocatorReasonCode"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ReconciliationRecord": {
+      "description": "One reconciliation record distinguishes persisted lease state from live kernel/host-observed state.",
+      "type": "object",
+      "required": [
+        "decision",
+        "kind",
+        "observed",
+        "resource_id"
+      ],
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/ReconciliationDecision"
+        },
+        "kind": {
+          "$ref": "#/definitions/HostResourceKind"
+        },
+        "observed": {
+          "$ref": "#/definitions/ObservedHostResource"
+        },
+        "persisted": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PersistedResourceLease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_id": {
+          "$ref": "#/definitions/HostResourceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReconciliationReport": {
+      "description": "Bounded reconciliation report.",
+      "type": "object",
+      "required": [
+        "correlation_id",
+        "events",
+        "operation_id",
+        "records"
+      ],
+      "properties": {
+        "correlation_id": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AllocatorEventMetadata"
+          },
+          "maxItems": 128
+        },
+        "operation_id": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReconciliationRecord"
+          },
+          "maxItems": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceAcquisitionKey": {
+      "description": "Deterministic total-order key for resource acquisition.",
+      "type": "object",
+      "required": [
+        "kind",
+        "order",
+        "resource_id"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HostResourceKind"
+        },
+        "order": {
+          "$ref": "#/definitions/ResourceAcquisitionOrder"
+        },
+        "resource_id": {
+          "$ref": "#/definitions/HostResourceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceAcquisitionOrder": {
+      "description": "Explicit acquisition order used for multi-resource requests.",
+      "type": "object",
+      "required": [
+        "ordinal",
+        "phase"
+      ],
+      "properties": {
+        "ordinal": {
+          "description": "Order within the phase. Lower ordinals are acquired first.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "phase": {
+          "description": "Coarse phase. Lower phases are acquired first.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceDelegation": {
+      "description": "How a granted resource is delegated to a realm broker.",
+      "oneOf": [
+        {
+          "description": "Delegated opaque name/handle. It is not a raw interface/path name.",
+          "type": "object",
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/HostResourceId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "opaque-name"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "FD handoff placeholder id used only for correlation before SCM_RIGHTS.",
+          "type": "object",
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/HostResourceId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file-descriptor"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Shared-resource partition id.",
+          "type": "object",
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/HostResourceId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "partition-id"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Namespace-boundary handle id.",
+          "type": "object",
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/HostResourceId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "namespace-handle"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ResourceObservationSource": {
+      "description": "Contract-only source for observed host state. These values describe which subsystem produced an observation; they do not imply an implementation here.",
+      "type": "string",
+      "enum": [
+        "kernel-netlink",
+        "nftables-api",
+        "cgroup-fs",
+        "host-filesystem",
+        "namespace-registry",
+        "allocator-ledger"
+      ]
+    },
+    "ResourceShareMode": {
+      "description": "Shared-vs-exclusive resource semantics.",
+      "oneOf": [
+        {
+          "description": "No other owner may hold the same resource id.",
+          "type": "string",
+          "enum": [
+            "exclusive"
+          ]
+        },
+        {
+          "description": "The allocator grants a partition inside a shared resource.",
+          "type": "string",
+          "enum": [
+            "shared-partition"
+          ]
+        }
+      ]
     },
     "RevocationId": {
       "type": "string",

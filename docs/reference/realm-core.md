@@ -5,8 +5,10 @@
 This page documents the committed `d2b-realm-core` DTO and parser
 contract. It is a contributor-facing reference for ADR 0043 realm target
 names, identifiers, capability checks, redacted audit metadata, typed
-errors, realm-controller metadata, route/enrollment DTOs, and semantic
-frame schema roots.
+errors, realm-controller metadata, route/enrollment DTOs, host-resource
+allocator DTOs, and semantic frame schema roots. See
+[Local-root allocator contract](./local-root-allocator.md) for the
+allocator-specific invariants and current implementation boundary.
 
 For the current Nix option surface, see
 [Realm option schema](./realm-options.md). The `d2b.realms.<realm>`
@@ -42,6 +44,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | ADR 0043 controller placement and access-binding DTOs for future realm access discovery. |
 | `ProviderRegistryEntry`, `WorkloadPlacement`, `WorkloadPlacementSummary`, `RealmTreeEdge`, `DescendantRoute`, `RouteAdvertisement` | `src/registry.rs`, `src/routing.rs` | Provider/workload placement and tree-route metadata. |
 | `EnrollmentRecord`, `RevocationRecord`, `KeyPin`, `SignatureRef`, migration DTOs | `src/enrollment.rs`, `src/routing.rs`, `src/migration.rs` | Realm identity lifecycle, signed-route metadata, and typed migration-error envelopes. |
+| `LeaseAllocationRequest` / `LeaseAllocationResponse`, `AllocatorLease`, `ReconciliationReport`, allocator event DTOs | `src/allocator.rs` | Contract-only local-root host-resource leases, total acquisition order, reconciliation/quarantine/reclaim decisions, and bounded allocator observability metadata. |
 | `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` / `ShellSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs`, `src/shell.rs` | Bounded status summaries and selectors for nodes, workloads, durable executions, and persistent shells. |
 | `ExecStartRequest` / `ExecAttachRequest` / `ExecLogsRequest` / `ExecCancelRequest` | `src/execution.rs` | Bounded durable-execution metadata for start, reconnect, retained logs, and retry-safe cancel. |
 | `ShellListRequest` / `ShellAttachRequest` / `ShellDetachRequest` / `ShellKillRequest` / `ShellListResponse` / `ShellAttachSummary` | `src/shell.rs` | Bounded persistent-shell metadata for list, attach, detach, kill, list responses, and shell-authorized PTY attachment. |

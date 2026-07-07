@@ -51,6 +51,10 @@ let
         key = "/etc/d2b/sync.json";
         path = config.d2b._bundle.syncJson.path;
       }
+      {
+        key = "/etc/d2b/allocator.json";
+        path = config.d2b._bundle.allocatorJson.path;
+      }
     ]
     ++ map (ref: {
       key = ref.path;
@@ -69,7 +73,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 6;
+    bundleVersion = 7;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";
@@ -77,6 +81,7 @@ let
     privilegesPath = "/etc/d2b/privileges.json";
     storagePath = "/etc/d2b/storage.json";
     syncPath = "/etc/d2b/sync.json";
+    allocatorPath = "/etc/d2b/allocator.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {

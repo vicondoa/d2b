@@ -9750,6 +9750,7 @@ mod tests {
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             sync_path: None,
+            allocator_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),

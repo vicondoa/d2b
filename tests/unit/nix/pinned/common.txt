@@ -587,6 +587,7 @@ readiness-waves/has-p6
 readiness-waves/has-p7
 readiness-waves/p0-implemented-default
 readiness-waves/p0-validated-default
+realms/allocator-artifact-roots-enabled-realm-index
 realms/examples-minimal-and-multi-env-still-eval
 realms/index-normalizes-enabled-disabled-and-derived-paths
 realms/rejects-duplicate-id-and-path

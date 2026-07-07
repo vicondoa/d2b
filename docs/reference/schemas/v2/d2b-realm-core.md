@@ -23,8 +23,8 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `NodeId`, `WorkloadId`, `ProviderId`, `GatewayId`;
 - `ExecutionId`, `StreamId`, `StreamCursor`, `PrincipalId`,
   `OperationId`, `IdempotencyKey`;
-- `RouteId`, `CorrelationId`, `ControllerGenerationId`, `EnrollmentId`,
-  `RevocationId`;
+- `RouteId`, `CorrelationId`, `ControllerGenerationId`,
+  `AllocatorLeaseId`, `HostResourceId`, `EnrollmentId`, `RevocationId`;
 - `Capability`, `CapabilitySet`, `CapabilityNegotiation`;
 - `RealmControllerPlacement`, `UnixSocketPath`, `AccessBindingRef`,
   `RealmTransportBinding`, `RealmAccessBinding`;
@@ -55,6 +55,17 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `AuditChainCheckFailure`, `AuditStreamKind`,
   `AuditRetentionFloorReason`, `AuditRetentionFloorStatus`,
   `AuditSinkHealthReason`, `AuditSinkHealth`;
+- `HostResourceKind`, `LeaseOwner`, `ResourceShareMode`,
+  `ResourceAcquisitionOrder`, `LeaseResourceRequest`,
+  `ResourceAcquisitionKey`, `ResourceDelegation`,
+  `GrantedHostResource`, `AllocatorLeaseState`, `AllocatorLease`,
+  `AllocatorReasonCode`, `AllocatorConflict`,
+  `LeaseAllocationResponse`, `LeaseAllocationRequest`,
+  `LeaseAllocationResult`, `AllocatorEventKind`,
+  `AllocatorEventMetadata`, `PersistedResourceLease`,
+  `ResourceObservationSource`, `ObservedResourceState`,
+  `ObservedHostResource`, `ReconciliationDecision`,
+  `ReconciliationRecord`, `ReconciliationReport`;
 - `ConstellationError`, `ConstellationFrame`.
 
 ## Contract notes

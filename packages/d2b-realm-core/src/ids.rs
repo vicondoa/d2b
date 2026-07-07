@@ -10,6 +10,9 @@
 //!   non-empty, log-safe tokens. They deliberately reject path-like and
 //!   credential-shaped strings because opaque ids appear in audit and
 //!   diagnostic metadata.
+//!   Troubleshooting ids such as [`OperationId`], [`CorrelationId`],
+//!   [`AllocatorLeaseId`], and [`HostResourceId`] remain visible in `Debug`;
+//!   credential-, key-, and principal-like ids stay redacted.
 //!
 //! All constructors validate; malformed input is rejected with
 //! [`IdError`] rather than silently accepted (fail-closed).
@@ -271,7 +274,7 @@ id_newtype!(
     OperationId,
     is_opaque_token,
     OPAQUE_PATTERN,
-    IdDebug::Redacted
+    IdDebug::Clear
 );
 id_newtype!(
     /// Caller-generated key for at-least-once mutating operations.
@@ -292,7 +295,7 @@ id_newtype!(
     CorrelationId,
     is_opaque_token,
     OPAQUE_PATTERN,
-    IdDebug::Redacted
+    IdDebug::Clear
 );
 id_newtype!(
     /// Opaque controller-generation id for a realm controller's runtime keys.
@@ -300,6 +303,23 @@ id_newtype!(
     is_opaque_token,
     OPAQUE_PATTERN,
     IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque local-root allocator lease id. The token is stable metadata only:
+    /// it is not a PID, file descriptor, path, interface name, or credential.
+    AllocatorLeaseId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Clear
+);
+id_newtype!(
+    /// Opaque id for a host resource or delegated partition allocated by the
+    /// local root allocator. Callers must not infer host paths, netlink names,
+    /// or nftables object names from this token.
+    HostResourceId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Clear
 );
 id_newtype!(
     /// Opaque enrollment record id.
@@ -372,11 +392,23 @@ mod tests {
     }
 
     #[test]
-    fn debug_redacts_opaque_ids_but_not_labels() {
+    fn debug_redacts_secret_like_opaque_ids_but_keeps_operator_ids_clear() {
         let principal = PrincipalId::parse("principal-1").unwrap();
         let principal_debug = format!("{principal:?}");
         assert!(principal_debug.contains("PrincipalId(<11 bytes>)"));
         assert!(!principal_debug.contains("principal-1"));
+
+        let operation = OperationId::parse("op-1").unwrap();
+        assert_eq!(format!("{operation:?}"), "OperationId(\"op-1\")");
+
+        let correlation = CorrelationId::parse("corr-1").unwrap();
+        assert_eq!(format!("{correlation:?}"), "CorrelationId(\"corr-1\")");
+
+        let lease = AllocatorLeaseId::parse("lease-home-1").unwrap();
+        assert_eq!(format!("{lease:?}"), "AllocatorLeaseId(\"lease-home-1\")");
+
+        let resource = HostResourceId::parse("bridge-home-1").unwrap();
+        assert_eq!(format!("{resource:?}"), "HostResourceId(\"bridge-home-1\")");
 
         let node = NodeId::parse("gateway").unwrap();
         assert_eq!(format!("{node:?}"), "NodeId(\"gateway\")");

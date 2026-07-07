@@ -60,6 +60,7 @@
     ./processes-json.nix
     ./storage-json.nix
     ./sync-json.nix
+    ./allocator-json.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix
