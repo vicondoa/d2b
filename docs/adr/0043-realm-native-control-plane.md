@@ -1,6 +1,6 @@
 # ADR 0043: Realm-native control plane
 
-- Status: Draft
+- Status: Accepted (Unreleased)
 - Date: 2026-07-05
 - Supersedes: [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
 - Related: [ADR 0002](0002-non-root-daemon-and-privileged-broker.md)
@@ -38,14 +38,14 @@ metadata, not as a collection of realm control planes.
 
 That is the wrong long-term shape for:
 
-- local `home`, `personal`, and `work` boundaries on the same computer;
+- local `home`, `dev`, and `work` boundaries on the same computer;
 - provider-managed sandboxes such as Azure Container Apps;
 - future cloud/full-host realm types such as Azure VM hosts running d2b;
 - nested "teleport" realms started from any host or VM capable of running d2b;
 - cross-realm Wayland, exec, persistent shell, lifecycle, logs, clipboard, and
   other capability-gated operations.
 
-This ADR proposes a realm-native model. It preserves [ADR 0032](0032-d2b-v2-constellation-control-plane.md)'s
+This ADR selects a realm-native model. It preserves [ADR 0032](0032-d2b-v2-constellation-control-plane.md)'s
 semantic protocol posture, but replaces the host-centric entrypoint model with
 a stricter invariant: **a realm boundary is a realm controller instance**.
 
@@ -62,8 +62,8 @@ broker mutates only its delegated partition.
 
 The local host no longer owns every realm as one host-global daemon with a
 realm dispatch table. Instead, the local machine has a minimal local
-root/anchor realm, and named local realms such as `home`, `personal`, and
-`work` are peer realm instances below that root. A sensitive realm such as
+root/anchor realm, and named local realms such as `home`, `dev`, and `work`
+are peer realm instances below that root. A sensitive realm such as
 `work` may run directly on the host as an isolated realm service; it does not
 need a gateway VM solely to become a separate realm boundary.
 
@@ -82,6 +82,15 @@ ACA sandbox surfaces. Existing local Cloud Hypervisor VMs and ACA sandboxes are
 migrated into `d2b.realms` and the shared realm protocol; old ACA sandbox
 contracts, gateway-shaped realm functionality, and legacy realm entrypoint
 surfaces are removed rather than carried as compatibility modes.
+
+Realm declarations also replace the current user-facing grouping abstraction.
+The canonical first local realms are `home`, `dev`, and `work`; VMs move into
+realms according to their current group membership or an explicit operator
+mapping. Network/env declarations may remain as realm-owned substrate for
+bridges, address allocation, and isolation, but they are no longer the
+user-facing trust-boundary model. Until the implementation waves land,
+`d2b.envs` remains the active configuration key; this ADR defines the target
+cutover, not an already-shipped module surface.
 
 Relay infrastructure is a discovery and byte-transport substrate only. Relay
 identity never authorizes d2b operations. Every cross-realm operation uses
@@ -134,7 +143,7 @@ an alternate peer route; the initial routing model is tree-only.
 ### Local root and peer realms
 
 On a local machine, the minimal root realm anchors local operator access,
-realm discovery, and peer realm registration. It is not where work/personal
+realm discovery, and peer realm registration. It is not where work/dev
 policy collapses.
 
 Example local topology:
@@ -142,12 +151,12 @@ Example local topology:
 ```text
 local-root
   ├── home
-  ├── personal
+  ├── dev
   └── work
         └── payments
 ```
 
-`home`, `personal`, and `work` are separate realm instances. Each has a
+`home`, `dev`, and `work` are separate realm instances. Each has a
 separate `d2bd` instance and, when it can mutate the host substrate, a separate
 broker/socket/state/audit boundary. The root realm can route to the peers
 according to policy, but it does not read their provider credentials or become
@@ -260,7 +269,7 @@ node:
 Examples:
 
 ```text
-dev.personal.d2b
+builder.dev.d2b
 browser.work.d2b
 api.payments.work.d2b
 build.teleport.work.d2b
@@ -295,7 +304,7 @@ the resolved placement metadata separately:
 
 ```text
 ADDRESS                    REALM          PLACEMENT         STATE
-dev.personal.d2b           personal       host-local        running
+builder.dev.d2b            dev            host-local        running
 browser.work.d2b           work           host-local        running
 api.payments.work.d2b      work/payments  azure-vm:build    running
 session.aca.work.d2b       work           aca:sandbox       running
@@ -400,14 +409,14 @@ Example:
 
 ```text
 local-root
-  ├── personal
+  ├── dev
   └── work
         └── payments
 ```
 
-`personal` can address `api.payments.work.d2b` only if:
+`dev` can address `api.payments.work.d2b` only if:
 
-1. `personal` policy allows the operation toward `work/payments`;
+1. `dev` policy allows the operation toward `work/payments`;
 2. `local-root` policy allows that cross-branch operation;
 3. `work` policy allows access to its child `payments`;
 4. `payments` policy allows the target workload operation;
@@ -420,12 +429,15 @@ proxy.
 
 Every routed operation carries a bounded correlation id aligned with W3C Trace
 Context so normal OpenTelemetry tooling can correlate realm hops without a
-d2b-specific tracing format. Each realm writes the same correlation id to its
-own audit log so operators can reconstruct a route without centralizing
-secret-bearing audit state. Route-decision audit records include the bounded
-policy rule id that allowed or denied each branch traversal or direct shortcut.
-Capability denials include the correlation id and missing capability so the
-caller can give the target realm administrator actionable context.
+d2b-specific tracing format. Audit records may store only the fixed-size
+`trace-id`, `span-id`, and d2b correlation id; `tracestate` is stripped or
+strictly size-bounded and never copied wholesale. Each realm writes the same
+correlation id to its own audit log so operators can reconstruct a route without
+centralizing secret-bearing audit state. Route-decision audit records include
+the bounded policy rule id that allowed or denied each branch traversal or
+direct shortcut. Capability denials include the correlation id and missing
+capability so the caller can give the target realm administrator actionable
+context.
 
 Each realm controller exposes low-cardinality health SLIs for API latency and
 errors, discovery queue depth, drop-new counts, pre-auth rate-limit hits,
@@ -439,9 +451,13 @@ propagate W3C Trace Context and log the correlation id locally through their
 normal diagnostics channel before calling the realm access layer. Canonical
 target addresses may appear in audit records, but metrics must not label on the
 full `<vm>.<realm>...d2b` address; metric labels use bounded operation kind,
-realm path, placement kind, and outcome enums. The local-root host-resource allocator also emits bounded
-audit records and low-cardinality metrics for allocation grants, denials,
-conflicts, reconciliation, reclamation, and quarantine decisions.
+realm class, placement kind, and outcome enums. Static operator-declared realms
+may contribute a bounded configured realm label only when the configured set is
+known at startup; dynamically discovered, nested, provider-created, or ephemeral
+realms must be rolled up to bounded classes rather than emitted as raw realm
+paths. The local-root host-resource allocator also emits bounded audit records
+and low-cardinality metrics for allocation grants, denials, conflicts,
+reconciliation, reclamation, and quarantine decisions.
 
 ## Operation and stream contract
 
@@ -578,6 +594,15 @@ The new surface should describe:
 - key/enrollment material references;
 - default workload namespace and env/network membership.
 
+The current grouping surface is removed in the same cutover and replaced by
+realm membership. `home`, `dev`, and `work` become first-class realm
+declarations. Any VM that cannot be mapped from its existing group into a realm
+must be assigned explicitly by the operator or fail evaluation with a typed
+migration error; it must not be silently adopted into an arbitrary default
+realm. During the transition, existing `d2b.envs` terminology remains the
+current code and documentation truth until the realm Nix surface and migration
+errors are implemented.
+
 The client/user-session surface must also be declarative. A `programs.d2b` or
 equivalent module configures the CLI and desktop helpers with the local-root
 realm access socket, default realm, explicit aliases, and any per-user desktop
@@ -610,10 +635,11 @@ outputs). Dynamic/transient realm discovery uses immutable-friendly runtime
 surfaces such as `systemd-resolved`, an NSS helper, or `/run/NetworkManager/conf.d`
 drop-ins instead of mutating `/etc`.
 
-`d2b.gateways` and the old realm/ACA sandbox surfaces are removed as public
-configuration. The migration path is an explicit cutover into `d2b.realms`, not
-a compatibility transform. A generation that still declares the old surfaces
-fails with a typed migration error pointing at the new realm declaration shape.
+`d2b.gateways`, the old realm/ACA sandbox surfaces, and the old user-facing
+grouping surface are removed as public configuration. The migration path is an
+explicit cutover into `d2b.realms`, not a compatibility transform. A generation
+that still declares the old surfaces fails with a typed migration error pointing
+at the new realm declaration shape.
 On NixOS, removed options use explicit removed-option modules or equivalent
 assertion errors so operators see the migration message at evaluation time
 rather than a generic unknown-option failure. Realm parent-cycle detection uses
@@ -676,7 +702,7 @@ Provider/session traits must preserve the existing invariants in type shapes:
 This ADR deliberately tightens isolation:
 
 - named local realms no longer share one host-global daemon/broker boundary;
-- host-local work and personal realm credentials are not colocated in one
+- host-local work and dev realm credentials are not colocated in one
   daemon's policy store;
 - parent/child routing is tree-only, avoiding surprising transitive DAG trust;
 - dynamic discovery is admitted only after realm-key and policy checks;
@@ -715,12 +741,11 @@ host-centric entrypoint model:
 | CLI talking directly to one local daemon namespace | CLI and desktop tools talk to a realm access layer that resolves and dispatches to the owning realm controller. |
 
 Existing local VM state must be migrated deliberately. A release implementing
-this ADR should prefer adopting all pre-realm local VMs into a configured
-default realm so users who do not need multi-realm features keep working. If
-that is not possible for a specific deployment, the release must choose one of
-these explicit paths and test it:
+this ADR adopts pre-realm local VMs into `home`, `dev`, or `work` realms when
+their current group membership is unambiguous. If that is not possible for a
+specific deployment, the release must choose one of these explicit paths and
+test it:
 
-- adopt all pre-realm local VMs into a configured default realm;
 - require an operator-supplied mapping from old VM names to target realms;
 - fail closed with a migration command that moves disks, state, audit pointers,
   and runtime metadata into the selected realm.
@@ -836,7 +861,7 @@ correcting.
 ### Keep one host broker with realm-scoped authorization
 
 Rejected. A single host broker would be simpler, but it would keep a
-host-global privileged mutation surface across `home`, `personal`, and `work`.
+host-global privileged mutation surface across `home`, `dev`, and `work`.
 The realm boundary should be visible in process, socket, state, and audit
 ownership.
 
@@ -875,12 +900,19 @@ who need continuity must run old and new deployments side-by-side and move
 traffic outside the old protocol; d2b itself fails closed on old realm/gateway
 and ACA surfaces after the cutover.
 
-## Open questions for review
+## Accepted cutover clarifications
 
-- Which non-secret gateway or ACA state, if any, is worth supporting through a
-  one-shot import tool rather than requiring explicit recreation/re-enrollment?
-- Which provider environments can run full `d2bd`, and which require a
-  constrained agent that shares DTOs and protocol code but not host-lifecycle
-  authority?
-- What is the first supported Wayland/display routing path for cross-realm
-  windows, and which display features remain local-only?
+- Non-secret gateway or ACA coordinates may be imported only through explicit
+  one-shot tooling. Secret material, sealed credential layouts, old sessions,
+  and provider-specific command/session contracts are never live compatibility
+  inputs; operators must recreate or re-enroll them.
+- Provider environments that can run full d2b should run a full realm
+  controller. Constrained provider environments may run a provider agent that
+  shares DTOs and the semantic operation/stream contract, but it advertises only
+  the capabilities it can actually provide and never gains host-lifecycle
+  authority by implication.
+- The first cross-realm Wayland/display path is the d2b-owned semantic
+  display/stream path with trusted realm identity metadata. Local default-realm
+  display keeps the current fast path while it is migrated behind the same
+  capability model. Guest-provided window titles, app ids, MIME metadata, and
+  payload labels remain non-authoritative.
