@@ -77,6 +77,12 @@ and future providers implement the standard d2b semantic contract and
 advertise positive capabilities. They do not define provider-specific d2b
 protocol forks.
 
+The realm-native cutover is a clean architectural break from the old realm and
+ACA sandbox surfaces. Existing local Cloud Hypervisor VMs and ACA sandboxes are
+migrated into `d2b.realms` and the shared realm protocol; old ACA sandbox
+contracts, gateway-shaped realm functionality, and legacy realm entrypoint
+surfaces are removed rather than carried as compatibility modes.
+
 Relay infrastructure is a discovery and byte-transport substrate only. Relay
 identity never authorizes d2b operations. Every cross-realm operation uses
 end-to-end realm identity, session authentication, capability negotiation,
@@ -206,7 +212,7 @@ The implementation must define:
 Any host-local realm that claims network isolation must run its network-facing
 broker work in a dedicated network namespace connected to the local root through
 an explicitly declared veth/bridge boundary. A default-network-namespace mode
-may exist only for non-isolated compatibility or diagnostics; it provides no
+may exist only for non-isolated diagnostics; it provides no
 network isolation, cannot safely partition network sysctls, and must not be
 presented as equivalent to a dedicated namespace.
 
@@ -225,8 +231,9 @@ The local-root allocator or host systemd/NixOS unit creates cross-namespace
 network plumbing. It creates the veth pair, attaches the root-side endpoint to
 the selected host bridge or namespace boundary, moves the realm-side endpoint
 into the realm network namespace, then delegates only the realm-side resources
-to the realm broker. Realm brokers confined to their own network namespace are
-not responsible for mutating the root namespace.
+to the realm broker, and brings up required namespace-local plumbing such as
+loopback. Realm brokers confined to their own network namespace are not
+responsible for mutating the root namespace.
 
 Allocator leases are tied to the realm broker lifecycle with pidfd tracking,
 Unix-socket disconnects, or an equivalent identity-bound liveness mechanism.
@@ -513,6 +520,10 @@ Providers implement standard d2b contracts below a realm controller.
 Cloud Hypervisor, crosvm, qemu-media, libkrun, and future Windows hypervisor
 support are local runtime providers. They plan/start/stop/inspect workloads
 for the owning realm daemon. They are not separate realm types by themselves.
+The existing local Cloud Hypervisor path migrates into this provider model: CH
+VMs are adopted by a realm controller, retain their local desktop fast path when
+they live in the default/local realm, and no longer assume one host-global
+daemon namespace.
 
 ### Cloud full-host providers
 
@@ -529,6 +540,20 @@ It can still participate when it implements the standard d2b semantic
 contract subset and advertises only the capabilities it can support. A
 persistent-shell-capable sandbox must run a guestd-compatible d2b agent; a
 provider-native one-shot command API is not a persistent shell.
+
+Existing ACA sandbox support migrates into this model. Old ACA sandbox
+contracts, provider-specific shell/exec behavior that bypasses the realm
+operation model, and pre-realm ACA state layouts are not supported after the
+realm-native cutover. Operators must recreate, re-enroll, or explicitly migrate
+ACA sandboxes into a `d2b.realms` provider declaration with the new realm
+identity and capability contract.
+
+Because this is a clean cutover, rolling mixed-protocol operation is not a
+goal. Old clients, old gateway routing formats, old ACA sandbox sessions, and
+old realm entrypoint protocols fail closed with migration errors rather than
+being drained through compatibility routing. Operators who need zero downtime
+must stand up replacement realm-native workloads, validate them, and switch
+traffic at the provider/load-balancer layer outside the old d2b protocol.
 
 ### Provider protocol rule
 
@@ -585,10 +610,20 @@ outputs). Dynamic/transient realm discovery uses immutable-friendly runtime
 surfaces such as `systemd-resolved`, an NSS helper, or `/run/NetworkManager/conf.d`
 drop-ins instead of mutating `/etc`.
 
-`d2b.gateways` should be replaced rather than preserved as a long-lived public
-escape hatch. If migration support is needed before release, it should be a
-short compatibility transform into `d2b.realms`, with warnings and a removal
-target.
+`d2b.gateways` and the old realm/ACA sandbox surfaces are removed as public
+configuration. The migration path is an explicit cutover into `d2b.realms`, not
+a compatibility transform. A generation that still declares the old surfaces
+fails with a typed migration error pointing at the new realm declaration shape.
+On NixOS, removed options use explicit removed-option modules or equivalent
+assertion errors so operators see the migration message at evaluation time
+rather than a generic unknown-option failure. Realm parent-cycle detection uses
+an explicit visited set or bounded topological sort; it must not rely on
+unbounded recursive parent traversal.
+
+Large disk/state moves for existing local Cloud Hypervisor VMs are not
+performed implicitly inside `nixos-rebuild switch` activation. They run through
+an explicit migration command or daemon-owned adoption workflow so activation
+does not time out or leave partially moved state.
 
 ## Rust architecture consequences
 
@@ -608,10 +643,11 @@ Provider traits can depend on realm DTOs, but provider implementations cannot
 pull host daemon internals into provider-agnostic crates.
 
 The current `d2b-constellation-*` crates should either be renamed around
-realm terminology or retained as internal crates with compatibility module
+realm terminology or retained as internal crates with temporary internal module
 names; the ADR implementation plan must choose one path explicitly before
 runtime work starts. Gateway-specific runtime crates and modules should be
-absorbed into realm/provider crates or retired when `d2b.gateways` is removed.
+absorbed into realm/provider crates or retired when `d2b.gateways` and old ACA
+sandbox support are removed.
 
 The target parser needs a new type-safe representation:
 
@@ -623,7 +659,7 @@ RealmTarget {
 ```
 
 The legacy node-qualified parser should remain only long enough to emit typed
-migration errors or compatibility diagnostics. New routing code must not accept
+migration diagnostics. New routing code must not accept
 ambiguous optional-node targets as a normal path.
 
 Provider/session traits must preserve the existing invariants in type shapes:
@@ -689,11 +725,29 @@ these explicit paths and test it:
 - fail closed with a migration command that moves disks, state, audit pointers,
   and runtime metadata into the selected realm.
 
-Gateway state must also be preserved. If a short compatibility transform maps
-`d2b.gateways.<name>` to `d2b.realms.<name>`, it must either keep the legacy
-`/var/lib/d2b/gateways/<name>` state directory for that generated realm or
-atomically migrate it before the new realm starts. It must not strand sealed
-credentials, enrollment keys, or provider state.
+Local Cloud Hypervisor VMs are part of this required migration. Their disks,
+per-VM state, guest-control identity, display/Wayland proxy identity, audit
+pointers, and runtime metadata move under the owning realm while preserving the
+local fast path for default-realm use.
+
+Gateway and ACA state are not preserved through compatibility mode. The
+implementation may provide one-shot migration/import tooling for non-secret
+coordinates and operator-approved state, but old gateway-backed realm state,
+old ACA sandbox registrations, old ACA provider-specific command/session
+contracts, and old sealed credential layouts are not live runtime inputs after
+the cutover. If such state is found, d2b fails closed with a typed migration
+error rather than silently adapting it.
+
+Migration and import tooling emits structured audit records into the target
+realm's audit log describing the adopted resource ids, source generation,
+operator principal, outcome, and bounded correlation id. It never records
+credential material, provider tokens, raw endpoints, command payloads, disk
+contents, or old sealed credential bytes. Fail-closed migration errors and
+legacy parser diagnostics also emit low-cardinality telemetry such as
+`legacy-surface-detected`, `migration-required`, and `import-failed` reason
+codes so operators can find blockers across a fleet. Successful import tooling
+should prompt for, or provide an explicit flag for, secure cleanup of legacy
+state directories after re-enrollment.
 
 The following [ADR 0032](0032-d2b-v2-constellation-control-plane.md) decisions
 remain valid and should be carried forward:
@@ -712,28 +766,30 @@ The first implementation plan after ADR acceptance should proceed in waves:
 
 1. Define the realm controller DTOs, `d2b.realms` schema, and migration errors;
    regenerate schemas with `xtask gen-schemas` and satisfy the drift gates.
-2. Split host-local daemon/broker instances by realm with deterministic
+2. Remove old realm/gateway/ACA public surfaces and add typed migration errors
+   for configs or runtime state that still use them.
+3. Split host-local daemon/broker instances by realm with deterministic
    socket/state/audit paths and global host-resource arbitration.
-3. Replace the current target parser/resolver with realm-qualified
+4. Replace the current target parser/resolver with realm-qualified
    `<vm>.<realm>[.<ancestor>...].d2b` semantics.
-4. Move CLI, public API clients, and desktop helpers (`d2b-wlcontrol`,
+5. Move CLI, public API clients, and desktop helpers (`d2b-wlcontrol`,
    `d2b-clip-picker` integration, `d2b-wlterm`) onto the realm access layer so
    they consume canonical addresses and capability-denial results instead of a
    single local daemon namespace.
-5. Add realm identity, enrollment, controller-generation keys, rotation, and
+6. Add realm identity, enrollment, controller-generation keys, rotation, and
    revocation.
-6. Implement dynamic relay discovery and tree route admission using loopback
+7. Implement dynamic relay discovery and tree route admission using loopback
    and local-TCP tests first.
-7. Route core operation families: lifecycle, exec, persistent shell, logs, and
+8. Route core operation families: lifecycle, exec, persistent shell, logs, and
    Wayland/display.
-8. Move provider-managed sandbox support behind the shared realm protocol and
-   capability model.
-9. Retire `d2b.gateways` or transform it into short-lived migration support for
-   `d2b.realms`.
-10. Update the Diataxis documentation tree: explanation docs for realm-native
+9. Migrate local Cloud Hypervisor runtime support behind the realm-local runtime
+   provider model.
+10. Migrate ACA sandbox support behind the shared realm protocol and capability
+    model, with no live compatibility for old ACA sandbox contracts.
+11. Update the Diataxis documentation tree: explanation docs for realm-native
    architecture, reference docs for `d2b.realms` and target addresses, how-to
-   migration guidance for existing `d2b.gateways` and local VM users, and the
-   CHANGELOG breaking-change entry.
+   migration guidance for existing local Cloud Hypervisor VM users and old
+   ACA/gateway users, and the CHANGELOG breaking-change entry.
 
 Each implementation wave must include its own validation rather than deferring
 testing to the end. Required validation includes:
@@ -761,8 +817,12 @@ testing to the end. Required validation includes:
   sessions/streams on revocation;
 - discovery resilience tests for pre-auth queue bounds, per-relay rate limits,
   replay windows, and drop-new behavior under simulated load;
-- migration tests for `d2b.gateways` compatibility transforms and existing
-  local VM state adoption.
+- migration tests for existing local Cloud Hypervisor VM state adoption,
+  fail-closed typed errors for old realm/gateway/ACA configuration or state, and
+  explicit ACA sandbox import/re-enrollment tooling where provided;
+- migration observability tests proving import/re-enrollment writes structured
+  audit records and fail-closed legacy-surface errors expose bounded telemetry
+  reason codes.
 
 ## Alternatives considered
 
@@ -805,10 +865,20 @@ Rejected. Provider APIs differ below the provider boundary, but d2b operations
 above that boundary must remain standard semantic d2b contracts with
 capability advertisement.
 
+### Rolling compatibility for old realm and ACA protocols
+
+Rejected. Keeping the legacy optional-node parser, old gateway routing, or old
+ACA command/session contracts during rollout would preserve the bolt-on realm
+model this ADR removes. It would also keep stale credential layouts and
+provider-specific behavior alive inside the new security boundary. Operators
+who need continuity must run old and new deployments side-by-side and move
+traffic outside the old protocol; d2b itself fails closed on old realm/gateway
+and ACA surfaces after the cutover.
+
 ## Open questions for review
 
-- What is the smallest safe migration path from current `d2b.gateways` users
-  to `d2b.realms` before release?
+- Which non-secret gateway or ACA state, if any, is worth supporting through a
+  one-shot import tool rather than requiring explicit recreation/re-enrollment?
 - Which provider environments can run full `d2bd`, and which require a
   constrained agent that shares DTOs and protocol code but not host-lifecycle
   authority?

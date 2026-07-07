@@ -14,7 +14,8 @@ deprecations ship one minor release before removal.
 
 - Added draft ADR 0043 proposing a realm-native control plane that supersedes
   the host-centric constellation model with per-realm daemon, broker, state, and
-  audit boundaries.
+  audit boundaries, including a clean cutover from old realm/ACA sandbox
+  surfaces into `d2b.realms`.
 - Documented the stable public-socket discovery contract for persistent shells
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
