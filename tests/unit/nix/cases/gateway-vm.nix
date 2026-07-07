@@ -135,6 +135,8 @@ let
     };
   gatewayProc = lib.findFirst (vm: vm.vm == "sys-work-gateway") null
     goodCfg.d2b._bundle.processesJson.data.vms;
+  legacyGatewayMigrationMessages = failureMessages goodCfg;
+  noGatewayMessages = failureMessages noGatewayCfg;
   badCfg = (mkEval [
     (lib.recursiveUpdate base {
       d2b.gateways.work.credentialPath = "SharedAccessKey=bad";
@@ -271,6 +273,32 @@ in
     expr = lib.any (m: lib.hasInfix "prefixes are reserved" m)
       (map (a: a.message) (lib.filter (a: !a.assertion) goodCfg.assertions));
     expected = false;
+  };
+
+  "gateway-vm/rejects-legacy-gateway-surface-with-realm-migration-error" = {
+    expr = lib.any
+      (m:
+        lib.hasInfix "legacy-surface-detected: d2b.gateways" m
+        && lib.hasInfix "old gateway/ACA sandbox fields" m
+        && lib.hasInfix "d2b.realms.work" m
+        && lib.hasInfix "`d2b.envs` remains the current substrate" m)
+      legacyGatewayMigrationMessages;
+    expected = true;
+  };
+
+  "gateway-vm/leaves-current-envs-valid-when-legacy-gateway-unset" = {
+    expr = {
+      envs = builtins.attrNames noGatewayCfg.d2b.envs;
+      workNet = noGatewayCfg.d2b.envs.work.netName;
+      noLegacyGatewayError = !(lib.any
+        (m: lib.hasInfix "legacy-surface-detected: d2b.gateways" m)
+        noGatewayMessages);
+    };
+    expected = {
+      envs = [ "work" ];
+      workNet = "sys-work-net";
+      noLegacyGatewayError = true;
+    };
   };
 
   "gateway-vm/rejects-secret-shaped-credential-path" = {

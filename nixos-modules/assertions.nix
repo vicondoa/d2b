@@ -303,6 +303,40 @@ let
     '';
   };
 
+  legacyGatewayMigrationAssertions = lib.optional (cfg.gateways != { }) {
+    assertion = false;
+    message = ''
+      d2b migration-required (legacy-surface-detected: d2b.gateways):
+      `d2b.gateways` and its old gateway/ACA sandbox fields were removed as a
+      public configuration surface by ADR 0043.
+
+      Move non-secret coordinates into the realm-native schema, for example:
+
+        d2b.realms.work = {
+          placement = "gateway-vm";        # or provider-agent/provider-controller
+          env = "work";                    # transitional link to existing d2b.envs
+          providers.aca = {
+            kind = "aca";
+            placement = "provider-agent";
+            configRef = "aca-work-non-secret-coordinates";
+          };
+          relay.mode = "static";
+          relay.endpoints = [ "relns-example.servicebus.windows.net" ];
+          relay.credentialRef = "work-relay-credential";
+        };
+
+      Do not put Relay SAS tokens, Entra tokens, sealed credential bytes, or
+      ACA provider secrets in Nix. Use enrollment/import tooling when the
+      realm-native runtime lands.
+
+      This is a guarded tombstone for the transition: declaring no
+      `d2b.gateways` entries keeps today's local VM behavior unchanged.
+      `d2b.envs` remains the current substrate/configuration key for bridges,
+      net VMs, address allocation, and workload `d2b.vms.<vm>.env`
+      membership until a later realm migration explicitly replaces it.
+    '';
+  };
+
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
   #   * `.` (dots — systemd-escape would turn them into `\x2e`)
@@ -1419,6 +1453,7 @@ in
     ++ gatewayHostRelayCredentialAssertions
     ++ gatewayStateBoundaryAssertions
     ++ gatewayCoordinateAssertions
+    ++ legacyGatewayMigrationAssertions
     ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
     ++ securityKeyHostRequiredAssertions

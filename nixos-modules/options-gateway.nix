@@ -1,4 +1,9 @@
-# Realm gateway declarations.
+# ADR 0043 legacy gateway tombstone declarations.
+#
+# Keep the old schema in place long enough for the top-level assertion in
+# assertions.nix to emit a migration error instead of a generic
+# "option does not exist" failure. Non-empty d2b.gateways declarations are not
+# a supported runtime surface.
 { lib, ... }:
 
 let
@@ -31,11 +36,14 @@ in
 
   options.d2b.gateways = lib.mkOption {
     description = ''
-      Realm gateway guests. Each enabled entry auto-declares a dedicated
-      d2b VM that holds realm provider/relay credentials inside the guest
-      boundary. The host declaration carries only non-secret coordinates and
-      state-directory paths; plaintext credentials are never represented in the
-      host Nix store.
+      Removed ADR 0043 gateway/ACA compatibility surface.
+
+      This option remains as an eval-time tombstone so configurations that
+      still declare `d2b.gateways.<name>` or nested old ACA sandbox fields get
+      a typed migration error pointing at `d2b.realms.<realm>` instead of a
+      generic unknown-option failure. Leave it unset and declare realm-native
+      metadata under `d2b.realms`; existing `d2b.envs` remains the active
+      network substrate during the transition.
     '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
