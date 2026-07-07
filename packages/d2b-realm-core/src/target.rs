@@ -17,7 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ids::{IdError, NodeId, RealmId, WorkloadId};
 use crate::realm::RealmPath;
-use serde::{Deserialize, Serialize};
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The reserved target-name suffix.
 pub const TARGET_SUFFIX: &str = "d2b";
@@ -30,10 +35,7 @@ pub const TARGET_SUFFIX: &str = "d2b";
 pub const THIS_NODE_ALIAS: &str = "this";
 
 /// A parsed ADR 0043 realm target: a workload inside a realm path.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RealmTarget {
     /// The named workload (VM, session, or provider-backed workload).
     pub workload: WorkloadId,
@@ -85,9 +87,155 @@ impl core::fmt::Display for RealmTarget {
     }
 }
 
-/// Temporary compatibility name for older call sites. New code should use
+impl Serialize for RealmTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_canonical())
+    }
+}
+
+impl<'de> Deserialize<'de> for RealmTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for RealmTarget {
+    fn schema_name() -> String {
+        "RealmTarget".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        target_string_schema()
+    }
+}
+
+/// Temporary compatibility wrapper for older call sites. New code should use
 /// [`RealmTarget`] so node labels do not re-enter normal routing paths.
-pub type TargetName = RealmTarget;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TargetName {
+    target: RealmTarget,
+    /// Compatibility field for ADR 0032 callers. ADR 0043 targets never encode
+    /// a node, so parsed targets carry the unresolved `this` alias until callers
+    /// explicitly resolve it for legacy-local behavior.
+    pub node: NodeId,
+}
+
+impl TargetName {
+    /// Parse an ADR 0043 target address while preserving legacy field access.
+    pub fn parse(raw: &str) -> Result<Self, TargetParseError> {
+        RealmTarget::parse(raw).map(Self::from_realm_target)
+    }
+
+    /// Wrap a realm target for older APIs that still traffic in `TargetName`.
+    pub fn from_realm_target(target: RealmTarget) -> Self {
+        Self {
+            target,
+            node: NodeId::parse(THIS_NODE_ALIAS).expect("`this` is a valid label"),
+        }
+    }
+
+    /// Borrow the ADR 0043 target.
+    pub fn as_realm_target(&self) -> &RealmTarget {
+        &self.target
+    }
+
+    /// Return the ADR 0043 target.
+    pub fn into_realm_target(self) -> RealmTarget {
+        self.target
+    }
+
+    /// True if the compatibility node field is still the unresolved `this` alias.
+    pub fn node_is_this(&self) -> bool {
+        self.node.as_str() == THIS_NODE_ALIAS
+    }
+
+    /// Resolve the compatibility `this` node field for older local-only callers.
+    /// The node is not part of canonical ADR 0043 routing.
+    pub fn with_local_node(mut self, local: NodeId) -> Self {
+        if self.node_is_this() {
+            self.node = local;
+        }
+        self
+    }
+
+    /// Render the canonical ADR 0043 target address.
+    pub fn to_canonical(&self) -> String {
+        self.target.to_canonical()
+    }
+}
+
+impl core::ops::Deref for TargetName {
+    type Target = RealmTarget;
+
+    fn deref(&self) -> &Self::Target {
+        &self.target
+    }
+}
+
+impl From<RealmTarget> for TargetName {
+    fn from(target: RealmTarget) -> Self {
+        Self::from_realm_target(target)
+    }
+}
+
+impl From<TargetName> for RealmTarget {
+    fn from(target: TargetName) -> Self {
+        target.into_realm_target()
+    }
+}
+
+impl core::fmt::Display for TargetName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.to_canonical())
+    }
+}
+
+impl Serialize for TargetName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.target.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TargetName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        RealmTarget::deserialize(deserializer).map(Self::from_realm_target)
+    }
+}
+
+impl JsonSchema for TargetName {
+    fn schema_name() -> String {
+        "TargetName".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        target_string_schema()
+    }
+}
+
+fn target_string_schema() -> Schema {
+    Schema::Object(SchemaObject {
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        string: Some(Box::new(StringValidation {
+            min_length: Some(1),
+            max_length: Some(388),
+            pattern: Some("^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$".to_owned()),
+        })),
+        ..Default::default()
+    })
+}
 
 /// A parsed old ADR 0032 node-qualified target.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +406,8 @@ impl RealmTargetParser {
         let labels = target_labels(raw)?;
         if labels.had_suffix {
             self.parse_qualified(labels.labels)
+        } else if labels.had_scheme {
+            Err(RealmTargetParseError::MissingSuffix)
         } else {
             self.parse_bare(labels.labels)
         }
@@ -269,20 +419,27 @@ impl RealmTargetParser {
                 reject_reserved_labels(&labels)?;
                 let workload =
                     WorkloadId::parse(*alias).map_err(RealmTargetParseError::BadLabel)?;
-                match self.aliases.get(&workload).map(|v| v.as_slice()) {
-                    Some([target]) => Ok(target.clone()),
-                    Some(candidates) if !candidates.is_empty() => {
-                        Err(RealmTargetParseError::AliasAmbiguous {
-                            alias: workload,
-                            candidates: candidates.to_vec(),
-                        })
+                if let Some(alias_candidates) = self.aliases.get(&workload) {
+                    let mut candidates = Vec::new();
+                    for candidate in alias_candidates {
+                        if !candidates.contains(candidate) {
+                            candidates.push(candidate.clone());
+                        }
                     }
-                    _ => self
-                        .default_realm
-                        .clone()
-                        .map(|realm| RealmTarget::new(workload, realm))
-                        .ok_or(RealmTargetParseError::BareAliasRequiresContext),
+                    return match candidates.as_slice() {
+                        [target] => Ok(target.clone()),
+                        [] => unreachable!("alias map stores only non-empty candidate vectors"),
+                        _ => Err(RealmTargetParseError::AliasAmbiguous {
+                            alias: workload,
+                            candidates,
+                        }),
+                    };
                 }
+
+                self.default_realm
+                    .clone()
+                    .map(|realm| RealmTarget::new(workload, realm))
+                    .ok_or(RealmTargetParseError::BareAliasRequiresContext)
             }
             _ => Err(RealmTargetParseError::MissingSuffix),
         }
@@ -300,6 +457,9 @@ impl RealmTargetParser {
 fn parse_realm_target(raw: &str) -> Result<RealmTarget, RealmTargetParseError> {
     let labels = target_labels(raw)?;
     if !labels.had_suffix {
+        if labels.had_scheme {
+            return Err(RealmTargetParseError::MissingSuffix);
+        }
         return match labels.labels.as_slice() {
             [_] => Err(RealmTargetParseError::BareAliasRequiresContext),
             _ => Err(RealmTargetParseError::MissingSuffix),
@@ -391,10 +551,14 @@ fn reject_reserved_labels(labels: &[&str]) -> Result<(), RealmTargetParseError> 
 struct TargetLabels<'a> {
     labels: Vec<&'a str>,
     had_suffix: bool,
+    had_scheme: bool,
 }
 
 fn target_labels(raw: &str) -> Result<TargetLabels<'_>, RealmTargetParseError> {
-    let body = raw.strip_prefix("d2b://").unwrap_or(raw);
+    let (body, had_scheme) = match raw.strip_prefix("d2b://") {
+        Some(rest) => (rest, true),
+        None => (raw, false),
+    };
     if body.is_empty() {
         return Err(RealmTargetParseError::Empty);
     }
@@ -408,7 +572,11 @@ fn target_labels(raw: &str) -> Result<TargetLabels<'_>, RealmTargetParseError> {
         }
     }
 
-    Ok(TargetLabels { labels, had_suffix })
+    Ok(TargetLabels {
+        labels,
+        had_suffix,
+        had_scheme,
+    })
 }
 
 #[cfg(test)]
@@ -458,6 +626,31 @@ mod tests {
     }
 
     #[test]
+    fn serde_and_schema_are_canonical_string_shaped() {
+        let target = parsed("api.payments.work.d2b");
+        assert_eq!(
+            serde_json::to_string(&target).unwrap(),
+            "\"api.payments.work.d2b\""
+        );
+        assert_eq!(
+            serde_json::from_str::<RealmTarget>("\"api.payments.work.d2b\"").unwrap(),
+            target
+        );
+        assert!(
+            serde_json::from_str::<RealmTarget>(
+                r#"{"workload":"api","realm":["payments","work"]}"#
+            )
+            .is_err()
+        );
+
+        let schema = schemars::schema_for!(RealmTarget);
+        assert!(matches!(
+            schema.schema.instance_type,
+            Some(SingleOrVec::Single(single)) if *single == InstanceType::String
+        ));
+    }
+
+    #[test]
     fn bare_alias_requires_context_by_default() {
         assert_eq!(
             RealmTarget::parse("builder"),
@@ -470,6 +663,24 @@ mod tests {
         let parser = RealmTargetParser::new().with_default_realm(realm(&["dev"]));
         let target = parser.parse("builder").unwrap();
         assert_eq!(target.to_canonical(), "builder.dev.d2b");
+    }
+
+    #[test]
+    fn scheme_form_requires_fully_qualified_suffix() {
+        let parser = RealmTargetParser::new()
+            .with_default_realm(realm(&["dev"]))
+            .with_alias(
+                workload("builder"),
+                RealmTarget::new(workload("builder"), realm(&["work"])),
+            );
+        assert_eq!(
+            RealmTarget::parse("d2b://builder"),
+            Err(RealmTargetParseError::MissingSuffix)
+        );
+        assert_eq!(
+            parser.parse("d2b://builder"),
+            Err(RealmTargetParseError::MissingSuffix)
+        );
     }
 
     #[test]
@@ -495,6 +706,31 @@ mod tests {
             }
             other => panic!("expected AliasAmbiguous, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parser_dedupes_identical_alias_targets_before_ambiguity() {
+        let target = RealmTarget::new(workload("browser"), realm(&["work"]));
+        let parser = RealmTargetParser::new()
+            .with_alias(workload("browser"), target.clone())
+            .with_alias(workload("browser"), target.clone());
+        assert_eq!(parser.parse("browser").unwrap(), target);
+    }
+
+    #[test]
+    fn target_name_preserves_legacy_field_access_without_node_routing() {
+        let target = TargetName::parse("api.aca.work.d2b").unwrap();
+        assert_eq!(target.workload.as_str(), "api");
+        assert_eq!(target.realm.target_form(), "aca.work");
+        assert_eq!(target.node.as_str(), THIS_NODE_ALIAS);
+        assert!(target.node_is_this());
+        assert_eq!(target.to_canonical(), "api.aca.work.d2b");
+
+        let local = node("local-node");
+        let with_local = target.with_local_node(local.clone());
+        assert_eq!(with_local.node, local);
+        assert_eq!(with_local.realm.target_form(), "aca.work");
+        assert_eq!(with_local.to_canonical(), "api.aca.work.d2b");
     }
 
     #[test]

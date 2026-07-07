@@ -60,8 +60,8 @@ pub use shell::{
 };
 pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
 pub use target::{
-    LegacyNodeQualifiedTarget, RealmTarget, RealmTargetParseError, TARGET_SUFFIX, THIS_NODE_ALIAS,
-    TargetName, TargetParseError,
+    LegacyNodeQualifiedTarget, RealmTarget, RealmTargetParseError, RealmTargetParser,
+    TARGET_SUFFIX, THIS_NODE_ALIAS, TargetName, TargetParseError,
 };
 pub use token::ProtocolToken;
 pub use trace_context::TraceContext;

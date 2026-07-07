@@ -3055,11 +3055,11 @@ fn dispatch_gateway_display(
                 workload: target.workload.as_str().to_owned(),
             };
             let seed = ContextSeed {
-                realm: target.realm,
+                realm: target.realm.clone(),
                 operation_id,
                 principal,
-                node: target.node,
-                workload: target.workload,
+                node: target.node.clone(),
+                workload: target.workload.clone(),
             };
             let owner_principal = seed.principal.to_string();
             gateway_display_gc(state);

@@ -41,10 +41,10 @@ impl RealmEntrypoint {
     }
 
     /// A gateway-backed entrypoint fronted by `gateway`.
-    pub fn gateway_backed(gateway: RealmTarget) -> Self {
+    pub fn gateway_backed(gateway: impl Into<RealmTarget>) -> Self {
         Self {
             mode: EntrypointMode::GatewayBacked,
-            gateway: Some(gateway),
+            gateway: Some(gateway.into()),
         }
     }
 }
@@ -129,7 +129,7 @@ impl RealmEntrypointTable {
     }
 
     /// Mark a realm gateway-backed, fronted by `gateway`.
-    pub fn gateway_backed(&mut self, realm: RealmPath, gateway: RealmTarget) {
+    pub fn gateway_backed(&mut self, realm: RealmPath, gateway: impl Into<RealmTarget>) {
         self.insert(realm, RealmEntrypoint::gateway_backed(gateway));
     }
 
