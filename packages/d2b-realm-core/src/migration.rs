@@ -67,6 +67,7 @@ impl MigrationLegacyId {
         let raw = raw.into();
         if raw.is_empty()
             || raw.len() > MAX_MIGRATION_LEGACY_ID_LEN
+            || !raw.as_bytes()[0].is_ascii_alphanumeric()
             || !raw
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
@@ -242,6 +243,9 @@ mod tests {
         );
         assert!(!format!("{envelope:?}").contains("aca-sandbox"));
         assert!(MigrationLegacyId::parse("/var/lib/d2b").is_none());
+        assert!(MigrationLegacyId::parse("-aca-sandbox").is_none());
+        assert!(MigrationLegacyId::parse(".aca-sandbox").is_none());
+        assert!(MigrationLegacyId::parse("_aca-sandbox").is_none());
         assert!(MigrationLegacyId::parse("bearer-token").is_none());
 
         let bad = "{\"surface\":\"group\",\"reason\":\"migration-required\",\

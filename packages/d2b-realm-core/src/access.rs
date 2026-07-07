@@ -88,6 +88,7 @@ impl AccessBindingRef {
         let raw = raw.into();
         if raw.is_empty()
             || raw.len() > MAX_ACCESS_REF_LEN
+            || !raw.as_bytes()[0].is_ascii_alphanumeric()
             || !raw
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
@@ -227,6 +228,9 @@ mod tests {
     #[test]
     fn remote_binding_rejects_credential_shaped_refs_and_unknown_fields() {
         assert!(AccessBindingRef::parse("relay-ref-1").is_some());
+        assert!(AccessBindingRef::parse("-relay-ref-1").is_none());
+        assert!(AccessBindingRef::parse(".relay-ref-1").is_none());
+        assert!(AccessBindingRef::parse("_relay-ref-1").is_none());
         assert!(AccessBindingRef::parse("bearer-token").is_none());
         let binding = RealmTransportBinding::RemoteRealmTransport {
             transport: ProtocolToken::parse("relay-v1").unwrap(),

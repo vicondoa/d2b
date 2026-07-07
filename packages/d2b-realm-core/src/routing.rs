@@ -29,6 +29,7 @@ impl SignatureRef {
         let raw = raw.into();
         if raw.is_empty()
             || raw.len() > MAX_SIGNATURE_REF_LEN
+            || !raw.as_bytes()[0].is_ascii_alphanumeric()
             || !raw
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
@@ -272,6 +273,15 @@ mod tests {
             signing_key_fingerprint: fp(),
             signature_ref: SignatureRef::parse("sig-1").unwrap(),
         }
+    }
+
+    #[test]
+    fn signature_ref_rejects_leading_punctuation() {
+        assert!(SignatureRef::parse("sig-1").is_some());
+        assert!(SignatureRef::parse("-sig-1").is_none());
+        assert!(SignatureRef::parse(".sig-1").is_none());
+        assert!(SignatureRef::parse("_sig-1").is_none());
+        assert!(SignatureRef::parse(":sig-1").is_none());
     }
 
     #[test]

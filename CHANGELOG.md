@@ -212,6 +212,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Aligned ADR 0043 realm-core schema generation and identifier validation:
+  `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
+  tokens reject leading punctuation consistently with their JSON schemas.
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
   toplevel has acked its initial configure before attaching the VM identity rail,
   preventing Wayland compositors from rejecting proxied WeezTerm windows during

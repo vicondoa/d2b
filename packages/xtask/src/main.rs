@@ -60,7 +60,7 @@ const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
-enum ConstellationCoreSchema {
+enum D2bRealmCoreSchema {
     RealmId(RealmId),
     RealmPath(RealmPath),
     NodeId(NodeId),
@@ -366,8 +366,8 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let schemas: [(&str, RootSchema); 14] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
-            "constellation-core.json",
-            schemars::schema_for!(ConstellationCoreSchema),
+            "d2b-realm-core.json",
+            schemars::schema_for!(D2bRealmCoreSchema),
         ),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
