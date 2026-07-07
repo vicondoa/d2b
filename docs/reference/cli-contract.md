@@ -42,6 +42,22 @@ than literal byte-for-byte goldens unless the corresponding
   backends are not yet shipped; commands marked `rust-native` stay on
   the daemon/public-socket or native planner path.
 
+## Realm target boundary
+
+Realm-aware target strings use the canonical form
+`<workload>.<realm>[.<ancestor>...].d2b`. Bare workload names are aliases only
+when a caller supplies an alias table or default realm, and old node-qualified
+forms are diagnostics that point to the realm-native target with the node label
+removed. See [Realm access resolver contract](./realm-access-resolver.md) for
+the target grammar, direct host-local socket binding, capability preflight, and
+typed denial shapes.
+
+Current CLI VM lifecycle and exec commands still operate through the global
+`d2bd` public socket and existing VM names unless a command section explicitly
+documents a realm-aware backend. The resolver contract is documentation and DTO
+shape for future routing; it does not make identity, relay, provider, or
+realm-local lifecycle behavior available in this release.
+
 ## Command reference
 
 ### `list`

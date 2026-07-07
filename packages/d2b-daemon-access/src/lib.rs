@@ -27,8 +27,9 @@ use d2b_contracts::{
     },
 };
 use d2b_realm_core::{
-    Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId, RealmPath, WorkloadId,
-    WorkloadState, WorkloadSummary,
+    Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId,
+    RealmAccessClientBindingKind, RealmAccessClientContract, RealmPath, WorkloadId, WorkloadState,
+    WorkloadSummary,
 };
 use d2b_realm_provider::{
     error::{ProviderError, ProviderResult},
@@ -756,6 +757,12 @@ impl LocalUnixDaemonAccess {
         &self.socket_path
     }
 
+    /// Client access contract for the current host-local public socket. The
+    /// connection is direct so `d2bd` observes the caller with `SO_PEERCRED`.
+    pub fn client_contract(&self) -> RealmAccessClientContract {
+        local_unix_daemon_access_client_contract()
+    }
+
     /// List VMs through the local daemon socket without losing public-wire
     /// fields or lifecycle states.
     pub async fn vm_list(&self) -> ProviderResult<DaemonVmList> {
@@ -802,6 +809,14 @@ impl LocalUnixDaemonAccess {
         let response = recv_frame(stream).await?;
         reject_error_frame(request_type, &response)?;
         Ok(response)
+    }
+}
+
+/// Client access contract for the existing local Unix daemon binding.
+pub fn local_unix_daemon_access_client_contract() -> RealmAccessClientContract {
+    RealmAccessClientContract {
+        supported_bindings: vec![RealmAccessClientBindingKind::DirectHostLocalUnixSocket],
+        require_direct_local_so_peercred: true,
     }
 }
 
@@ -1218,6 +1233,16 @@ mod tests {
         assert_eq!(access.mode(), DaemonAccessMode::LocalUnix);
         assert!(access.mode().is_implemented());
         assert_eq!(access.socket_path(), Path::new(DEFAULT_PUBLIC_SOCKET_PATH));
+    }
+
+    #[test]
+    fn local_client_contract_requires_direct_peercred() {
+        let contract = LocalUnixDaemonAccess::new().client_contract();
+        assert_eq!(
+            contract.supported_bindings,
+            vec![RealmAccessClientBindingKind::DirectHostLocalUnixSocket]
+        );
+        assert!(contract.require_direct_local_so_peercred);
     }
 
     #[test]

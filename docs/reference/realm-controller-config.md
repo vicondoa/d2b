@@ -137,6 +137,7 @@ runtime substrate until those later runtime surfaces land.
 ## Related references
 
 - [Realm option schema](./realm-options.md)
+- [Realm access resolver contract](./realm-access-resolver.md)
 - [Local-root allocator contract](./local-root-allocator.md)
 - [Realm policy](./realm-policy.md)
 - [Realm core model reference](./realm-core.md)

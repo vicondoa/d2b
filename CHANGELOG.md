@@ -20,6 +20,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documented the realm access resolver contract for canonical realm target
+  grammar, alias/default-realm resolution, direct host-local access bindings,
+  capability preflight, typed resolver diagnostics, and current non-routing
+  implementation boundaries.
 - Documented the local-root allocator contract for typed host-resource
   leases, opaque resource ids, deterministic acquisition order, reconciliation,
   quarantine/reclaim, immutable host-file boundaries, and the current
@@ -45,6 +49,16 @@ deprecations ship one minor release before removal.
 - Added Rust daemon, broker, and bundle-resolver loading for
   `realm-controllers.json` artifacts, including strict parsing and validation
   while keeping runtime realm routing inert.
+- Added realm access resolver contract DTOs for canonical target resolution,
+  direct host-local bindings that preserve `SO_PEERCRED`, alias/default-realm
+  diagnostics, conflict candidates, capability preflight, and stale/missing
+  realm-controller refusals without changing runtime routing.
+- Added d2bd local-root realm access resolver helpers that select direct Unix
+  socket bindings from realm-controller metadata without introducing a byte
+  proxy or changing the public socket protocol.
+- Added Layer-1 realm access coverage for CLI target routing diagnostics,
+  host-local resolver fail-closed paths, no-proxy direct socket semantics, and
+  generated schema/docs exposure.
 - Added Layer-1 coverage for host-local realm controller units, sockets,
   principals, tmpfiles paths, disabled-realm omissions, bundle classification,
   daemon/broker loading defaults, and bundle-resolver loading.
@@ -262,6 +276,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Routed CLI VM target resolution through the realm access contract DTOs while
+  preserving the existing local VM fast path and manifest-backed gateway
+  behavior until the daemon access API is implemented.
 - Renamed the Rust realm foundation crates from
   `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
   establishing realm-native package/import names for follow-up parser and DTO
@@ -281,6 +298,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Explicit `d2b://` CLI targets that omit the reserved `.d2b` suffix now fail
+  with a target grammar diagnostic instead of falling back to local VM routing.
 - Host-local realm daemons now emit only strict `DaemonConfig` fields
   and use realm-scoped daemon state directories, with realm brokers explicitly
   loading the shared `realm-controllers.json` contract.
@@ -311,6 +330,9 @@ deprecations ship one minor release before removal.
 - Realm capability-negotiation JSON now rejects unknown outer envelope fields
   while still preserving unknown future capability tokens inside the
   capability set.
+- Host-local realm access preflight now derives advertised capabilities from
+  enabled provider refs and denies missing required capabilities instead of
+  echoing every request as satisfied.
 - Aligned realm-core schema generation and identifier validation:
   `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
   tokens reject leading punctuation consistently with their JSON schemas.
