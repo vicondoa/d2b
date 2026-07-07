@@ -1013,10 +1013,8 @@ mod tests {
     #[test]
     fn wrong_realm_registration_fails_before_state_is_retained() {
         let mut reg = registration("gen-1", CapabilitySet::empty());
-        reg.summary.realm = RealmPath::new(vec![
-            d2b_realm_core::RealmId::parse("work").unwrap(),
-        ])
-        .unwrap();
+        reg.summary.realm =
+            RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()]).unwrap();
         let mut registry = RemoteNodeRegistry::new();
         let err = registry.register(reg, instant(0)).unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::WrongRealm);
@@ -1051,10 +1049,8 @@ mod tests {
     fn wrong_realm_route_fails_before_lookup() {
         let registry = RemoteNodeRegistry::new();
         let mut request = req(OperationKind::WorkloadList, Capability::Lifecycle, None);
-        request.realm = RealmPath::new(vec![
-            d2b_realm_core::RealmId::parse("work").unwrap(),
-        ])
-        .unwrap();
+        request.realm =
+            RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()]).unwrap();
         let err = registry
             .prepare_route(
                 &request,

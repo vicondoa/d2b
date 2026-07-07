@@ -186,8 +186,7 @@ mod tests {
                 name: ShellName::parse("default").unwrap(),
                 generation: ShellGeneration {
                     guest_boot_id: d2b_realm_core::ProtocolToken::parse("boot-1").unwrap(),
-                    guestd_instance_id: d2b_realm_core::ProtocolToken::parse("guestd-1")
-                        .unwrap(),
+                    guestd_instance_id: d2b_realm_core::ProtocolToken::parse("guestd-1").unwrap(),
                     shell_daemon_instance_id: d2b_realm_core::ProtocolToken::parse(
                         "shell-daemon-1",
                     )

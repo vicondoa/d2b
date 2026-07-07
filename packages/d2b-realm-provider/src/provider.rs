@@ -78,10 +78,7 @@ pub trait WorkloadProvider: Send + Sync {
     /// Stop a workload.
     async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus>;
     /// Start an execution.
-    async fn exec(
-        &self,
-        req: ExecStartRequest,
-    ) -> ProviderResult<d2b_realm_core::ExecutionId>;
+    async fn exec(&self, req: ExecStartRequest) -> ProviderResult<d2b_realm_core::ExecutionId>;
 }
 
 /// Durable execution adapter over an already-addressed workload. This is the

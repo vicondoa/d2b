@@ -11,9 +11,7 @@ use d2b_realm_core::{Capability, CapabilitySet, StreamDescriptor, StreamKind, St
 use d2b_realm_provider::capabilities::DisplayCapabilitySet;
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::DisplayProvider;
-use d2b_realm_provider::types::{
-    DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest,
-};
+use d2b_realm_provider::types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest};
 
 /// Waypipe compression selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

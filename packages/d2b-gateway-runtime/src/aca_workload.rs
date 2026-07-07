@@ -24,9 +24,9 @@
 
 use async_trait::async_trait;
 use base64::Engine;
-use d2b_realm_core::WorkloadId;
 use d2b_gateway::{AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload, SessionBinding};
 use d2b_provider_aca::AcaWorkloadProvider;
+use d2b_realm_core::WorkloadId;
 
 /// Azure Relay coordinates the in-sandbox sender dials out to.
 #[derive(Debug, Clone)]
@@ -402,9 +402,9 @@ impl GatewayWorkload for AcaGatewayWorkload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
     use d2b_gateway::SECRET_LEN;
     use d2b_gateway::{AppCommand, DisplaySessionContext, DisplaySessionId, SessionSecret};
+    use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
 
     fn req(app: Vec<&str>) -> AgentSpawnRequest {
         let realm = RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap();

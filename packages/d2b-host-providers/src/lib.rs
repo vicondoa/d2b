@@ -5,6 +5,9 @@
 //! surface without spawning or changing runtime behavior.
 
 use async_trait::async_trait;
+use d2b_core::host::HostJson;
+use d2b_core::host_check::{self, HostCheckReport, HostCheckSeverity};
+use d2b_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
 use d2b_realm_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
 use d2b_realm_provider::{
     DisplayProvider, HostSubstrateProvider,
@@ -12,9 +15,6 @@ use d2b_realm_provider::{
     error::{ProviderError, ProviderResult},
     types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest},
 };
-use d2b_core::host::HostJson;
-use d2b_core::host_check::{self, HostCheckReport, HostCheckSeverity};
-use d2b_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
 
 pub use d2b_host::{
     ch_argv::ChArgvInput,
@@ -345,9 +345,6 @@ fn static_provider_id(id: &'static str) -> ProviderId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_realm_core::{ErrorKind, WorkloadId};
-    use d2b_realm_provider::RuntimeProvider;
-    use d2b_realm_provider::types::{DisplaySessionRequest, WorkloadSpec};
     use d2b_core::host_check::{
         HostCheckFinding, HostCheckReport, HostCheckSeverity, HostCheckSummary,
     };
@@ -355,6 +352,9 @@ mod tests {
         ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv},
         wayland_proxy_argv::generate_wayland_proxy_argv,
     };
+    use d2b_realm_core::{ErrorKind, WorkloadId};
+    use d2b_realm_provider::RuntimeProvider;
+    use d2b_realm_provider::types::{DisplaySessionRequest, WorkloadSpec};
 
     fn workload_id(raw: &str) -> WorkloadId {
         WorkloadId::parse(raw).expect("test workload id must be valid")

@@ -12124,10 +12124,8 @@ mod host_install_dispatch_tests {
         write_test_manifest(&manifest_path, "vm-a");
         let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         table.gateway_backed(
-            d2b_realm_core::RealmPath::new(vec![
-                d2b_realm_core::RealmId::parse("work").unwrap(),
-            ])
-            .unwrap(),
+            d2b_realm_core::RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()])
+                .unwrap(),
             d2b_realm_core::TargetName::parse("corp-gateway.d2b").unwrap(),
         );
         let context = Context {

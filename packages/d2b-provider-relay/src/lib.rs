@@ -32,9 +32,7 @@ use base64::Engine;
 use d2b_realm_core::{ErrorKind, NodeId, ProviderId};
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
-use d2b_realm_provider::types::{
-    NodeRegistration, SafeLabel, TransportSession, TransportTarget,
-};
+use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
 use hmac::{Hmac, Mac};
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use sha2::Sha256;

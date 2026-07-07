@@ -73,9 +73,7 @@ use d2b_realm_core::{
 };
 use d2b_realm_core::{RealmId, RealmPath, WorkloadSummary};
 use d2b_realm_provider::capabilities::WorkloadCapabilitySet;
-use d2b_realm_provider::error::{
-    ProviderDiagnostic, ProviderError, ProviderResult, RetryHint,
-};
+use d2b_realm_provider::error::{ProviderDiagnostic, ProviderError, ProviderResult, RetryHint};
 use d2b_realm_provider::provider::WorkloadProvider;
 use d2b_realm_provider::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
 use d2b_realm_provider::types::{
@@ -2776,10 +2774,7 @@ mod tests {
         let list = p.list(ListSelector::All).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id.as_str(), "demo");
-        assert_eq!(
-            list[0].state,
-            d2b_realm_core::WorkloadState::Running
-        );
+        assert_eq!(list[0].state, d2b_realm_core::WorkloadState::Running);
     }
 
     #[test]

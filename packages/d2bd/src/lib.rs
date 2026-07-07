@@ -26,8 +26,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
-use d2b_realm_core::TargetName;
-use d2b_realm_provider::provider::WorkloadProvider;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -89,6 +87,8 @@ use d2b_gateway_runtime::{
 use d2b_host::ssh_keygen;
 use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider};
 use d2b_provider_relay::{LocalTarget, RelayEndpoint};
+use d2b_realm_core::TargetName;
+use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
@@ -3042,9 +3042,11 @@ fn dispatch_gateway_display(
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
                 })?;
-            let correlation_id = d2b_realm_core::CorrelationId::parse(args.operation_id)
-                .map_err(|err| TypedError::WireInvalidFrame {
-                    detail: format!("gatewayDisplay correlation_id invalid: {err}"),
+            let correlation_id =
+                d2b_realm_core::CorrelationId::parse(args.operation_id).map_err(|err| {
+                    TypedError::WireInvalidFrame {
+                        detail: format!("gatewayDisplay correlation_id invalid: {err}"),
+                    }
                 })?;
             let principal = gateway_display_peer_principal(peer);
             let app =
@@ -3246,12 +3248,11 @@ fn parse_gateway_display_lifecycle_target(
     let target = TargetName::parse(target).map_err(|err| TypedError::WireInvalidFrame {
         detail: format!("gatewayDisplay target parse failed: {err}"),
     })?;
-    let _operation_id =
-        d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
-            TypedError::WireInvalidFrame {
-                detail: format!("gatewayDisplay operation_id invalid: {err}"),
-            }
-        })?;
+    let _operation_id = d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
+        TypedError::WireInvalidFrame {
+            detail: format!("gatewayDisplay operation_id invalid: {err}"),
+        }
+    })?;
     let _principal = d2b_realm_core::PrincipalId::parse(principal).map_err(|err| {
         TypedError::WireInvalidFrame {
             detail: format!("gatewayDisplay principal invalid: {err}"),

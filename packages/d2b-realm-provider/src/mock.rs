@@ -79,10 +79,7 @@ impl WorkloadProvider for MockWorkloadProvider {
     }
     async fn exec(&self, _req: ExecStartRequest) -> ProviderResult<ExecutionId> {
         ExecutionId::parse("mock-exec-1").map_err(|_| {
-            ProviderError::new(
-                d2b_realm_core::ErrorKind::MalformedFrame,
-                "mock exec id",
-            )
+            ProviderError::new(d2b_realm_core::ErrorKind::MalformedFrame, "mock exec id")
         })
     }
 }

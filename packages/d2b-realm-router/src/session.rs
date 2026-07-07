@@ -282,9 +282,7 @@ async fn read_frame(stream: &mut dyn ByteStream) -> ProviderResult<Vec<u8>> {
 mod tests {
     use super::*;
     use d2b_realm_codec_protobuf::ProtobufCodec;
-    use d2b_realm_core::{
-        Capability, ConstellationError, NodeId, PrincipalId, ProtocolToken,
-    };
+    use d2b_realm_core::{Capability, ConstellationError, NodeId, PrincipalId, ProtocolToken};
     use d2b_realm_provider::provider::TransportProvider;
     use d2b_realm_provider::types::{NodeRegistration, TransportTarget};
     use d2b_realm_transport::LoopbackTransport;

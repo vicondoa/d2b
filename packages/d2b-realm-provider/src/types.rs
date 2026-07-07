@@ -641,8 +641,7 @@ mod tests {
         ShellGeneration {
             guest_boot_id: d2b_realm_core::ProtocolToken::parse("boot-a").unwrap(),
             guestd_instance_id: d2b_realm_core::ProtocolToken::parse("guestd-a").unwrap(),
-            shell_daemon_instance_id: d2b_realm_core::ProtocolToken::parse("shell-a")
-                .unwrap(),
+            shell_daemon_instance_id: d2b_realm_core::ProtocolToken::parse("shell-a").unwrap(),
         }
     }
 

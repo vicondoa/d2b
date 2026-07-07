@@ -2,9 +2,7 @@ use async_trait::async_trait;
 use d2b_realm_core::{ErrorKind, NodeId, ProviderId};
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
-use d2b_realm_provider::types::{
-    NodeRegistration, SafeLabel, TransportSession, TransportTarget,
-};
+use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{
     Arc,

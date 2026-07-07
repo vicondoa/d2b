@@ -17,9 +17,7 @@ use d2b_realm_core::ErrorKind;
 use d2b_realm_core::{NodeId, ProviderId};
 use d2b_realm_provider::error::{ProviderError, ProviderResult};
 use d2b_realm_provider::provider::{TransportListener, TransportProvider};
-use d2b_realm_provider::types::{
-    NodeRegistration, SafeLabel, TransportSession, TransportTarget,
-};
+use d2b_realm_provider::types::{NodeRegistration, SafeLabel, TransportSession, TransportTarget};
 use std::sync::{
     Arc, Mutex as StdMutex,
     atomic::{AtomicBool, Ordering},

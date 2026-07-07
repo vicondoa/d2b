@@ -501,9 +501,7 @@ fn derive_capabilities_config(inputs: CapabilitiesInputs) -> CapabilitiesConfig 
 /// capability contract. The core `persistent-shell` capability is advertised
 /// only when guestd can attach, manage, force-attach, and report bounded shell
 /// limits; partial guest-control fragments remain fail-closed.
-pub fn realm_shell_capability_set(
-    config: &CapabilitiesConfig,
-) -> d2b_realm_core::CapabilitySet {
+pub fn realm_shell_capability_set(config: &CapabilitiesConfig) -> d2b_realm_core::CapabilitySet {
     let shell_ready = config.shell_attached
         && config.shell_management
         && config.shell_force_attach
@@ -511,8 +509,7 @@ pub fn realm_shell_capability_set(
         && (1..=64).contains(&config.shell_attached_sessions_per_vm)
         && config.shell_attached_sessions_per_vm <= config.shell_sessions_per_vm;
     if shell_ready {
-        d2b_realm_core::CapabilitySet::empty()
-            .with(d2b_realm_core::Capability::PersistentShell)
+        d2b_realm_core::CapabilitySet::empty().with(d2b_realm_core::Capability::PersistentShell)
     } else {
         d2b_realm_core::CapabilitySet::empty()
     }

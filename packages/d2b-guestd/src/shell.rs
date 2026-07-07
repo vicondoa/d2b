@@ -4,8 +4,8 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use d2b_realm_core as realm_core;
 use d2b_contracts::guest_proto as pb;
+use d2b_realm_core as realm_core;
 use protobuf::{EnumOrUnknown, MessageField};
 
 pub const DEFAULT_SHELL_SESSIONS_PER_VM: u32 = 8;
@@ -1294,10 +1294,7 @@ mod tests {
             .map(|event| shell_event_to_core(*event, &generation))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(
-            events[0].cause,
-            realm_core::ShellCause::ReconciliationGap
-        );
+        assert_eq!(events[0].cause, realm_core::ShellCause::ReconciliationGap);
         assert_eq!(events[0].state, realm_core::ShellState::Lost);
 
         let core_batch = runtime.events_core_since(0, 16).expect("core event batch");

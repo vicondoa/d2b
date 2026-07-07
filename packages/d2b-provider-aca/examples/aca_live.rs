@@ -4,8 +4,8 @@
 //! explicit local-validation Azure CLI credential (plane 1), and runs a
 //! command in the sandbox. Production provider construction does not use this
 //! ambient developer credential path.
-use d2b_realm_core::NodeId;
 use d2b_provider_aca::{AcaConfig, AcaWorkloadProvider, ReqwestTransport};
+use d2b_realm_core::NodeId;
 use std::sync::Arc;
 
 #[tokio::main(flavor = "current_thread")]
