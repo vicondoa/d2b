@@ -1353,6 +1353,7 @@
           "type": "object",
           "required": [
             "body",
+            "correlation_id",
             "frame",
             "operation_id"
           ],
@@ -1362,6 +1363,14 @@
               "allOf": [
                 {
                   "$ref": "#/definitions/OpaquePayload"
+                }
+              ]
+            },
+            "correlation_id": {
+              "description": "Cross-realm correlation id shared across response, route, and audit hops.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CorrelationId"
                 }
               ]
             },
@@ -2844,6 +2853,7 @@
       "type": "object",
       "required": [
         "body",
+        "correlation_id",
         "operation_id"
       ],
       "properties": {
@@ -2852,6 +2862,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/OpaquePayload"
+            }
+          ]
+        },
+        "correlation_id": {
+          "description": "Cross-realm correlation id shared across response, route, and audit hops.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
             }
           ]
         },
