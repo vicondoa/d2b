@@ -317,6 +317,29 @@ let
     || lib.hasInfix "AccountKey=" s
     || lib.hasInfix "PRIVATE KEY" s
     || lib.hasInfix "BEGIN " s;
+  secretLikeRef = s:
+    let
+      lower = lib.toLower s;
+      compact = lib.replaceStrings [ "-" "_" "." " " "=" ":" "/" ] [ "" "" "" "" "" "" "" ] lower;
+      markers = [
+        "secret"
+        "password"
+        "passwd"
+        "bearer"
+        "private"
+        "apikey"
+        "sharedaccesskey"
+        "accountkey"
+        "endpointsb"
+        "accesstoken"
+        "refreshtoken"
+        "sessiontoken"
+        "privatekey"
+        "publickey"
+        "credentialmaterial"
+      ];
+    in
+    secretShaped s || lib.any (marker: lib.hasInfix marker compact) markers;
 
   underStateDir = s:
     lib.hasPrefix "${toString cfg.site.stateDir}/" s;
@@ -389,6 +412,44 @@ let
         '';
       })
       (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
+
+  realmIdentityRefFields = [
+    "realmIdentityRef"
+    "controllerKeyRef"
+    "trustBundleRef"
+    "enrollmentRef"
+    "rotationPolicyRef"
+  ];
+  realmIdentitySecretRefRows =
+    lib.flatten (map
+      (realm:
+        lib.filter
+          (row: row.value != null && secretLikeRef row.value)
+          (map
+            (field: {
+              inherit field;
+              realmPath = realm.path;
+              value = realm.keys.${field};
+            })
+            realmIdentityRefFields))
+      enabledRealmRows);
+  realmIdentitySecretRefAssertions = [
+    {
+      assertion = realmIdentitySecretRefRows == [ ];
+      message = ''
+        d2b.realms identity key refs must be opaque, non-secret locators.
+        These d2b.realms.<realm>.keys fields look like inline credential or
+        key material: ${
+          lib.concatStringsSep ", " (map (row: "${row.realmPath}.${row.field}") realmIdentitySecretRefRows)
+        }.
+
+        Store private keys, public-key blocks, bearer tokens, passwords, and
+        provider credentials outside the host Nix store; reference them with
+        neutral ids such as idref-work, cgref-work, trust-work, enroll-work,
+        or rotate-work.
+      '';
+    }
+  ];
 
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
@@ -1653,6 +1714,7 @@ in
     ++ legacyGatewayMigrationAssertions
     ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
+    ++ realmIdentitySecretRefAssertions
     ++ realmAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions

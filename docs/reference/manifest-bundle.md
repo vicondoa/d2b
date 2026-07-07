@@ -41,8 +41,8 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 8`
-for the metadata-only realm-controller configuration artifact.
+bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 9`
+for the metadata-only realm identity configuration artifact.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under

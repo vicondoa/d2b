@@ -88,7 +88,7 @@ use d2b_gateway_runtime::{
 use d2b_host::ssh_keygen;
 use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider};
 use d2b_provider_relay::{LocalTarget, RelayEndpoint};
-use d2b_realm_core::TargetName;
+use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary, TargetName};
 use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -250,6 +250,7 @@ use typed_error::TypedError;
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/d2b/daemon-config.json";
 pub const DEFAULT_GATEWAY_CONFIG_PATH: &str = "/etc/d2b/gateway.json";
 pub const DEFAULT_REALM_CONTROLLERS_CONFIG_PATH: &str = "/etc/d2b/realm-controllers.json";
+pub const DEFAULT_REALM_IDENTITY_CONFIG_PATH: &str = "/etc/d2b/realm-identity.json";
 pub const DEFAULT_SERVER_VERSION: &str = "0.4.0";
 pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
@@ -352,6 +353,8 @@ pub struct DaemonConfig {
     pub gateway_config_path: PathBuf,
     #[serde(default = "default_realm_controllers_config_path")]
     pub realm_controllers_config_path: PathBuf,
+    #[serde(default = "default_realm_identity_config_path")]
+    pub realm_identity_config_path: PathBuf,
     /// Concurrency cap for the autostart pass that runs on daemon
     /// startup. Default `3`.
     /// Mirrors `d2b.daemon.autostart.parallelism`.
@@ -385,6 +388,10 @@ fn default_realm_controllers_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_REALM_CONTROLLERS_CONFIG_PATH)
 }
 
+fn default_realm_identity_config_path() -> PathBuf {
+    PathBuf::from(DEFAULT_REALM_IDENTITY_CONFIG_PATH)
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
@@ -402,6 +409,7 @@ impl Default for DaemonConfig {
             artifacts: ArtifactPaths::default(),
             gateway_config_path: default_gateway_config_path(),
             realm_controllers_config_path: default_realm_controllers_config_path(),
+            realm_identity_config_path: default_realm_identity_config_path(),
             autostart_parallelism: autostart::DEFAULT_PARALLELISM,
             graceful_shutdown_timeout_seconds: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
             live_activation_timeout_seconds: GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_secs(),
@@ -834,6 +842,34 @@ pub fn load_realm_controllers_config(
     Ok(Some(LoadedRealmControllersConfig { config, summary }))
 }
 
+#[derive(Debug, Clone)]
+pub struct LoadedRealmIdentityConfig {
+    pub config: RealmIdentityConfigJson,
+    pub summary: RealmIdentityConfigSummary,
+}
+
+pub fn load_realm_identity_config(
+    path: &Path,
+) -> Result<Option<LoadedRealmIdentityConfig>, TypedError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
+        context: "read realm identity config".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let config: RealmIdentityConfigJson =
+        serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalConfig {
+            detail: format!("invalid realm identity config: {err}"),
+        })?;
+    let summary = config
+        .validate_metadata_only()
+        .map_err(|err| TypedError::InternalConfig {
+            detail: format!("invalid realm identity config: {err}"),
+        })?;
+    Ok(Some(LoadedRealmIdentityConfig { config, summary }))
+}
+
 #[cfg(test)]
 mod config_loading_tests {
     use super::*;
@@ -905,14 +941,42 @@ mod config_loading_tests {
         }"#
     }
 
+    fn realm_identity_json() -> &'static str {
+        r#"{
+          "schemaVersion": "v2",
+          "runtimeState": "metadata-only",
+          "realms": [
+            {
+              "realm": ["work"],
+              "realmIdentityRef": "idref-work",
+              "realmIdentityFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "controllerCredentialRef": "cgref-work",
+              "controllerCredentialFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "trustBundleRef": "trust-work",
+              "enrollmentRef": "enroll-work",
+              "rotationPolicyRef": "rotate-work"
+            }
+          ],
+          "invariants": {
+            "metadataOnly": true,
+            "noSecretMaterial": true,
+            "preservesRuntimeBehavior": true
+          }
+        }"#
+    }
+
     #[test]
-    fn daemon_config_missing_uses_realm_controller_default_path() {
+    fn daemon_config_missing_uses_realm_metadata_default_paths() {
         let root = temp_root();
         let config = load_config(&root.path().join("missing-daemon-config.json"))
             .expect("missing daemon config uses defaults");
         assert_eq!(
             config.realm_controllers_config_path,
             PathBuf::from(DEFAULT_REALM_CONTROLLERS_CONFIG_PATH)
+        );
+        assert_eq!(
+            config.realm_identity_config_path,
+            PathBuf::from(DEFAULT_REALM_IDENTITY_CONFIG_PATH)
         );
     }
 
@@ -930,7 +994,8 @@ mod config_loading_tests {
               "daemonUser": "d2bd",
               "daemonGroup": "d2bd",
               "publicSocketGroup": "d2b",
-              "realmControllersConfigPath": "/etc/d2b/custom-realm-controllers.json"
+              "realmControllersConfigPath": "/etc/d2b/custom-realm-controllers.json",
+              "realmIdentityConfigPath": "/etc/d2b/custom-realm-identity.json"
             }"#,
         )
         .expect("write daemon config");
@@ -938,6 +1003,10 @@ mod config_loading_tests {
         assert_eq!(
             config.realm_controllers_config_path,
             PathBuf::from("/etc/d2b/custom-realm-controllers.json")
+        );
+        assert_eq!(
+            config.realm_identity_config_path,
+            PathBuf::from("/etc/d2b/custom-realm-identity.json")
         );
 
         fs::write(
@@ -1042,6 +1111,68 @@ mod config_loading_tests {
             .expect("materialized host-local unit metadata remains loadable")
             .expect("realm controllers present");
         assert_eq!(materialized_loaded.summary.host_local_controller_count, 1);
+    }
+
+    #[test]
+    fn daemon_realm_identity_loader_handles_missing_and_validates_metadata_only() {
+        let root = temp_root();
+        let missing_path = root.path().join("missing-realm-identity.json");
+        assert!(
+            load_realm_identity_config(&missing_path)
+                .expect("missing realm identity is optional")
+                .is_none()
+        );
+
+        let config_path = root.path().join("realm-identity.json");
+        fs::write(&config_path, realm_identity_json()).expect("write realm identity");
+        let loaded = load_realm_identity_config(&config_path)
+            .expect("realm identity parses")
+            .expect("realm identity present");
+        assert_eq!(loaded.summary.realm_count, 1);
+        assert_eq!(loaded.summary.identity_ref_count, 1);
+        assert_eq!(loaded.summary.controller_credential_ref_count, 1);
+
+        let secret_path = root.path().join("secret-realm-identity.json");
+        fs::write(
+            &secret_path,
+            realm_identity_json().replace(
+                r#""rotationPolicyRef": "rotate-work""#,
+                r#""rotationPolicyRef": "rotate-work", "privateKey": "nope""#,
+            ),
+        )
+        .expect("write invalid realm identity");
+        let err = load_realm_identity_config(&secret_path)
+            .expect_err("secret material field is rejected");
+        let err_text = format!("{err:?}");
+        assert!(
+            !err_text.contains(secret_path.to_string_lossy().as_ref()),
+            "identity parse errors must not log config paths: {err_text}"
+        );
+
+        let secret_ref_path = root.path().join("secret-ref-realm-identity.json");
+        fs::write(
+            &secret_ref_path,
+            realm_identity_json().replace("idref-work", "secret-identity"),
+        )
+        .expect("write invalid realm identity ref");
+        let err = load_realm_identity_config(&secret_ref_path)
+            .expect_err("secret-shaped identity refs are rejected");
+        let err_text = format!("{err:?}");
+        assert!(
+            !err_text.contains(secret_ref_path.to_string_lossy().as_ref()),
+            "identity ref parse errors must not log config paths: {err_text}"
+        );
+
+        let invariant_path = root.path().join("bad-realm-identity.json");
+        fs::write(
+            &invariant_path,
+            realm_identity_json().replace(
+                r#""noSecretMaterial": true"#,
+                r#""noSecretMaterial": false"#,
+            ),
+        )
+        .expect("write invalid realm identity invariant");
+        assert!(load_realm_identity_config(&invariant_path).is_err());
     }
 }
 
@@ -1251,6 +1382,23 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             config_source = "realm-controllers",
             config_present = false,
             "realm-controller metadata not present; continuing with single-root daemon config",
+        );
+    }
+    if let Some(realm_identity) = load_realm_identity_config(&config.realm_identity_config_path)? {
+        tracing::info!(
+            config_source = "realm-identity",
+            config_present = true,
+            realm_count = realm_identity.summary.realm_count,
+            identity_ref_count = realm_identity.summary.identity_ref_count,
+            controller_credential_ref_count =
+                realm_identity.summary.controller_credential_ref_count,
+            "realm identity metadata loaded; runtime trust sessions remain inert",
+        );
+    } else {
+        tracing::debug!(
+            config_source = "realm-identity",
+            config_present = false,
+            "realm identity metadata not present; runtime trust sessions remain inert",
         );
     }
 

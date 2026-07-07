@@ -54,6 +54,21 @@
       "$ref": "#/definitions/ControllerGenerationId"
     },
     {
+      "$ref": "#/definitions/RealmIdentityRef"
+    },
+    {
+      "$ref": "#/definitions/ControllerGenerationCredentialRef"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationId"
+    },
+    {
+      "$ref": "#/definitions/RevocationListId"
+    },
+    {
+      "$ref": "#/definitions/RecoveryProcedureId"
+    },
+    {
       "$ref": "#/definitions/AllocatorLeaseId"
     },
     {
@@ -162,25 +177,112 @@
       "$ref": "#/definitions/KeyFingerprint"
     },
     {
+      "$ref": "#/definitions/RealmIdentityFingerprint"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityStatus"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityMetadata"
+    },
+    {
+      "$ref": "#/definitions/ControllerGenerationStatus"
+    },
+    {
+      "$ref": "#/definitions/ControllerGenerationMetadata"
+    },
+    {
       "$ref": "#/definitions/RealmKeyRole"
     },
     {
       "$ref": "#/definitions/KeyPin"
     },
     {
+      "$ref": "#/definitions/ParentTrustAnchor"
+    },
+    {
+      "$ref": "#/definitions/ChildKeyPin"
+    },
+    {
       "$ref": "#/definitions/EnrollmentStatus"
+    },
+    {
+      "$ref": "#/definitions/EnrollmentReason"
     },
     {
       "$ref": "#/definitions/EnrollmentRecord"
     },
     {
+      "$ref": "#/definitions/KeyRotationSubjectKind"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationSubject"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationReason"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationStatus"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationPlan"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationEventKind"
+    },
+    {
+      "$ref": "#/definitions/KeyRotationEvent"
+    },
+    {
       "$ref": "#/definitions/RevocationTarget"
+    },
+    {
+      "$ref": "#/definitions/RevocationReason"
     },
     {
       "$ref": "#/definitions/RevocationStatus"
     },
     {
       "$ref": "#/definitions/RevocationRecord"
+    },
+    {
+      "$ref": "#/definitions/RevocationListStatus"
+    },
+    {
+      "$ref": "#/definitions/RevocationList"
+    },
+    {
+      "$ref": "#/definitions/SessionTeardownReason"
+    },
+    {
+      "$ref": "#/definitions/SessionTeardownDirective"
+    },
+    {
+      "$ref": "#/definitions/RecoveryReason"
+    },
+    {
+      "$ref": "#/definitions/RecoveryStatus"
+    },
+    {
+      "$ref": "#/definitions/RecoveryProcedure"
+    },
+    {
+      "$ref": "#/definitions/IdentityAuditEventKind"
+    },
+    {
+      "$ref": "#/definitions/IdentityAuditEventMetadata"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityConfigJson"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityConfigRuntimeState"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityConfigEntry"
+    },
+    {
+      "$ref": "#/definitions/RealmIdentityConfigInvariants"
     },
     {
       "$ref": "#/definitions/SignatureRef"
@@ -1091,7 +1193,7 @@
       ]
     },
     "AuthorizationScope": {
-      "description": "What an audited operation was authorized against. Workload operations require a [`Capability`]; node-control, enrollment, and read-only health operations are authorized by node enrollment / session identity, so they have their own scope rather than a synthetic capability.",
+      "description": "What an audited operation was authorized against. Workload operations require a [`Capability`]; node-control, identity lifecycle, and read-only health operations are authorized by node enrollment / session identity, so they have their own scope rather than a synthetic capability.",
       "oneOf": [
         {
           "description": "A workload capability (lifecycle/exec/display/…).",
@@ -1143,6 +1245,51 @@
               "type": "string",
               "enum": [
                 "enrollment"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Realm identity or controller-generation key rotation.",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "key-rotation"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Revocation issuance/list propagation/session teardown.",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "revocation"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Child controller-generation recovery.",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "recovery"
               ]
             }
           }
@@ -1430,6 +1577,51 @@
       },
       "maxItems": 64,
       "uniqueItems": true
+    },
+    "ChildKeyPin": {
+      "description": "Child identity key pinned by a parent during enrollment.",
+      "type": "object",
+      "required": [
+        "acceptedByGeneration",
+        "childFingerprint",
+        "childIdentityRef",
+        "childRealm",
+        "enrollmentId",
+        "parentRealm",
+        "pinnedAtUnixSeconds"
+      ],
+      "properties": {
+        "acceptedByGeneration": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "childFingerprint": {
+          "$ref": "#/definitions/RealmIdentityFingerprint"
+        },
+        "childIdentityRef": {
+          "$ref": "#/definitions/RealmIdentityRef"
+        },
+        "childRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "enrollmentId": {
+          "$ref": "#/definitions/EnrollmentId"
+        },
+        "parentRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "pinnedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "ConstellationError": {
       "description": "A typed realm error: a [`ErrorKind`], an optional structured missing capability (for `CapabilityDenied`), plus a bounded, operator-safe message. The message MUST NOT contain secrets, command output, store paths, argv, or stream payload, and is bounded at decode so it can never be an unbounded side channel.",
@@ -2108,11 +2300,95 @@
         }
       ]
     },
+    "ControllerGenerationCredentialRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
     "ControllerGenerationId": {
       "type": "string",
       "maxLength": 128,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ControllerGenerationMetadata": {
+      "description": "Metadata for a realm controller generation and its credential reference.",
+      "type": "object",
+      "required": [
+        "credentialFingerprint",
+        "credentialRef",
+        "generationId",
+        "issuedAtUnixSeconds",
+        "notBeforeUnixSeconds",
+        "realm",
+        "realmIdentity",
+        "status"
+      ],
+      "properties": {
+        "credentialFingerprint": {
+          "$ref": "#/definitions/KeyFingerprint"
+        },
+        "credentialRef": {
+          "$ref": "#/definitions/ControllerGenerationCredentialRef"
+        },
+        "generationId": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "notAfterUnixSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "notBeforeUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "realmIdentity": {
+          "$ref": "#/definitions/RealmIdentityMetadata"
+        },
+        "revokedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RevocationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/ControllerGenerationStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ControllerGenerationStatus": {
+      "description": "Lifecycle state of a controller-generation credential.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "rotating",
+        "superseded",
+        "revoked",
+        "recovering"
+      ]
     },
     "CorrelationId": {
       "type": "string",
@@ -2220,6 +2496,18 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "EnrollmentReason": {
+      "description": "Stable rejection/supersession reason for enrollment metadata.",
+      "type": "string",
+      "enum": [
+        "operator-requested",
+        "parent-policy-denied",
+        "child-key-mismatch",
+        "parent-trust-anchor-mismatch",
+        "controller-generation-revoked",
+        "recovery-replacement"
+      ]
+    },
     "EnrollmentRecord": {
       "description": "Metadata-only enrollment record for a child realm.",
       "type": "object",
@@ -2230,8 +2518,8 @@
         "controllerGeneration",
         "createdAtUnixSeconds",
         "enrollmentId",
-        "parentKeyPin",
         "parentRealm",
+        "parentTrustAnchor",
         "status",
         "updatedAtUnixSeconds"
       ],
@@ -2248,7 +2536,7 @@
           "description": "Child identity pin metadata.",
           "allOf": [
             {
-              "$ref": "#/definitions/KeyPin"
+              "$ref": "#/definitions/ChildKeyPin"
             }
           ]
         },
@@ -2263,7 +2551,7 @@
           "description": "Active controller generation for this enrollment.",
           "allOf": [
             {
-              "$ref": "#/definitions/ControllerGenerationId"
+              "$ref": "#/definitions/ControllerGenerationMetadata"
             }
           ]
         },
@@ -2292,20 +2580,31 @@
             }
           ]
         },
-        "parentKeyPin": {
-          "description": "Parent trust-anchor pin metadata.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeyPin"
-            }
-          ]
-        },
         "parentRealm": {
           "description": "Parent realm that admits the child.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/RealmId"
           }
+        },
+        "parentTrustAnchor": {
+          "description": "Parent trust-anchor pin metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ParentTrustAnchor"
+            }
+          ]
+        },
+        "reason": {
+          "description": "Optional stable status reason.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EnrollmentReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "description": "Current status.",
@@ -2332,7 +2631,8 @@
         "accepted",
         "rejected",
         "superseded",
-        "revoked"
+        "revoked",
+        "recovery-required"
       ]
     },
     "ErrorKind": {
@@ -2990,6 +3290,131 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "IdentityAuditEventKind": {
+      "description": "Low-cardinality identity-lifecycle audit event kind.",
+      "type": "string",
+      "enum": [
+        "enrollment-requested",
+        "enrollment-accepted",
+        "enrollment-rejected",
+        "rotation-planned",
+        "rotation-activated",
+        "revocation-issued",
+        "revocation-propagated",
+        "recovery-opened",
+        "recovery-completed"
+      ]
+    },
+    "IdentityAuditEventMetadata": {
+      "description": "Metadata attached to audit records for enrollment/rotation/revocation and recovery. It names only ids, realm paths, statuses, and reasons.",
+      "type": "object",
+      "required": [
+        "event",
+        "realm"
+      ],
+      "properties": {
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enrollmentId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EnrollmentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enrollmentStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EnrollmentStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event": {
+          "$ref": "#/definitions/IdentityAuditEventKind"
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "recoveryId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RecoveryProcedureId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recoveryStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RecoveryStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revocationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RevocationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revocationStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RevocationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyRotationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyRotationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "KeyFingerprint": {
       "type": "string",
       "maxLength": 71,
@@ -3055,6 +3480,259 @@
         }
       },
       "additionalProperties": false
+    },
+    "KeyRotationEvent": {
+      "description": "Metadata-only key-rotation event.",
+      "type": "object",
+      "required": [
+        "event",
+        "observedAtUnixSeconds",
+        "realm",
+        "rotationId",
+        "status",
+        "subjectKind"
+      ],
+      "properties": {
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event": {
+          "$ref": "#/definitions/KeyRotationEventKind"
+        },
+        "observedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "rotationId": {
+          "$ref": "#/definitions/KeyRotationId"
+        },
+        "status": {
+          "$ref": "#/definitions/KeyRotationStatus"
+        },
+        "subjectKind": {
+          "$ref": "#/definitions/KeyRotationSubjectKind"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeyRotationEventKind": {
+      "description": "Stable key-rotation audit/event kind.",
+      "type": "string",
+      "enum": [
+        "planned",
+        "credential-issued",
+        "activated",
+        "superseded",
+        "revoked",
+        "failed"
+      ]
+    },
+    "KeyRotationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "KeyRotationPlan": {
+      "description": "Metadata-only rotation plan. Replacement fields are opaque refs and fingerprints only; no generated key bytes or signatures are represented.",
+      "type": "object",
+      "required": [
+        "plannedAtUnixSeconds",
+        "realm",
+        "reason",
+        "rotationId",
+        "status",
+        "subject"
+      ],
+      "properties": {
+        "activateAfterUnixSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plannedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "reason": {
+          "$ref": "#/definitions/KeyRotationReason"
+        },
+        "replacementCredentialRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationCredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replacementFingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replacementIdentityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmIdentityRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationId": {
+          "$ref": "#/definitions/KeyRotationId"
+        },
+        "status": {
+          "$ref": "#/definitions/KeyRotationStatus"
+        },
+        "subject": {
+          "$ref": "#/definitions/KeyRotationSubject"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeyRotationReason": {
+      "description": "Stable reason for a key rotation.",
+      "type": "string",
+      "enum": [
+        "routine",
+        "operator-requested",
+        "suspected-compromise",
+        "parent-requested",
+        "recovery",
+        "algorithm-migration"
+      ]
+    },
+    "KeyRotationStatus": {
+      "description": "Lifecycle status for a key rotation plan.",
+      "type": "string",
+      "enum": [
+        "planned",
+        "issued",
+        "active",
+        "superseded",
+        "revoked",
+        "failed"
+      ]
+    },
+    "KeyRotationSubject": {
+      "description": "Key rotation subject metadata.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "current_fingerprint",
+            "current_identity_ref",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "current_fingerprint": {
+              "$ref": "#/definitions/RealmIdentityFingerprint"
+            },
+            "current_identity_ref": {
+              "$ref": "#/definitions/RealmIdentityRef"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-identity"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "current_credential_ref",
+            "current_fingerprint",
+            "current_generation",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "current_credential_ref": {
+              "$ref": "#/definitions/ControllerGenerationCredentialRef"
+            },
+            "current_fingerprint": {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            "current_generation": {
+              "$ref": "#/definitions/ControllerGenerationId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "controller-generation"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "KeyRotationSubjectKind": {
+      "description": "Key material class controlled by a rotation.",
+      "type": "string",
+      "enum": [
+        "realm-identity",
+        "controller-generation"
+      ]
     },
     "LeaseAllocationRequest": {
       "description": "Mutating lease allocation request. Idempotency is mandatory.",
@@ -3650,6 +4328,47 @@
               "$ref": "#/definitions/OperationId"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParentTrustAnchor": {
+      "description": "Parent trust-anchor metadata installed into a child realm.",
+      "type": "object",
+      "required": [
+        "acceptedByGeneration",
+        "childRealm",
+        "parentFingerprint",
+        "parentIdentityRef",
+        "parentRealm",
+        "pinnedAtUnixSeconds"
+      ],
+      "properties": {
+        "acceptedByGeneration": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "childRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "parentFingerprint": {
+          "$ref": "#/definitions/RealmIdentityFingerprint"
+        },
+        "parentIdentityRef": {
+          "$ref": "#/definitions/RealmIdentityRef"
+        },
+        "parentRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "pinnedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
@@ -4542,6 +5261,208 @@
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*$"
     },
+    "RealmIdentityConfigEntry": {
+      "type": "object",
+      "required": [
+        "realm"
+      ],
+      "properties": {
+        "controllerCredentialFingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "controllerCredentialRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationCredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enrollmentRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "realmIdentityFingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmIdentityFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmIdentityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmIdentityRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationPolicyRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trustBundleRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityConfigInvariants": {
+      "type": "object",
+      "required": [
+        "metadataOnly",
+        "noSecretMaterial",
+        "preservesRuntimeBehavior"
+      ],
+      "properties": {
+        "metadataOnly": {
+          "type": "boolean"
+        },
+        "noSecretMaterial": {
+          "type": "boolean"
+        },
+        "preservesRuntimeBehavior": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityConfigJson": {
+      "type": "object",
+      "required": [
+        "invariants",
+        "runtimeState",
+        "schemaVersion"
+      ],
+      "properties": {
+        "invariants": {
+          "$ref": "#/definitions/RealmIdentityConfigInvariants"
+        },
+        "realms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmIdentityConfigEntry"
+          }
+        },
+        "runtimeState": {
+          "$ref": "#/definitions/RealmIdentityConfigRuntimeState"
+        },
+        "schemaVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityConfigRuntimeState": {
+      "type": "string",
+      "enum": [
+        "metadata-only"
+      ]
+    },
+    "RealmIdentityFingerprint": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "RealmIdentityMetadata": {
+      "description": "Metadata for a realm identity key. The reference and fingerprint are the only key-shaped values; no key bytes or credential material are modeled.",
+      "type": "object",
+      "required": [
+        "createdAtUnixSeconds",
+        "fingerprint",
+        "identityRef",
+        "realm",
+        "status"
+      ],
+      "properties": {
+        "createdAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "fingerprint": {
+          "$ref": "#/definitions/RealmIdentityFingerprint"
+        },
+        "identityRef": {
+          "$ref": "#/definitions/RealmIdentityRef"
+        },
+        "notAfterUnixSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "status": {
+          "$ref": "#/definitions/RealmIdentityStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RealmIdentityStatus": {
+      "description": "Lifecycle state of a realm identity reference.",
+      "type": "string",
+      "enum": [
+        "active",
+        "rotating",
+        "superseded",
+        "revoked",
+        "recovery-only"
+      ]
+    },
     "RealmKeyRole": {
       "description": "Role of a pinned realm key.",
       "oneOf": [
@@ -4858,6 +5779,115 @@
       },
       "additionalProperties": false
     },
+    "RecoveryProcedure": {
+      "description": "Metadata-only recovery procedure for a lost or compromised child controller key. Evidence values are bounded opaque refs, not logs or secret bytes.",
+      "type": "object",
+      "required": [
+        "affectedGeneration",
+        "childRealm",
+        "evidenceRefs",
+        "openedAtUnixSeconds",
+        "parentRealm",
+        "reason",
+        "recoveryId",
+        "status"
+      ],
+      "properties": {
+        "affectedGeneration": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "childRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "closedAtUnixSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProtocolToken"
+          },
+          "maxItems": 16
+        },
+        "openedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "parentRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "reason": {
+          "$ref": "#/definitions/RecoveryReason"
+        },
+        "recoveryId": {
+          "$ref": "#/definitions/RecoveryProcedureId"
+        },
+        "replacementGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/RecoveryStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecoveryProcedureId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RecoveryReason": {
+      "description": "Stable recovery cause.",
+      "type": "string",
+      "enum": [
+        "lost-controller-key",
+        "compromised-controller-key",
+        "parent-initiated-reset",
+        "operator-break-glass"
+      ]
+    },
+    "RecoveryStatus": {
+      "description": "Metadata lifecycle status for child-controller recovery.",
+      "type": "string",
+      "enum": [
+        "requested",
+        "parent-approved",
+        "isolating",
+        "reissued",
+        "completed",
+        "rejected"
+      ]
+    },
     "ResourceAcquisitionKey": {
       "description": "Deterministic total-order key for resource acquisition.",
       "type": "object",
@@ -5024,6 +6054,110 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "RevocationList": {
+      "description": "Metadata-only parent-pushed revocation-list snapshot.",
+      "type": "object",
+      "required": [
+        "generatedAtUnixSeconds",
+        "issuerControllerGeneration",
+        "issuerRealm",
+        "listId",
+        "propagatedTo",
+        "records",
+        "status"
+      ],
+      "properties": {
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generatedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuerControllerGeneration": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "issuerRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "listId": {
+          "$ref": "#/definitions/RevocationListId"
+        },
+        "propagatedTo": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/RealmId"
+            }
+          },
+          "maxItems": 64
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RevocationRecord"
+          },
+          "maxItems": 512,
+          "minItems": 1
+        },
+        "status": {
+          "$ref": "#/definitions/RevocationListStatus"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RevocationListId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RevocationListId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RevocationListStatus": {
+      "description": "Parent-pushed revocation-list propagation state.",
+      "type": "string",
+      "enum": [
+        "draft",
+        "published",
+        "propagating",
+        "propagated",
+        "superseded"
+      ]
+    },
+    "RevocationReason": {
+      "description": "Stable revocation reason.",
+      "type": "string",
+      "enum": [
+        "operator-requested",
+        "key-compromised",
+        "controller-compromised",
+        "parent-policy-revoked",
+        "enrollment-superseded",
+        "recovery-completed",
+        "expired"
+      ]
+    },
     "RevocationRecord": {
       "description": "Metadata-only revocation record.",
       "type": "object",
@@ -5082,7 +6216,7 @@
           "description": "Low-cardinality reason code.",
           "allOf": [
             {
-              "$ref": "#/definitions/ProtocolToken"
+              "$ref": "#/definitions/RevocationReason"
             }
           ]
         },
@@ -5119,6 +6253,7 @@
       "enum": [
         "pending",
         "effective",
+        "propagating",
         "propagated",
         "superseded"
       ]
@@ -5126,6 +6261,28 @@
     "RevocationTarget": {
       "description": "Thing revoked by a parent or realm controller.",
       "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         {
           "type": "object",
           "required": [
@@ -5159,6 +6316,36 @@
         {
           "type": "object",
           "required": [
+            "fingerprint",
+            "identity_ref",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "fingerprint": {
+              "$ref": "#/definitions/RealmIdentityFingerprint"
+            },
+            "identity_ref": {
+              "$ref": "#/definitions/RealmIdentityRef"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-identity"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
             "controller_generation",
             "kind",
             "realm"
@@ -5185,6 +6372,36 @@
         {
           "type": "object",
           "required": [
+            "credential_ref",
+            "fingerprint",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "credential_ref": {
+              "$ref": "#/definitions/ControllerGenerationCredentialRef"
+            },
+            "fingerprint": {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "controller-credential"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
             "enrollment_id",
             "kind"
           ],
@@ -5197,6 +6414,58 @@
               "enum": [
                 "enrollment"
               ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "grant",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "grant": {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "policy-grant"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "capability",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "capability": {
+              "$ref": "#/definitions/Capability"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capability-grant"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
             }
           },
           "additionalProperties": false
@@ -5328,6 +6597,72 @@
         }
       },
       "additionalProperties": false
+    },
+    "SessionTeardownDirective": {
+      "description": "Metadata-only directive to terminate sessions depending on a revoked grant.",
+      "type": "object",
+      "required": [
+        "affectedRealm",
+        "affectedWorkloads",
+        "issuedAtUnixSeconds",
+        "issuerRealm",
+        "reason",
+        "revocationId"
+      ],
+      "properties": {
+        "affectedRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "affectedWorkloads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkloadId"
+          },
+          "maxItems": 64
+        },
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuerRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "reason": {
+          "$ref": "#/definitions/SessionTeardownReason"
+        },
+        "revocationId": {
+          "$ref": "#/definitions/RevocationId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionTeardownReason": {
+      "description": "Runtime session teardown cause metadata. This only describes what must be torn down; it does not implement routing, transport, or process cleanup.",
+      "type": "string",
+      "enum": [
+        "realm-identity-revoked",
+        "controller-generation-revoked",
+        "policy-grant-revoked",
+        "stream-capability-revoked",
+        "recovery-isolation"
+      ]
     },
     "ShellAttachId": {
       "type": "string",

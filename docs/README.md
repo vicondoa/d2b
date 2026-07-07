@@ -81,6 +81,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/realm-policy.md`](./reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
+- [`reference/realm-identity-lifecycle.md`](./reference/realm-identity-lifecycle.md) —
+  metadata-only realm identity, enrollment, controller-generation, rotation,
+  revocation, teardown, recovery, and future enforcement boundary contract.
 - [`reference/realm-options.md`](./reference/realm-options.md) —
   current `d2b.realms.<realm>` Nix option shape and transition boundary:
   host-local realm scaffolding is materialized while access-layer routing,

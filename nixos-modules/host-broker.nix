@@ -153,6 +153,7 @@ EOF
         "--audit-retention-days ${toString auditRetentionDays} " +
         "--bundle-path ${bundleManifestPath} " +
         "--realm-controllers-path /etc/d2b/realm-controllers.json " +
+        "--realm-identity-path /etc/d2b/realm-identity.json " +
         "--state-dir ${realm.paths.stateDir} " +
         "--d2bd-uid ${toString (stablePrincipalId realm.controller.daemon.user)} " +
         "--d2bd-gid ${toString (stablePrincipalId realm.controller.daemon.group)}";
@@ -412,6 +413,7 @@ in
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
           "--realm-controllers-path /etc/d2b/realm-controllers.json " +
+          "--realm-identity-path /etc/d2b/realm-identity.json " +
           "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";

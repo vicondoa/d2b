@@ -81,6 +81,7 @@ use crate::processes::{
 use crate::realm_controller_config::RealmControllersJson;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
+use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
@@ -98,6 +99,7 @@ pub struct BundleResolver {
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
     pub realm_controllers: Option<RealmControllersJson>,
+    pub realm_identity: Option<RealmIdentityConfigJson>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -127,6 +129,7 @@ struct ParsedBundleArtifacts {
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
     realm_controllers: Option<RealmControllersJson>,
+    realm_identity: Option<RealmIdentityConfigJson>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
 }
@@ -983,6 +986,7 @@ impl BundleResolver {
                 storage: None,
                 sync: None,
                 realm_controllers: None,
+                realm_identity: None,
                 manifest,
                 closures,
             },
@@ -1000,6 +1004,7 @@ impl BundleResolver {
             storage,
             sync,
             realm_controllers,
+            realm_identity,
             manifest,
             closures,
         } = artifacts;
@@ -1033,6 +1038,7 @@ impl BundleResolver {
             storage,
             sync,
             realm_controllers,
+            realm_identity,
             manifest,
             nft_intents,
             route_intents,
@@ -1055,6 +1061,7 @@ impl BundleResolver {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_artifacts_with_optional_contracts(
         bundle: Bundle,
         host: HostJson,
@@ -1062,6 +1069,7 @@ impl BundleResolver {
         storage: Option<StorageJson>,
         sync: Option<SyncJson>,
         realm_controllers: Option<RealmControllersJson>,
+        realm_identity: Option<RealmIdentityConfigJson>,
         manifest: ManifestV04,
     ) -> Self {
         let bundle_hash = stable_digest_bytes(
@@ -1078,6 +1086,7 @@ impl BundleResolver {
                 storage,
                 sync,
                 realm_controllers,
+                realm_identity,
                 manifest,
                 closures: Vec::new(),
             },
@@ -1117,6 +1126,7 @@ impl BundleResolver {
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
             load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
+        let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
@@ -1130,6 +1140,7 @@ impl BundleResolver {
                 storage,
                 sync,
                 realm_controllers,
+                realm_identity,
                 manifest,
                 closures,
             },
@@ -2891,6 +2902,31 @@ fn load_optional_realm_controllers_artifact(
     Ok(Some(realm_controllers))
 }
 
+fn load_optional_realm_identity_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<RealmIdentityConfigJson>, Error> {
+    let Some(realm_identity_ref) = bundle.realm_identity_path.as_deref() else {
+        return Ok(None);
+    };
+    let realm_identity_path = resolve_bundle_ref(bundle_root, realm_identity_ref);
+    let bytes = secure_open_and_read(&realm_identity_path, policy)?;
+    verify_artifact_hash(
+        &realm_identity_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        realm_identity_ref,
+    )?;
+    let realm_identity: RealmIdentityConfigJson = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::manifest_parse_error("realm-identity.json", manifest_parse_reason(&e.to_string()))
+    })?;
+    realm_identity
+        .validate_metadata_only()
+        .map_err(|err| Error::manifest_parse_error("realm-identity.json", err.to_string()))?;
+    Ok(Some(realm_identity))
+}
+
 // ---------------------------------------------------------------
 // Stable digest helper.
 // ---------------------------------------------------------------
@@ -3000,6 +3036,7 @@ mod tests {
                 sync_path: None,
                 allocator_path: None,
                 realm_controllers_path: None,
+                realm_identity_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3342,6 +3379,7 @@ mod tests {
             sync_path: None,
             allocator_path: None,
             realm_controllers_path: None,
+            realm_identity_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),
@@ -3510,6 +3548,30 @@ mod tests {
         })
     }
 
+    fn realm_identity_artifact_value() -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "v2",
+            "runtimeState": "metadata-only",
+            "realms": [
+                {
+                    "realm": ["home"],
+                    "realmIdentityRef": "idref-home",
+                    "realmIdentityFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "controllerCredentialRef": "cgref-home",
+                    "controllerCredentialFingerprint": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                    "trustBundleRef": "trust-home",
+                    "enrollmentRef": "enroll-home",
+                    "rotationPolicyRef": "rotate-home"
+                }
+            ],
+            "invariants": {
+                "metadataOnly": true,
+                "noSecretMaterial": true,
+                "preservesRuntimeBehavior": true
+            }
+        })
+    }
+
     #[test]
     fn bundle_resolver_loads_realm_controller_artifact() {
         let root = test_root("realm-controller-artifact");
@@ -3560,6 +3622,74 @@ mod tests {
         assert!(
             err.to_string().contains("realm-controllers.json"),
             "error names realm-controller artifact: {err}"
+        );
+    }
+
+    #[test]
+    fn bundle_resolver_loads_realm_identity_artifact() {
+        let root = test_root("realm-identity-artifact");
+        let _baseline = build_personal_dev_bundle(&root);
+        let bundle_dir = root.join("bundle");
+        let bundle_path = bundle_dir.join("bundle.json");
+        let realm_identity_path = bundle_dir.join("realm-identity.json");
+
+        write_json(&realm_identity_path, &realm_identity_artifact_value());
+
+        let mut bundle_value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&bundle_path).expect("read bundle json"))
+                .expect("bundle json parses");
+        if let serde_json::Value::Object(map) = &mut bundle_value {
+            map.insert(
+                "realmIdentityPath".to_owned(),
+                serde_json::Value::String("realm-identity.json".to_owned()),
+            );
+        }
+        write_hashed_test_bundle(&bundle_path, bundle_value);
+
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
+        fs::set_permissions(&realm_identity_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod realm identity");
+
+        let resolver =
+            BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
+                .expect("load bundle with realm identity");
+        let identity = resolver
+            .realm_identity
+            .as_ref()
+            .expect("realm identity artifact loaded");
+        assert_eq!(identity.realms.len(), 1);
+        assert_eq!(identity.realms[0].realm.target_form(), "home");
+        assert!(identity.realms[0].realm_identity_ref.is_some());
+
+        let mut invalid = realm_identity_artifact_value();
+        invalid["invariants"]["noSecretMaterial"] = serde_json::Value::Bool(false);
+        write_json(&realm_identity_path, &invalid);
+        fs::set_permissions(&realm_identity_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod invalid realm identity");
+        let err = BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
+            .expect_err("bundle resolver rejects invalid realm identity metadata");
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("realm-identity.json"),
+            "error names realm-identity artifact: {err}"
+        );
+        assert!(
+            !err_text.contains(realm_identity_path.to_string_lossy().as_ref()),
+            "realm identity parse errors must not expose host paths: {err_text}"
+        );
+    }
+
+    #[test]
+    fn bundle_resolver_defaults_absent_realm_identity_to_none() {
+        let root = test_root("realm-identity-absent");
+        let resolver = build_personal_dev_bundle(&root);
+
+        assert!(resolver.bundle.realm_identity_path.is_none());
+        assert!(resolver.realm_identity.is_none());
+        assert!(
+            !root.join("bundle/realm-identity.json").exists(),
+            "baseline bundles without realmIdentityPath must not require a realm-identity file"
         );
     }
 

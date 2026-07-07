@@ -5,8 +5,8 @@
 This page documents the committed `d2b-realm-core` DTO and parser
 contract. It is a contributor-facing reference for realm target
 names, identifiers, capability checks, redacted audit metadata, typed
-errors, realm-controller metadata, route/enrollment DTOs, host-resource
-allocator DTOs, and semantic frame schema roots. See
+errors, realm-controller metadata, route/enrollment DTOs, realm identity
+lifecycle DTOs, host-resource allocator DTOs, and semantic frame schema roots. See
 [Local-root allocator contract](./local-root-allocator.md) for the
 allocator-specific invariants and current implementation boundary.
 
@@ -167,6 +167,33 @@ The protobuf codec advertises a bounded schema fingerprint via
 or channel-binding mismatch fails closed before operation or stream frames
 can be routed.
 
+## Realm identity lifecycle
+
+The identity lifecycle roots are metadata-only contracts for future
+enrollment, controller-generation admission, key rotation, revocation,
+teardown, and recovery flows. See
+[Realm identity lifecycle contract](./realm-identity-lifecycle.md) for the
+field-level lifecycle reference and
+[`schemas/v2/d2b-realm-core.md`](./schemas/v2/d2b-realm-core.md) for the
+generated schema companion.
+
+- `RealmIdentityMetadata` names a realm identity by opaque
+  `RealmIdentityRef` plus `RealmIdentityFingerprint`; it never carries key
+  bytes or credential material.
+- `ControllerGenerationMetadata` binds a controller generation to the realm
+  identity metadata, an opaque `ControllerGenerationCredentialRef`, and a
+  credential fingerprint.
+- `ParentTrustAnchor`, `ChildKeyPin`, and `KeyPin` model parent/child trust
+  anchors and child identity pinning by reference and fingerprint only.
+- `EnrollmentRecord`, `KeyRotationPlan`, `RevocationRecord`,
+  `RevocationList`, `SessionTeardownDirective`, and `RecoveryProcedure` carry
+  low-cardinality lifecycle state, bounded timestamps, reason/status enums, and
+  correlation ids for future admission and audit code.
+
+These DTOs do not implement live route selection, session admission,
+revocation enforcement, process teardown, provider credential exchange, or
+relay transport in the current runtime.
+
 ## Operation authorization and idempotency
 
 `OperationKind` is a closed, typed enum. The required capability is
@@ -286,4 +313,5 @@ the structured capability.
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)
 - [Realm option schema](./realm-options.md)
+- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Manifest bundle reference](./manifest-bundle.md)

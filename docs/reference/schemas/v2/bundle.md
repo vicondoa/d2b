@@ -6,12 +6,13 @@ Schema: [`bundle.json`](./bundle.json)
 `vms.json` manifest. It gives the daemon and broker one stable place to
 find the current `host.json`, `processes.json`, `privileges.json`,
 `closures/*.json`, `storage.json`, `sync.json`, `allocator.json`,
-`realm-controllers.json`, and `minijail-profile.json` artifacts.
+`realm-controllers.json`, `realm-identity.json`, and
+`minijail-profile.json` artifacts.
 
 ## Top-level fields
 
 - `schemaVersion` — schema directory/version for every referenced artifact.
-- `bundleVersion` — additive bundle contract rev (`8` in the current tree).
+- `bundleVersion` — additive bundle contract rev (`9` in the current tree).
 - `publicManifestPath` — path to the public `vms.json` manifest.
 - `hostPath` — path to the private `host.json` artifact.
 - `processesPath` — path to the private `processes.json` artifact.
@@ -20,6 +21,7 @@ find the current `host.json`, `processes.json`, `privileges.json`,
 - `allocatorPath` — path to the private `allocator.json` artifact.
 - `realmControllersPath` — path to the private `realm-controllers.json`
   artifact.
+- `realmIdentityPath` — path to the private `realm-identity.json` artifact.
 - `privilegesPath` — path to the private `privileges.json` artifact.
 - `closures` — per-VM closure artifact paths.
 - `minijailProfiles` — shipped minijail profile metadata paths.

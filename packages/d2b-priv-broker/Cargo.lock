@@ -93,26 +93,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-realm-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "schemars",
- "serde",
-]
-
-[[package]]
-name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "schemars",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -127,6 +107,7 @@ dependencies = [
 name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-realm-core",
  "rustix 0.38.44",
  "schemars",
  "semver",
@@ -140,10 +121,10 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
  "d2b-contracts",
  "d2b-core",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "libc",
  "miniz_oxide",
  "nix",
@@ -161,6 +142,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-core",
  "d2b-host",
+ "d2b-realm-core",
  "hmac",
  "nix",
  "rustix 0.38.44",
@@ -171,6 +153,26 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "d2b-realm-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "d2b-realm-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-realm-core",
+ "schemars",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

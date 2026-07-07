@@ -59,6 +59,10 @@ let
         key = "/etc/d2b/realm-controllers.json";
         path = config.d2b._bundle.realmControllersJson.path;
       }
+      {
+        key = "/etc/d2b/realm-identity.json";
+        path = config.d2b._bundle.realmIdentityJson.path;
+      }
     ]
     ++ map (ref: {
       key = ref.path;
@@ -77,7 +81,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 8;
+    bundleVersion = 9;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";
@@ -87,6 +91,7 @@ let
     syncPath = "/etc/d2b/sync.json";
     allocatorPath = "/etc/d2b/allocator.json";
     realmControllersPath = "/etc/d2b/realm-controllers.json";
+    realmIdentityPath = "/etc/d2b/realm-identity.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;
     managedKeys = {
