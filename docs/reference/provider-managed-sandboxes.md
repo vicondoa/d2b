@@ -362,7 +362,7 @@ the capability matrix above.
   for nodes that run their own `d2bd`/broker/guest-control stack.
 - [Azure Relay transport](./transport-azure-relay.md) — the Relay
   WebSocket transport used for sandbox sender connections.
-- [Constellation core](./constellation-core.md) — typed error shapes,
+- [Realm core](./realm-core.md) — typed error shapes,
   capability model, audit redaction, and idempotency contract.
 - [Transport conformance matrix](./transport-conformance-matrix.md) —
   cross-transport capability and conformance requirements.

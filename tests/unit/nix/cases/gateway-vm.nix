@@ -564,7 +564,7 @@ in
       };
       work = {
         mode = "gateway-backed";
-        gateway = "sys-work-gateway.d2b";
+        gateway = "sys-work-gateway.local.d2b";
       };
       workCarriesProviderConfig = false;
     };
@@ -591,7 +591,7 @@ in
         };
         work = {
           mode = "gateway-backed";
-          gateway = "sys-work-gateway.d2b";
+          gateway = "sys-work-gateway.local.d2b";
         };
       };
       carriesRelayOrAcaMaterial = false;
@@ -648,7 +648,7 @@ in
       declared = true;
       work = {
         mode = "gateway-backed";
-        gateway = "corp-gateway.d2b";
+        gateway = "corp-gateway.local.d2b";
       };
     };
   };
@@ -693,11 +693,11 @@ in
         };
         work = {
           mode = "gateway-backed";
-          gateway = "sys-work-gateway.d2b";
+          gateway = "sys-work-gateway.local.d2b";
         };
         personal = {
           mode = "gateway-backed";
-          gateway = "sys-personal-gateway.d2b";
+          gateway = "sys-personal-gateway.local.d2b";
         };
       };
     };

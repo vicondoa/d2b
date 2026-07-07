@@ -67,16 +67,17 @@ names or terminal session handles.
 ## Constellation target and model identifiers
 
 Constellation targets extend the VM/env naming rules without making a
-target address a network address. The canonical persisted form is:
+target address a network address. The canonical ADR 0043 target form is:
 
 ```text
-d2b://<workload>.<node>.<realm-path>.d2b
+<workload>.<realm>[.<ancestor>...].d2b
 ```
 
-The bare `<workload>` form remains the v1-compatible local workload
-alias. Multi-label human forms must end in `.d2b`; `all`, `*`, and
-non-suffix `d2b` labels are list selectors or reserved words, never
-target labels.
+Bare workload names are convenience aliases only when a caller supplies a
+default realm or explicit alias table. Fully qualified public targets must
+end in `.d2b`; `all`, `*`, and non-suffix `d2b` labels are list selectors or
+reserved words, never target labels. Public targets do not include physical
+node labels; placement is resolved inside the owning realm.
 
 Label-shaped constellation ids (`RealmId`, `NodeId`, `WorkloadId`,
 `ProviderId`) use the same lowercase label shape as VM names:
@@ -84,8 +85,8 @@ Label-shaped constellation ids (`RealmId`, `NodeId`, `WorkloadId`,
 (`GatewayId`, `ExecutionId`, `StreamId`, `StreamCursor`, `PrincipalId`,
 `OperationId`, and `IdempotencyKey`) are bounded printable-ASCII tokens
 without spaces. See
-[`constellation-core.md`](./constellation-core.md) for the complete
-core model contract.
+[`realm-core.md`](./realm-core.md) for the complete realm-core model
+contract.
 
 Gateway-backed realms use a local gateway VM entrypoint. The default
 gateway VM name is `sys-<realm-path-with-dashes>-gateway`, but
@@ -193,7 +194,7 @@ unambiguously.
 
 - [AGENTS.md](../../AGENTS.md)
 - [Design explanation](../explanation/design.md)
-- [Constellation core model reference](./constellation-core.md)
+- [Realm core model reference](./realm-core.md)
 - [USB/IP component reference](./components-usbip.md)
 - [tests/README.md](../../tests/README.md)
 - [ADR 0012 — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)

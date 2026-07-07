@@ -26,8 +26,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
-use d2b_constellation_core::TargetName;
-use d2b_constellation_provider::provider::WorkloadProvider;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -89,6 +87,8 @@ use d2b_gateway_runtime::{
 use d2b_host::ssh_keygen;
 use d2b_provider_aca::{AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider};
 use d2b_provider_relay::{LocalTarget, RelayEndpoint};
+use d2b_realm_core::TargetName;
+use d2b_realm_provider::provider::WorkloadProvider;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::sys::socket::{
@@ -238,10 +238,10 @@ pub mod concurrency;
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
 
-// ADR 0032: compile-only peer-module skeletons wiring the v2
-// constellation provider/router trait surface. NOT called from the running
+// ADR 0032/0043: compile-only peer-module skeletons wiring the realm
+// provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
-pub mod constellation_stubs;
+pub mod realm_stubs;
 
 use typed_error::TypedError;
 
@@ -3038,9 +3038,15 @@ fn dispatch_gateway_display(
                 TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
                 })?;
-            let operation_id = d2b_constellation_core::OperationId::parse(args.operation_id)
+            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id.clone())
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
+                })?;
+            let correlation_id =
+                d2b_realm_core::CorrelationId::parse(args.operation_id).map_err(|err| {
+                    TypedError::WireInvalidFrame {
+                        detail: format!("gatewayDisplay correlation_id invalid: {err}"),
+                    }
                 })?;
             let principal = gateway_display_peer_principal(peer);
             let app =
@@ -3055,11 +3061,12 @@ fn dispatch_gateway_display(
                 workload: target.workload.as_str().to_owned(),
             };
             let seed = ContextSeed {
-                realm: target.realm,
+                realm: target.realm.clone(),
                 operation_id,
+                correlation_id,
                 principal,
-                node: target.node,
-                workload: target.workload,
+                node: target.node.clone(),
+                workload: target.workload.clone(),
             };
             let owner_principal = seed.principal.to_string();
             gateway_display_gc(state);
@@ -3241,13 +3248,12 @@ fn parse_gateway_display_lifecycle_target(
     let target = TargetName::parse(target).map_err(|err| TypedError::WireInvalidFrame {
         detail: format!("gatewayDisplay target parse failed: {err}"),
     })?;
-    let _operation_id =
-        d2b_constellation_core::OperationId::parse(operation_id).map_err(|err| {
-            TypedError::WireInvalidFrame {
-                detail: format!("gatewayDisplay operation_id invalid: {err}"),
-            }
-        })?;
-    let _principal = d2b_constellation_core::PrincipalId::parse(principal).map_err(|err| {
+    let _operation_id = d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
+        TypedError::WireInvalidFrame {
+            detail: format!("gatewayDisplay operation_id invalid: {err}"),
+        }
+    })?;
+    let _principal = d2b_realm_core::PrincipalId::parse(principal).map_err(|err| {
         TypedError::WireInvalidFrame {
             detail: format!("gatewayDisplay principal invalid: {err}"),
         }
@@ -3666,7 +3672,7 @@ fn aca_provider_from_gateway_config(
         .insert("d2b-realm".to_owned(), config.realm.clone());
     let provider = AcaWorkloadProvider::new(
         provider_config,
-        d2b_constellation_core::NodeId::parse("gateway")
+        d2b_realm_core::NodeId::parse("gateway")
             .map_err(|_| GatewayError::ProviderAllocationFailed)?,
     )
     .map_err(|err| {
@@ -17113,7 +17119,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-invalid-waypipe".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17135,7 +17141,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17234,7 +17240,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-launcher".to_owned(),
                     principal: "uid-9999".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17272,7 +17278,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "not valid".to_owned(),
                     principal: "uid-1001".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17298,7 +17304,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-owner".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17319,7 +17325,7 @@ mod public_status_tests {
             &other_peer,
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://other.gw.work.d2b".to_owned(),
+                    target: "other.work.d2b".to_owned(),
                     operation_id: "gw-exec-other".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17409,7 +17415,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-terminal".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17461,7 +17467,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 41,
@@ -17487,7 +17493,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Stop(
                 public_wire::GatewayDisplayStopArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-stop-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 42,
@@ -17513,7 +17519,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-unconfigured".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 41,
@@ -17530,7 +17536,7 @@ mod public_status_tests {
         let request = || {
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-replay".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17567,7 +17573,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-gc".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17615,7 +17621,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-launcher".to_owned(),
                     principal: "uid-1001".to_owned(),
                     request_hash: 1,

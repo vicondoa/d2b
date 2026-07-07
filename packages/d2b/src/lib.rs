@@ -67,6 +67,7 @@ use status_read_model::{
 use terminal_client::TerminalTransport as _;
 
 const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/d2b/vms.json";
+#[cfg(not(test))]
 const DEFAULT_REALM_ENTRYPOINTS_PATH: &str =
     "/run/current-system/sw/share/d2b/realm-entrypoints.json";
 const DEFAULT_BUNDLE_PATH: &str = "/etc/d2b/bundle.json";
@@ -701,7 +702,7 @@ enum VmDisplayCommand {
 
 #[derive(Debug, Args)]
 struct VmDisplayListArgs {
-    /// Optional realm target to filter, for example `d2b://demo.gw.work.d2b`.
+    /// Optional realm target to filter, for example `demo.work.d2b`.
     #[arg(long)]
     target: Option<String>,
     #[arg(long, conflicts_with = "human")]
@@ -5223,12 +5224,18 @@ struct RealmGatewayListEntry {
     state: String,
 }
 
+#[cfg(not(test))]
 fn realm_entrypoints_path() -> PathBuf {
     env_path("D2B_REALM_ENTRYPOINTS_PATH", DEFAULT_REALM_ENTRYPOINTS_PATH)
 }
 
+#[cfg(test)]
+fn realm_entrypoints_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".d2b-test-missing-realm-entrypoints.json")
+}
+
 fn load_realm_entrypoint_table()
--> Result<Option<d2b_constellation_router::RealmEntrypointTable>, CliFailure> {
+-> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
     let path = realm_entrypoints_path();
     load_realm_entrypoint_table_from_path(&path)
 }
@@ -5273,11 +5280,11 @@ fn load_realm_entrypoint_document_from_path(
 
 fn load_realm_entrypoint_table_from_path(
     path: &Path,
-) -> Result<Option<d2b_constellation_router::RealmEntrypointTable>, CliFailure> {
+) -> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
     let Some(doc) = load_realm_entrypoint_document_from_path(path)? else {
         return Ok(None);
     };
-    let mut table = d2b_constellation_router::RealmEntrypointTable::new();
+    let mut table = d2b_realm_router::RealmEntrypointTable::new();
     for (realm_raw, entry) in normalize_realm_entrypoint_entries(doc.entries)? {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
@@ -5302,7 +5309,7 @@ fn load_realm_entrypoint_table_from_path(
                     )
                 })?;
                 let gateway_target =
-                    d2b_constellation_core::TargetName::parse(&gateway).map_err(|err| {
+                    d2b_realm_core::TargetName::parse(&gateway).map_err(|err| {
                         CliFailure::new(
                             1,
                             format!(
@@ -5373,7 +5380,7 @@ fn gateway_vm_from_target_text(
     realm: &str,
     target: &str,
 ) -> Result<String, target_routing::RouteError> {
-    d2b_constellation_core::TargetName::parse(target)
+    d2b_realm_core::TargetName::parse(target)
         .map(|target| target.workload.as_str().to_owned())
         .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
             realm: realm.to_owned(),
@@ -5471,7 +5478,7 @@ fn route_vm_target_with_table(
     context: &Context,
     raw: &str,
     json: bool,
-    table: Option<d2b_constellation_router::RealmEntrypointTable>,
+    table: Option<d2b_realm_router::RealmEntrypointTable>,
 ) -> Result<VmTargetRoute, CliFailure> {
     if table.is_none() {
         if let Some(route) = conventional_gateway_route(raw, json)? {
@@ -5498,11 +5505,11 @@ fn route_vm_target_with_table(
             }
             return Ok(route);
         }
-        let table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+        let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         return match target_routing::route(raw, &table) {
             Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
             Ok(target_routing::Route::Gateway { gateway, target }) => {
-                let realm = d2b_constellation_core::TargetName::parse(&target)
+                let realm = d2b_realm_core::TargetName::parse(&target)
                     .map(|target| target.realm.target_form())
                     .unwrap_or_else(|_| "unknown".to_owned());
                 let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
@@ -5522,7 +5529,7 @@ fn route_vm_target_with_table(
     match target_routing::route(raw, table.as_ref().expect("checked above")) {
         Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
-            let realm = d2b_constellation_core::TargetName::parse(&target)
+            let realm = d2b_realm_core::TargetName::parse(&target)
                 .map(|target| target.realm.target_form())
                 .unwrap_or_else(|_| "unknown".to_owned());
             let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
@@ -5565,7 +5572,7 @@ fn resolve_realm_gateway(
         .unwrap_or_else(|failure| failure)
     })?;
     let (gateway_vm, gateway_target) = if let Some(table) = load_realm_entrypoint_table()? {
-        let probe_target = format!("probe.node.{}.d2b", realm.target_form());
+        let probe_target = format!("probe.{}.d2b", realm.target_form());
         match target_routing::route(&probe_target, &table) {
             Ok(target_routing::Route::Gateway { gateway, .. }) => {
                 let gateway_vm = gateway_vm_from_target_text(&realm.target_form(), &gateway)
@@ -5584,7 +5591,12 @@ fn resolve_realm_gateway(
         }
     } else {
         let gateway_vm = target_routing::gateway_vm_name(&realm);
-        (gateway_vm.clone(), format!("{gateway_vm}.d2b"))
+        (
+            gateway_vm.clone(),
+            target_routing::gateway_target_name(&realm)
+                .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?
+                .to_string(),
+        )
     };
     let manifest = context.load_manifest()?;
     if manifest.get_vm(&gateway_vm).is_none() {
@@ -5925,7 +5937,7 @@ fn op_inspect_trace(args: &OpInspectArgs) -> Result<Option<OpInspectTraceOutputV
     let (Some(trace_id), Some(span_id)) = (&args.trace_id, &args.span_id) else {
         return Ok(None);
     };
-    let trace = d2b_constellation_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
+    let trace = d2b_realm_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
         CliFailure::new(
             2,
             "op inspect: trace context fields must be non-empty, bounded, and contain no whitespace",
@@ -6083,7 +6095,7 @@ fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailu
 /// gateway-mode `d2bd` owns gateway-backed targets.
 #[cfg(test)]
 fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
-    let table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+    let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
     match target_routing::route(raw, &table) {
         Ok(target_routing::Route::Local { .. }) => Ok(()),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
@@ -11028,7 +11040,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn gateway_target_guard_fails_before_manifest_or_socket_access() {
-        let err = super::guard_local_target("demo.gw.work.d2b", false)
+        let err = super::guard_local_target("demo.work.d2b", false)
             .expect_err("realm target must fail closed on host daemon");
         assert_eq!(err.exit_code, 2);
         assert!(err.message.contains("target not dispatchable"));
@@ -11063,12 +11075,12 @@ mod host_install_dispatch_tests {
             metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
         };
         assert_eq!(
-            super::gateway_target_from_manifest(&context, "demo.gw.work.d2b", false)
+            super::gateway_target_from_manifest(&context, "demo.work.d2b", false)
                 .unwrap()
                 .as_deref(),
-            Some("d2b://demo.gw.work.d2b")
+            Some("demo.work.d2b")
         );
-        let err = super::gateway_target_from_manifest(&context, "demo.gw.unknown.d2b", false)
+        let err = super::gateway_target_from_manifest(&context, "demo.unknown.d2b", false)
             .expect_err("unknown realm has no gateway entrypoint");
         assert_eq!(err.exit_code, 2);
         assert!(err.message.contains("entrypoint"));
@@ -11092,7 +11104,7 @@ mod host_install_dispatch_tests {
               "schemaVersion": 1,
               "entries": {
                 "local": { "mode": "host-resident", "gateway": null },
-                "work": { "mode": "gateway-backed", "gateway": "corp-gateway.d2b" }
+                "work": { "mode": "gateway-backed", "gateway": "corp-gateway.local.d2b" }
               }
             }"#,
         )
@@ -11114,7 +11126,7 @@ mod host_install_dispatch_tests {
             metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
         };
         let routed =
-            super::route_vm_target_with_table(&context, "demo.aca.work.d2b", false, Some(table))
+            super::route_vm_target_with_table(&context, "demo.work.d2b", false, Some(table))
                 .expect("gateway target routes through table");
         match routed {
             super::VmTargetRoute::Gateway {
@@ -11124,8 +11136,8 @@ mod host_install_dispatch_tests {
                 ..
             } => {
                 assert_eq!(gateway_vm, "corp-gateway");
-                assert_eq!(gateway, "d2b://corp-gateway.this.local.d2b");
-                assert_eq!(target, "d2b://demo.aca.work.d2b");
+                assert_eq!(gateway, "corp-gateway.local.d2b");
+                assert_eq!(target, "demo.work.d2b");
             }
             other => panic!("expected gateway route, got {other:?}"),
         }
@@ -11476,7 +11488,7 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
-        let args = parse_shell_raw(&["d2b", "shell", "demo.aca.work.d2b", "attach"]);
+        let args = parse_shell_raw(&["d2b", "shell", "demo.work.d2b", "attach"]);
         let (result, stdout) =
             super::with_test_stdout_capture(|| super::cmd_shell(&context, &args));
         let failure = result.expect_err("gateway shell attach is rejected locally");
@@ -11491,7 +11503,7 @@ mod host_install_dispatch_tests {
         let args = parse_shell_raw(&[
             "d2b",
             "shell",
-            "demo.aca.work.d2b",
+            "demo.work.d2b",
             "kill",
             "--name",
             "ops",
@@ -11524,7 +11536,7 @@ mod host_install_dispatch_tests {
             vec![
                 json!("d2b"),
                 json!("shell"),
-                json!("demo.aca.work.d2b"),
+                json!("demo.work.d2b"),
                 json!("kill"),
                 json!("--name"),
                 json!("ops"),
@@ -12061,7 +12073,7 @@ mod host_install_dispatch_tests {
     #[test]
     fn route_vm_target_preserves_local_names_and_routes_gateway_targets() {
         let local =
-            super::route_vm_target_with_table(&missing_daemon_context(), "demo.d2b", false, None)
+            super::route_vm_target_with_table(&missing_daemon_context(), "demo", false, None)
                 .expect("local target routes without manifest");
         assert_eq!(
             local,
@@ -12087,7 +12099,7 @@ mod host_install_dispatch_tests {
             daemon_state_dir: manifest_path.with_extension("daemon-state"),
             metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
         };
-        let local = super::route_vm_target(&context, "demo.d2b", false)
+        let local = super::route_vm_target(&context, "demo", false)
             .expect("local target routes with manifest context");
         assert_eq!(
             local,
@@ -12096,7 +12108,7 @@ mod host_install_dispatch_tests {
             }
         );
 
-        let routed = super::route_vm_target(&context, "demo.aca.work.d2b", false)
+        let routed = super::route_vm_target(&context, "demo.work.d2b", false)
             .expect("gateway target routes");
         match routed {
             super::VmTargetRoute::Gateway {
@@ -12107,8 +12119,8 @@ mod host_install_dispatch_tests {
             } => {
                 assert_eq!(realm, "work");
                 assert_eq!(gateway_vm, "sys-work-gateway");
-                assert_eq!(gateway, "d2b://sys-work-gateway.this.local.d2b");
-                assert_eq!(target, "d2b://demo.aca.work.d2b");
+                assert_eq!(gateway, "sys-work-gateway.local.d2b");
+                assert_eq!(target, "demo.work.d2b");
             }
             other => panic!("expected gateway route, got {other:?}"),
         }
@@ -12122,13 +12134,11 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "vm-a");
-        let mut table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+        let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         table.gateway_backed(
-            d2b_constellation_core::RealmPath::new(vec![
-                d2b_constellation_core::RealmId::parse("work").unwrap(),
-            ])
-            .unwrap(),
-            d2b_constellation_core::TargetName::parse("corp-gateway.d2b").unwrap(),
+            d2b_realm_core::RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()])
+                .unwrap(),
+            d2b_realm_core::TargetName::parse("corp-gateway.local.d2b").unwrap(),
         );
         let context = Context {
             manifest_path: manifest_path.clone(),
@@ -12143,7 +12153,7 @@ mod host_install_dispatch_tests {
             metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
         };
         let (result, stdout) = super::with_test_stdout_capture(|| {
-            super::route_vm_target_with_table(&context, "demo.aca.work.d2b", true, Some(table))
+            super::route_vm_target_with_table(&context, "demo.work.d2b", true, Some(table))
         });
         let err = result.expect_err("missing custom gateway must fail");
         assert_eq!(err.exit_code, 2);
@@ -12268,7 +12278,7 @@ mod host_install_dispatch_tests {
     fn gateway_display_frame_serializes_lifecycle_open_list_and_close_requests() {
         let start = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Start(
             public_wire::GatewayDisplayStartArgs {
-                target: "d2b://demo.gw.work.d2b".to_owned(),
+                target: "demo.work.d2b".to_owned(),
                 operation_id: "gw-start-1".to_owned(),
                 principal: "uid-1000".to_owned(),
                 request_hash: 7,
@@ -12284,7 +12294,7 @@ mod host_install_dispatch_tests {
 
         let stop = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Stop(
             public_wire::GatewayDisplayStopArgs {
-                target: "d2b://demo.gw.work.d2b".to_owned(),
+                target: "demo.work.d2b".to_owned(),
                 operation_id: "gw-stop-1".to_owned(),
                 principal: "uid-1000".to_owned(),
                 request_hash: 9,
@@ -12300,7 +12310,7 @@ mod host_install_dispatch_tests {
 
         let open = super::gateway_display_frame(&public_wire::GatewayDisplayOp::Open(
             public_wire::GatewayDisplayOpenArgs {
-                target: "d2b://demo.gw.work.d2b".to_owned(),
+                target: "demo.work.d2b".to_owned(),
                 operation_id: "gw-exec-1".to_owned(),
                 principal: "uid-1000".to_owned(),
                 app_argv: vec!["foot".to_owned()],
@@ -12326,7 +12336,7 @@ mod host_install_dispatch_tests {
 
         let list = super::gateway_display_frame(&public_wire::GatewayDisplayOp::List(
             public_wire::GatewayDisplayListArgs {
-                target: Some("d2b://demo.gw.work.d2b".to_owned()),
+                target: Some("demo.work.d2b".to_owned()),
             },
         ))
         .unwrap();
@@ -12339,7 +12349,7 @@ mod host_install_dispatch_tests {
 
         let list_detailed = super::gateway_display_frame(
             &public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
-                target: Some("d2b://demo.gw.work.d2b".to_owned()),
+                target: Some("demo.work.d2b".to_owned()),
             }),
         )
         .unwrap();
@@ -12375,7 +12385,7 @@ mod host_install_dispatch_tests {
             "result": {
                 "sessions": [{
                     "sessionId": "s0",
-                    "target": "d2b://demo.gw.work.d2b",
+                    "target": "demo.work.d2b",
                     "state": "running",
                     "operationId": "op-1",
                     "principal": "uid-1000"
@@ -12575,7 +12585,7 @@ mod host_install_dispatch_tests {
             "work".to_owned(),
             super::RealmEntrypointConfig {
                 mode: "gateway-backed".to_owned(),
-                gateway: Some("sys-work-gateway.d2b".to_owned()),
+                gateway: Some("sys-work-gateway.local.d2b".to_owned()),
             },
         );
 
@@ -12614,7 +12624,7 @@ mod host_install_dispatch_tests {
             "work".to_owned(),
             super::RealmEntrypointConfig {
                 mode: "gateway-backed".to_owned(),
-                gateway: Some("sys-work-gateway.d2b".to_owned()),
+                gateway: Some("sys-work-gateway.local.d2b".to_owned()),
             },
         );
         let rows = super::realm_policy_rows_from_entries(
@@ -12634,7 +12644,7 @@ mod host_install_dispatch_tests {
             "local".to_owned(),
             super::RealmEntrypointConfig {
                 mode: "gateway-backed".to_owned(),
-                gateway: Some("sys-local-gateway.d2b".to_owned()),
+                gateway: Some("sys-local-gateway.local.d2b".to_owned()),
             },
         );
         let err = super::normalize_realm_entrypoint_entries(entries)
@@ -12782,7 +12792,7 @@ mod host_install_dispatch_tests {
             realm: "work".to_owned(),
             mode: "gateway-backed".to_owned(),
             gateway_vm: Some("sys-work-gateway".to_owned()),
-            gateway_target: Some("sys-work-gateway.d2b".to_owned()),
+            gateway_target: Some("sys-work-gateway.local.d2b".to_owned()),
             gateway_state: "stopped".to_owned(),
             cross_realm_policy: "default-deny".to_owned(),
             credential_boundary: "gateway-owned".to_owned(),

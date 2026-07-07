@@ -12,7 +12,7 @@
 //! [`verify`](SessionBinding::verify)s it constant-time with generation,
 //! expiry, one-shot anti-replay, and field-equality checks.
 
-use d2b_constellation_core::{OperationId, PrincipalId, RealmPath, WorkloadId};
+use d2b_realm_core::{OperationId, PrincipalId, RealmPath, WorkloadId};
 use hmac::{Mac, SimpleHmac};
 use sha2::Sha256;
 
@@ -346,10 +346,7 @@ mod tests {
         WorkloadId,
     ) {
         (
-            RealmPath::new(vec![
-                d2b_constellation_core::RealmId::parse("work").unwrap(),
-            ])
-            .unwrap(),
+            RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()]).unwrap(),
             DisplaySessionId::new("sess-1"),
             OperationId::parse("op-1").unwrap(),
             PrincipalId::parse("alice").unwrap(),
@@ -463,12 +460,8 @@ mod tests {
         // authorizing binding in exactly one field must be rejected, so
         // removing any single equality check fails a test.
         let secret = SessionSecret::from_bytes([7u8; SECRET_LEN]);
-        let realm = RealmPath::new(vec![
-            d2b_constellation_core::RealmId::parse("work").unwrap(),
-        ])
-        .unwrap();
-        let realm2 =
-            RealmPath::new(vec![d2b_constellation_core::RealmId::parse("ops").unwrap()]).unwrap();
+        let realm = RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()]).unwrap();
+        let realm2 = RealmPath::new(vec![d2b_realm_core::RealmId::parse("ops").unwrap()]).unwrap();
         let base = SessionBinding::new(
             &realm,
             5,

@@ -160,16 +160,17 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{
-        AuthzDecision, NodeId, OperationId, PrincipalId, RealmPath, WorkloadId,
-    };
     use d2b_gateway::{GatewayAuditKind, SessionState, display_envelope};
+    use d2b_realm_core::{
+        AuthzDecision, CorrelationId, NodeId, OperationId, PrincipalId, RealmPath, WorkloadId,
+    };
 
     fn event(kind: GatewayAuditKind, op: &str) -> GatewayAuditEvent {
         GatewayAuditEvent {
             kind,
             envelope: display_envelope(
                 OperationId::parse(op).unwrap(),
+                CorrelationId::parse("corr-1").unwrap(),
                 RealmPath::local(),
                 PrincipalId::parse("alice").unwrap(),
                 NodeId::parse("gateway").unwrap(),

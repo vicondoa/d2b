@@ -6,9 +6,9 @@
 //! relay tokens, session secrets, socket paths, or provider error strings.
 
 use crate::{DisplaySessionId, GatewayError, SessionState};
-use d2b_constellation_core::{
-    AuditEnvelope, AuthorizationScope, AuthzDecision, Capability, NodeId, OperationId, PrincipalId,
-    RealmPath, WorkloadId,
+use d2b_realm_core::{
+    AuditEnvelope, AuthorizationScope, AuthzDecision, Capability, CorrelationId, NodeId,
+    OperationId, PrincipalId, RealmPath, WorkloadId,
 };
 
 /// Low-cardinality gateway audit event kind.
@@ -61,6 +61,7 @@ impl GatewayAudit for NoopGatewayAudit {
 /// Build the audit envelope for display-session open/running/close events.
 pub fn display_envelope(
     operation_id: OperationId,
+    correlation_id: CorrelationId,
     realm: RealmPath,
     principal: PrincipalId,
     node: NodeId,
@@ -69,6 +70,7 @@ pub fn display_envelope(
 ) -> AuditEnvelope {
     AuditEnvelope::post_auth(
         operation_id,
+        correlation_id,
         realm,
         principal,
         node,
@@ -81,13 +83,14 @@ pub fn display_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{RealmId, WorkloadId};
+    use d2b_realm_core::{RealmId, WorkloadId};
 
     #[test]
     fn display_envelope_is_redacted_and_principal_consistent() {
         let realm = RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap();
         let env = display_envelope(
             OperationId::parse("op-1").unwrap(),
+            CorrelationId::parse("corr-1").unwrap(),
             realm,
             PrincipalId::parse("alice").unwrap(),
             NodeId::parse("gateway").unwrap(),

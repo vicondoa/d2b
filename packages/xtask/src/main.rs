@@ -9,23 +9,6 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use d2b_constellation_core::{
-    AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
-    ConstellationError, ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest,
-    ExecLogsRequest, ExecStartRequest, ExecutionGeneration, ExecutionId, ExecutionSummary,
-    GatewayId, Handshake, HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason,
-    IdempotencyKey, NodeId, NodeSummary, OperationId, OperationKind, OperationRequest,
-    OperationResponse, PrincipalId, ProviderId, RealmId, RealmPath, ShellAttachId,
-    ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest, ShellEventBatch,
-    ShellEventSummary, ShellGeneration, ShellKillRequest, ShellListRequest, ShellListResponse,
-    ShellName, ShellSessionInstanceId, ShellState, ShellSummary, StreamCursor, StreamId,
-    StreamResume, WorkloadId, WorkloadSelector, WorkloadSummary,
-    audit::{
-        AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
-        AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
-        AuditSinkHealthReason, AuditStreamKind,
-    },
-};
 use d2b_contracts::guest_wire::GuestControlSchema;
 use d2b_contracts::{
     WireProtocolSchema,
@@ -44,6 +27,29 @@ use d2b_core::{
     privileges::PrivilegesJson, processes::ProcessesJson, storage::StorageJson,
     storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
 };
+use d2b_realm_core::{
+    AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
+    CapabilitySet, ConstellationError, ConstellationFrame, ControllerGenerationId, CorrelationId,
+    DescendantRoute, EnrollmentId, EnrollmentRecord, EnrollmentStatus, ExecAttachMode,
+    ExecAttachRequest, ExecCancelRequest, ExecLogsRequest, ExecStartRequest, ExecutionGeneration,
+    ExecutionId, ExecutionSummary, GatewayId, Handshake, HandshakeAccepted, HandshakeRejected,
+    HandshakeRejectedReason, IdempotencyKey, KeyFingerprint, KeyPin, LegacySurface,
+    MigrationErrorEnvelope, MigrationLegacyId, MigrationReasonCode, NodeId, NodeSummary,
+    OperationId, OperationKind, OperationRequest, OperationResponse, PrincipalId, ProviderId,
+    ProviderRegistryEntry, RealmAccessBinding, RealmControllerPlacement, RealmId, RealmKeyRole,
+    RealmPath, RealmTarget, RealmTransportBinding, RealmTreeEdge, RevocationId, RevocationRecord,
+    RevocationStatus, RevocationTarget, RouteAdvertisement, RouteId, RouteSignature, ShellAttachId,
+    ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest, ShellEventBatch,
+    ShellEventSummary, ShellGeneration, ShellKillRequest, ShellListRequest, ShellListResponse,
+    ShellName, ShellSessionInstanceId, ShellState, ShellSummary, SignatureRef, StreamCursor,
+    StreamId, StreamResume, UnixSocketPath, WorkloadId, WorkloadPlacement,
+    WorkloadPlacementSummary, WorkloadSelector, WorkloadSummary,
+    audit::{
+        AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
+        AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
+        AuditSinkHealthReason, AuditStreamKind,
+    },
+};
 use schemars::schema::RootSchema;
 
 mod inventory;
@@ -54,9 +60,10 @@ const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
-enum ConstellationCoreSchema {
+enum D2bRealmCoreSchema {
     RealmId(RealmId),
     RealmPath(RealmPath),
+    RealmTarget(RealmTarget),
     NodeId(NodeId),
     WorkloadId(WorkloadId),
     ProviderId(ProviderId),
@@ -67,9 +74,39 @@ enum ConstellationCoreSchema {
     PrincipalId(PrincipalId),
     OperationId(OperationId),
     IdempotencyKey(IdempotencyKey),
+    RouteId(RouteId),
+    CorrelationId(CorrelationId),
+    ControllerGenerationId(ControllerGenerationId),
+    EnrollmentId(EnrollmentId),
+    RevocationId(RevocationId),
     Capability(Capability),
     CapabilitySet(CapabilitySet),
     CapabilityNegotiation(CapabilityNegotiation),
+    RealmControllerPlacement(RealmControllerPlacement),
+    UnixSocketPath(UnixSocketPath),
+    AccessBindingRef(AccessBindingRef),
+    RealmTransportBinding(RealmTransportBinding),
+    RealmAccessBinding(RealmAccessBinding),
+    ProviderRegistryEntry(ProviderRegistryEntry),
+    WorkloadPlacement(WorkloadPlacement),
+    WorkloadPlacementSummary(WorkloadPlacementSummary),
+    KeyFingerprint(KeyFingerprint),
+    RealmKeyRole(RealmKeyRole),
+    KeyPin(KeyPin),
+    EnrollmentStatus(EnrollmentStatus),
+    EnrollmentRecord(EnrollmentRecord),
+    RevocationTarget(RevocationTarget),
+    RevocationStatus(RevocationStatus),
+    RevocationRecord(RevocationRecord),
+    SignatureRef(SignatureRef),
+    RealmTreeEdge(RealmTreeEdge),
+    DescendantRoute(DescendantRoute),
+    RouteSignature(RouteSignature),
+    RouteAdvertisement(RouteAdvertisement),
+    LegacySurface(LegacySurface),
+    MigrationLegacyId(MigrationLegacyId),
+    MigrationReasonCode(MigrationReasonCode),
+    MigrationErrorEnvelope(MigrationErrorEnvelope),
     NodeSummary(NodeSummary),
     WorkloadSelector(WorkloadSelector),
     WorkloadSummary(WorkloadSummary),
@@ -330,8 +367,8 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let schemas: [(&str, RootSchema); 14] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
-            "constellation-core.json",
-            schemars::schema_for!(ConstellationCoreSchema),
+            "d2b-realm-core.json",
+            schemars::schema_for!(D2bRealmCoreSchema),
         ),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),

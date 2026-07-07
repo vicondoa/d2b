@@ -7,13 +7,11 @@
 //! into jailed `SpawnRunner` roles.
 
 use async_trait::async_trait;
-use d2b_constellation_core::{Capability, CapabilitySet, StreamDescriptor, StreamKind, StreamOpen};
-use d2b_constellation_provider::capabilities::DisplayCapabilitySet;
-use d2b_constellation_provider::error::{ProviderError, ProviderResult};
-use d2b_constellation_provider::provider::DisplayProvider;
-use d2b_constellation_provider::types::{
-    DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest,
-};
+use d2b_realm_core::{Capability, CapabilitySet, StreamDescriptor, StreamKind, StreamOpen};
+use d2b_realm_provider::capabilities::DisplayCapabilitySet;
+use d2b_realm_provider::error::{ProviderError, ProviderResult};
+use d2b_realm_provider::provider::DisplayProvider;
+use d2b_realm_provider::types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest};
 
 /// Waypipe compression selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,8 +151,8 @@ impl WaypipeDisplayProvider {
 
 #[async_trait]
 impl DisplayProvider for WaypipeDisplayProvider {
-    fn provider_id(&self) -> d2b_constellation_core::ProviderId {
-        d2b_constellation_core::ProviderId::parse("waypipe").expect("valid provider id")
+    fn provider_id(&self) -> d2b_realm_core::ProviderId {
+        d2b_realm_core::ProviderId::parse("waypipe").expect("valid provider id")
     }
 
     fn capabilities(&self) -> DisplayCapabilitySet {
@@ -180,7 +178,7 @@ impl DisplayProvider for WaypipeDisplayProvider {
         };
         if !expected.is_consistent() {
             return Err(ProviderError::new(
-                d2b_constellation_core::ErrorKind::Unauthorized,
+                d2b_realm_core::ErrorKind::Unauthorized,
                 "display stream is not authorized for window forwarding",
             ));
         }
@@ -197,7 +195,7 @@ impl DisplayProvider for WaypipeDisplayProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{
+    use d2b_realm_core::{
         Capability, OperationId, PrincipalId, RealmPath, StreamAuthz, StreamId, WorkloadId,
     };
 
@@ -266,6 +264,6 @@ mod tests {
             },
         };
         let err = provider.open_display_session(req).await.unwrap_err();
-        assert_eq!(err.kind(), d2b_constellation_core::ErrorKind::Unauthorized);
+        assert_eq!(err.kind(), d2b_realm_core::ErrorKind::Unauthorized);
     }
 }

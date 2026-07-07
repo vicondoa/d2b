@@ -668,10 +668,9 @@ implementations, `prost`-generated codec internals, or host-only broker code.
 Provider traits can depend on realm DTOs, but provider implementations cannot
 pull host daemon internals into provider-agnostic crates.
 
-The current `d2b-constellation-*` crates should either be renamed around
-realm terminology or retained as internal crates with temporary internal module
-names; the ADR implementation plan must choose one path explicitly before
-runtime work starts. Gateway-specific runtime crates and modules should be
+The current `d2b-constellation-*` crates are renamed around realm terminology
+before runtime work starts rather than kept behind compatibility aliases.
+Gateway-specific runtime crates and modules should be
 absorbed into realm/provider crates or retired when `d2b.gateways` and old ACA
 sandbox support are removed.
 

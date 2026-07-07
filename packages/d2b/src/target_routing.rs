@@ -2,7 +2,7 @@
 //!
 //! `d2b vm <verb> <target>` accepts either a **local** VM name (the v1
 //! fast path, preserved exactly) or a **realm** target in the
-//! `<workload>.<node>.<realm-path>.d2b` / `d2b://…` form. This module
+//! `<workload>.<realm-path>.d2b` form. This module
 //! classifies the argument and, for realm targets, resolves it against the
 //! realm entrypoint table to a dispatch decision.
 //!
@@ -15,8 +15,8 @@
 //!   `local` realm (the host carries no realm config), so any realm target
 //!   surfaces a typed, actionable diagnostic rather than a host dispatch.
 
-use d2b_constellation_core::{RealmId, RealmPath, TargetName};
-use d2b_constellation_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
+use d2b_realm_core::{RealmId, RealmPath, TargetName};
+use d2b_realm_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
 
 /// The routing decision for a `vm start/exec <target>` argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,7 +136,7 @@ pub fn gateway_vm_name(realm: &RealmPath) -> String {
 /// Conventional local gateway target address for a realm gateway VM.
 pub fn gateway_target_name(realm: &RealmPath) -> Result<TargetName, RouteError> {
     let gateway = gateway_vm_name(realm);
-    let raw = format!("{gateway}.d2b");
+    let raw = format!("{gateway}.local.d2b");
     TargetName::parse(&raw).map_err(|err| RouteError::InvalidGatewayTarget {
         realm: realm.target_form(),
         gateway,
@@ -222,8 +222,8 @@ pub fn gateway_hint(raw: &str) -> Result<Option<GatewayHint>, RouteError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{EntrypointMode, RealmId, TargetName};
-    use d2b_constellation_router::RealmEntrypoint;
+    use d2b_realm_core::{EntrypointMode, RealmId, TargetName};
+    use d2b_realm_router::RealmEntrypoint;
 
     fn realm(labels: &[&str]) -> RealmPath {
         RealmPath::new(labels.iter().map(|l| RealmId::parse(*l).unwrap()).collect()).unwrap()
@@ -258,7 +258,7 @@ mod tests {
         // The host daemon's table only knows the reserved `local` realm, so a
         // `work` realm target is rejected fail-closed (never silently local).
         let table = RealmEntrypointTable::with_local_default();
-        let err = route("demo.gw.work.d2b", &table).unwrap_err();
+        let err = route("demo.work.d2b", &table).unwrap_err();
         match err {
             RouteError::NoRealmEntrypoint { realm, .. } => assert_eq!(realm, "work"),
             other => panic!("expected NoRealmEntrypoint, got {other:?}"),
@@ -268,9 +268,9 @@ mod tests {
     #[test]
     fn gateway_backed_realm_routes_to_its_gateway() {
         let mut table = RealmEntrypointTable::with_local_default();
-        let gateway = TargetName::parse("gw.host.work.d2b").unwrap();
+        let gateway = TargetName::parse("gw.local.d2b").unwrap();
         table.gateway_backed(realm(&["work"]), gateway);
-        let r = route("demo.gw.work.d2b", &table).unwrap();
+        let r = route("demo.work.d2b", &table).unwrap();
         match r {
             Route::Gateway { gateway, target } => {
                 assert!(gateway.contains("gw"));
@@ -284,7 +284,7 @@ mod tests {
     fn host_resident_realm_routes_local() {
         let mut table = RealmEntrypointTable::new();
         table.host_resident(realm(&["work"]));
-        let r = route("demo.gw.work.d2b", &table).unwrap();
+        let r = route("demo.work.d2b", &table).unwrap();
         assert_eq!(
             r,
             Route::Local {
@@ -298,8 +298,8 @@ mod tests {
         assert_eq!(gateway_candidate("vm-a"), None);
         assert_eq!(gateway_candidate("demo.aca.work"), None);
         assert_eq!(
-            gateway_candidate("demo.gw.work.d2b").as_deref(),
-            Some("d2b://demo.gw.work.d2b")
+            gateway_candidate("demo.work.d2b").as_deref(),
+            Some("demo.work.d2b")
         );
     }
 
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(gateway_vm_name(&work), "sys-work-gateway");
         assert_eq!(
             gateway_target_name(&work).unwrap().to_string(),
-            "d2b://sys-work-gateway.this.local.d2b"
+            "sys-work-gateway.local.d2b"
         );
 
         let nested = parse_realm_arg("payments.work").unwrap();
@@ -333,13 +333,13 @@ mod tests {
 
     #[test]
     fn gateway_hint_describes_gateway_backed_target_without_routing_it() {
-        let hint = gateway_hint("demo.aca.work.d2b")
+        let hint = gateway_hint("demo.work.d2b")
             .unwrap()
             .expect("realm target has a gateway hint");
-        assert_eq!(hint.target, "d2b://demo.aca.work.d2b");
+        assert_eq!(hint.target, "demo.work.d2b");
         assert_eq!(hint.realm.target_form(), "work");
         assert_eq!(hint.gateway_vm, "sys-work-gateway");
-        assert_eq!(hint.gateway_target, "d2b://sys-work-gateway.this.local.d2b");
+        assert_eq!(hint.gateway_target, "sys-work-gateway.local.d2b");
         assert!(gateway_hint("vm-a").unwrap().is_none());
         assert!(gateway_hint("demo.aca.work").unwrap().is_none());
     }
@@ -354,7 +354,7 @@ mod tests {
                 gateway: None,
             },
         );
-        let err = route("demo.gw.work.d2b", &table).unwrap_err();
+        let err = route("demo.work.d2b", &table).unwrap_err();
         match err {
             RouteError::MissingGateway { realm, .. } => assert_eq!(realm, "work"),
             other => panic!("expected MissingGateway, got {other:?}"),

@@ -5,16 +5,16 @@
 //! surface without spawning or changing runtime behavior.
 
 use async_trait::async_trait;
-use d2b_constellation_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
-use d2b_constellation_provider::{
+use d2b_core::host::HostJson;
+use d2b_core::host_check::{self, HostCheckReport, HostCheckSeverity};
+use d2b_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
+use d2b_realm_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
+use d2b_realm_provider::{
     DisplayProvider, HostSubstrateProvider,
     capabilities::{DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet},
     error::{ProviderError, ProviderResult},
     types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest},
 };
-use d2b_core::host::HostJson;
-use d2b_core::host_check::{self, HostCheckReport, HostCheckSeverity};
-use d2b_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
 
 pub use d2b_host::{
     ch_argv::ChArgvInput,
@@ -345,9 +345,6 @@ fn static_provider_id(id: &'static str) -> ProviderId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{ErrorKind, WorkloadId};
-    use d2b_constellation_provider::RuntimeProvider;
-    use d2b_constellation_provider::types::{DisplaySessionRequest, WorkloadSpec};
     use d2b_core::host_check::{
         HostCheckFinding, HostCheckReport, HostCheckSeverity, HostCheckSummary,
     };
@@ -355,6 +352,9 @@ mod tests {
         ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv},
         wayland_proxy_argv::generate_wayland_proxy_argv,
     };
+    use d2b_realm_core::{ErrorKind, WorkloadId};
+    use d2b_realm_provider::RuntimeProvider;
+    use d2b_realm_provider::types::{DisplaySessionRequest, WorkloadSpec};
 
     fn workload_id(raw: &str) -> WorkloadId {
         WorkloadId::parse(raw).expect("test workload id must be valid")
@@ -632,12 +632,12 @@ mod tests {
             &display_provider,
             DisplaySessionRequest {
                 workload: workload_id("corp-vm"),
-                operation_id: d2b_constellation_core::OperationId::parse("op-display-1").unwrap(),
-                display_stream: d2b_constellation_core::StreamId::parse("disp-1").unwrap(),
-                authz: d2b_constellation_core::StreamAuthz::for_kind(
-                    d2b_constellation_core::PrincipalId::parse("principal-1").unwrap(),
-                    d2b_constellation_core::RealmPath::local(),
-                    d2b_constellation_core::StreamKind::Display,
+                operation_id: d2b_realm_core::OperationId::parse("op-display-1").unwrap(),
+                display_stream: d2b_realm_core::StreamId::parse("disp-1").unwrap(),
+                authz: d2b_realm_core::StreamAuthz::for_kind(
+                    d2b_realm_core::PrincipalId::parse("principal-1").unwrap(),
+                    d2b_realm_core::RealmPath::local(),
+                    d2b_realm_core::StreamKind::Display,
                 ),
             },
         )

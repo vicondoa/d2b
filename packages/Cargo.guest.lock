@@ -505,7 +505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-core"
+name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
@@ -534,7 +534,7 @@ dependencies = [
  "async-trait",
  "futures",
  "hmac",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "d2b-exec-runner",
  "d2b-contracts",
  "protobuf",

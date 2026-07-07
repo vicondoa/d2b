@@ -1,5 +1,5 @@
-use d2b_constellation_core::PrincipalId;
 use d2b_contracts::public_wire;
+use d2b_realm_core::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
 use uzers::{get_user_by_uid, get_user_groups};

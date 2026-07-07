@@ -3,7 +3,7 @@
 //! argv and a socket path; their `Debug` is redacted so a stray
 //! `{:?}`/error/trace can never leak the command line or a filesystem path.
 
-use d2b_constellation_core::{OperationId, PrincipalId, RealmPath};
+use d2b_realm_core::{OperationId, PrincipalId, RealmPath};
 
 use crate::handshake::DisplaySessionId;
 

@@ -84,6 +84,7 @@ struct ScratchPaths {
     bundle: PathBuf,
     socket: PathBuf,
     poison: PathBuf,
+    realm_entrypoints: PathBuf,
     system_state: PathBuf,
     daemon_state: PathBuf,
 }
@@ -107,6 +108,8 @@ fn scratch(manifest_json: &str) -> (TempDir, ScratchPaths) {
     perms.set_mode(0o755);
     std::fs::set_permissions(&poison, perms).expect("chmod poison-pill");
 
+    let realm_entrypoints = tmp.path().join("missing-realm-entrypoints.json");
+
     let system_state = tmp.path().join("system-state.json");
     std::fs::write(&system_state, SYSTEM_STATE_JSON).expect("write system-state");
 
@@ -125,6 +128,7 @@ fn scratch(manifest_json: &str) -> (TempDir, ScratchPaths) {
             bundle,
             socket,
             poison,
+            realm_entrypoints,
             system_state,
             daemon_state,
         },
@@ -145,6 +149,7 @@ fn run_cli(p: &ScratchPaths, args: &[&str]) -> Output {
         .env("D2B_LEGACY_CLI", &p.poison)
         .env("D2B_LEGACY_BASH_OPT_IN", "1")
         .env("D2B_SUPPRESS_LEGACY_BASH_WARNING", "1")
+        .env("D2B_REALM_ENTRYPOINTS_PATH", &p.realm_entrypoints)
         .env("D2B_TEST_SYSTEM_STATE_JSON", &p.system_state)
         .env("D2B_DAEMON_STATE_DIR", &p.daemon_state)
         .output()

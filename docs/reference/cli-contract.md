@@ -234,12 +234,12 @@ targets route through the configured gateway entrypoint when supported.
 
 ### Realm target routing
 
-`d2b vm start|stop|restart|exec <workload>.<node>.<realm>.d2b`
-keeps local VM names on the existing host fast path. Fully qualified
-realm targets are resolved through the generated `realm-entrypoints.json`
-table. Missing entrypoints fail closed with an actionable
-`missing-realm-entrypoint` error; stopped gateway VMs fail with
-`gateway-not-running` and a remediation command to start the gateway.
+The ADR 0043 target grammar is
+`<workload>.<realm>[.<ancestor>...].d2b`. Bare local VM names stay on the
+existing host fast path until the runtime/Nix cutover lands. Fully qualified
+realm targets must resolve through the realm access layer; missing entrypoints
+fail closed with an actionable `missing-realm-entrypoint` error rather than
+falling back to SSH or a generic tunnel.
 
 `d2b vm list --realm <realm>` runs `d2b vm list` inside the
 realm gateway through the same local guest-control exec path. It does not
@@ -249,7 +249,7 @@ make the host persist a remote node/workload registry.
 
 **Synopsis:**
 
-- `d2b vm display list [--target <d2b://...>] [--human | --json]`
+- `d2b vm display list [--target <workload>.<realm>.d2b] [--human | --json]`
 - `d2b vm display close <session-id> [--human | --json]`
 
 `vm display` manages active gateway display sessions. It requires the
@@ -268,11 +268,11 @@ already-absent session.
 ```json
 {
   "command": "vm display list",
-  "target": "d2b://demo.gw.work.d2b",
+  "target": "demo.work.d2b",
   "sessions": [
     {
       "sessionId": "s0",
-      "target": "d2b://demo.gw.work.d2b",
+      "target": "demo.work.d2b",
       "state": "running",
       "operationId": "gw-exec-1",
       "principal": "uid-1000"

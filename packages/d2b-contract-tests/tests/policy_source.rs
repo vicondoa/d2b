@@ -106,7 +106,7 @@ fn nix_package_source_filters_are_path_segment_based() {
             !content.contains("hasInfix \"target\" rel"),
             "{rel}: package source filters must not substring-match `target`; \
              that excludes legitimate files like \
-             packages/d2b-constellation-core/src/target.rs"
+             packages/d2b-realm-core/src/target.rs"
         );
         assert!(
             content.contains("d2bLib.cleanRustPackagesSource ../packages"),

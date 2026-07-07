@@ -16,8 +16,8 @@ workspace = true
 # production code does not fall back to ambient developer credentials. Data-plane
 # REST calls go to the ADC endpoint.
 [dependencies]
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
-d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -14,7 +14,7 @@ futures = "0.3"
 hmac = "0.12"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-exec-runner = { path = "../d2b-exec-runner", version = "0.0.0-bootstrap" }
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 rustix = { workspace = true }
 sha2 = { workspace = true }

@@ -8,7 +8,7 @@ network preparation remain explicit operator or broker-mediated actions.
 The underlying read-only probe model is described in
 [host prepare](../explanation/host-prepare.md); the advertised capability
 model is the same positive-assertion model documented in
-[constellation core](./constellation-core.md#capabilities).
+[realm core](./realm-core.md#capabilities).
 
 ## Current adapters
 

@@ -12,16 +12,26 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Aligned realm gateway target routing and generated entrypoints with ADR 0043's
+  canonical `<workload>.<realm>.d2b` form so the Rust CI gate no longer hangs
+  on stale node-qualified gateway tests.
 - Updated the `crossbeam-epoch` lockfile entry to a non-vulnerable release for
   the RustSec advisory check.
 
 ### Added
 
+- Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
+  rendering, bare-alias ambiguity diagnostics, and old node-qualified target
+  migration errors.
 - Add accepted ADR 0043, superseding the host-centric constellation model with a
   realm-native control plane: per-realm daemon, broker, state, and audit
   boundaries; first-class `home`, `dev`, and `work` realms to replace the
   current grouping model; and a clean cutover from old realm/ACA sandbox
   surfaces into `d2b.realms`.
+- Added ADR 0043 core realm DTOs in `d2b-realm-core` for controller placement,
+  access bindings, provider/workload placement summaries, tree route
+  advertisements, enrollment/key lifecycle metadata, and migration-error
+  envelopes.
 - Documented the stable public-socket discovery contract for persistent shells
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
@@ -204,8 +214,31 @@ deprecations ship one minor release before removal.
   interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
   forwarding.
 
+### Changed
+
+- Renamed the ADR 0043 Rust foundation crates from
+  `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
+  establishing realm-native package/import names for follow-up parser and DTO
+  work.
+- Aligned current realm-core reference pages and generated schema companions
+  with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
+  grammar.
+
 ### Fixed
 
+- ADR 0043 realm audit, operation, and typed-error envelopes now carry the
+  cross-realm correlation id needed to reconstruct rejected routes.
+- ADR 0043 operation responses now carry the same required correlation id as
+  requests so response-frame return paths can emit correlated audit and trace
+  records.
+- Realm Unix socket access-binding DTOs now reject paths longer than the Linux
+  `sockaddr_un.sun_path` limit before bind/connect.
+- Realm capability-negotiation JSON now rejects unknown outer envelope fields
+  while still preserving unknown future capability tokens inside the
+  capability set.
+- Aligned ADR 0043 realm-core schema generation and identifier validation:
+  `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
+  tokens reject leading punctuation consistently with their JSON schemas.
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
   toplevel has acked its initial configure before attaching the VM identity rail,
   preventing Wayland compositors from rejecting proxied WeezTerm windows during
