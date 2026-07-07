@@ -1044,7 +1044,8 @@
           "format": "uint32",
           "minimum": 0.0
         }
-      }
+      },
+      "additionalProperties": false
     },
     "CapabilitySet": {
       "type": "array",
@@ -4190,7 +4191,7 @@
     },
     "UnixSocketPath": {
       "type": "string",
-      "maxLength": 108,
+      "maxLength": 107,
       "minLength": 1,
       "pattern": "^/[^\\0]*$"
     },
