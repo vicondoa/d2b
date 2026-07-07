@@ -59,7 +59,10 @@ pub use shell::{
     ShellState, ShellSummary,
 };
 pub use stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
-pub use target::{TARGET_SUFFIX, THIS_NODE_ALIAS, TargetName, TargetParseError};
+pub use target::{
+    LegacyNodeQualifiedTarget, RealmTarget, RealmTargetParseError, TARGET_SUFFIX, THIS_NODE_ALIAS,
+    TargetName, TargetParseError,
+};
 pub use token::ProtocolToken;
 pub use trace_context::TraceContext;
 pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};

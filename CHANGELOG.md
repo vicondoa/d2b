@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
+  rendering, bare-alias ambiguity diagnostics, and old node-qualified target
+  migration errors.
 - Add accepted ADR 0043, superseding the host-centric constellation model with a
   realm-native control plane: per-realm daemon, broker, state, and audit
   boundaries; first-class `home`, `dev`, and `work` realms to replace the
