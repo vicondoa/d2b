@@ -3,6 +3,7 @@
 //! command output, store paths, or stream payload.
 
 use crate::capability::Capability;
+use crate::ids::CorrelationId;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Stable, closed-enum classification of a realm operation failure. Codecs
@@ -109,6 +110,9 @@ pub struct ConstellationError {
     /// `Some(capability)` invariant cannot be broken by external mutation
     /// or struct-literal construction.
     kind: ErrorKind,
+    /// Cross-realm correlation id when this error is tied to an operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    correlation_id: Option<CorrelationId>,
     /// The structured missing capability, present for `CapabilityDenied`
     /// so callers route on a stable field rather than parsing the message.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -143,6 +147,7 @@ impl ConstellationError {
         };
         Self {
             kind,
+            correlation_id: None,
             capability: None,
             negotiated_capability_fingerprint: None,
             message: bound_message(message.into()),
@@ -163,6 +168,7 @@ impl ConstellationError {
     ) -> Self {
         Self {
             kind: ErrorKind::CapabilityDenied,
+            correlation_id: None,
             capability: Some(missing),
             negotiated_capability_fingerprint: negotiated_fingerprint.into().map(bound_fingerprint),
             message: bound_message(format!(
@@ -175,6 +181,17 @@ impl ConstellationError {
     /// The stable error classification.
     pub fn kind(&self) -> ErrorKind {
         self.kind
+    }
+
+    /// Cross-realm correlation id, when this error is tied to an operation.
+    pub fn correlation_id(&self) -> Option<&CorrelationId> {
+        self.correlation_id.as_ref()
+    }
+
+    /// Attach the operation's cross-realm correlation id.
+    pub fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
     }
 
     /// The structured missing capability, if this is a capability denial.
@@ -207,6 +224,8 @@ impl<'de> Deserialize<'de> for ConstellationError {
         struct Raw {
             kind: ErrorKind,
             #[serde(default)]
+            correlation_id: Option<CorrelationId>,
+            #[serde(default)]
             capability: Option<Capability>,
             #[serde(default)]
             negotiated_capability_fingerprint: Option<String>,
@@ -227,6 +246,7 @@ impl<'de> Deserialize<'de> for ConstellationError {
         }
         Ok(Self {
             kind: raw.kind,
+            correlation_id: raw.correlation_id,
             capability: raw.capability,
             negotiated_capability_fingerprint: raw
                 .negotiated_capability_fingerprint
@@ -289,6 +309,27 @@ mod tests {
             e.negotiated_capability_fingerprint(),
             Some("cap-v1-cbf29ce484222325")
         );
+    }
+
+    #[test]
+    fn errors_can_carry_bounded_correlation_id() {
+        let e = ConstellationError::capability_denied(Capability::Exec)
+            .with_correlation_id(CorrelationId::parse("corr-1").unwrap());
+        assert_eq!(
+            e.correlation_id().map(CorrelationId::as_str),
+            Some("corr-1")
+        );
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"correlation_id\":\"corr-1\""));
+        let back: ConstellationError = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.correlation_id().map(CorrelationId::as_str),
+            Some("corr-1")
+        );
+
+        let malformed =
+            "{\"kind\":\"timeout\",\"correlation_id\":\"secret-token\",\"message\":\"x\"}";
+        assert!(serde_json::from_str::<ConstellationError>(malformed).is_err());
     }
 
     #[test]

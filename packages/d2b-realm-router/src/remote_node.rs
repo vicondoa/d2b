@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use d2b_realm_core::{
-    Capability, CapabilitySet, ErrorKind, ExecutionGeneration, NodeId, NodeKind, NodeSummary,
-    OperationKind, OperationRequest, PrincipalId, ProtocolToken, ProviderId, RealmPath,
-    ShellGeneration, TraceContext,
+    Capability, CapabilitySet, CorrelationId, ErrorKind, ExecutionGeneration, NodeId, NodeKind,
+    NodeSummary, OperationKind, OperationRequest, PrincipalId, ProtocolToken, ProviderId,
+    RealmPath, ShellGeneration, TraceContext,
 };
 
 /// Default maximum number of remote full-host nodes retained by one registry.
@@ -142,6 +142,8 @@ pub struct RemoteNodeError {
     pub missing_capability: Option<Capability>,
     /// Bounded capability fingerprint of the registered node.
     pub capability_fingerprint: Option<String>,
+    /// Operation correlation id when this refusal came from an operation path.
+    pub correlation_id: Option<CorrelationId>,
 }
 
 impl RemoteNodeError {
@@ -150,6 +152,7 @@ impl RemoteNodeError {
             kind,
             missing_capability: None,
             capability_fingerprint: None,
+            correlation_id: None,
         }
     }
 
@@ -158,7 +161,13 @@ impl RemoteNodeError {
             kind: RemoteNodeErrorKind::CapabilityDenied,
             missing_capability: Some(capability),
             capability_fingerprint: Some(fingerprint),
+            correlation_id: None,
         }
+    }
+
+    fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
     }
 
     /// Stable reason code.
@@ -444,42 +453,52 @@ impl RemoteNodeRegistry {
         gateway_principal: &PrincipalId,
     ) -> Result<RemoteRoute, RemoteNodeError> {
         if req.realm != self.managed_realm {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::WrongRealm));
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::WrongRealm)
+                .with_correlation_id(req.correlation_id.clone()));
         }
-        let entry = self
-            .get(&req.realm, &req.node)
-            .ok_or_else(|| RemoteNodeError::new(RemoteNodeErrorKind::WrongNode))?;
+        let entry = self.get(&req.realm, &req.node).ok_or_else(|| {
+            RemoteNodeError::new(RemoteNodeErrorKind::WrongNode)
+                .with_correlation_id(req.correlation_id.clone())
+        })?;
         if req.node != entry.summary.id {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::WrongNode));
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::WrongNode)
+                .with_correlation_id(req.correlation_id.clone()));
         }
         if &entry.gateway_principal != gateway_principal {
-            return Err(RemoteNodeError::new(
-                RemoteNodeErrorKind::UnauthorizedGateway,
-            ));
+            return Err(
+                RemoteNodeError::new(RemoteNodeErrorKind::UnauthorizedGateway)
+                    .with_correlation_id(req.correlation_id.clone()),
+            );
         }
         if entry.availability != RemoteNodeAvailability::Available {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::NodeUnavailable));
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::NodeUnavailable)
+                .with_correlation_id(req.correlation_id.clone()));
         }
         if entry.is_stale_generation(generation) {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::StaleGeneration));
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::StaleGeneration)
+                .with_correlation_id(req.correlation_id.clone()));
         }
-        let required_capability = required_remote_capability(req.kind)?;
+        let required_capability = required_remote_capability(req.kind)
+            .map_err(|err| err.with_correlation_id(req.correlation_id.clone()))?;
         if let Some(capability) = required_capability
             && !entry.summary.capabilities.has(capability)
         {
             return Err(RemoteNodeError::capability_denied(
                 capability,
                 entry.capability_fingerprint.clone(),
-            ));
+            )
+            .with_correlation_id(req.correlation_id.clone()));
         }
         if req.workload.is_none() && remote_operation_requires_workload(req.kind) {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::MissingWorkload));
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::MissingWorkload)
+                .with_correlation_id(req.correlation_id.clone()));
         }
         Ok(RemoteRoute {
             realm: req.realm.clone(),
             node: req.node.clone(),
             generation: entry.generation.clone(),
             operation: req.kind,
+            correlation_id: req.correlation_id.clone(),
             required_capability,
             capability_fingerprint: entry.capability_fingerprint.clone(),
             principal: entry.gateway_principal.clone(),
@@ -505,6 +524,8 @@ pub struct RemoteRoute {
     pub generation: ProtocolToken,
     /// Trusted operation kind.
     pub operation: OperationKind,
+    /// Cross-realm correlation id shared across route and audit hops.
+    pub correlation_id: CorrelationId,
     /// Capability required by the operation, if any.
     pub required_capability: Option<Capability>,
     /// Bounded capability fingerprint.
@@ -524,6 +545,7 @@ impl RemoteRoute {
             realm: self.realm.target_form(),
             node: self.node.as_str(),
             operation: self.operation,
+            correlation_id: self.correlation_id.as_str(),
             principal: self.principal.as_str(),
             capability_fingerprint: &self.capability_fingerprint,
             trace_id: self.trace.as_ref().map(TraceContext::trace_id),
@@ -539,6 +561,7 @@ pub struct RemoteNodeAuditLabels<'a> {
     pub realm: String,
     pub node: &'a str,
     pub operation: OperationKind,
+    pub correlation_id: &'a str,
     pub principal: &'a str,
     pub capability_fingerprint: &'a str,
     pub trace_id: Option<&'a str>,
@@ -682,6 +705,7 @@ where
             realm = %labels.realm,
             node = %labels.node,
             operation_kind = ?labels.operation,
+            correlation_id = %labels.correlation_id,
             principal = %labels.principal,
             capability_fingerprint = %labels.capability_fingerprint,
             trace_id = labels.trace_id,
@@ -710,6 +734,7 @@ where
                     realm = %labels.realm,
                     node = %labels.node,
                     operation_kind = ?labels.operation,
+                    correlation_id = %labels.correlation_id,
                     principal = %labels.principal,
                     capability_fingerprint = %labels.capability_fingerprint,
                     trace_id = labels.trace_id,
@@ -744,6 +769,7 @@ where
                             realm = %labels.realm,
                             node = %labels.node,
                             operation_kind = ?labels.operation,
+                            correlation_id = %labels.correlation_id,
                             principal = %labels.principal,
                             capability_fingerprint = %labels.capability_fingerprint,
                             trace_id = labels.trace_id,
@@ -757,19 +783,23 @@ where
                         if req.kind.is_mutating() {
                             self.router.mark_failed(req);
                         }
-                        Err(RemoteNodeError::new(
-                            RemoteNodeErrorKind::RemoteOperationUnknown,
-                        ))
+                        Err(
+                            RemoteNodeError::new(RemoteNodeErrorKind::RemoteOperationUnknown)
+                                .with_correlation_id(req.correlation_id.clone()),
+                        )
                     }
                 },
             },
-            decision => Err(remote_error_from_route_decision(decision)),
+            decision => Err(remote_error_from_route_decision(req, decision)),
         }
     }
 }
 
-fn remote_error_from_route_decision(decision: super::RouteDecision) -> RemoteNodeError {
-    match decision {
+fn remote_error_from_route_decision(
+    req: &OperationRequest,
+    decision: super::RouteDecision,
+) -> RemoteNodeError {
+    let err = match decision {
         super::RouteDecision::PrincipalMismatch => {
             RemoteNodeError::new(RemoteNodeErrorKind::UnauthorizedGateway)
         }
@@ -794,7 +824,8 @@ fn remote_error_from_route_decision(decision: super::RouteDecision) -> RemoteNod
         | super::RouteDecision::Accept { .. } => {
             RemoteNodeError::new(RemoteNodeErrorKind::UnsupportedOperation)
         }
-    }
+    };
+    err.with_correlation_id(req.correlation_id.clone())
 }
 
 fn required_remote_capability(kind: OperationKind) -> Result<Option<Capability>, RemoteNodeError> {
@@ -920,6 +951,7 @@ mod tests {
     ) -> OperationRequest {
         OperationRequest {
             operation_id: OperationId::parse("op-1").unwrap(),
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: key.map(|raw| IdempotencyKey::parse(raw).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("remote-host").unwrap(),
@@ -1122,6 +1154,10 @@ mod tests {
         assert_eq!(err.kind, RemoteNodeErrorKind::CapabilityDenied);
         assert_eq!(err.missing_capability, Some(Capability::Lifecycle));
         assert!(err.capability_fingerprint.is_some());
+        assert_eq!(
+            err.correlation_id.as_ref().map(CorrelationId::as_str),
+            Some("corr-1")
+        );
     }
 
     #[test]
@@ -1330,6 +1366,7 @@ mod tests {
             node: NodeId::parse("remote-host").unwrap(),
             generation: ProtocolToken::parse("boot-a").unwrap(),
             operation: OperationKind::ExecAttach,
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             required_capability: Some(Capability::Exec),
             capability_fingerprint: CapabilitySet::empty()
                 .with(Capability::Exec)
@@ -1358,6 +1395,7 @@ mod tests {
             node: NodeId::parse("remote-host").unwrap(),
             generation: ProtocolToken::parse("boot-a").unwrap(),
             operation: OperationKind::ShellAttach,
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             required_capability: Some(Capability::PersistentShell),
             capability_fingerprint: CapabilitySet::empty()
                 .with(Capability::PersistentShell)
@@ -1507,6 +1545,10 @@ mod tests {
             .dispatch(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
             .unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::CapabilityDenied);
+        assert_eq!(
+            err.correlation_id.as_ref().map(CorrelationId::as_str),
+            Some("corr-1")
+        );
         assert_eq!(peer.sends, 0);
     }
 
@@ -1769,6 +1811,7 @@ mod tests {
         let labels = route.audit_labels("accepted");
         assert_eq!(labels.realm, "local");
         assert_eq!(labels.node, "remote-host");
+        assert_eq!(labels.correlation_id, "corr-1");
         assert_eq!(labels.principal, "gateway-principal");
         assert_eq!(labels.capability_fingerprint, caps.stable_fingerprint());
         assert_eq!(labels.trace_id, Some("trace-1"));

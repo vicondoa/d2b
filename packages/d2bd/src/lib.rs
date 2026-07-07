@@ -3038,9 +3038,13 @@ fn dispatch_gateway_display(
                 TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
                 })?;
-            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id)
+            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id.clone())
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
+                })?;
+            let correlation_id = d2b_realm_core::CorrelationId::parse(args.operation_id)
+                .map_err(|err| TypedError::WireInvalidFrame {
+                    detail: format!("gatewayDisplay correlation_id invalid: {err}"),
                 })?;
             let principal = gateway_display_peer_principal(peer);
             let app =
@@ -3057,6 +3061,7 @@ fn dispatch_gateway_display(
             let seed = ContextSeed {
                 realm: target.realm.clone(),
                 operation_id,
+                correlation_id,
                 principal,
                 node: target.node.clone(),
                 workload: target.workload.clone(),

@@ -19,9 +19,7 @@ use crate::error::GatewayError;
 use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
-use d2b_realm_core::{
-    AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
-};
+use d2b_realm_core::{AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
 
 /// How long a minted session credential is valid (seconds) before
 /// `not_after`. The agent must complete its handshake within this window.
@@ -401,6 +399,7 @@ impl GatewayOrchestrator {
     ) -> Result<(), GatewayError> {
         let envelope = display_envelope(
             seed.operation_id.clone(),
+            seed.correlation_id.clone(),
             seed.realm.clone(),
             seed.principal.clone(),
             seed.node.clone(),
@@ -419,6 +418,7 @@ impl GatewayOrchestrator {
     fn audit_open_denied(&self, seed: &ContextSeed, err: GatewayError) -> Result<(), GatewayError> {
         let envelope = display_envelope(
             seed.operation_id.clone(),
+            seed.correlation_id.clone(),
             seed.realm.clone(),
             seed.principal.clone(),
             seed.node.clone(),
@@ -441,6 +441,7 @@ impl GatewayOrchestrator {
     ) -> Result<(), GatewayError> {
         let envelope = display_envelope(
             seed.operation_id.clone(),
+            seed.correlation_id.clone(),
             seed.realm.clone(),
             seed.principal.clone(),
             seed.node.clone(),
@@ -465,6 +466,8 @@ pub struct ContextSeed {
     pub realm: d2b_realm_core::RealmPath,
     /// Authorizing operation id.
     pub operation_id: d2b_realm_core::OperationId,
+    /// Cross-realm correlation id shared across route and audit hops.
+    pub correlation_id: d2b_realm_core::CorrelationId,
     /// Authorizing caller principal.
     pub principal: d2b_realm_core::PrincipalId,
     /// Gateway node handling the operation.
@@ -478,7 +481,7 @@ mod tests {
     use super::*;
     use crate::handshake::SECRET_LEN;
     use d2b_realm_core::{
-        NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
+        CorrelationId, NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
     };
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -638,6 +641,7 @@ mod tests {
             ContextSeed {
                 realm,
                 operation_id: OperationId::parse("op-1").unwrap(),
+                correlation_id: CorrelationId::parse("corr-1").unwrap(),
                 principal: PrincipalId::parse("alice").unwrap(),
                 node: NodeId::parse("gateway").unwrap(),
                 workload: WorkloadId::parse("demo").unwrap(),

@@ -26,9 +26,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use d2b_realm_core::{
-    CapabilitySet, OperationRequest, PrincipalId, ProtocolToken, TargetName,
-};
+use d2b_realm_core::{CapabilitySet, OperationRequest, PrincipalId, ProtocolToken, TargetName};
 use d2b_realm_provider::error::ProviderResult;
 use d2b_realm_provider::provider::{ProtocolCodec, WorkloadProvider};
 use d2b_realm_router::{
@@ -341,14 +339,15 @@ impl DaemonModeConfig {
 mod tests {
     use super::*;
     use d2b_realm_core::{
-        Capability, IdempotencyKey, NodeId, NodeKind, NodeSummary, OpaquePayload, OperationId,
-        OperationKind, ProviderId, RealmPath, WorkloadId,
+        Capability, CorrelationId, IdempotencyKey, NodeId, NodeKind, NodeSummary, OpaquePayload,
+        OperationId, OperationKind, ProviderId, RealmPath, WorkloadId,
     };
     use d2b_realm_router::{RemoteNodeError, RemoteNodeRegistration};
 
     fn list_req(principal: &PrincipalId) -> OperationRequest {
         OperationRequest {
             operation_id: OperationId::parse("op-1").unwrap(),
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: None,
             realm: RealmPath::local(),
             node: NodeId::parse("gw").unwrap(),
@@ -363,6 +362,7 @@ mod tests {
     fn start_req(principal: &PrincipalId, op_id: &str, key: &str) -> OperationRequest {
         OperationRequest {
             operation_id: OperationId::parse(op_id).unwrap(),
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: Some(IdempotencyKey::parse(key).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("gw").unwrap(),
@@ -377,6 +377,7 @@ mod tests {
     fn remote_start_req(principal: &PrincipalId, op_id: &str, key: &str) -> OperationRequest {
         OperationRequest {
             operation_id: OperationId::parse(op_id).unwrap(),
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: Some(IdempotencyKey::parse(key).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("remote-host").unwrap(),
