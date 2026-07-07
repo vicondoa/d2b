@@ -86,6 +86,20 @@ EOF
   maxNetVmShutdownTimeoutSeconds = maxSeconds (lib.mapAttrsToList
     (name: vm: if builtins.elem name netVmNames then gracefulTimeoutFor vm else 0)
     cfg.vms);
+  hostLocalRealms =
+    lib.filter (realm: realm.placement == "host-local") cfg._index.realms.enabledList;
+  brokerMaterializedFor = realm:
+    realm.controller.broker.materializedSocket && realm.controller.broker.materializedService;
+  serviceAttrName = unitName: lib.removeSuffix ".service" unitName;
+  parentDaemonUnitFor = realm:
+    if realm.parentPath == null || !(builtins.hasAttr realm.parentPath cfg._index.realms.enabledByPath)
+    then null
+    else
+      let parent = cfg._index.realms.enabledByPath.${realm.parentPath};
+      in
+      if parent.placement == "host-local"
+      then parent.controller.daemon.serviceName
+      else null;
   forceFallbackTimeoutSeconds = 30;
   sidecarCleanupGraceSeconds = 120;
   d2bdStopTimeoutSeconds = lib.max 90 (
@@ -189,6 +203,7 @@ EOF
     serverVersion = "0.4.0";
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
     gatewayConfigPath = "/etc/d2b/gateway.json";
+    realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
     autostartParallelism = cfg.daemon.autostart.parallelism;
     gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
@@ -200,6 +215,114 @@ EOF
       closuresDir = "/etc/d2b/closures";
     };
   };
+  realmDaemonConfig = realm: builtins.toJSON {
+    publicSocketPath = realm.paths.publicSocket;
+    brokerSocketPath = realm.paths.brokerSocket;
+    stateLockPath = realm.controller.daemon.stateLockPath;
+    locksDir = realm.controller.daemon.locksDir;
+    daemonUser = realm.controller.daemon.user;
+    daemonGroup = realm.controller.daemon.group;
+    publicSocketGroup = realm.controller.daemon.publicSocketGroup;
+    launcherUsers = realm.allowedUsers;
+    adminUsers = cfg.site.adminUsers;
+    serverVersion = "0.4.0";
+    acceptedClientVersionRange = ">=0.4.0, <0.5.0";
+    gatewayConfigPath = "/etc/d2b/gateway.json";
+    realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
+    autostartParallelism = cfg.daemon.autostart.parallelism;
+    gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
+    liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
+    artifacts = {
+      publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
+      bundlePath = "/etc/d2b/bundle.json";
+      hostPath = "/etc/d2b/host.json";
+      processesPath = "/etc/d2b/processes.json";
+      closuresDir = "/etc/d2b/closures";
+    };
+  };
+  realmDaemonEtc = lib.listToAttrs (map
+    (realm: {
+      name = lib.removePrefix "/etc/" realm.controller.daemon.configPath;
+      value = {
+        text = realmDaemonConfig realm;
+        mode = "0640";
+        user = "root";
+        group = realm.controller.daemon.group;
+      };
+    })
+    hostLocalRealms);
+  realmTmpfilesFor = realm: [
+    "d ${realm.paths.stateDir} 0750 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
+    "d /var/lib/d2b/audit/realms 0750 root d2bd -"
+    "d ${realm.paths.auditDir} 0750 root ${realm.controller.daemon.group} -"
+    "d ${realm.paths.runDir} 0710 root ${realm.controller.daemon.publicSocketGroup} -"
+    "z ${realm.paths.runDir} 0710 root ${realm.controller.daemon.publicSocketGroup} -"
+    "a+ ${realm.paths.runDir} - - - - g::--x"
+    "a+ ${realm.paths.runDir} - - - - u:${realm.controller.daemon.user}:rwx"
+    "a+ ${realm.paths.runDir} - - - - m::rwx"
+    "f ${realm.controller.daemon.stateLockPath} 0640 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
+    "d ${realm.controller.daemon.locksDir} 0700 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
+  ];
+  realmDaemonService = realm:
+    let
+      parentDaemonUnit = parentDaemonUnitFor realm;
+      brokerSocketUnit =
+        if brokerMaterializedFor realm
+        then realm.controller.broker.socketUnitName
+        else null;
+      brokerServiceUnit =
+        if brokerMaterializedFor realm
+        then realm.controller.broker.serviceUnitName
+        else null;
+    in
+    {
+      description = "d2b host-local realm daemon";
+      wantedBy = [ "multi-user.target" ];
+      wants =
+        [ "systemd-tmpfiles-setup.service" ]
+        ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit;
+      after =
+        [
+          "systemd-tmpfiles-setup.service"
+          "network.target"
+          "dbus.socket"
+          "dbus.service"
+          "d2b.slice"
+        ]
+        ++ lib.optional (parentDaemonUnit != null) parentDaemonUnit
+        ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit
+        ++ lib.optional (brokerServiceUnit != null) brokerServiceUnit;
+      serviceConfig = {
+        Type = "notify";
+        NotifyAccess = "main";
+        TimeoutStartSec = "5min";
+        KillMode = "process";
+        User = realm.controller.daemon.user;
+        Group = realm.controller.daemon.group;
+        ExecStart =
+          "${d2bdPackage}/bin/d2bd serve " +
+          "--config ${realm.controller.daemon.configPath} " +
+          "--daemon-state-dir ${realm.paths.stateDir}";
+        TimeoutStopSec = lib.mkDefault "${toString d2bdStopTimeoutSeconds}s";
+        Restart = "on-failure";
+        RestartSec = "2s";
+        NoNewPrivileges = true;
+        CapabilityBoundingSet = [ "" ];
+        AmbientCapabilities = [ "" ];
+        PrivateTmp = true;
+        ProtectHome = true;
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+        UMask = "0027";
+        SupplementaryGroups = [ realm.controller.daemon.publicSocketGroup ];
+        Slice = "d2b.slice";
+      };
+    };
+  realmDaemonServices = lib.listToAttrs (map
+    (realm: {
+      name = serviceAttrName realm.controller.daemon.serviceName;
+      value = realmDaemonService realm;
+    })
+    hostLocalRealms);
   enabledGateways = lib.mapAttrsToList
     (name: gw: { inherit name gw; })
     (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
@@ -290,27 +413,23 @@ in
     users.groups.d2b-launchers = { };
     users.groups.d2bd = { };
 
-    users.users =
-      (lib.genAttrs cfg.site.launcherUsers (_: {
+    users.users = {
+      d2bd = {
+        isSystemUser = true;
+        group = "d2bd";
+        description = "d2b daemon user";
+        # d2bd MUST be a supplementary member of d2b so it
+        # can `chown(path,
+        # None, Some(gid))` the public socket to the launcher
+        # group on bind. Without this membership, the chown(2)
+        # call returns EPERM (kernel allows chown-to-gid only
+        # for one of the caller's groups, real/effective/
+        # supplementary). The daemon failed at startup with
+        # "internal-io" when chown(public.sock, -1, 1000)
+        # returned EPERM.
         extraGroups = [ "d2b" ];
-      }))
-      // {
-        d2bd = {
-          isSystemUser = true;
-          group = "d2bd";
-          description = "d2b daemon user";
-          # d2bd MUST be a supplementary member of d2b so it
-          # can `chown(path,
-          # None, Some(gid))` the public socket to the launcher
-          # group on bind. Without this membership, the chown(2)
-          # call returns EPERM (kernel allows chown-to-gid only
-          # for one of the caller's groups, real/effective/
-          # supplementary). The daemon failed at startup with
-          # "internal-io" when chown(public.sock, -1, 1000)
-          # returned EPERM.
-          extraGroups = [ "d2b" ];
-        };
       };
+    };
 
     d2b._hostToolPackages = {
       d2b = d2bCliPackage;
@@ -325,9 +444,6 @@ in
       d2bActivationHelperPackage
       realmEntrypointsPkg
     ];
-    environment.etc."d2b/host-realm-relay-egress-policy.json".text =
-      builtins.toJSON hostRealmRelayEgressPolicyData;
-
     d2b._computed.realmEntrypoints = realmEntrypointData // {
       path = realmEntrypointPath;
     };
@@ -336,13 +452,15 @@ in
     };
 
     environment.etc = {
+      "d2b/host-realm-relay-egress-policy.json".text =
+        builtins.toJSON hostRealmRelayEgressPolicyData;
       "d2b/daemon-config.json" = {
         text = daemonConfigJson;
         mode = "0640";
         user = "root";
         group = "d2bd";
       };
-    };
+    } // realmDaemonEtc;
 
     systemd.tmpfiles.rules = [
       # d2bd runs non-root, so it gets an explicit rwx ACL on
@@ -387,9 +505,10 @@ in
       "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
       "d /var/cache/d2b 0750 root d2bd -"
       "d /etc/d2b 0750 root d2bd -"
-    ];
+    ] ++ lib.concatMap realmTmpfilesFor hostLocalRealms;
 
-    systemd.services.d2bd = {
+    systemd.services = {
+      d2bd = {
       # d2bd is allowed to restart on switch/update. Running VMs survive
       # because systemd stops only the daemon main process (KillMode=process)
       # and the restarted daemon re-adopts broker-spawned runners by identity.
@@ -455,6 +574,7 @@ in
         # needs to chgrp the socket.
         SupplementaryGroups = [ "d2b" ];
       };
-    };
+      };
+    } // realmDaemonServices;
   };
 }

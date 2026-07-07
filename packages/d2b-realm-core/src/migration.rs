@@ -1,4 +1,4 @@
-//! Typed migration-error envelopes for ADR 0043 clean cutover surfaces.
+//! Typed migration-error envelopes for realm-native clean cutover surfaces.
 
 use crate::ids::CorrelationId;
 use schemars::{

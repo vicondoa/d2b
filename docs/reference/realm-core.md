@@ -3,7 +3,7 @@
 **Diataxis category:** reference.
 
 This page documents the committed `d2b-realm-core` DTO and parser
-contract. It is a contributor-facing reference for ADR 0043 realm target
+contract. It is a contributor-facing reference for realm target
 names, identifiers, capability checks, redacted audit metadata, typed
 errors, realm-controller metadata, route/enrollment DTOs, host-resource
 allocator DTOs, and semantic frame schema roots. See
@@ -12,9 +12,10 @@ allocator-specific invariants and current implementation boundary.
 
 For the current Nix option surface, see
 [Realm option schema](./realm-options.md). The `d2b.realms.<realm>`
-namespace validates realm declaration shape only in the current release;
-it does not yet instantiate the per-realm runtime described by the DTO
-model below.
+namespace validates realm declaration shape and materializes host-local
+control-plane scaffolding in the current release; access-layer routing,
+identity/enrollment, realm networking, and provider runtime integration
+remain future work over the DTO model below.
 
 The crate is intentionally codec-neutral. Protocol codecs map bytes to
 and from `ConstellationFrame`; routing, authorization, audit, and
@@ -32,7 +33,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | Root | Source | Contract |
 | --- | --- | --- |
 | `D2bRealmCoreSchema` | `packages/xtask/src/main.rs` | Generated schema wrapper whose top-level `anyOf` enumerates the committed core roots. |
-| `RealmTarget` | `src/target.rs` | ADR 0043 workload-in-realm target string, serialized in canonical `<workload>.<realm>[.<ancestor>...].d2b` form. |
+| `RealmTarget` | `src/target.rs` | workload-in-realm target string, serialized in canonical `<workload>.<realm>[.<ancestor>...].d2b` form. |
 | `ConstellationFrame` | `src/frame.rs` | Top-level semantic frame enum: handshake proposal/accept/reject, operation request/response, stream open/data/flow/close, typed error, and admission audit. |
 | `OperationRequest` / `OperationResponse` | `src/frame.rs` | Operation envelope with target realm/node/workload, authenticated principal, bounded body, trace context, and required idempotency for mutating kinds. |
 | `Handshake` / `HandshakeAccepted` / `HandshakeRejected` / `OperationKind` | `src/frame.rs` | Negotiation outcome roots and closed operation taxonomy roots. |
@@ -41,7 +42,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
-| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | ADR 0043 controller placement and access-binding DTOs for future realm access discovery. |
+| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement and access-binding DTOs for future realm access discovery. |
 | `ProviderRegistryEntry`, `WorkloadPlacement`, `WorkloadPlacementSummary`, `RealmTreeEdge`, `DescendantRoute`, `RouteAdvertisement` | `src/registry.rs`, `src/routing.rs` | Provider/workload placement and tree-route metadata. |
 | `EnrollmentRecord`, `RevocationRecord`, `KeyPin`, `SignatureRef`, migration DTOs | `src/enrollment.rs`, `src/routing.rs`, `src/migration.rs` | Realm identity lifecycle, signed-route metadata, and typed migration-error envelopes. |
 | `LeaseAllocationRequest` / `LeaseAllocationResponse`, `AllocatorLease`, `ReconciliationReport`, allocator event DTOs | `src/allocator.rs` | Contract-only local-root host-resource leases, total acquisition order, reconciliation/quarantine/reclaim decisions, and bounded allocator observability metadata. |
@@ -80,7 +81,7 @@ Parsing is fail-closed. Fully qualified public targets require the
 reserved `.d2b` suffix. `all`, `*`, and non-suffix `d2b` labels are
 rejected as target labels. Old ADR 0032 node-qualified targets are
 accepted only by the legacy diagnostic parser so migration tooling can
-produce a typed error and suggested ADR 0043 target; new routing code
+produce a typed error and suggested realm-native target; new routing code
 must not treat node labels as part of the public target grammar.
 
 ## Identifier families

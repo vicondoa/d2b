@@ -8,7 +8,7 @@
 # host.nix.
 #
 # Realm-native declarations live under `d2b.realms.<realm>` as schema
-# foundation only during the ADR 0043 transition; they do not yet alter
+# foundation only during the realm-native transition; they do not yet alter
 # env or VM runtime behaviour.
 #
 # Isolated environments live under `d2b.envs.<env>`. Each env

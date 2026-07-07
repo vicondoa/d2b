@@ -1,4 +1,4 @@
-# nix-unit coverage for ADR 0043 realm option/schema foundations.
+# nix-unit coverage for realm option/schema foundations.
 { mkEval, lib, flakeRoot, ... }:
 
 let
@@ -56,6 +56,11 @@ let
       env = "home";
       network.envs = [ "home" ];
       allowedUsers = [ "alice" "alice" ];
+      allowedGroups = [ "realm-home" "realm-home" ];
+      broker = {
+        enable = true;
+        hostMutation = true;
+      };
     };
 
     d2b.realms.dev = {
@@ -100,6 +105,11 @@ let
 
   cfg = (mkEval [ realmFixture ]).config;
   realms = cfg.d2b._index.realms;
+  realmHash = path: builtins.substring 0 16 (builtins.hashString "sha256" path);
+  realmUnitPrefix = path: "d2b-realm-${realmHash path}";
+  homeUnitPrefix = realmUnitPrefix "home";
+  devUnitPrefix = realmUnitPrefix "dev.home";
+  workUnitPrefix = realmUnitPrefix "work.home";
 
   failureMessages = modules:
     map (a: a.message)
@@ -150,7 +160,7 @@ let
       d2b.realms.alpha = { };
       d2b.realms.beta.paths = {
         stateDir = "/var/lib/d2b/realms/alpha";
-        auditDir = "/var/lib/d2b/realms/alpha/audit";
+        auditDir = "/var/lib/d2b/audit/realms/alpha";
         runDir = "/run/d2b/realms/alpha";
         publicSocket = "/run/d2b/realms/alpha/public.sock";
         brokerSocket = "/run/d2b/realms/alpha/broker.sock";
@@ -201,6 +211,14 @@ let
     })
   ];
 
+  missingRealmAllowedUserMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.home = {
+        allowedUsers = [ "missing-user" ];
+      };
+    })
+  ];
+
   validProviderPlacementCfg = (mkEval [
     (lib.recursiveUpdate hostBase {
       d2b.realms.work = {
@@ -210,6 +228,8 @@ let
       };
     })
   ]).config;
+  validProviderController =
+    builtins.head validProviderPlacementCfg.d2b._bundle.realmControllersJson.data.controllers;
 
   legacyGatewayMessages = failureMessages [
     (lib.recursiveUpdate hostBase {
@@ -260,7 +280,36 @@ in
       };
       home = {
         allowedUsers = realms.byPath.home.allowedUsers;
+        allowedGroups = realms.byPath.home.allowedGroups;
         paths = realms.byPath.home.paths;
+        controller = {
+          controllerId = realms.byPath.home.controller.controllerId;
+          runtimeState = realms.byPath.home.controller.runtimeState;
+          daemon = {
+            inherit (realms.byPath.home.controller.daemon)
+              serviceName
+              configPath
+              stateLockPath
+              locksDir
+              socketActivated
+              materializedService
+              ;
+            userShape = builtins.substring 0 5 realms.byPath.home.controller.daemon.user == "d2br-";
+            daemonPrincipalIsShared =
+              realms.byPath.home.controller.daemon.user
+              == realms.byPath.home.controller.daemon.group
+              && realms.byPath.home.controller.daemon.user
+              == realms.byPath.home.controller.daemon.publicSocketGroup;
+          };
+          broker = {
+            inherit (realms.byPath.home.controller.broker)
+              socketUnitName
+              serviceUnitName
+              materializedSocket
+              materializedService
+              ;
+          };
+        };
       };
       work = {
         inherit (realms.byPath."work.home") placement placementProvider;
@@ -304,12 +353,33 @@ in
 
       home = {
         allowedUsers = [ "alice" ];
+        allowedGroups = [ "realm-home" ];
         paths = {
           stateDir = "/var/lib/d2b/realms/home";
-          auditDir = "/var/lib/d2b/realms/home/audit";
+          auditDir = "/var/lib/d2b/audit/realms/home";
           runDir = "/run/d2b/realms/home";
           publicSocket = "/run/d2b/realms/home/public.sock";
           brokerSocket = "/run/d2b/realms/home/broker.sock";
+        };
+        controller = {
+          controllerId = "realm-${realmHash "home"}";
+          runtimeState = "metadata-only";
+          daemon = {
+            serviceName = "${homeUnitPrefix}-daemon.service";
+            configPath = "/etc/d2b/realms/home/daemon-config.json";
+            stateLockPath = "/run/d2b/realms/home/daemon.lock";
+            locksDir = "/run/d2b/realms/home/locks";
+            socketActivated = false;
+            materializedService = true;
+            userShape = true;
+            daemonPrincipalIsShared = false;
+          };
+          broker = {
+            socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
+            serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+            materializedSocket = true;
+            materializedService = true;
+          };
         };
       };
       work = {
@@ -485,6 +555,460 @@ in
     };
   };
 
+  "realms/controller-config-artifact-materializes-host-local-units" = {
+    expr =
+      let
+        data = cfg.d2b._bundle.realmControllersJson.data;
+        controllerByPath = path:
+          lib.findFirst (row: row.realmPath == path) null data.controllers;
+        home = controllerByPath "home";
+        dev = controllerByPath "dev.home";
+        work = controllerByPath "work.home";
+        realmServiceNames =
+          lib.filter
+            (name: lib.hasPrefix "d2b-realm-" name)
+            (lib.attrNames cfg.systemd.services);
+        realmSocketNames =
+          lib.filter
+            (name: lib.hasPrefix "d2b-realm-" name)
+            (lib.attrNames cfg.systemd.sockets);
+        allRealmUnitNames = realmServiceNames ++ realmSocketNames;
+        homeDaemonServiceName = lib.removeSuffix ".service" home.daemon.serviceName;
+        homeBrokerServiceName = lib.removeSuffix ".service" home.broker.serviceUnitName;
+        homeBrokerSocketName = lib.removeSuffix ".socket" home.broker.socketUnitName;
+        devDaemonServiceName = lib.removeSuffix ".service" dev.daemon.serviceName;
+        workDaemonServiceName = lib.removeSuffix ".service" work.daemon.serviceName;
+        homeDaemonUnit = cfg.systemd.services.${homeDaemonServiceName};
+        devDaemonUnit = cfg.systemd.services.${devDaemonServiceName};
+        homeBrokerSocket = cfg.systemd.sockets.${homeBrokerSocketName};
+        homeBrokerService = cfg.systemd.services.${homeBrokerServiceName};
+        homeResourceRefs = home.allocator.resourceRequestRefs;
+      in
+      {
+        installFileName = cfg.d2b._bundle.realmControllersJson.installFileName;
+        classification = cfg.d2b._bundle.realmControllersJson.classification;
+        sensitivity = cfg.d2b._bundle.realmControllersJson.sensitivity;
+        mode = cfg.d2b._bundle.realmControllersJson.mode;
+        user = cfg.d2b._bundle.realmControllersJson.user;
+        group = cfg.d2b._bundle.realmControllersJson.group;
+        bundleRealmControllersPath = cfg.d2b._bundle.bundle.data.realmControllersPath;
+        storageCoversRealmControllers =
+          lib.any (path: path.pathTemplate == "/etc/d2b/realm-controllers.json")
+            cfg.d2b._bundle.storageJson.data.paths;
+        realmSystemdUnits = {
+          serviceCount = lib.length realmServiceNames;
+          socketCount = lib.length realmSocketNames;
+          hasHomeDaemon = builtins.elem homeDaemonServiceName realmServiceNames;
+          hasDevDaemon = builtins.elem devDaemonServiceName realmServiceNames;
+          hasHomeBrokerService = builtins.elem homeBrokerServiceName realmServiceNames;
+          hasHomeBrokerSocket = builtins.elem homeBrokerSocketName realmSocketNames;
+          rawRealmIdsAbsent =
+            !lib.any
+              (name:
+                lib.hasInfix "home-daemon" name
+                || lib.hasInfix "dev-daemon" name
+                || lib.hasInfix "work-daemon" name)
+              allRealmUnitNames;
+          gatewayRealmUnitAbsent = !(builtins.hasAttr workDaemonServiceName cfg.systemd.services);
+        };
+        accessMaterialization = {
+          socketGroup = home.daemon.publicSocketGroup;
+          daemonGroup = home.daemon.group;
+          socketGroupIsDistinct = home.daemon.publicSocketGroup != home.daemon.group;
+          aliceExtraGroups = lib.sort lib.lessThan cfg.users.users.alice.extraGroups;
+          aliceInD2bLifecycleGroup =
+            builtins.elem "d2b" cfg.users.users.alice.extraGroups;
+          aliceInRealmSocketGroup =
+            builtins.elem home.daemon.publicSocketGroup cfg.users.users.alice.extraGroups;
+          daemonUserExists = builtins.hasAttr home.daemon.user cfg.users.users;
+          daemonUserSupplementarySocketGroup =
+            builtins.elem home.daemon.publicSocketGroup cfg.users.users.${home.daemon.user}.extraGroups;
+        };
+        units = {
+          homeDaemon = {
+            wantedBy = homeDaemonUnit.wantedBy;
+            wantsBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.wants;
+            afterBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.after;
+            afterBrokerService = builtins.elem home.broker.serviceUnitName homeDaemonUnit.after;
+            inherit (homeDaemonUnit.serviceConfig) User Group ExecStart SupplementaryGroups Slice;
+            execStartHasDaemonStateDir =
+              lib.hasInfix "--daemon-state-dir /var/lib/d2b/realms/home" homeDaemonUnit.serviceConfig.ExecStart;
+          };
+          devDaemonAfterHome =
+            builtins.elem home.daemon.serviceName devDaemonUnit.after;
+          homeBrokerSocket = {
+            inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
+          };
+          homeBroker = {
+            requiresBrokerSocket = builtins.elem home.broker.socketUnitName homeBrokerService.requires;
+            afterBrokerSocket = builtins.elem home.broker.socketUnitName homeBrokerService.after;
+            inherit (homeBrokerService.serviceConfig) Group Slice;
+            execStartHasAuditDir =
+              lib.hasInfix "--audit-dir /var/lib/d2b/audit/realms/home" homeBrokerService.serviceConfig.ExecStart;
+            execStartHasRealmControllersPath =
+              lib.hasInfix "--realm-controllers-path /etc/d2b/realm-controllers.json" homeBrokerService.serviceConfig.ExecStart;
+            execStartHasStateDir =
+              lib.hasInfix "--state-dir /var/lib/d2b/realms/home" homeBrokerService.serviceConfig.ExecStart;
+            execStartHasD2bdUid =
+              lib.hasInfix "--d2bd-uid " homeBrokerService.serviceConfig.ExecStart;
+            execStartHasD2bdGid =
+              lib.hasInfix "--d2bd-gid " homeBrokerService.serviceConfig.ExecStart;
+            noGlobalSetEnvironment =
+              !(lib.hasInfix "set-environment" (homeBrokerService.serviceConfig.ExecStartPre or ""))
+              && !(lib.hasInfix "systemctl set-environment" homeBrokerService.serviceConfig.ExecStart);
+          };
+        };
+        runtimeState = data.runtimeState;
+        controllerPaths = map (row: row.realmPath) data.controllers;
+        home = {
+          inherit (home) realmName realmId realmPath placement providerPlacement sockets access;
+          paths = home.paths // {
+            auditDirOutsideStateDir =
+              !(lib.hasPrefix "${home.paths.stateDir}/" home.paths.auditDir);
+          };
+          daemon = {
+            inherit (home.daemon)
+              serviceName
+              configPath
+              stateLockPath
+              locksDir
+              socketActivated
+              materializedService
+              ;
+            principalShape = builtins.substring 0 5 home.daemon.user == "d2br-";
+            socketGroupIsDaemonGroup =
+              home.daemon.user == home.daemon.group
+              && home.daemon.user == home.daemon.publicSocketGroup;
+          };
+          broker = home.broker;
+          allocator = {
+            inherit (home.allocator) kind configPath rootSocket;
+            resourceRefCount = lib.length homeResourceRefs;
+            hasStateRef = builtins.elem "realm-home-state" homeResourceRefs;
+            hasPublicSocketRef = builtins.elem "realm-home-public-socket" homeResourceRefs;
+            hasBrokerSocketRef = builtins.elem "realm-home-broker-socket" homeResourceRefs;
+          };
+        };
+        workProviderCount = lib.length work.providers;
+        workProvider = builtins.head work.providers;
+        providerPlacement = validProviderController.providerPlacement;
+        inherit (data) invariants;
+      };
+    expected = {
+      installFileName = "realm-controllers.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+      mode = "0640";
+      user = "root";
+      group = "d2bd";
+      bundleRealmControllersPath = "/etc/d2b/realm-controllers.json";
+      storageCoversRealmControllers = true;
+      realmSystemdUnits = {
+        serviceCount = 3;
+        socketCount = 1;
+        hasHomeDaemon = true;
+        hasDevDaemon = true;
+        hasHomeBrokerService = true;
+        hasHomeBrokerSocket = true;
+        rawRealmIdsAbsent = true;
+        gatewayRealmUnitAbsent = true;
+      };
+      accessMaterialization = {
+        socketGroup = "d2bra-${realmHash "home"}";
+        daemonGroup = "d2br-${realmHash "home"}";
+        socketGroupIsDistinct = true;
+        aliceExtraGroups = [ "d2b" "d2bra-${realmHash "home"}" ];
+        aliceInD2bLifecycleGroup = true;
+        aliceInRealmSocketGroup = true;
+        daemonUserExists = true;
+        daemonUserSupplementarySocketGroup = true;
+      };
+      units = {
+        homeDaemon = {
+          wantedBy = [ "multi-user.target" ];
+          wantsBrokerSocket = true;
+          afterBrokerSocket = true;
+          afterBrokerService = true;
+          User = "d2br-${realmHash "home"}";
+          Group = "d2br-${realmHash "home"}";
+          ExecStart = "${cfg.d2b._hostToolPackages.d2bd}/bin/d2bd serve --config /etc/d2b/realms/home/daemon-config.json --daemon-state-dir /var/lib/d2b/realms/home";
+          execStartHasDaemonStateDir = true;
+          SupplementaryGroups = [ "d2bra-${realmHash "home"}" ];
+          Slice = "d2b.slice";
+        };
+        devDaemonAfterHome = true;
+        homeBrokerSocket = {
+          ListenSequentialPacket = "/run/d2b/realms/home/broker.sock";
+          SocketGroup = "d2br-${realmHash "home"}";
+          SocketMode = "0660";
+        };
+        homeBroker = {
+          requiresBrokerSocket = true;
+          afterBrokerSocket = true;
+          Group = "d2br-${realmHash "home"}";
+          execStartHasAuditDir = true;
+          execStartHasRealmControllersPath = true;
+          execStartHasStateDir = true;
+          execStartHasD2bdUid = true;
+          execStartHasD2bdGid = true;
+          noGlobalSetEnvironment = true;
+          Slice = "d2b.slice";
+        };
+      };
+      runtimeState = "metadata-only";
+      controllerPaths = [ "dev.home" "home" "work.home" ];
+      home = {
+        realmName = "home";
+        realmId = "home";
+        realmPath = "home";
+        placement = "host-local";
+        providerPlacement = null;
+        paths = {
+          runDir = "/run/d2b/realms/home";
+          stateDir = "/var/lib/d2b/realms/home";
+          auditDir = "/var/lib/d2b/audit/realms/home";
+          auditDirOutsideStateDir = true;
+        };
+        sockets = {
+          publicSocketPath = "/run/d2b/realms/home/public.sock";
+          brokerSocketPath = "/run/d2b/realms/home/broker.sock";
+        };
+        access = {
+          allowedUsers = [ "alice" ];
+          allowedGroups = [ "realm-home" ];
+          inheritedAdminUsers = [ ];
+        };
+        daemon = {
+        serviceName = "${homeUnitPrefix}-daemon.service";
+          configPath = "/etc/d2b/realms/home/daemon-config.json";
+          stateLockPath = "/run/d2b/realms/home/daemon.lock";
+          locksDir = "/run/d2b/realms/home/locks";
+          socketActivated = false;
+          materializedService = true;
+          principalShape = true;
+          socketGroupIsDaemonGroup = false;
+        };
+        broker = {
+          enabled = true;
+          hostMutation = true;
+          user = "root";
+          group = realms.byPath.home.controller.broker.group;
+          socketPath = "/run/d2b/realms/home/broker.sock";
+          socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
+          serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+          auditDir = "/var/lib/d2b/audit/realms/home";
+          materializedSocket = true;
+          materializedService = true;
+        };
+        allocator = {
+          kind = "local-root-metadata";
+          configPath = "/etc/d2b/allocator.json";
+          rootSocket = "/run/d2b/allocator/local-root.sock";
+          resourceRefCount = 8;
+          hasStateRef = true;
+          hasPublicSocketRef = true;
+          hasBrokerSocketRef = true;
+        };
+      };
+      workProviderCount = 1;
+      workProvider = {
+        providerName = "aca";
+        providerId = "aca";
+        enabled = true;
+        kind = "aca";
+        placement = "provider-agent";
+        capabilityRefs = [ "aca" "relay" ];
+        configRef = "work-aca-non-secret";
+      };
+      providerPlacement = {
+        providerName = "aca";
+        providerId = "aca";
+        kind = "aca";
+        providerSpecificPlacement = null;
+      };
+      invariants = {
+        metadataOnly = true;
+        noSystemdUnitsMaterialized = false;
+        preservesGlobalDaemonBehavior = true;
+        preservesDirectUnixSocketSemantics = true;
+      };
+    };
+  };
+
+  "realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units" = {
+    expr =
+      let
+        data = cfg.d2b._bundle.realmControllersJson.data;
+        controllerByPath = path:
+          lib.findFirst (row: row.realmPath == path) null data.controllers;
+        home = controllerByPath "home";
+        dev = controllerByPath "dev.home";
+        homeDaemonServiceName = lib.removeSuffix ".service" home.daemon.serviceName;
+        devDaemonServiceName = lib.removeSuffix ".service" dev.daemon.serviceName;
+        homeBrokerSocketName = lib.removeSuffix ".socket" home.broker.socketUnitName;
+        homeDaemonUnit = cfg.systemd.services.${homeDaemonServiceName};
+        devDaemonUnit = cfg.systemd.services.${devDaemonServiceName};
+        homeBrokerSocket = cfg.systemd.sockets.${homeBrokerSocketName};
+        homeDaemonUser = cfg.users.users.${home.daemon.user};
+        homeDaemonEtc = cfg.environment.etc."d2b/realms/home/daemon-config.json";
+        homeDaemonConfig = builtins.fromJSON homeDaemonEtc.text;
+        tmpfiles = cfg.systemd.tmpfiles.rules;
+        disabledUnitPrefix = realmUnitPrefix "archive";
+        disabledPrincipal = "d2br-${realmHash "archive"}";
+        disabledAccessGroup = "d2bra-${realmHash "archive"}";
+        unitNames = (lib.attrNames cfg.systemd.services) ++ (lib.attrNames cfg.systemd.sockets);
+        perVmUnitNames =
+          lib.filter
+            (name:
+              lib.any
+                (vmName: lib.hasInfix vmName name)
+                [ "homebox" "devbox" "corp" "sys-home-net" "sys-dev-net" "sys-work-net" ])
+            unitNames;
+      in
+      {
+        groups = {
+          daemonGroupDeclared = builtins.hasAttr home.daemon.group cfg.users.groups;
+          accessGroupDeclared = builtins.hasAttr home.daemon.publicSocketGroup cfg.users.groups;
+          daemonAndAccessGroupsDistinct = home.daemon.group != home.daemon.publicSocketGroup;
+          disabledDaemonGroupAbsent = !(builtins.hasAttr disabledPrincipal cfg.users.groups);
+          disabledAccessGroupAbsent = !(builtins.hasAttr disabledAccessGroup cfg.users.groups);
+        };
+        users = {
+          allowedUserInAccessGroup =
+            builtins.elem home.daemon.publicSocketGroup cfg.users.users.alice.extraGroups;
+          daemonUser = {
+            inherit (homeDaemonUser) isSystemUser group description extraGroups;
+          };
+          disabledDaemonUserAbsent = !(builtins.hasAttr disabledPrincipal cfg.users.users);
+        };
+        tmpfiles = {
+          stateDir =
+            builtins.elem
+              "d /var/lib/d2b/realms/home 0750 ${home.daemon.user} ${home.daemon.group} -"
+              tmpfiles;
+          auditDir =
+            builtins.elem
+              "d /var/lib/d2b/audit/realms/home 0750 root ${home.daemon.group} -"
+              tmpfiles;
+          auditParentDir =
+            builtins.elem
+              "d /var/lib/d2b/audit/realms 0750 root d2bd -"
+              tmpfiles;
+          runDir =
+            builtins.elem
+              "d /run/d2b/realms/home 0710 root ${home.daemon.publicSocketGroup} -"
+              tmpfiles;
+          runDirReset =
+            builtins.elem
+              "z /run/d2b/realms/home 0710 root ${home.daemon.publicSocketGroup} -"
+              tmpfiles;
+          runDirGroupTraverseAcl =
+            builtins.elem
+              "a+ /run/d2b/realms/home - - - - g::--x"
+              tmpfiles;
+          daemonRunAcl =
+            builtins.elem
+              "a+ /run/d2b/realms/home - - - - u:${home.daemon.user}:rwx"
+              tmpfiles;
+          stateLock =
+            builtins.elem
+              "f /run/d2b/realms/home/daemon.lock 0640 ${home.daemon.user} ${home.daemon.group} -"
+              tmpfiles;
+          locksDir =
+            builtins.elem
+              "d /run/d2b/realms/home/locks 0700 ${home.daemon.user} ${home.daemon.group} -"
+              tmpfiles;
+        };
+        daemonConfig = {
+          inherit (homeDaemonEtc) mode user group;
+          publicSocketPath = homeDaemonConfig.publicSocketPath;
+          brokerSocketPath = homeDaemonConfig.brokerSocketPath;
+          daemonUser = homeDaemonConfig.daemonUser;
+          daemonGroup = homeDaemonConfig.daemonGroup;
+          publicSocketGroup = homeDaemonConfig.publicSocketGroup;
+          launcherUsers = homeDaemonConfig.launcherUsers;
+          realmControllersConfigPath = homeDaemonConfig.realmControllersConfigPath;
+          artifacts = homeDaemonConfig.artifacts;
+        };
+        unitOrdering = {
+          childAfterParent = builtins.elem home.daemon.serviceName devDaemonUnit.after;
+          parentDoesNotAfterChild = !(builtins.elem dev.daemon.serviceName homeDaemonUnit.after);
+        };
+        socketAccess = {
+          inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
+        };
+        disabledRealm = {
+          unitsAbsent = !lib.any (name: lib.hasPrefix disabledUnitPrefix name) unitNames;
+          controllersAbsent =
+            !lib.any (row: row.realmPath == "archive") data.controllers;
+        };
+        noPerVmSystemdUnits = perVmUnitNames;
+      };
+    expected = {
+      groups = {
+        daemonGroupDeclared = true;
+        accessGroupDeclared = true;
+        daemonAndAccessGroupsDistinct = true;
+        disabledDaemonGroupAbsent = true;
+        disabledAccessGroupAbsent = true;
+      };
+      users = {
+        allowedUserInAccessGroup = true;
+        daemonUser = {
+          isSystemUser = true;
+          group = "d2br-${realmHash "home"}";
+          description = "d2b realm daemon user for home";
+          extraGroups = [ "d2bra-${realmHash "home"}" ];
+        };
+        disabledDaemonUserAbsent = true;
+      };
+      tmpfiles = {
+        stateDir = true;
+        auditDir = true;
+        auditParentDir = true;
+        runDir = true;
+        runDirReset = true;
+        runDirGroupTraverseAcl = true;
+        daemonRunAcl = true;
+        stateLock = true;
+        locksDir = true;
+      };
+      daemonConfig = {
+        mode = "0640";
+        user = "root";
+        group = "d2br-${realmHash "home"}";
+        publicSocketPath = "/run/d2b/realms/home/public.sock";
+        brokerSocketPath = "/run/d2b/realms/home/broker.sock";
+        daemonUser = "d2br-${realmHash "home"}";
+        daemonGroup = "d2br-${realmHash "home"}";
+        publicSocketGroup = "d2bra-${realmHash "home"}";
+        launcherUsers = [ "alice" ];
+        realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
+        artifacts = {
+          publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
+          bundlePath = "/etc/d2b/bundle.json";
+          hostPath = "/etc/d2b/host.json";
+          processesPath = "/etc/d2b/processes.json";
+          closuresDir = "/etc/d2b/closures";
+        };
+      };
+      unitOrdering = {
+        childAfterParent = true;
+        parentDoesNotAfterChild = true;
+      };
+      socketAccess = {
+        ListenSequentialPacket = "/run/d2b/realms/home/broker.sock";
+        SocketGroup = "d2br-${realmHash "home"}";
+        SocketMode = "0660";
+      };
+      disabledRealm = {
+        unitsAbsent = true;
+        controllersAbsent = true;
+      };
+      noPerVmSystemdUnits = [ ];
+    };
+  };
+
   "realms/rejects-missing-parent" = {
     expr = hasMessage [
       "enabled child realms must name an enabled parent realm"
@@ -521,7 +1045,7 @@ in
   "realms/rejects-duplicate-runtime-paths" = {
     expr = {
       stateDir = hasMessage [ "must not share stateDir paths" "/var/lib/d2b/realms/alpha" ] duplicateRuntimePathMessages;
-      auditDir = hasMessage [ "must not share auditDir paths" "/var/lib/d2b/realms/alpha/audit" ] duplicateRuntimePathMessages;
+      auditDir = hasMessage [ "must not share auditDir paths" "/var/lib/d2b/audit/realms/alpha" ] duplicateRuntimePathMessages;
       runDir = hasMessage [ "must not share runDir paths" "/run/d2b/realms/alpha" ] duplicateRuntimePathMessages;
       publicSocket = hasMessage [ "must not share publicSocket paths" "/run/d2b/realms/alpha/public.sock" ] duplicateRuntimePathMessages;
       brokerSocket = hasMessage [ "must not share brokerSocket paths" "/run/d2b/realms/alpha/broker.sock" ] duplicateRuntimePathMessages;
@@ -552,6 +1076,14 @@ in
       publicSocket = true;
       brokerSocket = true;
     };
+  };
+
+  "realms/rejects-missing-host-local-allowed-user" = {
+    expr = hasMessage [
+      "d2b.realms.home.allowedUsers contains \"missing-user\""
+      "users.users.missing-user is declared"
+    ] missingRealmAllowedUserMessages;
+    expected = true;
   };
 
   "realms/requires-provider-for-provider-backed-placement" = {

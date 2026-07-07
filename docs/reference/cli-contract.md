@@ -234,7 +234,7 @@ targets route through the configured gateway entrypoint when supported.
 
 ### Realm target routing
 
-The ADR 0043 target grammar is
+The realm target grammar is
 `<workload>.<realm>[.<ancestor>...].d2b`. Bare local VM names stay on the
 existing host fast path until the runtime/Nix cutover lands. Fully qualified
 realm targets must resolve through the realm access layer; missing entrypoints

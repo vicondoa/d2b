@@ -487,7 +487,7 @@ let
     message = ''
       d2b migration-required (legacy-surface-detected: d2b.gateways):
       `d2b.gateways` and its old gateway/ACA sandbox fields were removed as a
-      public configuration surface by ADR 0043.
+      public configuration surface by the realm-native cutover.
 
       Move non-secret coordinates into the realm-native schema, for example:
 
@@ -1417,6 +1417,23 @@ let
       })
       cfg.site.launcherUsers;
 
+  realmAllowedUserAssertions = lib.flatten (map
+    (realm:
+      map
+        (u: {
+          assertion =
+            config.users.users ? "${u}"
+            && ((config.users.users.${u}.isNormalUser or false)
+              || (config.users.users.${u}.isSystemUser or false));
+          message = ''
+            d2b.realms.${realm.realmName}.allowedUsers contains "${u}" but no
+            users.users.${u} is declared. Host-local realm socket access is
+            added via extraGroups; non-existent users silently no-op.
+          '';
+        })
+        realm.allowedUsers)
+    (lib.filter (realm: realm.placement == "host-local") enabledRealmRows));
+
   # Validate every authorized-key entry (site-level + per-VM).
   siteAuthorizedKeyAssertions =
     validateAuthorizedKeys "d2b.site.userAuthorizedKeys"
@@ -1623,6 +1640,7 @@ in
     ++ externalNetworkAssertions
     ++ vsockAssertions
     ++ siteAssertions
+    ++ realmAllowedUserAssertions
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions
     ++ volumeSerialAssertions

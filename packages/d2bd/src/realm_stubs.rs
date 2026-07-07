@@ -1,4 +1,4 @@
-//! Initial compile-only peer-module skeletons (ADR 0032/0043).
+//! Initial compile-only peer-module skeletons.
 //!
 //! These wire the v2 provider/router/transport trait surface into
 //! `d2bd` so future gateway work can fill them in, but they are **not**
@@ -80,8 +80,8 @@ impl Default for ApiService {
 }
 
 /// Resolves a realm [`TargetName`] to the [`DispatchTarget`] that
-/// serves it, by consulting the node's [`RealmEntrypointTable`] (ADR 0032
-/// `TargetResolver`). The table is seeded with the reserved `local` realm as
+/// serves it, by consulting the node's [`RealmEntrypointTable`]. The table is
+/// seeded with the reserved `local` realm as
 /// host-resident; gateway-mode config wiring populates the rest. Resolution
 /// is fail-closed — an unknown realm is rejected rather than defaulted to
 /// local dispatch.
@@ -166,8 +166,8 @@ impl ProviderExecutor {
 }
 
 /// The current local execution path (unchanged). The marker records that
-/// the local path remains the default; later ADR 0032 work routes through
-/// the router + provider executor instead.
+/// the local path remains the default; later realm routing work routes through
+/// the router and provider executor instead.
 pub struct LocalExecutor;
 
 impl LocalExecutor {

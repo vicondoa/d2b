@@ -19,6 +19,7 @@ world-readable system profile.
 | `storage.json` | private storage lifecycle contract | root:`d2bd` `0640` | Managed path inventory, restart/adoption policy, degraded-state taxonomy, cleanup/repair policy, and remediation IDs. |
 | `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
 | `allocator.json` | private allocator metadata | root:`d2bd` `0640` | Metadata-only local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, and env bridges. |
+| `realm-controllers.json` | private realm controller metadata | root:`d2bd` `0640` | Metadata-only per-realm daemon, broker, socket, state, audit, allocator binding, provider placement, and direct-access plan rooted in `d2b.realms`. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
 | `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
@@ -40,8 +41,8 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 7`
-for the metadata-only local-root allocator artifact (ADR 0043).
+bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 8`
+for the metadata-only realm-controller configuration artifact.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under

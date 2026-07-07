@@ -88,6 +88,7 @@ let
     "/etc/d2b/storage.json"
     "/etc/d2b/sync.json"
     "/etc/d2b/allocator.json"
+    "/etc/d2b/realm-controllers.json"
   ];
 
   daemonStateReports = [

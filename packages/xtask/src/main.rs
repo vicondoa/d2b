@@ -25,7 +25,8 @@ use d2b_core::{
     allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
     closures::ClosureMetadata, error::Error, host::HostJson, manifest_v04::ManifestV04,
     minijail_profile::MinijailProfile, privileges::PrivilegesJson, processes::ProcessesJson,
-    storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
+    realm_controller_config::RealmControllersJson, storage::StorageJson,
+    storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
 };
 use d2b_realm_core::{
     AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
@@ -398,7 +399,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 15] = [
+    let schemas: [(&str, RootSchema); 16] = [
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
@@ -409,6 +410,10 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ("processes.json", schemars::schema_for!(ProcessesJson)),
         ("storage.json", schemars::schema_for!(StorageJson)),
         ("sync.json", schemars::schema_for!(SyncJson)),
+        (
+            "realm-controllers.json",
+            schemars::schema_for!(RealmControllersJson),
+        ),
         (
             "storage-lifecycle-report.json",
             schemars::schema_for!(StorageLifecycleReport),

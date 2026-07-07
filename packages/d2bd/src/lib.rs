@@ -73,6 +73,7 @@ use d2b_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
+use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
@@ -238,7 +239,7 @@ pub mod concurrency;
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
 
-// ADR 0032/0043: compile-only peer-module skeletons wiring the realm
+// Compile-only peer-module skeletons wiring the realm
 // provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
 pub mod realm_stubs;
@@ -247,6 +248,7 @@ use typed_error::TypedError;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/d2b/daemon-config.json";
 pub const DEFAULT_GATEWAY_CONFIG_PATH: &str = "/etc/d2b/gateway.json";
+pub const DEFAULT_REALM_CONTROLLERS_CONFIG_PATH: &str = "/etc/d2b/realm-controllers.json";
 pub const DEFAULT_SERVER_VERSION: &str = "0.4.0";
 pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
@@ -347,6 +349,8 @@ pub struct DaemonConfig {
     pub artifacts: ArtifactPaths,
     #[serde(default = "default_gateway_config_path")]
     pub gateway_config_path: PathBuf,
+    #[serde(default = "default_realm_controllers_config_path")]
+    pub realm_controllers_config_path: PathBuf,
     /// Concurrency cap for the autostart pass that runs on daemon
     /// startup. Default `3`.
     /// Mirrors `d2b.daemon.autostart.parallelism`.
@@ -376,6 +380,10 @@ fn default_gateway_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_GATEWAY_CONFIG_PATH)
 }
 
+fn default_realm_controllers_config_path() -> PathBuf {
+    PathBuf::from(DEFAULT_REALM_CONTROLLERS_CONFIG_PATH)
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
@@ -392,6 +400,7 @@ impl Default for DaemonConfig {
             accepted_client_version_range: default_accepted_version_range(),
             artifacts: ArtifactPaths::default(),
             gateway_config_path: default_gateway_config_path(),
+            realm_controllers_config_path: default_realm_controllers_config_path(),
             autostart_parallelism: autostart::DEFAULT_PARALLELISM,
             graceful_shutdown_timeout_seconds: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
             live_activation_timeout_seconds: GUEST_SYSTEM_ACTIVATION_TIMEOUT.as_secs(),
@@ -796,6 +805,245 @@ pub fn load_config(path: &Path) -> Result<DaemonConfig, TypedError> {
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct LoadedRealmControllersConfig {
+    pub config: RealmControllersJson,
+    pub summary: RealmControllerMetadataSummary,
+}
+
+pub fn load_realm_controllers_config(
+    path: &Path,
+) -> Result<Option<LoadedRealmControllersConfig>, TypedError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
+        context: "read realm controllers config".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let config: RealmControllersJson =
+        serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalConfig {
+            detail: format!("invalid realm controllers config: {err}"),
+        })?;
+    let summary = config
+        .validate_metadata_only()
+        .map_err(|err| TypedError::InternalConfig {
+            detail: format!("invalid realm controllers config: {err}"),
+        })?;
+    Ok(Some(LoadedRealmControllersConfig { config, summary }))
+}
+
+#[cfg(test)]
+mod config_loading_tests {
+    use super::*;
+
+    fn temp_root() -> tempfile::TempDir {
+        tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("temp config root")
+    }
+
+    fn realm_controllers_json() -> &'static str {
+        r#"{
+          "schemaVersion": "v2",
+          "runtimeState": "metadata-only",
+          "controllers": [
+            {
+              "realmName": "Work",
+              "realmId": "work",
+              "realmPath": "corp.work",
+              "placement": "host-local",
+              "daemon": {
+                "user": "d2br-0123456789abcdef",
+                "group": "d2br-0123456789abcdef",
+                "publicSocketGroup": "d2br-0123456789abcdef",
+                "serviceName": "d2b-realm-work-daemon.service",
+                "configPath": "/etc/d2b/realms/work/daemon-config.json",
+                "stateLockPath": "/run/d2b/realms/work/daemon.lock",
+                "locksDir": "/run/d2b/realms/work/locks",
+                "socketActivated": false,
+                "materializedService": false
+              },
+              "broker": {
+                "enabled": true,
+                "hostMutation": false,
+                "user": "root",
+                "group": "d2br-0123456789abcdef",
+                "socketPath": "/run/d2b/realms/work/priv.sock",
+                "socketUnitName": "d2b-realm-work-priv-broker.socket",
+                "serviceUnitName": "d2b-realm-work-priv-broker.service",
+                "auditDir": "/var/lib/d2b/realms/work/audit",
+                "materializedSocket": false,
+                "materializedService": false
+              },
+              "paths": {
+                "runDir": "/run/d2b/realms/work",
+                "stateDir": "/var/lib/d2b/realms/work",
+                "auditDir": "/var/lib/d2b/realms/work/audit"
+              },
+              "sockets": {
+                "publicSocketPath": "/run/d2b/realms/work/public.sock",
+                "brokerSocketPath": "/run/d2b/realms/work/priv.sock"
+              },
+              "allocator": {
+                "kind": "local-root-metadata",
+                "configPath": "/etc/d2b/allocator.json",
+                "rootSocket": "/run/d2b/allocator.sock"
+              },
+              "access": {
+                "allowedUsers": ["alice"],
+                "allowedGroups": ["d2b"],
+                "inheritedAdminUsers": ["admin"]
+              }
+            }
+          ],
+          "invariants": {
+            "metadataOnly": true,
+            "noSystemdUnitsMaterialized": true,
+            "preservesGlobalDaemonBehavior": true,
+            "preservesDirectUnixSocketSemantics": true
+          }
+        }"#
+    }
+
+    #[test]
+    fn daemon_config_missing_uses_realm_controller_default_path() {
+        let root = temp_root();
+        let config = load_config(&root.path().join("missing-daemon-config.json"))
+            .expect("missing daemon config uses defaults");
+        assert_eq!(
+            config.realm_controllers_config_path,
+            PathBuf::from(DEFAULT_REALM_CONTROLLERS_CONFIG_PATH)
+        );
+    }
+
+    #[test]
+    fn daemon_config_strictly_parses_realm_controller_path() {
+        let root = temp_root();
+        let config_path = root.path().join("daemon-config.json");
+        fs::write(
+            &config_path,
+            r#"{
+              "publicSocketPath": "/run/custom/public.sock",
+              "brokerSocketPath": "/run/custom/priv.sock",
+              "stateLockPath": "/run/custom/daemon.lock",
+              "locksDir": "/run/custom/locks",
+              "daemonUser": "d2bd",
+              "daemonGroup": "d2bd",
+              "publicSocketGroup": "d2b",
+              "realmControllersConfigPath": "/etc/d2b/custom-realm-controllers.json"
+            }"#,
+        )
+        .expect("write daemon config");
+        let config = load_config(&config_path).expect("daemon config parses");
+        assert_eq!(
+            config.realm_controllers_config_path,
+            PathBuf::from("/etc/d2b/custom-realm-controllers.json")
+        );
+
+        fs::write(
+            &config_path,
+            r#"{
+              "publicSocketPath": "/run/custom/public.sock",
+              "brokerSocketPath": "/run/custom/priv.sock",
+              "stateLockPath": "/run/custom/daemon.lock",
+              "locksDir": "/run/custom/locks",
+              "daemonUser": "d2bd",
+              "daemonGroup": "d2bd",
+              "publicSocketGroup": "d2b",
+              "unknown": true
+            }"#,
+        )
+        .expect("write strict daemon config");
+        assert!(load_config(&config_path).is_err());
+
+        fs::write(
+            &config_path,
+            r#"{
+              "publicSocketPath": "/run/custom/public.sock",
+              "brokerSocketPath": "/run/custom/priv.sock",
+              "stateLockPath": "/run/custom/daemon.lock",
+              "locksDir": "/run/custom/locks",
+              "daemonUser": "d2bd",
+              "daemonGroup": "d2bd",
+              "publicSocketGroup": "d2b",
+              "realm": {
+                "id": "home",
+                "controllerConfigPath": "/etc/d2b/realms/home/daemon-config.json"
+              }
+            }"#,
+        )
+        .expect("write legacy realm daemon config");
+        assert!(load_config(&config_path).is_err());
+
+        fs::write(
+            &config_path,
+            r#"{
+              "publicSocketPath": "/run/custom/public.sock",
+              "brokerSocketPath": "/run/custom/priv.sock",
+              "stateLockPath": "/run/custom/daemon.lock",
+              "locksDir": "/run/custom/locks",
+              "daemonUser": "d2bd",
+              "daemonGroup": "d2bd",
+              "publicSocketGroup": "d2b",
+              "artifacts": {
+                "publicManifestPath": "/run/current-system/sw/share/d2b/vms.json",
+                "bundlePath": "/etc/d2b/bundle.json",
+                "hostPath": "/etc/d2b/host.json",
+                "processesPath": "/etc/d2b/processes.json",
+                "closuresDir": "/etc/d2b/closures",
+                "realmControllersPath": "/etc/d2b/realm-controllers.json"
+              }
+            }"#,
+        )
+        .expect("write legacy artifact daemon config");
+        assert!(load_config(&config_path).is_err());
+    }
+
+    #[test]
+    fn daemon_realm_controller_loader_handles_missing_and_validates_metadata() {
+        let root = temp_root();
+        let missing_path = root.path().join("missing-realm-controllers.json");
+        assert!(
+            load_realm_controllers_config(&missing_path)
+                .expect("missing realm controllers is optional")
+                .is_none()
+        );
+
+        let config_path = root.path().join("realm-controllers.json");
+        fs::write(&config_path, realm_controllers_json()).expect("write realm controllers");
+        let loaded = load_realm_controllers_config(&config_path)
+            .expect("realm controllers parse")
+            .expect("realm controllers present");
+        assert_eq!(loaded.summary.controller_count, 1);
+        let controller = &loaded.config.controllers[0];
+        assert_eq!(controller.daemon.user.as_str(), "d2br-0123456789abcdef");
+        assert_eq!(controller.broker.group.as_str(), "d2br-0123456789abcdef");
+        assert_eq!(
+            controller.broker.socket_path.as_str(),
+            "/run/d2b/realms/work/priv.sock"
+        );
+
+        let materialized_path = root.path().join("materialized-realm-controllers.json");
+        let materialized = realm_controllers_json()
+            .replace(
+                r#""materializedService": false"#,
+                r#""materializedService": true"#,
+            )
+            .replace(
+                r#""materializedSocket": false"#,
+                r#""materializedSocket": true"#,
+            )
+            .replace(
+                r#""noSystemdUnitsMaterialized": true"#,
+                r#""noSystemdUnitsMaterialized": false"#,
+            );
+        fs::write(&materialized_path, materialized).expect("write materialized realm controllers");
+        let materialized_loaded = load_realm_controllers_config(&materialized_path)
+            .expect("materialized host-local unit metadata remains loadable")
+            .expect("realm controllers present");
+        assert_eq!(materialized_loaded.summary.host_local_controller_count, 1);
+    }
+}
+
 fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, TypedError> {
     if !path.exists() {
         return Ok(None);
@@ -986,6 +1234,24 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         } else {
             crate::new_gateway_display_runtime()
         };
+    if let Some(realm_controllers) =
+        load_realm_controllers_config(&config.realm_controllers_config_path)?
+    {
+        tracing::info!(
+            config_source = "realm-controllers",
+            config_present = true,
+            controller_count = realm_controllers.summary.controller_count,
+            host_local_controller_count = realm_controllers.summary.host_local_controller_count,
+            broker_enabled_count = realm_controllers.summary.broker_enabled_count,
+            "realm-controller metadata loaded; runtime routing remains inert",
+        );
+    } else {
+        tracing::debug!(
+            config_source = "realm-controllers",
+            config_present = false,
+            "realm-controller metadata not present; continuing with single-root daemon config",
+        );
+    }
 
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
@@ -1015,11 +1281,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     match load_bundle_resolver(&state) {
         Ok(resolver) => {
             let report = storage_lifecycle::run_startup_contract_check(&resolver);
-            let report_path = storage_lifecycle_report_path(&state.daemon_state_dir);
             if report.has_only_legacy_contract_issue() {
                 tracing::info!(
                     bundle_version = resolver.bundle.bundle_version,
-                    report_path = %report_path.display(),
+                    report_kind = "storage-lifecycle",
                     "storage-lifecycle: legacy bundle lacks storage/sync contracts; rebuild host configuration to enable startup contract checks",
                 );
             } else if report.is_degraded() {
@@ -1030,7 +1295,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     path_count = report.path_count,
                     restart_policy_count = report.restart_policy_count,
                     lock_count = report.lock_count,
-                    report_path = %report_path.display(),
+                    report_kind = "storage-lifecycle",
                     "storage-lifecycle: startup contract check degraded",
                 );
             } else {
@@ -1038,7 +1303,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     path_count = report.path_count,
                     restart_policy_count = report.restart_policy_count,
                     lock_count = report.lock_count,
-                    report_path = %report_path.display(),
+                    report_kind = "storage-lifecycle",
                     "storage-lifecycle: startup contract check clean",
                 );
             }
@@ -1055,7 +1320,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 Err(err) => {
                     tracing::warn!(
                         error = %err,
-                        report_path = %report_path.display(),
+                        report_kind = "storage-lifecycle",
                         "storage-lifecycle: remove stale report failed",
                     );
                 }
@@ -1066,7 +1331,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             tracing::warn!(
                 error = %error.message(),
                 issue_kinds = %issue_kinds,
-                report_path = %report_path.display(),
+                report_kind = "storage-lifecycle",
                 "storage-lifecycle: skipped (bundle resolver unavailable)",
             );
         }
@@ -1196,7 +1461,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     run_startup_autostart(&state, &combined_pre_degraded).await;
     sd_notify_ready(notify_socket.as_deref());
     tracing::info!(
-        socket = %state.config.public_socket_path.display(),
+        socket_kind = "public",
+        socket_ready = true,
         "d2bd public socket ready; accepting connections",
     );
 

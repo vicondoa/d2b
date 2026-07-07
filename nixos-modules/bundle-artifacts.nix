@@ -137,6 +137,7 @@ let
     "storageJson"
     "syncJson"
     "allocatorJson"
+    "realmControllersJson"
   ];
 
   shouldInstall = artifact:
@@ -212,6 +213,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed allocator.json artifact metadata.";
+    };
+
+    realmControllersJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed realm-controllers.json artifact metadata.";
     };
 
     extraArtifacts = lib.mkOption {

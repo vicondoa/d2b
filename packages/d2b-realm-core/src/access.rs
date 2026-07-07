@@ -1,4 +1,4 @@
-//! Realm access bindings (ADR 0043). Bindings describe how a client reaches a
+//! Realm access bindings. Bindings describe how a client reaches a
 //! realm controller without carrying credential material or provider tokens.
 
 use crate::ids::{ControllerGenerationId, ProviderId};

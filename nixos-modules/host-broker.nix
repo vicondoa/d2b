@@ -25,6 +25,7 @@ let
   # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
+  inherit (d2bLib) stablePrincipalId;
 
   brokerSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-priv-broker";
@@ -54,6 +55,126 @@ EOF
     cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json";
 
   auditRetentionDays = cfg.site.audit.retentionDays or 14;
+  hostLocalBrokerRealms =
+    lib.filter
+      (realm:
+        realm.placement == "host-local"
+        && realm.controller.broker.materializedSocket
+        && realm.controller.broker.materializedService)
+      cfg._index.realms.enabledList;
+  serviceAttrName = unitName: lib.removeSuffix ".service" unitName;
+  socketAttrName = unitName: lib.removeSuffix ".socket" unitName;
+  realmBrokerSocket = realm: {
+    description = "d2b host-local realm privileged broker socket";
+    wantedBy = [ "sockets.target" ];
+    requires = [ "systemd-tmpfiles-setup.service" ];
+    after = [ "systemd-tmpfiles-setup.service" ];
+    socketConfig = {
+      ListenSequentialPacket = realm.controller.broker.socketPath;
+      SocketUser = "root";
+      SocketGroup = realm.controller.broker.group;
+      SocketMode = "0660";
+      Accept = false;
+      FileDescriptorName = "priv.sock";
+    };
+  };
+  realmBrokerService = realm: {
+    description = "d2b host-local realm privileged broker";
+    documentation = [
+      "https://github.com/vicondoa/d2b/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
+      "https://github.com/vicondoa/d2b/blob/main/docs/reference/privileges.md"
+    ];
+    requires = [
+      realm.controller.broker.socketUnitName
+      "systemd-tmpfiles-setup.service"
+    ];
+    after = [
+      realm.controller.broker.socketUnitName
+      "systemd-tmpfiles-setup.service"
+      "local-fs.target"
+    ];
+    environment = {
+      RUST_LOG = lib.mkDefault "info";
+      D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
+      D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
+      D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+    };
+    path = with pkgs; [
+      nftables
+      acl
+      iproute2
+      util-linux
+    ];
+    serviceConfig = {
+      Type = "notify";
+      NotifyAccess = "main";
+      User = "root";
+      Group = realm.controller.broker.group;
+      CapabilityBoundingSet = [
+        "CAP_NET_ADMIN"
+        "CAP_NET_RAW"
+        "CAP_DAC_OVERRIDE"
+        "CAP_DAC_READ_SEARCH"
+        "CAP_SYS_ADMIN"
+        "CAP_SETUID"
+        "CAP_SETGID"
+        "CAP_FOWNER"
+        "CAP_SETPCAP"
+        "CAP_CHOWN"
+        "CAP_FSETID"
+        "CAP_MKNOD"
+        "CAP_SETFCAP"
+        "CAP_SYS_RESOURCE"
+        "CAP_IPC_LOCK"
+        "CAP_LEASE"
+        "CAP_KILL"
+      ];
+      AmbientCapabilities = [ "" ];
+      NoNewPrivileges = false;
+      Slice = "d2b.slice";
+      Delegate = true;
+      KillMode = "process";
+      PrivateTmp = true;
+      ProtectHome = false;
+      ProtectClock = true;
+      ProtectProc = "invisible";
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_NETLINK"
+        "AF_VSOCK"
+        "AF_INET"
+        "AF_INET6"
+      ];
+      SystemCallArchitectures = "native";
+      UMask = "0027";
+      ExecStart =
+        "${brokerPackage}/bin/d2b-priv-broker serve " +
+        "--audit-dir ${realm.controller.broker.auditDir} " +
+        "--audit-retention-days ${toString auditRetentionDays} " +
+        "--bundle-path ${bundleManifestPath} " +
+        "--realm-controllers-path /etc/d2b/realm-controllers.json " +
+        "--state-dir ${realm.paths.stateDir} " +
+        "--d2bd-uid ${toString (stablePrincipalId realm.controller.daemon.user)} " +
+        "--d2bd-gid ${toString (stablePrincipalId realm.controller.daemon.group)}";
+      Restart = "on-failure";
+      RestartSec = "2s";
+      StandardOutput = "journal";
+      StandardError = "journal";
+      SyslogIdentifier = "d2b-realm-priv-broker";
+    };
+  };
+  realmBrokerSockets = lib.listToAttrs (map
+    (realm: {
+      name = socketAttrName realm.controller.broker.socketUnitName;
+      value = realmBrokerSocket realm;
+    })
+    hostLocalBrokerRealms);
+  realmBrokerServices = lib.listToAttrs (map
+    (realm: {
+      name = serviceAttrName realm.controller.broker.serviceUnitName;
+      value = realmBrokerService realm;
+    })
+    hostLocalBrokerRealms);
 in
 
 {
@@ -81,6 +202,7 @@ in
     # this module MUST NOT touch /run/d2b tmpfiles to avoid the
     # runtime-dir ownership conflict).
     systemd.tmpfiles.rules = [
+      "d /run/d2b/broker 0750 root d2bd -"
       "d /var/lib/d2b/audit 0750 root d2bd -"
       "d /var/lib/d2b/current-bundle 0755 root root -"
     ];
@@ -105,7 +227,8 @@ in
     # of /run/d2b/priv.sock. The broker process receives the fd
     # via SD_LISTEN_FDS=1 LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock and
     # MUST NOT bind/listen itself when activated this way.
-    systemd.sockets.d2b-priv-broker = {
+    systemd.sockets = {
+      d2b-priv-broker = {
       description = "d2b privileged broker socket";
       wantedBy = [ "sockets.target" ];
       requires = [ "systemd-tmpfiles-setup.service" ];
@@ -118,9 +241,11 @@ in
         Accept = false;
         FileDescriptorName = "priv.sock";
       };
-    };
+      };
+    } // realmBrokerSockets;
 
-    systemd.services.d2b-priv-broker = {
+    systemd.services = {
+      d2b-priv-broker = {
       description = "d2b privileged broker (uid 0 host-mutation surface)";
       documentation = [
         "https://github.com/vicondoa/d2b/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
@@ -257,14 +382,25 @@ in
         SystemCallArchitectures = "native";
         UMask = "0027";
 
-        # Resolve d2bd uid/gid at start time. Broker validates
-        # SO_PEERCRED on incoming connections against these.
+        # Resolve d2bd uid/gid at start time into a unit-local
+        # EnvironmentFile. This avoids mutating global systemd manager
+        # environment while still supporting systems that allocated d2bd
+        # dynamically before stable numeric ids were introduced.
+        EnvironmentFile = "/run/d2b/broker/priv-broker.env";
         ExecStartPre = "+${pkgs.writeShellScript "d2b-priv-broker-prep" ''
           set -euo pipefail
+          env_file=/run/d2b/broker/priv-broker.env
+          env_tmp=/run/d2b/broker/priv-broker.env.new
           uid=$(${pkgs.coreutils}/bin/id -u d2bd)
           gid=$(${pkgs.coreutils}/bin/id -g d2bd)
-          ${pkgs.systemd}/bin/systemctl set-environment D2BD_UID="$uid"
-          ${pkgs.systemd}/bin/systemctl set-environment D2BD_GID="$gid"
+          umask 0077
+          {
+            printf 'D2BD_UID=%s\n' "$uid"
+            printf 'D2BD_GID=%s\n' "$gid"
+          } > "$env_tmp"
+          ${pkgs.coreutils}/bin/chown root:d2bd "$env_tmp"
+          ${pkgs.coreutils}/bin/chmod 0640 "$env_tmp"
+          ${pkgs.coreutils}/bin/mv -f "$env_tmp" "$env_file"
         ''}";
 
         # NOTE: NO --socket-path here. With SD_LISTEN_FDS the broker
@@ -275,6 +411,7 @@ in
           "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
+          "--realm-controllers-path /etc/d2b/realm-controllers.json " +
           "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";
@@ -284,26 +421,27 @@ in
         StandardError = "journal";
         SyslogIdentifier = "d2b-priv-broker";
       };
-    };
+      };
 
-    # Daemon: Wants= (not Requires=) the broker socket so daemon
-    # serving doesn't hard-fail if the socket-activated broker has
-    # idled out. Daemon code reconnects on ENOENT/ECONNRESET per
-    # request.
-    #
-    # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
-    # d2bd)` caused infinite recursion in the NixOS module system
-    # because it forced evaluation of `systemd.services` from within a
-    # definition contributing to `systemd.services`. This broker module
-    # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
-    # gated on `daemonExperimental.enable`. The guard is unnecessary: we
-    # unconditionally merge the wants/after entries here — they are
-    # harmless if the `d2bd` unit is absent (e.g. when
-    # `daemonExperimental.enable = false` drops the daemon config),
-    # since systemd merges these at the unit-file level.
-    systemd.services.d2bd = {
-      wants = [ "d2b-priv-broker.socket" ];
-      after = [ "d2b-priv-broker.socket" ];
-    };
+      # Daemon: Wants= (not Requires=) the broker socket so daemon
+      # serving doesn't hard-fail if the socket-activated broker has
+      # idled out. Daemon code reconnects on ENOENT/ECONNRESET per
+      # request.
+      #
+      # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
+      # d2bd)` caused infinite recursion in the NixOS module system
+      # because it forced evaluation of `systemd.services` from within a
+      # definition contributing to `systemd.services`. This broker module
+      # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
+      # gated on `daemonExperimental.enable`. The guard is unnecessary: we
+      # unconditionally merge the wants/after entries here — they are
+      # harmless if the `d2bd` unit is absent (e.g. when
+      # `daemonExperimental.enable = false` drops the daemon config),
+      # since systemd merges these at the unit-file level.
+      d2bd = {
+        wants = [ "d2b-priv-broker.socket" ];
+        after = [ "d2b-priv-broker.socket" ];
+      };
+    } // realmBrokerServices;
   };
 }

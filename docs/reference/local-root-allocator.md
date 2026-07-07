@@ -13,10 +13,10 @@ realm-broker dispatch for these DTOs.
 The local-root allocator is the future local authority for host resources
 that cannot safely be created independently by each realm broker. Realm
 brokers request typed leases from the allocator instead of inventing
-interface names, writing host files, or creating their own lock files.
-The allocator decides whether the requested resource set can be granted,
-denied, quarantined, or reclaimed while preserving a single
-fail-closed ownership ledger.
+interface names, writing host files, creating their own lock files, or
+asking the host daemon to proxy raw mutation bytes. The allocator decides
+whether the requested resource set can be granted, denied, quarantined, or
+reclaimed while preserving a single fail-closed ownership ledger.
 
 The contract is intentionally host-local. It does not grant relay
 identity, remote-provider credentials, cross-realm policy authority, or
@@ -122,6 +122,10 @@ The current crate defines these reports and bounds them to keep audit and
 metric metadata small. It does not yet observe the live kernel, mutate
 nftables, create cgroups, or repair host files.
 
+`/etc/d2b/realm-controllers.json` may reference allocator resource ids for a
+realm, but those references remain metadata until a runtime allocator exists.
+They do not grant host mutation authority by themselves.
+
 Future operator repair should be explicit and evidence-driven rather than
 automatic cleanup. A future CLI or daemon repair path for states such as
 `DriftDetected`, `ReconcileMismatch`, or quarantine should inspect the
@@ -143,6 +147,9 @@ sweeps, or direct host-resource mutation paths to work around the
 allocator. If the allocator contract cannot represent a resource or lock
 ordering, the correct next step is to extend the contract and schema, not
 to bypass it in a broker.
+
+See [Realm controller configuration](./realm-controller-config.md) for the
+metadata artifact that records each realm's allocator binding.
 
 ## Redaction and observability
 

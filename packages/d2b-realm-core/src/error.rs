@@ -1,4 +1,4 @@
-//! Typed error surface for the realm model (ADR 0043, ADR 0010
+//! Typed error surface for the realm model (ADR 0010
 //! strict wire discipline). Errors are closed-enum and carry no secrets,
 //! command output, store paths, or stream payload.
 

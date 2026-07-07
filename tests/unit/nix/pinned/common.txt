@@ -588,11 +588,14 @@ readiness-waves/has-p7
 readiness-waves/p0-implemented-default
 readiness-waves/p0-validated-default
 realms/allocator-artifact-roots-enabled-realm-index
+realms/controller-config-artifact-materializes-host-local-units
 realms/examples-minimal-and-multi-env-still-eval
+realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units
 realms/index-normalizes-enabled-disabled-and-derived-paths
 realms/rejects-duplicate-id-and-path
 realms/rejects-duplicate-runtime-paths
 realms/rejects-legacy-gateway-aca-surface-with-migration-guidance
+realms/rejects-missing-host-local-allowed-user
 realms/rejects-missing-parent
 realms/rejects-overlong-unix-socket-paths
 realms/rejects-parent-cycle

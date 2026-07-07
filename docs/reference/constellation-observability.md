@@ -21,7 +21,7 @@ credentials, SSH, generic tunnels, or host-owned relay sessions.
 
 ## Trace context
 
-Wave 19 uses the existing ADR032 `TraceContext` model. Trace fields are bounded
+Constellation inspection uses the existing ADR032 `TraceContext` model. Trace fields are bounded
 and optional; malformed trace context is rejected at the CLI boundary rather
 than propagated into daemon, gateway, provider, or telemetry surfaces.
 

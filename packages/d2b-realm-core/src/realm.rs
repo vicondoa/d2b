@@ -16,7 +16,7 @@ pub enum EntrypointMode {
     GatewayBacked,
 }
 
-/// Where a realm controller is placed in the ADR 0043 realm-native model.
+/// Where a realm controller is placed in the realm-native model.
 ///
 /// This is capability-neutral placement metadata. Whether a placement can
 /// perform lifecycle, exec, display, or provider operations is advertised
