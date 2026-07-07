@@ -187,16 +187,6 @@ let
   realmParentCycles = lib.unique
     (lib.filter (cycle: cycle != null)
       (map realmParentCycleFor enabledRealmRows));
-  realmLocalUnitOrderingRows = lib.filter
-    (realm: realm.localUnitOrdering != null)
-    enabledRealmRows;
-  invalidRealmLocalUnitOrderingRows = lib.filter
-    (realm:
-      realm.parentPath == null
-      || realm.placement != "host-local"
-      || !(builtins.isAttrs realm.localUnitOrdering))
-    realmLocalUnitOrderingRows;
-
   realmAssertions = [
     {
       assertion = duplicateRealmIds == [ ];
@@ -232,16 +222,6 @@ let
           lib.concatStringsSep "; " (map
             (cycle: lib.concatStringsSep " -> " cycle)
             realmParentCycles)
-        }.
-      '';
-    }
-    {
-      assertion = invalidRealmLocalUnitOrderingRows == [ ];
-      message = ''
-        child local unit ordering metadata, when present, is valid only on
-        enabled host-local child realms and must be an attrset. Invalid realm
-        path(s): ${
-          lib.concatStringsSep ", " (map (realm: realm.path) invalidRealmLocalUnitOrderingRows)
         }.
       '';
     }

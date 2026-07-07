@@ -269,7 +269,6 @@ in
           placement = "provider-agent";
           capabilityRefs = [ "aca" "relay" ];
           configRef = "work-aca-non-secret";
-          localUnitOrdering = null;
         };
         relay = {
           enable = true;

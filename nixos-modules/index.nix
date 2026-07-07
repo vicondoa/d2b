@@ -131,10 +131,6 @@ let
             else realm.placement;
           capabilityRefs = sortNames (lib.unique provider.capabilityRefs);
           configRef = provider.configRef;
-          localUnitOrdering =
-            if provider ? localUnitOrdering
-            then provider.localUnitOrdering
-            else null;
         };
       })
       realm.providers);
@@ -161,10 +157,6 @@ let
       providerSpecificPlacement = realm.providerSpecificPlacement;
       allowedUsers = sortNames (lib.unique realm.allowedUsers);
       defaultWorkloadNamespace = realm.defaultWorkloadNamespace;
-      localUnitOrdering =
-        if realm ? localUnitOrdering
-        then realm.localUnitOrdering
-        else null;
       network = {
         env = realm.env;
         envNames = envNames;
