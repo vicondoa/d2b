@@ -28,14 +28,14 @@ pub fn resolve_local_root_realm_access(
     };
 
     let observed_generation = realm_controllers_config_generation(&loaded.config);
-    if let Some(expected_generation) = expected_controller_generation {
-        if expected_generation != &observed_generation {
-            return Err(stale_controller_error(
-                resolved.target.realm.clone(),
-                expected_generation.clone(),
-                Some(observed_generation),
-            ));
-        }
+    if let Some(expected_generation) = expected_controller_generation
+        && expected_generation != &observed_generation
+    {
+        return Err(stale_controller_error(
+            resolved.target.realm.clone(),
+            expected_generation.clone(),
+            Some(observed_generation),
+        ));
     }
 
     let Some(controller) = find_controller_for_realm(&loaded.config, &resolved.target.realm) else {
