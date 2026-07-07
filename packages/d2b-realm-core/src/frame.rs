@@ -312,6 +312,8 @@ impl OperationRequest {
 pub struct OperationResponse {
     /// Correlates to the request.
     pub operation_id: OperationId,
+    /// Cross-realm correlation id shared across response, route, and audit hops.
+    pub correlation_id: CorrelationId,
     /// Opaque, bounded operation-specific body (codec-defined).
     pub body: OpaquePayload,
 }
@@ -701,6 +703,19 @@ mod tests {
                          \"realm\":[\"work\"],\"node\":\"n1\",\"principal\":\"p1\",\
                          \"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(malformed).is_err());
+    }
+
+    #[test]
+    fn operation_response_requires_bounded_correlation_id() {
+        let missing = "{\"operation_id\":\"op1\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationResponse>(missing).is_err());
+
+        let malformed =
+            "{\"operation_id\":\"op1\",\"correlation_id\":\"secret-token\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationResponse>(malformed).is_err());
+
+        let ok = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationResponse>(ok).is_ok());
     }
 
     #[test]

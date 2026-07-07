@@ -17,7 +17,7 @@ use prost::Message;
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op19:sk13:err20:audit12:cap21";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op19:resp3:sk13:err20:audit12:cap21";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -166,6 +166,8 @@ struct ProtoOperationResponse {
     operation_id: String,
     #[prost(message, optional, tag = "2")]
     body: Option<ProtoPayload>,
+    #[prost(string, tag = "3")]
+    correlation_id: String,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -606,6 +608,7 @@ fn encode_operation_response(frame: &OperationResponse) -> ProtoOperationRespons
     ProtoOperationResponse {
         operation_id: frame.operation_id.as_str().to_owned(),
         body: Some(encode_payload(&frame.body)),
+        correlation_id: frame.correlation_id.as_str().to_owned(),
     }
 }
 
@@ -614,6 +617,10 @@ fn decode_operation_response(
 ) -> Result<OperationResponse, ConstellationError> {
     Ok(OperationResponse {
         operation_id: parse_operation_id(frame.operation_id, "operation_response operation_id")?,
+        correlation_id: parse_correlation_id(
+            frame.correlation_id,
+            "operation_response correlation_id",
+        )?,
         body: decode_payload(frame.body, "operation_response body")?,
     })
 }
@@ -1302,6 +1309,52 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_operation_response_requires_bounded_correlation_id() {
+        let codec = ProtobufCodec::new();
+        let missing = ProtoFrame {
+            body: Some(proto_frame::Body::OperationResponse(
+                ProtoOperationResponse {
+                    operation_id: "op-1".to_owned(),
+                    body: Some(ProtoPayload { bytes: Vec::new() }),
+                    correlation_id: String::new(),
+                },
+            )),
+        }
+        .encode_to_vec();
+        assert_malformed(codec.decode_frame(&missing));
+
+        let malformed = ProtoFrame {
+            body: Some(proto_frame::Body::OperationResponse(
+                ProtoOperationResponse {
+                    operation_id: "op-1".to_owned(),
+                    body: Some(ProtoPayload { bytes: Vec::new() }),
+                    correlation_id: "secret-token".to_owned(),
+                },
+            )),
+        }
+        .encode_to_vec();
+        assert_malformed(codec.decode_frame(&malformed));
+    }
+
+    #[test]
+    fn protobuf_operation_response_round_trips_correlation_id() {
+        let codec = ProtobufCodec::new();
+        let frame = ConstellationFrame::OperationResponse(OperationResponse {
+            operation_id: operation_id("op-1"),
+            correlation_id: CorrelationId::parse("corr-response-1").unwrap(),
+            body: payload(b"response-body"),
+        });
+
+        let decoded = codec
+            .decode_frame(&codec.encode_frame(&frame).unwrap())
+            .unwrap();
+        let ConstellationFrame::OperationResponse(response) = decoded else {
+            panic!("expected operation response frame");
+        };
+        assert_eq!(response.correlation_id.as_str(), "corr-response-1");
+    }
+
+    #[test]
     fn protobuf_decode_rejects_oversized_input_before_prost_decode() {
         let codec = ProtobufCodec::new();
         let oversized = vec![0xff; MAX_FRAME_SIZE + 1];
@@ -1566,6 +1619,7 @@ mod tests {
             }),
             ConstellationFrame::OperationResponse(OperationResponse {
                 operation_id: operation_id.clone(),
+                correlation_id: correlation_id(),
                 body: payload(b"response-body"),
             }),
             ConstellationFrame::StreamOpen(StreamOpen {
