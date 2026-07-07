@@ -10,6 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated the `crossbeam-epoch` lockfile entry to a non-vulnerable release for
+  the RustSec advisory check.
+
 ### Added
 
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
