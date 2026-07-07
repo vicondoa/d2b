@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ConstellationCoreSchema",
+  "title": "D2bRealmCoreSchema",
   "anyOf": [
     {
       "$ref": "#/definitions/RealmId"
@@ -42,6 +42,21 @@
       "$ref": "#/definitions/IdempotencyKey"
     },
     {
+      "$ref": "#/definitions/RouteId"
+    },
+    {
+      "$ref": "#/definitions/CorrelationId"
+    },
+    {
+      "$ref": "#/definitions/ControllerGenerationId"
+    },
+    {
+      "$ref": "#/definitions/EnrollmentId"
+    },
+    {
+      "$ref": "#/definitions/RevocationId"
+    },
+    {
       "$ref": "#/definitions/Capability"
     },
     {
@@ -49,6 +64,81 @@
     },
     {
       "$ref": "#/definitions/CapabilityNegotiation"
+    },
+    {
+      "$ref": "#/definitions/RealmControllerPlacement"
+    },
+    {
+      "$ref": "#/definitions/UnixSocketPath"
+    },
+    {
+      "$ref": "#/definitions/AccessBindingRef"
+    },
+    {
+      "$ref": "#/definitions/RealmTransportBinding"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessBinding"
+    },
+    {
+      "$ref": "#/definitions/ProviderRegistryEntry"
+    },
+    {
+      "$ref": "#/definitions/WorkloadPlacement"
+    },
+    {
+      "$ref": "#/definitions/WorkloadPlacementSummary"
+    },
+    {
+      "$ref": "#/definitions/KeyFingerprint"
+    },
+    {
+      "$ref": "#/definitions/RealmKeyRole"
+    },
+    {
+      "$ref": "#/definitions/KeyPin"
+    },
+    {
+      "$ref": "#/definitions/EnrollmentStatus"
+    },
+    {
+      "$ref": "#/definitions/EnrollmentRecord"
+    },
+    {
+      "$ref": "#/definitions/RevocationTarget"
+    },
+    {
+      "$ref": "#/definitions/RevocationStatus"
+    },
+    {
+      "$ref": "#/definitions/RevocationRecord"
+    },
+    {
+      "$ref": "#/definitions/SignatureRef"
+    },
+    {
+      "$ref": "#/definitions/RealmTreeEdge"
+    },
+    {
+      "$ref": "#/definitions/DescendantRoute"
+    },
+    {
+      "$ref": "#/definitions/RouteSignature"
+    },
+    {
+      "$ref": "#/definitions/RouteAdvertisement"
+    },
+    {
+      "$ref": "#/definitions/LegacySurface"
+    },
+    {
+      "$ref": "#/definitions/MigrationLegacyId"
+    },
+    {
+      "$ref": "#/definitions/MigrationReasonCode"
+    },
+    {
+      "$ref": "#/definitions/MigrationErrorEnvelope"
     },
     {
       "$ref": "#/definitions/NodeSummary"
@@ -193,6 +283,12 @@
     }
   ],
   "definitions": {
+    "AccessBindingRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
     "AdmissionAuditRecord": {
       "description": "A redacted pre-auth/session-admission denial record. This is separate from [`AuditEnvelope`] because no authenticated principal may exist yet.",
       "type": "object",
@@ -1583,6 +1679,183 @@
         }
       ]
     },
+    "ControllerGenerationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "CorrelationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "DescendantRoute": {
+      "description": "One descendant route advertised by a realm controller.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "descendant",
+        "nextHopChild",
+        "routeId"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Positive capabilities reachable on this route.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "descendant": {
+          "description": "Descendant reachable below the advertising realm.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "nextHopChild": {
+          "description": "Next child label below the advertiser.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "routeId": {
+          "description": "Route id for this descendant path.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RouteId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnrollmentId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "EnrollmentRecord": {
+      "description": "Metadata-only enrollment record for a child realm.",
+      "type": "object",
+      "required": [
+        "bootstrapMethod",
+        "childKeyPin",
+        "childRealm",
+        "controllerGeneration",
+        "createdAtUnixSeconds",
+        "enrollmentId",
+        "parentKeyPin",
+        "parentRealm",
+        "status",
+        "updatedAtUnixSeconds"
+      ],
+      "properties": {
+        "bootstrapMethod": {
+          "description": "Bounded provider/bootstrap method token.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "childKeyPin": {
+          "description": "Child identity pin metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeyPin"
+            }
+          ]
+        },
+        "childRealm": {
+          "description": "Child realm being enrolled.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "controllerGeneration": {
+          "description": "Active controller generation for this enrollment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "correlationId": {
+          "description": "Correlation id for audit across parent/child records.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAtUnixSeconds": {
+          "description": "Enrollment creation time.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "enrollmentId": {
+          "description": "Enrollment record id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnrollmentId"
+            }
+          ]
+        },
+        "parentKeyPin": {
+          "description": "Parent trust-anchor pin metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeyPin"
+            }
+          ]
+        },
+        "parentRealm": {
+          "description": "Parent realm that admits the child.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnrollmentStatus"
+            }
+          ]
+        },
+        "updatedAtUnixSeconds": {
+          "description": "Last status update time.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnrollmentStatus": {
+      "description": "Enrollment lifecycle status.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "accepted",
+        "rejected",
+        "superseded",
+        "revoked"
+      ]
+    },
     "ErrorKind": {
       "description": "Stable, closed-enum classification of a constellation failure. Codecs map this to/from typed error frames; it never carries payload bytes.",
       "oneOf": [
@@ -2132,6 +2405,159 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
+    "KeyFingerprint": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "KeyPin": {
+      "description": "Parent/child key pinning metadata.",
+      "type": "object",
+      "required": [
+        "controllerGeneration",
+        "fingerprint",
+        "peer",
+        "pinnedAtUnixSeconds",
+        "realm",
+        "role"
+      ],
+      "properties": {
+        "controllerGeneration": {
+          "description": "Controller generation that produced or accepted this pin.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "fingerprint": {
+          "description": "Fingerprint only; no key bytes.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeyFingerprint"
+            }
+          ]
+        },
+        "peer": {
+          "description": "Parent or child label at the trust edge.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "pinnedAtUnixSeconds": {
+          "description": "Issuance/observation time as Unix seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "realm": {
+          "description": "Realm whose key is pinned.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "role": {
+          "description": "Key role represented by this fingerprint.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmKeyRole"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LegacySurface": {
+      "description": "Legacy surface that triggered a realm-native migration diagnostic.",
+      "type": "string",
+      "enum": [
+        "gateway",
+        "aca-sandbox",
+        "group",
+        "env",
+        "old-realm-entrypoint",
+        "node-qualified-target"
+      ]
+    },
+    "MigrationErrorEnvelope": {
+      "description": "Fail-closed migration diagnostic for removed gateway/ACA/group/env surfaces.",
+      "type": "object",
+      "required": [
+        "message",
+        "reason",
+        "surface"
+      ],
+      "properties": {
+        "correlationId": {
+          "description": "Optional cross-log correlation id.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "legacyId": {
+          "description": "Optional bounded legacy option/state identifier; never a path or secret.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MigrationLegacyId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "description": "Operator-safe bounded diagnostic.",
+          "type": "string",
+          "maxLength": 256
+        },
+        "reason": {
+          "description": "Low-cardinality reason.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MigrationReasonCode"
+            }
+          ]
+        },
+        "surface": {
+          "description": "Legacy surface family.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacySurface"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrationLegacyId": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "MigrationReasonCode": {
+      "description": "Low-cardinality migration reason code.",
+      "type": "string",
+      "enum": [
+        "legacy-surface-detected",
+        "migration-required",
+        "operator-mapping-required",
+        "ambiguous-group-mapping",
+        "unsupported-aca-contract",
+        "legacy-runtime-state-detected",
+        "import-failed",
+        "removed-option"
+      ]
+    },
     "NodeId": {
       "type": "string",
       "maxLength": 128,
@@ -2427,11 +2853,721 @@
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*$"
     },
+    "ProviderRegistryEntry": {
+      "description": "Provider registry entry owned by a realm controller. Capabilities are positive assertions; absent capabilities must be treated as denial.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "controllerPlacement",
+        "provider",
+        "providerKind",
+        "realm"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Positive provider capability advertisement.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "controllerPlacement": {
+          "description": "Controller placement through which the provider is managed.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmControllerPlacement"
+            }
+          ]
+        },
+        "provider": {
+          "description": "Provider id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProviderId"
+            }
+          ]
+        },
+        "providerKind": {
+          "description": "Provider implementation/class token.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm that owns this registry row.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessBinding": {
+      "description": "Resolved access binding for a realm controller generation.",
+      "type": "object",
+      "required": [
+        "controllerGeneration",
+        "placement",
+        "realm",
+        "transport"
+      ],
+      "properties": {
+        "controllerGeneration": {
+          "description": "Controller generation that issued this binding.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "placement": {
+          "description": "Controller placement metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmControllerPlacement"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Realm reached by this binding.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "transport": {
+          "description": "Concrete transport binding.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTransportBinding"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerPlacement": {
+      "description": "Where a realm controller is placed in the ADR 0043 realm-native model.\n\nThis is capability-neutral placement metadata. Whether a placement can perform lifecycle, exec, display, or provider operations is advertised separately through [`crate::capability::CapabilitySet`].",
+      "oneOf": [
+        {
+          "description": "Isolated realm service on the physical host.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host-local"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Dedicated local gateway VM.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "gateway-vm"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Cloud VM running full d2b.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cloud-full-host"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Provider-supported controller environment.",
+          "type": "object",
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider-controller"
+              ]
+            },
+            "provider": {
+              "description": "Provider that owns the controller substrate.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProviderId"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Agent inside or adjacent to a managed provider sandbox.",
+          "type": "object",
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider-agent"
+              ]
+            },
+            "provider": {
+              "description": "Provider that owns the sandbox substrate.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProviderId"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Provider-specific placement that is still described through the shared realm protocol and positive capability advertisement.",
+          "type": "object",
+          "required": [
+            "kind",
+            "placement",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider-specific"
+              ]
+            },
+            "placement": {
+              "description": "Bounded non-secret provider placement token.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                }
+              ]
+            },
+            "provider": {
+              "description": "Provider that defines the placement token.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProviderId"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "RealmId": {
       "type": "string",
       "maxLength": 128,
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmKeyRole": {
+      "description": "Role of a pinned realm key.",
+      "oneOf": [
+        {
+          "description": "Long-lived realm identity key.",
+          "type": "string",
+          "enum": [
+            "realm-identity"
+          ]
+        },
+        {
+          "description": "Parent realm trust anchor pinned into a child.",
+          "type": "string",
+          "enum": [
+            "parent-trust-anchor"
+          ]
+        },
+        {
+          "description": "Child realm identity observed and pinned by a parent.",
+          "type": "string",
+          "enum": [
+            "child-identity"
+          ]
+        },
+        {
+          "description": "Controller-generation signing key.",
+          "type": "string",
+          "enum": [
+            "controller-generation"
+          ]
+        }
+      ]
+    },
+    "RealmTransportBinding": {
+      "description": "Transport binding for reaching a realm controller.",
+      "oneOf": [
+        {
+          "description": "Direct host-local Unix socket. Authentication remains OS DAC + `SO_PEERCRED`; no local-root byte proxy is implied.",
+          "type": "object",
+          "required": [
+            "socket_path",
+            "type"
+          ],
+          "properties": {
+            "socket_path": {
+              "description": "Socket path for this realm controller.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/UnixSocketPath"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "local-unix-socket"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Remote realm-tree transport selected by the resolver.",
+          "type": "object",
+          "required": [
+            "binding_ref",
+            "transport",
+            "type"
+          ],
+          "properties": {
+            "binding_ref": {
+              "description": "Non-secret resolver reference for endpoint lookup.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AccessBindingRef"
+                }
+              ]
+            },
+            "transport": {
+              "description": "Bounded transport kind, e.g. `relay-v1` or `mtls-v1`.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "remote-realm-transport"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Provider-backed realm transport selected by the resolver.",
+          "type": "object",
+          "required": [
+            "binding_ref",
+            "provider",
+            "transport",
+            "type"
+          ],
+          "properties": {
+            "binding_ref": {
+              "description": "Non-secret provider binding reference.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AccessBindingRef"
+                }
+              ]
+            },
+            "provider": {
+              "description": "Provider owning the transport binding.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProviderId"
+                }
+              ]
+            },
+            "transport": {
+              "description": "Bounded provider transport kind.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "provider-realm-transport"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RealmTreeEdge": {
+      "description": "Parent/child tree edge metadata.",
+      "type": "object",
+      "required": [
+        "child",
+        "parent"
+      ],
+      "properties": {
+        "child": {
+          "description": "Direct child realm.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "parent": {
+          "description": "Parent realm.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RevocationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RevocationRecord": {
+      "description": "Metadata-only revocation record.",
+      "type": "object",
+      "required": [
+        "issuedAtUnixSeconds",
+        "issuerControllerGeneration",
+        "issuerRealm",
+        "reason",
+        "revocationId",
+        "status",
+        "target"
+      ],
+      "properties": {
+        "correlationId": {
+          "description": "Cross-realm audit correlation id.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effectiveAtUnixSeconds": {
+          "description": "Optional effective time.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuedAtUnixSeconds": {
+          "description": "Issue time.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuerControllerGeneration": {
+          "description": "Issuer controller generation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "issuerRealm": {
+          "description": "Realm issuing the revocation.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "reason": {
+          "description": "Low-cardinality reason code.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "revocationId": {
+          "description": "Revocation record id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RevocationId"
+            }
+          ]
+        },
+        "status": {
+          "description": "Current status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RevocationStatus"
+            }
+          ]
+        },
+        "target": {
+          "description": "Target metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RevocationTarget"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RevocationStatus": {
+      "description": "Revocation lifecycle status.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "effective",
+        "propagated",
+        "superseded"
+      ]
+    },
+    "RevocationTarget": {
+      "description": "Thing revoked by a parent or realm controller.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "fingerprint",
+            "kind",
+            "realm",
+            "role"
+          ],
+          "properties": {
+            "fingerprint": {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-key"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            },
+            "role": {
+              "$ref": "#/definitions/RealmKeyRole"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "controller_generation",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "controller_generation": {
+              "$ref": "#/definitions/ControllerGenerationId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "controller-generation"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "enrollment_id",
+            "kind"
+          ],
+          "properties": {
+            "enrollment_id": {
+              "$ref": "#/definitions/EnrollmentId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "enrollment"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RouteAdvertisement": {
+      "description": "Signed, expiring descendant-only route advertisement.",
+      "type": "object",
+      "required": [
+        "advertisingRealm",
+        "controllerGeneration",
+        "correlationId",
+        "expiresAtUnixSeconds",
+        "issuedAtUnixSeconds",
+        "routes",
+        "signature",
+        "treeEdge"
+      ],
+      "properties": {
+        "advertisingRealm": {
+          "description": "Advertising realm.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "controllerGeneration": {
+          "description": "Controller generation that signed the advertisement.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationId"
+            }
+          ]
+        },
+        "correlationId": {
+          "description": "Bounded correlation id shared across route-decision audit records.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
+        "expiresAtUnixSeconds": {
+          "description": "Expiry time as Unix seconds. Must be greater than issue time.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuedAtUnixSeconds": {
+          "description": "Issue time as Unix seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "routes": {
+          "description": "Routes below `advertising_realm`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DescendantRoute"
+          }
+        },
+        "signature": {
+          "description": "Signature metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RouteSignature"
+            }
+          ]
+        },
+        "treeEdge": {
+          "description": "Parent/child edge that authorizes this advertisement.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTreeEdge"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RouteSignature": {
+      "description": "Signature metadata for a route advertisement.",
+      "type": "object",
+      "required": [
+        "algorithm",
+        "keyRole",
+        "signatureRef",
+        "signingKeyFingerprint"
+      ],
+      "properties": {
+        "algorithm": {
+          "description": "Signature algorithm token.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          ]
+        },
+        "keyRole": {
+          "description": "Controller key role used for signing.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmKeyRole"
+            }
+          ]
+        },
+        "signatureRef": {
+          "description": "Detached signature reference or bounded signature fingerprint.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SignatureRef"
+            }
+          ]
+        },
+        "signingKeyFingerprint": {
+          "description": "Fingerprint of the signing key; no key bytes.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeyFingerprint"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ShellAttachId": {
       "type": "string",
@@ -2752,6 +3888,12 @@
       },
       "additionalProperties": false
     },
+    "SignatureRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
+    },
     "StreamAuthz": {
       "description": "The authorization context evaluated before a stream is opened. The `capability` is always derived from the stream kind via [`StreamAuthz::for_kind`] so a caller cannot pair a stream kind with a weaker capability.",
       "type": "object",
@@ -3037,11 +4179,197 @@
       },
       "additionalProperties": false
     },
+    "UnixSocketPath": {
+      "type": "string",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^/[^\\0]*$"
+    },
     "WorkloadId": {
       "type": "string",
       "maxLength": 128,
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadPlacement": {
+      "description": "Coarse workload placement kind for inventory and preflight output.",
+      "oneOf": [
+        {
+          "description": "Workload runs on a host-local runtime provider.",
+          "type": "object",
+          "required": [
+            "kind",
+            "node"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host-local"
+              ]
+            },
+            "node": {
+              "description": "Node that currently owns the workload.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NodeId"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Workload runs inside a gateway VM realm.",
+          "type": "object",
+          "required": [
+            "gateway",
+            "kind"
+          ],
+          "properties": {
+            "gateway": {
+              "description": "Gateway node that currently owns the workload.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NodeId"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "gateway-vm"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Workload runs on a cloud full-host realm.",
+          "type": "object",
+          "required": [
+            "kind",
+            "node"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cloud-full-host"
+              ]
+            },
+            "node": {
+              "description": "Cloud node id.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NodeId"
+                }
+              ]
+            },
+            "region": {
+              "description": "Non-secret provider region/class token.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Provider-managed sandbox/session.",
+          "type": "object",
+          "required": [
+            "kind",
+            "placement",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider-managed"
+              ]
+            },
+            "placement": {
+              "description": "Non-secret provider placement class.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProtocolToken"
+                }
+              ]
+            },
+            "provider": {
+              "description": "Provider that owns the sandbox/session.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ProviderId"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "WorkloadPlacementSummary": {
+      "description": "Workload placement summary for machine-readable inventory.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "placement",
+        "realm",
+        "workload"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Positive workload capability advertisement.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "placement": {
+          "description": "Resolved placement metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadPlacement"
+            }
+          ]
+        },
+        "provider": {
+          "description": "Provider registry row, when provider-backed.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProviderId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "description": "Owning realm.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "workload": {
+          "description": "Workload id within the realm.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "WorkloadSelector": {
       "description": "A selector for listing workloads.",

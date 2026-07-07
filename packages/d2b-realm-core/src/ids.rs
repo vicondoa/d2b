@@ -280,6 +280,41 @@ id_newtype!(
     OPAQUE_PATTERN,
     IdDebug::Redacted
 );
+id_newtype!(
+    /// Bounded route identifier for parent/child realm route advertisements.
+    RouteId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Bounded cross-realm correlation id shared across route and audit hops.
+    CorrelationId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque controller-generation id for a realm controller's runtime keys.
+    ControllerGenerationId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque enrollment record id.
+    EnrollmentId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque revocation record id.
+    RevocationId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
 
 #[cfg(test)]
 mod tests {

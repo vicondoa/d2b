@@ -18,13 +18,13 @@ specific wire encoding.
 
 The Rust DTOs derive or implement `serde` and `schemars::JsonSchema`.
 They are emitted by `cargo xtask gen-schemas` through the
-`ConstellationCoreSchema` wrapper into the generated JSON companion
-[`schemas/v2/constellation-core.json`](./schemas/v2/constellation-core.json).
+`D2bRealmCoreSchema` wrapper into the generated JSON companion
+[`schemas/v2/d2b-realm-core.json`](./schemas/v2/d2b-realm-core.json).
 Regenerate that file; do not edit generated JSON by hand.
 
 | Root | Source | Contract |
 | --- | --- | --- |
-| `ConstellationCoreSchema` | `packages/xtask/src/main.rs` | Generated schema wrapper whose top-level `anyOf` enumerates the committed core roots. |
+| `D2bRealmCoreSchema` | `packages/xtask/src/main.rs` | Generated schema wrapper whose top-level `anyOf` enumerates the committed core roots. |
 | `ConstellationFrame` | `src/frame.rs` | Top-level semantic frame enum: handshake proposal/accept/reject, operation request/response, stream open/data/flow/close, typed error, and admission audit. |
 | `OperationRequest` / `OperationResponse` | `src/frame.rs` | Operation envelope with target realm/node/workload, authenticated principal, bounded body, trace context, and required idempotency for mutating kinds. |
 | `Handshake` / `HandshakeAccepted` / `HandshakeRejected` / `OperationKind` | `src/frame.rs` | Negotiation outcome roots and closed operation taxonomy roots. |

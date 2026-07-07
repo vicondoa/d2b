@@ -20,6 +20,10 @@ deprecations ship one minor release before removal.
   boundaries; first-class `home`, `dev`, and `work` realms to replace the
   current grouping model; and a clean cutover from old realm/ACA sandbox
   surfaces into `d2b.realms`.
+- Added ADR 0043 core realm DTOs in `d2b-realm-core` for controller placement,
+  access bindings, provider/workload placement summaries, tree route
+  advertisements, enrollment/key lifecycle metadata, and migration-error
+  envelopes.
 - Documented the stable public-socket discovery contract for persistent shells
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
@@ -211,6 +215,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Aligned ADR 0043 realm-core schema generation and identifier validation:
+  `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
+  tokens reject leading punctuation consistently with their JSON schemas.
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
   toplevel has acked its initial configure before attaching the VM identity rail,
   preventing Wayland compositors from rejecting proxied WeezTerm windows during

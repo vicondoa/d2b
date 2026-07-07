@@ -1,7 +1,9 @@
 //! Realm model (ADR 0032). A realm has an entrypoint mode and a
 //! DNS-style path written most-specific-first.
 
+use crate::ids::ProviderId;
 use crate::ids::RealmId;
+use crate::token::ProtocolToken;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Where a realm's entrypoint runs.
@@ -12,6 +14,40 @@ pub enum EntrypointMode {
     HostResident,
     /// Realm fronted by a dedicated local gateway guest VM.
     GatewayBacked,
+}
+
+/// Where a realm controller is placed in the ADR 0043 realm-native model.
+///
+/// This is capability-neutral placement metadata. Whether a placement can
+/// perform lifecycle, exec, display, or provider operations is advertised
+/// separately through [`crate::capability::CapabilitySet`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RealmControllerPlacement {
+    /// Isolated realm service on the physical host.
+    HostLocal,
+    /// Dedicated local gateway VM.
+    GatewayVm,
+    /// Cloud VM running full d2b.
+    CloudFullHost,
+    /// Provider-supported controller environment.
+    ProviderController {
+        /// Provider that owns the controller substrate.
+        provider: ProviderId,
+    },
+    /// Agent inside or adjacent to a managed provider sandbox.
+    ProviderAgent {
+        /// Provider that owns the sandbox substrate.
+        provider: ProviderId,
+    },
+    /// Provider-specific placement that is still described through the shared
+    /// realm protocol and positive capability advertisement.
+    ProviderSpecific {
+        /// Provider that defines the placement token.
+        provider: ProviderId,
+        /// Bounded non-secret provider placement token.
+        placement: ProtocolToken,
+    },
 }
 
 /// A realm path: an ordered list of labels written most-specific realm
@@ -92,6 +128,25 @@ impl RealmPath {
             .collect::<Vec<_>>()
             .join(".")
     }
+
+    /// True when `self` is strictly below `ancestor` in the realm tree.
+    pub fn is_descendant_of(&self, ancestor: &RealmPath) -> bool {
+        self.0.len() > ancestor.0.len() && self.has_suffix(ancestor)
+    }
+
+    /// True when `self` is exactly one label below `parent`.
+    pub fn is_direct_child_of(&self, parent: &RealmPath) -> bool {
+        self.0.len() == parent.0.len() + 1 && self.has_suffix(parent)
+    }
+
+    fn has_suffix(&self, suffix: &RealmPath) -> bool {
+        self.0
+            .iter()
+            .rev()
+            .zip(suffix.0.iter().rev())
+            .all(|(a, b)| a == b)
+            && self.0.len() >= suffix.0.len()
+    }
 }
 
 #[cfg(test)]
@@ -142,5 +197,35 @@ mod tests {
         assert!(RealmPath::new(labels).is_none());
         let json = format!("[\"{long}\",\"{long}\"]");
         assert!(serde_json::from_str::<RealmPath>(&json).is_err());
+    }
+
+    #[test]
+    fn realm_path_checks_descendant_relationships() {
+        let work = RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap();
+        let payments = RealmPath::new(vec![
+            RealmId::parse("payments").unwrap(),
+            RealmId::parse("work").unwrap(),
+        ])
+        .unwrap();
+        let api = RealmPath::new(vec![
+            RealmId::parse("api").unwrap(),
+            RealmId::parse("payments").unwrap(),
+            RealmId::parse("work").unwrap(),
+        ])
+        .unwrap();
+        let dev = RealmPath::new(vec![RealmId::parse("dev").unwrap()]).unwrap();
+
+        assert!(payments.is_descendant_of(&work));
+        assert!(payments.is_direct_child_of(&work));
+        assert!(api.is_descendant_of(&work));
+        assert!(!api.is_direct_child_of(&work));
+        assert!(!work.is_descendant_of(&work));
+        assert!(!dev.is_descendant_of(&work));
+    }
+
+    #[test]
+    fn placement_rejects_unknown_fields() {
+        let json = "{\"kind\":\"provider-agent\",\"provider\":\"aca\",\"extra\":true}";
+        assert!(serde_json::from_str::<RealmControllerPlacement>(json).is_err());
     }
 }
