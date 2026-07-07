@@ -1,7 +1,7 @@
-//! Realm entrypoint table + target resolution (ADR 0032 `TargetResolver`).
+//! Realm entrypoint table + target resolution (ADR 0043 `RealmTargetResolver`).
 //!
 //! Resolution is **policy, not address decoding**: the
-//! [`crate::TargetName`] grammar never encodes whether a realm is
+//! [`d2b_realm_core::RealmTarget`] grammar never encodes whether a realm is
 //! host-resident or gateway-backed — the entrypoint table does. Given a
 //! parsed target, [`RealmEntrypointTable::resolve`] selects the realm
 //! entrypoint by **longest-suffix match** over the target's realm path
@@ -14,12 +14,12 @@
 //! matching entry returns [`ResolveError::NoEntrypoint`] rather than
 //! defaulting to local dispatch.
 //!
-//! This module owns no provider or transport code (ADR 0032): it reasons
+//! This module owns no provider or transport code (ADR 0043): it reasons
 //! only over the codec-neutral core target/realm types.
 
 use std::collections::HashMap;
 
-use d2b_realm_core::{EntrypointMode, RealmPath, TargetName};
+use d2b_realm_core::{EntrypointMode, RealmPath, RealmTarget};
 
 /// One realm's entrypoint binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub struct RealmEntrypoint {
     pub mode: EntrypointMode,
     /// The gateway-guest target for a [`EntrypointMode::GatewayBacked`]
     /// realm; `None` for a host-resident realm.
-    pub gateway: Option<TargetName>,
+    pub gateway: Option<RealmTarget>,
 }
 
 impl RealmEntrypoint {
@@ -41,10 +41,10 @@ impl RealmEntrypoint {
     }
 
     /// A gateway-backed entrypoint fronted by `gateway`.
-    pub fn gateway_backed(gateway: TargetName) -> Self {
+    pub fn gateway_backed(gateway: impl Into<RealmTarget>) -> Self {
         Self {
             mode: EntrypointMode::GatewayBacked,
-            gateway: Some(gateway),
+            gateway: Some(gateway.into()),
         }
     }
 }
@@ -56,15 +56,15 @@ pub enum DispatchTarget {
     /// policy and then the local fast path.
     HostResident {
         /// The target being dispatched.
-        target: TargetName,
+        target: RealmTarget,
     },
     /// The realm is fronted by a gateway guest; the host does not resolve
     /// nodes or workloads inside the realm.
     GatewayBacked {
         /// The realm gateway guest to route through.
-        gateway: TargetName,
+        gateway: RealmTarget,
         /// The target being dispatched.
-        target: TargetName,
+        target: RealmTarget,
     },
 }
 
@@ -129,13 +129,13 @@ impl RealmEntrypointTable {
     }
 
     /// Mark a realm gateway-backed, fronted by `gateway`.
-    pub fn gateway_backed(&mut self, realm: RealmPath, gateway: TargetName) {
+    pub fn gateway_backed(&mut self, realm: RealmPath, gateway: impl Into<RealmTarget>) {
         self.insert(realm, RealmEntrypoint::gateway_backed(gateway));
     }
 
     /// Resolve `target` to a [`DispatchTarget`] by longest-suffix match over
     /// its realm path. Fail-closed on a realm with no entrypoint.
-    pub fn resolve(&self, target: &TargetName) -> Result<DispatchTarget, ResolveError> {
+    pub fn resolve(&self, target: &RealmTarget) -> Result<DispatchTarget, ResolveError> {
         let labels = target.realm.labels();
         // labels are most-specific first; progressively drop the most-specific
         // labels to test successively shorter suffixes (parent realms). The
@@ -174,27 +174,27 @@ mod tests {
         RealmPath::new(labels.iter().map(|l| RealmId::parse(*l).unwrap()).collect()).unwrap()
     }
 
-    fn target(raw: &str) -> TargetName {
-        TargetName::parse(raw).unwrap()
+    fn target(raw: &str) -> RealmTarget {
+        RealmTarget::parse(raw).unwrap()
     }
 
-    /// The ADR 0032 example table.
+    /// The ADR 0043 example table.
     fn example_table() -> RealmEntrypointTable {
         let mut t = RealmEntrypointTable::with_local_default();
         t.host_resident(realm(&["personal"]));
-        t.gateway_backed(realm(&["work"]), target("work-gateway.laptop.d2b"));
-        t.gateway_backed(realm(&["ops"]), target("ops-gateway.laptop.d2b"));
+        t.gateway_backed(realm(&["work"]), target("work-gateway.work.d2b"));
+        t.gateway_backed(realm(&["ops"]), target("ops-gateway.ops.d2b"));
         t
     }
 
     #[test]
     fn local_realm_is_host_resident() {
         let t = example_table();
-        let d = t.resolve(&target("demo.d2b")).unwrap();
+        let d = t.resolve(&target("demo.local.d2b")).unwrap();
         assert_eq!(
             d,
             DispatchTarget::HostResident {
-                target: target("demo.d2b")
+                target: target("demo.local.d2b")
             }
         );
     }
@@ -202,22 +202,22 @@ mod tests {
     #[test]
     fn host_resident_named_realm() {
         let t = example_table();
-        // dev-vm.laptop.personal.d2b -> personal -> host-resident.
-        let d = t.resolve(&target("dev-vm.laptop.personal.d2b")).unwrap();
+        // dev-vm.personal.d2b -> personal -> host-resident.
+        let d = t.resolve(&target("dev-vm.personal.d2b")).unwrap();
         assert!(matches!(d, DispatchTarget::HostResident { .. }));
     }
 
     #[test]
     fn gateway_backed_realm_returns_its_gateway() {
         let t = example_table();
-        let d = t.resolve(&target("demo.aca.work.d2b")).unwrap();
+        let d = t.resolve(&target("demo.work.d2b")).unwrap();
         match d {
             DispatchTarget::GatewayBacked {
                 gateway,
                 target: tgt,
             } => {
-                assert_eq!(gateway, target("work-gateway.laptop.d2b"));
-                assert_eq!(tgt, target("demo.aca.work.d2b"));
+                assert_eq!(gateway, target("work-gateway.work.d2b"));
+                assert_eq!(tgt, target("demo.work.d2b"));
             }
             other => panic!("expected gateway-backed, got {other:?}"),
         }
@@ -227,7 +227,7 @@ mod tests {
     fn nested_child_realm_matches_parent_by_longest_suffix() {
         // No `payments.work` entry; the parent `work` (gateway-backed) owns it.
         let t = example_table();
-        let d = t.resolve(&target("api.build.payments.work.d2b")).unwrap();
+        let d = t.resolve(&target("api.payments.work.d2b")).unwrap();
         assert!(matches!(d, DispatchTarget::GatewayBacked { .. }));
     }
 
@@ -236,17 +236,17 @@ mod tests {
         let mut t = example_table();
         // payments.work is host-resident even though work is gateway-backed.
         t.host_resident(realm(&["payments", "work"]));
-        let d = t.resolve(&target("api.build.payments.work.d2b")).unwrap();
+        let d = t.resolve(&target("api.payments.work.d2b")).unwrap();
         assert!(matches!(d, DispatchTarget::HostResident { .. }));
         // a sibling child still falls through to the parent gateway.
-        let sibling = t.resolve(&target("api.build.billing.work.d2b")).unwrap();
+        let sibling = t.resolve(&target("api.billing.work.d2b")).unwrap();
         assert!(matches!(sibling, DispatchTarget::GatewayBacked { .. }));
     }
 
     #[test]
     fn unknown_realm_fails_closed() {
         let t = example_table();
-        let err = t.resolve(&target("x.y.unknown.d2b")).unwrap_err();
+        let err = t.resolve(&target("x.unknown.d2b")).unwrap_err();
         assert_eq!(err, ResolveError::NoEntrypoint(realm(&["unknown"])));
     }
 
@@ -260,7 +260,7 @@ mod tests {
                 gateway: None,
             },
         );
-        let err = t.resolve(&target("demo.aca.work.d2b")).unwrap_err();
+        let err = t.resolve(&target("demo.work.d2b")).unwrap_err();
         assert_eq!(err, ResolveError::MissingGateway(realm(&["work"])));
     }
 }
