@@ -7,6 +7,10 @@
 # under `nixos-modules/components/` is conditionally imported by
 # host.nix.
 #
+# Realm-native declarations live under `d2b.realms.<realm>` as schema
+# foundation only during the ADR 0043 transition; they do not yet alter
+# env or VM runtime behaviour.
+#
 # Isolated environments live under `d2b.envs.<env>`. Each env
 # is materialised by network.nix into two host bridges (`br-<env>-up`
 # point-to-point host↔net-VM, `br-<env>-lan` net-VM↔workload-VMs),
@@ -21,6 +25,7 @@
     ./options-site.nix
     ./options-host.nix
     ./options-envs.nix
+    ./options-realms.nix
     ./options-vms.nix
     ./options-daemon.nix
     ./options-gateway.nix
