@@ -15,16 +15,21 @@
 //! - DTOs are `serde` + `schemars` and security-sensitive structures use
 //!   `deny_unknown_fields` (ADR 0010 strict wire discipline).
 
+pub mod access;
 pub mod audit;
 pub mod capability;
+pub mod enrollment;
 pub mod error;
 pub mod execution;
 pub mod frame;
 pub mod ids;
+pub mod migration;
 pub mod mux;
 pub mod node;
 pub mod payload;
 pub mod realm;
+pub mod registry;
+pub mod routing;
 pub mod shell;
 pub mod stream;
 pub mod target;
@@ -32,8 +37,13 @@ pub mod token;
 pub mod trace_context;
 pub mod workload;
 
+pub use access::{AccessBindingRef, RealmAccessBinding, RealmTransportBinding, UnixSocketPath};
 pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
+pub use enrollment::{
+    EnrollmentRecord, EnrollmentStatus, KeyFingerprint, KeyPin, RealmKeyRole, RevocationRecord,
+    RevocationStatus, RevocationTarget,
+};
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{
     ExecAttachMode, ExecAttachRequest, ExecCancelRequest, ExecLogsRequest, ExecStartRequest,
@@ -45,13 +55,21 @@ pub use frame::{
     StreamFlow, StreamOpen, StreamResume,
 };
 pub use ids::{
-    ExecutionId, GatewayId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
-    StreamCursor, StreamId, WorkloadId,
+    ControllerGenerationId, CorrelationId, EnrollmentId, ExecutionId, GatewayId, IdempotencyKey,
+    NodeId, OperationId, PrincipalId, ProviderId, RealmId, RevocationId, RouteId, StreamCursor,
+    StreamId, WorkloadId,
+};
+pub use migration::{
+    LegacySurface, MigrationErrorEnvelope, MigrationLegacyId, MigrationReasonCode,
 };
 pub use mux::{DEFAULT_MAX_OPEN_STREAMS, StreamMux};
 pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
-pub use realm::{EntrypointMode, RealmPath};
+pub use realm::{EntrypointMode, RealmControllerPlacement, RealmPath};
+pub use registry::{ProviderRegistryEntry, WorkloadPlacement, WorkloadPlacementSummary};
+pub use routing::{
+    DescendantRoute, RealmTreeEdge, RouteAdvertisement, RouteSignature, SignatureRef,
+};
 pub use shell::{
     ShellAttachId, ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest,
     ShellEventBatch, ShellEventSummary, ShellGeneration, ShellKillRequest, ShellListRequest,

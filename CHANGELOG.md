@@ -17,6 +17,10 @@ deprecations ship one minor release before removal.
   boundaries; first-class `home`, `dev`, and `work` realms to replace the
   current grouping model; and a clean cutover from old realm/ACA sandbox
   surfaces into `d2b.realms`.
+- Added ADR 0043 core realm DTOs in `d2b-realm-core` for controller placement,
+  access bindings, provider/workload placement summaries, tree route
+  advertisements, enrollment/key lifecycle metadata, and migration-error
+  envelopes.
 - Documented the stable public-socket discovery contract for persistent shells
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
