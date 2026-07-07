@@ -3,8 +3,8 @@
 # This file declares the public Nix schema selected by ADR 0043 without
 # materialising per-realm daemons, brokers, networks, allocators, or VM/env
 # migrations. Existing `d2b.envs` and `d2b.vms.<vm>.env` behaviour remains the
-# runtime source of truth until later migration scopes wire these declarations
-# into the index, assertions, and runtime.
+# runtime source of truth; the realm index and assertions only normalize and
+# validate inert planning metadata.
 { lib, config, ... }:
 
 let
@@ -122,8 +122,8 @@ in
             default = null;
             example = "work";
             description = ''
-              Optional parent realm path. Parent/child validation and routing
-              are intentionally left to later ADR 0043 implementation scopes.
+              Optional parent realm path. Enabled child realms must point at an
+              enabled parent path, and the parent graph must remain acyclic.
             '';
           };
 

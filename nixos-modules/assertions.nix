@@ -125,6 +125,139 @@ let
   duplicateGatewayEnvs = duplicateValues enabledGatewayEnvs;
   duplicateGatewayVmNames = duplicateValues enabledGatewayVmNames;
 
+  realmIndex = cfg._index.realms;
+  realmRows = realmIndex.list;
+  enabledRealmRows = realmIndex.enabledList;
+  duplicateRealmIds = duplicateValues (map (realm: realm.id) realmRows);
+  duplicateRealmPaths = duplicateValues (map (realm: realm.path) realmRows);
+  duplicateEnabledRealmPathValues = field:
+    duplicateValues (map (realm: realm.paths.${field}) enabledRealmRows);
+  realmPathCollisionFields = [
+    "stateDir"
+    "auditDir"
+    "runDir"
+    "publicSocket"
+    "brokerSocket"
+  ];
+
+  missingRealmParents = lib.filter
+    (realm:
+      realm.enabled
+      && realm.parentPath != null
+      && !(builtins.hasAttr realm.parentPath realmIndex.enabledByPath))
+    enabledRealmRows;
+
+  realmParentCycleFor = realm:
+    let
+      maxDepth = (lib.length enabledRealmRows) + 1;
+      step = state: _:
+        if state.done then
+          state
+        else
+          let
+            currentRow = realmIndex.enabledByPath.${state.current};
+            parent = currentRow.parentPath;
+          in
+          if parent == null || !(builtins.hasAttr parent realmIndex.enabledByPath) then
+            state // { done = true; }
+          else if builtins.elem parent state.seen then
+            {
+              done = true;
+              current = parent;
+              seen = state.seen ++ [ parent ];
+              cycle = state.seen ++ [ parent ];
+            }
+          else
+            {
+              done = false;
+              current = parent;
+              seen = state.seen ++ [ parent ];
+              cycle = null;
+            };
+      final = lib.foldl' step
+        {
+          done = false;
+          current = realm.path;
+          seen = [ realm.path ];
+          cycle = null;
+        }
+        (lib.genList (i: i) maxDepth);
+    in
+    final.cycle;
+  realmParentCycles = lib.unique
+    (lib.filter (cycle: cycle != null)
+      (map realmParentCycleFor enabledRealmRows));
+  realmLocalUnitOrderingRows = lib.filter
+    (realm: realm.localUnitOrdering != null)
+    enabledRealmRows;
+  invalidRealmLocalUnitOrderingRows = lib.filter
+    (realm:
+      realm.parentPath == null
+      || realm.placement != "host-local"
+      || !(builtins.isAttrs realm.localUnitOrdering))
+    realmLocalUnitOrderingRows;
+
+  realmAssertions = [
+    {
+      assertion = duplicateRealmIds == [ ];
+      message = ''
+        d2b.realms must use unique stable realm ids. Duplicate id(s): ${
+          lib.concatStringsSep ", " duplicateRealmIds
+        }.
+      '';
+    }
+    {
+      assertion = duplicateRealmPaths == [ ];
+      message = ''
+        d2b.realms must use unique canonical realm paths. Duplicate path(s): ${
+          lib.concatStringsSep ", " duplicateRealmPaths
+        }.
+      '';
+    }
+    {
+      assertion = missingRealmParents == [ ];
+      message = ''
+        enabled child realms must name an enabled parent realm by canonical
+        path. Missing or disabled parent reference(s): ${
+          lib.concatStringsSep ", " (map
+            (realm: "${realm.path} -> ${realm.parentPath}")
+            missingRealmParents)
+        }.
+      '';
+    }
+    {
+      assertion = realmParentCycles == [ ];
+      message = ''
+        enabled d2b.realms parent links must form an acyclic tree. Cycle(s): ${
+          lib.concatStringsSep "; " (map
+            (cycle: lib.concatStringsSep " -> " cycle)
+            realmParentCycles)
+        }.
+      '';
+    }
+    {
+      assertion = invalidRealmLocalUnitOrderingRows == [ ];
+      message = ''
+        child local unit ordering metadata, when present, is valid only on
+        enabled host-local child realms and must be an attrset. Invalid realm
+        path(s): ${
+          lib.concatStringsSep ", " (map (realm: realm.path) invalidRealmLocalUnitOrderingRows)
+        }.
+      '';
+    }
+  ] ++ map
+    (field:
+      let duplicates = duplicateEnabledRealmPathValues field;
+      in {
+        assertion = duplicates == [ ];
+        message = ''
+          enabled d2b.realms must not share ${field} paths. Duplicate path(s): ${
+            lib.concatStringsSep ", " duplicates
+          }.
+        '';
+      })
+    realmPathCollisionFields;
+
   autoSysVmNames =
     (lib.mapAttrsToList
       (envName: env: env.netName or "sys-${envName}-net")
@@ -1456,6 +1589,7 @@ in
     ++ legacyGatewayMigrationAssertions
     ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
+    ++ realmAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions

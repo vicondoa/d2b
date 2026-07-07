@@ -24,6 +24,8 @@ deprecations ship one minor release before removal.
   ADR 0043 without changing existing `d2b.envs` runtime behavior, with
   reference documentation for placement, user access, provider/relay/policy/key
   references, and the transitional env/network bridge.
+- Added normalized internal realm index metadata plus eval-time assertions for
+  realm identity, parent graph, and derived path uniqueness.
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.

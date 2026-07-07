@@ -15,6 +15,8 @@ let
 
   enabledEnvs = sortedAttrs (lib.filterAttrs (_: env: env.enable) cfg.envs);
   enabledVms = sortedAttrs (lib.filterAttrs (_: vm: vm.enable) cfg.vms);
+  declaredRealms = sortedAttrs cfg.realms;
+  enabledRealms = sortedAttrs (lib.filterAttrs (_: realm: realm.enable) cfg.realms);
   normalNixosVms = sortedAttrs (d2bLib.normalNixosVms cfg.vms);
   qemuMediaVms = sortedAttrs (d2bLib.qemuMediaVms cfg.vms);
 
@@ -107,6 +109,106 @@ let
 
   envMeta = lib.mapAttrs netMeta enabledEnvs;
   externalNetworkEnvs = sortedAttrs (lib.filterAttrs (_: env: externalNetworkConfigured env) enabledEnvs);
+
+  realmEnvNames = realm:
+    sortNames (lib.unique (
+      lib.optionals (realm.env != null) [ realm.env ]
+      ++ realm.network.envs
+    ));
+
+  realmProviderRows = realmName: realm:
+    lib.listToAttrs (sortedMapAttrsToList
+      (providerName: provider: {
+        name = providerName;
+        value = {
+          inherit providerName;
+          id = provider.id;
+          enabled = provider.enable;
+          kind = provider.kind;
+          placement =
+            if provider.placement != null
+            then provider.placement
+            else realm.placement;
+          capabilityRefs = sortNames (lib.unique provider.capabilityRefs);
+          configRef = provider.configRef;
+          localUnitOrdering =
+            if provider ? localUnitOrdering
+            then provider.localUnitOrdering
+            else null;
+        };
+      })
+      realm.providers);
+
+  realmRow = realmName: realm:
+    let
+      envNames = realmEnvNames realm;
+      providerRows = realmProviderRows realmName realm;
+      enabledProviderRows = lib.filterAttrs (_: provider: provider.enabled) providerRows;
+    in
+    {
+      inherit realmName;
+      id = realm.id;
+      name = realm.name;
+      path = realm.path;
+      pathParts = lib.splitString "." realm.path;
+      enabled = realm.enable;
+      parentPath = realm.parent;
+      parentId =
+        if realm.parent == null
+        then null
+        else builtins.head (lib.splitString "." realm.parent);
+      placement = realm.placement;
+      providerSpecificPlacement = realm.providerSpecificPlacement;
+      allowedUsers = sortNames (lib.unique realm.allowedUsers);
+      defaultWorkloadNamespace = realm.defaultWorkloadNamespace;
+      localUnitOrdering =
+        if realm ? localUnitOrdering
+        then realm.localUnitOrdering
+        else null;
+      network = {
+        env = realm.env;
+        envNames = envNames;
+        declaredEnvNames = lib.filter (envName: builtins.hasAttr envName cfg.envs) envNames;
+        enabledEnvNames = lib.filter (envName: builtins.hasAttr envName enabledEnvs) envNames;
+        missingEnvNames = lib.filter (envName: !(builtins.hasAttr envName cfg.envs)) envNames;
+        mode = realm.network.mode;
+        cidrRefs = sortNames (lib.unique realm.network.cidrRefs);
+      };
+      providers = providerRows;
+      providerKeys = sortedAttrNames providerRows;
+      enabledProviderKeys = sortedAttrNames enabledProviderRows;
+      relay = {
+        inherit (realm.relay) enable mode credentialRef;
+        endpoints = sortNames (lib.unique realm.relay.endpoints);
+      };
+      discovery = realm.discovery;
+      policy = realm.policy;
+      keys = realm.keys;
+      paths = realm.paths;
+      broker = realm.broker;
+    };
+
+  realmRows = sortedMapAttrsToList realmRow declaredRealms;
+  enabledRealmRows = lib.filter (realm: realm.enabled) realmRows;
+  realmAttrsBy = field: rows:
+    lib.listToAttrs (map (row: {
+      name = row.${field};
+      value = row;
+    }) rows);
+  realmNamesByEnv = rows:
+    lib.listToAttrs (map
+      (envName: {
+        name = envName;
+        value = {
+          realmNames = sortNames (map (row: row.realmName)
+            (lib.filter (row: builtins.elem envName row.network.envNames) rows));
+          realmIds = sortNames (map (row: row.id)
+            (lib.filter (row: builtins.elem envName row.network.envNames) rows));
+          realmPaths = sortNames (map (row: row.path)
+            (lib.filter (row: builtins.elem envName row.network.envNames) rows));
+        };
+      })
+      (sortedAttrNames cfg.envs));
 
   subset = pred: sortedAttrs (lib.filterAttrs pred enabledVms);
   subsetNames = pred: sortedAttrNames (subset pred);
@@ -334,6 +436,20 @@ let
       byVm = runtimeRows;
       providers = runtimeProviders;
       kinds = sortNames (lib.unique (map (name: runtimeRows.${name}.kind) (sortedAttrNames runtimeRows)));
+    };
+
+    realms = {
+      declared = declaredRealms;
+      enabled = enabledRealms;
+      names = sortedAttrNames declaredRealms;
+      enabledNames = sortedAttrNames enabledRealms;
+      list = realmRows;
+      enabledList = enabledRealmRows;
+      byId = realmAttrsBy "id" realmRows;
+      byPath = realmAttrsBy "path" realmRows;
+      enabledById = realmAttrsBy "id" enabledRealmRows;
+      enabledByPath = realmAttrsBy "path" enabledRealmRows;
+      byEnv = realmNamesByEnv enabledRealmRows;
     };
   };
 in
