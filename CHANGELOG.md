@@ -20,6 +20,17 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the public `d2b.realms.<realm>` Nix option schema foundation for
+  ADR 0043 without changing existing `d2b.envs` runtime behavior, with
+  reference documentation for placement, user access, provider/relay/policy/key
+  references, and the transitional env/network bridge.
+- Added normalized internal realm index metadata plus eval-time assertions for
+  realm identity, parent graph, and derived path uniqueness.
+- Added Layer-1 nix-unit coverage for the ADR 0043 realm option schema,
+  normalized realm index, parent/path collision assertions, legacy gateway/ACA
+  migration guidance, and minimal/multi-env eval compatibility.
+- Added realm `placementProvider` metadata and AF_UNIX socket path length
+  assertions for future realm public and broker socket declarations.
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.
@@ -220,6 +231,10 @@ deprecations ship one minor release before removal.
   `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
   establishing realm-native package/import names for follow-up parser and DTO
   work.
+- Added ADR 0043 eval-time migration errors for legacy `d2b.gateways` and
+  nested gateway/ACA sandbox configuration, pointing operators to
+  `d2b.realms` while preserving current `d2b.envs` behavior when no legacy
+  gateway surface is declared.
 - Aligned current realm-core reference pages and generated schema companions
   with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
   grammar.

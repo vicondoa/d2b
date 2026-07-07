@@ -88,6 +88,14 @@ without spaces. See
 [`realm-core.md`](./realm-core.md) for the complete realm-core model
 contract.
 
+`d2b.realms.<realm>` uses the same lowercase label shape for the realm
+attribute name and default `id`. The realm option schema also exposes a
+`path` field for most-specific-first realm paths and an `env` /
+`network.envs` bridge to existing `d2b.envs` names. That bridge is
+transition metadata only in the current implementation; bridge and TAP
+names below are still generated from `d2b.envs` and `d2b.vms.<vm>.env`.
+See [Realm option schema](./realm-options.md).
+
 Gateway-backed realms use a local gateway VM entrypoint. The default
 gateway VM name is `sys-<realm-path-with-dashes>-gateway`, but
 operators may override `d2b.gateways.<name>.vmName`; consumers
@@ -194,6 +202,7 @@ unambiguously.
 
 - [AGENTS.md](../../AGENTS.md)
 - [Design explanation](../explanation/design.md)
+- [Realm option schema](./realm-options.md)
 - [Realm core model reference](./realm-core.md)
 - [USB/IP component reference](./components-usbip.md)
 - [tests/README.md](../../tests/README.md)

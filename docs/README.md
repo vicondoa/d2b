@@ -81,6 +81,10 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/realm-policy.md`](./reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
+- [`reference/realm-options.md`](./reference/realm-options.md) —
+  current `d2b.realms.<realm>` Nix option shape and transition boundary:
+  schema-only realm declarations while `d2b.envs` remains the active
+  runtime substrate.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.

@@ -7,6 +7,14 @@ fast path for bare VM names and the reserved `local` realm. Gateway-backed
 realms are fronted by a dedicated gateway guest in a separate d2b env/L2
 segment.
 
+Current Nix support for `d2b.realms.<realm>` is schema-only. Defining a
+realm can record intended placement, users, provider/relay/policy/key
+references, and associated existing envs, but it does not yet create the
+per-realm policy evaluator, daemon, broker, socket, audit domain, or
+network partition described by future runtime support. Existing
+`d2b.envs` and `d2b.vms.<vm>.env` declarations remain the implemented
+substrate.
+
 ## Policy modes
 
 | Mode | Authority | Credential boundary | Cross-realm default |
@@ -47,3 +55,8 @@ audit events. Audit and error surfaces carry only low-cardinality realm,
 operation or stream kind, decision, and reason labels. They must not contain
 payload bytes, argv, stdout/stderr, credentials, tokens, provider headers, full
 endpoints, host paths, or PII.
+
+## Related references
+
+- [Realm option schema](./realm-options.md)
+- [Realm core model reference](./realm-core.md)

@@ -752,6 +752,7 @@
             "index.nix"
             "multi-env-daemon-backed.nix"
             "net-vm-network.nix"
+            "realms.nix"
             "usbip-gating.nix"
           ];
           nix-unit-runtime = [

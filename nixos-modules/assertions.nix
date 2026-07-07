@@ -125,6 +125,185 @@ let
   duplicateGatewayEnvs = duplicateValues enabledGatewayEnvs;
   duplicateGatewayVmNames = duplicateValues enabledGatewayVmNames;
 
+  realmIndex = cfg._index.realms;
+  realmRows = realmIndex.list;
+  enabledRealmRows = realmIndex.enabledList;
+  duplicateRealmIds = duplicateValues (map (realm: realm.id) realmRows);
+  duplicateRealmPaths = duplicateValues (map (realm: realm.path) realmRows);
+  duplicateEnabledRealmPathValues = field:
+    duplicateValues (map (realm: realm.paths.${field}) enabledRealmRows);
+  realmPathCollisionFields = [
+    "stateDir"
+    "auditDir"
+    "runDir"
+    "publicSocket"
+    "brokerSocket"
+  ];
+  realmUnixSocketFields = [
+    "publicSocket"
+    "brokerSocket"
+  ];
+  providerBackedRealmPlacements = [
+    "provider-controller"
+    "provider-agent"
+    "provider-specific"
+  ];
+  localRealmPlacements = [
+    "host-local"
+    "gateway-vm"
+    "cloud-full-host"
+  ];
+
+  missingRealmParents = lib.filter
+    (realm:
+      realm.enabled
+      && realm.parentPath != null
+      && !(builtins.hasAttr realm.parentPath realmIndex.enabledByPath))
+    enabledRealmRows;
+
+  realmParentCycleFor = realm:
+    let
+      maxDepth = (lib.length enabledRealmRows) + 1;
+      step = state: _:
+        if state.done then
+          state
+        else
+          let
+            currentRow = realmIndex.enabledByPath.${state.current};
+            parent = currentRow.parentPath;
+          in
+          if parent == null || !(builtins.hasAttr parent realmIndex.enabledByPath) then
+            state // { done = true; }
+          else if builtins.elem parent state.seen then
+            {
+              done = true;
+              current = parent;
+              seen = state.seen ++ [ parent ];
+              cycle = state.seen ++ [ parent ];
+            }
+          else
+            {
+              done = false;
+              current = parent;
+              seen = state.seen ++ [ parent ];
+              cycle = null;
+            };
+      final = lib.foldl' step
+        {
+          done = false;
+          current = realm.path;
+          seen = [ realm.path ];
+          cycle = null;
+        }
+        (lib.genList (i: i) maxDepth);
+    in
+    final.cycle;
+  realmParentCycles = lib.unique
+    (lib.filter (cycle: cycle != null)
+      (map realmParentCycleFor enabledRealmRows));
+  realmSocketPathTooLongRows = field:
+    lib.filter
+      (realm: builtins.stringLength realm.paths.${field} > 107)
+      enabledRealmRows;
+  realmMissingPlacementProviderRows = lib.filter
+    (realm:
+      builtins.elem realm.placement providerBackedRealmPlacements
+      && realm.placementProvider == null)
+    enabledRealmRows;
+  realmUnexpectedPlacementProviderRows = lib.filter
+    (realm:
+      builtins.elem realm.placement localRealmPlacements
+      && realm.placementProvider != null)
+    enabledRealmRows;
+
+  realmAssertions = [
+    {
+      assertion = duplicateRealmIds == [ ];
+      message = ''
+        d2b.realms must use unique stable realm ids. Duplicate id(s): ${
+          lib.concatStringsSep ", " duplicateRealmIds
+        }.
+      '';
+    }
+    {
+      assertion = duplicateRealmPaths == [ ];
+      message = ''
+        d2b.realms must use unique canonical realm paths. Duplicate path(s): ${
+          lib.concatStringsSep ", " duplicateRealmPaths
+        }.
+      '';
+    }
+    {
+      assertion = missingRealmParents == [ ];
+      message = ''
+        enabled child realms must name an enabled parent realm by canonical
+        path. Missing or disabled parent reference(s): ${
+          lib.concatStringsSep ", " (map
+            (realm: "${realm.path} -> ${realm.parentPath}")
+            missingRealmParents)
+        }.
+      '';
+    }
+    {
+      assertion = realmParentCycles == [ ];
+      message = ''
+        enabled d2b.realms parent links must form an acyclic tree. Cycle(s): ${
+          lib.concatStringsSep "; " (map
+            (cycle: lib.concatStringsSep " -> " cycle)
+            realmParentCycles)
+        }.
+      '';
+    }
+    {
+      assertion = realmMissingPlacementProviderRows == [ ];
+      message = ''
+        provider-backed d2b.realms placements require
+        `placementProvider` so the realm can map to
+        RealmControllerPlacement.provider. Set
+        d2b.realms.<realm>.placementProvider for provider-controller,
+        provider-agent, and provider-specific realm(s): ${
+          lib.concatStringsSep ", " (map (realm: "${realm.path} (${realm.placement})") realmMissingPlacementProviderRows)
+        }.
+      '';
+    }
+    {
+      assertion = realmUnexpectedPlacementProviderRows == [ ];
+      message = ''
+        d2b.realms.<realm>.placementProvider is valid only for provider-backed
+        placements (provider-controller, provider-agent, provider-specific).
+        Leave it null for host-local, gateway-vm, and cloud-full-host realm(s): ${
+          lib.concatStringsSep ", " (map (realm: "${realm.path} (${realm.placement})") realmUnexpectedPlacementProviderRows)
+        }.
+      '';
+    }
+  ] ++ map
+    (field:
+      let overlong = realmSocketPathTooLongRows field;
+      in {
+        assertion = overlong == [ ];
+        message = ''
+          d2b.realms.<realm>.paths.${field} must fit Linux AF_UNIX pathname
+          sockets: at most 107 bytes including path characters, leaving one
+          byte for the terminating NUL in sockaddr_un.sun_path. Overlong
+          realm socket path(s): ${
+            lib.concatStringsSep ", " (map (realm: "${realm.path} (${toString (builtins.stringLength realm.paths.${field})} bytes)") overlong)
+          }.
+        '';
+      })
+    realmUnixSocketFields
+  ++ map
+    (field:
+      let duplicates = duplicateEnabledRealmPathValues field;
+      in {
+        assertion = duplicates == [ ];
+        message = ''
+          enabled d2b.realms must not share ${field} paths. Duplicate path(s): ${
+            lib.concatStringsSep ", " duplicates
+          }.
+        '';
+      })
+    realmPathCollisionFields;
+
   autoSysVmNames =
     (lib.mapAttrsToList
       (envName: env: env.netName or "sys-${envName}-net")
@@ -300,6 +479,40 @@ let
       d2b.gateways requires d2b.daemonExperimental.enable = true. The
       gateway guest is supervised by the daemon control-plane package plumbing
       and has no legacy service or bash fallback.
+    '';
+  };
+
+  legacyGatewayMigrationAssertions = lib.optional (cfg.gateways != { }) {
+    assertion = false;
+    message = ''
+      d2b migration-required (legacy-surface-detected: d2b.gateways):
+      `d2b.gateways` and its old gateway/ACA sandbox fields were removed as a
+      public configuration surface by ADR 0043.
+
+      Move non-secret coordinates into the realm-native schema, for example:
+
+        d2b.realms.work = {
+          placement = "gateway-vm";        # or provider-agent/provider-controller
+          env = "work";                    # transitional link to existing d2b.envs
+          providers.aca = {
+            kind = "aca";
+            placement = "provider-agent";
+            configRef = "aca-work-non-secret-coordinates";
+          };
+          relay.mode = "static";
+          relay.endpoints = [ "relns-example.servicebus.windows.net" ];
+          relay.credentialRef = "work-relay-credential";
+        };
+
+      Do not put Relay SAS tokens, Entra tokens, sealed credential bytes, or
+      ACA provider secrets in Nix. Use enrollment/import tooling when the
+      realm-native runtime lands.
+
+      This is a guarded tombstone for the transition: declaring no
+      `d2b.gateways` entries keeps today's local VM behavior unchanged.
+      `d2b.envs` remains the current substrate/configuration key for bridges,
+      net VMs, address allocation, and workload `d2b.vms.<vm>.env`
+      membership until a later realm migration explicitly replaces it.
     '';
   };
 
@@ -1419,8 +1632,10 @@ in
     ++ gatewayHostRelayCredentialAssertions
     ++ gatewayStateBoundaryAssertions
     ++ gatewayCoordinateAssertions
+    ++ legacyGatewayMigrationAssertions
     ++ gatewayEntrypointAssertions
     ++ gatewayDaemonAssertions
+    ++ realmAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
