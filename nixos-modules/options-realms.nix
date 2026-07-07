@@ -12,6 +12,7 @@ let
 
   label = "^[a-z][a-z0-9-]*$";
   realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
+  providerKind = "^[a-z][a-z0-9-]*$";
   absolutePath = "^/.*$";
 
   placementKinds = [
@@ -39,7 +40,7 @@ let
       };
 
       kind = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
+        type = lib.types.nullOr (lib.types.strMatching providerKind);
         default = null;
         example = "aca";
         description = ''

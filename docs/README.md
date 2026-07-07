@@ -85,6 +85,9 @@ The contracts. Stable interfaces a consumer can depend on.
   current `d2b.realms.<realm>` Nix option shape and transition boundary:
   schema-only realm declarations while `d2b.envs` remains the active
   runtime substrate.
+- [`reference/local-root-allocator.md`](./reference/local-root-allocator.md) —
+  typed host-resource lease contract for future local-root allocation,
+  reconciliation, quarantine, reclaim, and realm-broker boundaries.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.

@@ -317,6 +317,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         privileges_path: "/etc/d2b/privileges.json".to_owned(),
         storage_path: None,
         sync_path: None,
+        allocator_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),

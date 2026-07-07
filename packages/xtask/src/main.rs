@@ -22,10 +22,10 @@ use d2b_contracts::{
     },
 };
 use d2b_core::{
-    audio_policy::AudioPolicyState, bundle::Bundle, closures::ClosureMetadata, error::Error,
-    host::HostJson, manifest_v04::ManifestV04, minijail_profile::MinijailProfile,
-    privileges::PrivilegesJson, processes::ProcessesJson, storage::StorageJson,
-    storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
+    allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
+    closures::ClosureMetadata, error::Error, host::HostJson, manifest_v04::ManifestV04,
+    minijail_profile::MinijailProfile, privileges::PrivilegesJson, processes::ProcessesJson,
+    storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
 };
 use d2b_realm_core::{
     AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
@@ -44,6 +44,14 @@ use d2b_realm_core::{
     ShellName, ShellSessionInstanceId, ShellState, ShellSummary, SignatureRef, StreamCursor,
     StreamId, StreamResume, UnixSocketPath, WorkloadId, WorkloadPlacement,
     WorkloadPlacementSummary, WorkloadSelector, WorkloadSummary,
+    allocator::{
+        AllocatorConflict, AllocatorEventKind, AllocatorEventMetadata, AllocatorLease,
+        AllocatorLeaseState, AllocatorReasonCode, GrantedHostResource, HostResourceKind,
+        LeaseAllocationRequest, LeaseAllocationResponse, LeaseAllocationResult, LeaseOwner,
+        LeaseResourceRequest, ObservedHostResource, ObservedResourceState, PersistedResourceLease,
+        ReconciliationDecision, ReconciliationRecord, ReconciliationReport, ResourceAcquisitionKey,
+        ResourceAcquisitionOrder, ResourceDelegation, ResourceObservationSource, ResourceShareMode,
+    },
     audit::{
         AuditChainCheckFailure, AuditChainCheckResult, AuditChainLink, AuditChainRecord, AuditHash,
         AuditRetentionFloorReason, AuditRetentionFloorStatus, AuditSinkHealth,
@@ -77,6 +85,8 @@ enum D2bRealmCoreSchema {
     RouteId(RouteId),
     CorrelationId(CorrelationId),
     ControllerGenerationId(ControllerGenerationId),
+    AllocatorLeaseId(d2b_realm_core::AllocatorLeaseId),
+    HostResourceId(d2b_realm_core::HostResourceId),
     EnrollmentId(EnrollmentId),
     RevocationId(RevocationId),
     Capability(Capability),
@@ -152,6 +162,30 @@ enum D2bRealmCoreSchema {
     AuditRetentionFloorStatus(AuditRetentionFloorStatus),
     AuditSinkHealthReason(AuditSinkHealthReason),
     AuditSinkHealth(AuditSinkHealth),
+    HostResourceKind(HostResourceKind),
+    LeaseOwner(LeaseOwner),
+    ResourceShareMode(ResourceShareMode),
+    ResourceAcquisitionOrder(ResourceAcquisitionOrder),
+    LeaseResourceRequest(LeaseResourceRequest),
+    ResourceAcquisitionKey(ResourceAcquisitionKey),
+    ResourceDelegation(ResourceDelegation),
+    GrantedHostResource(GrantedHostResource),
+    AllocatorLeaseState(AllocatorLeaseState),
+    AllocatorLease(AllocatorLease),
+    AllocatorReasonCode(AllocatorReasonCode),
+    AllocatorConflict(AllocatorConflict),
+    LeaseAllocationResponse(LeaseAllocationResponse),
+    LeaseAllocationRequest(LeaseAllocationRequest),
+    LeaseAllocationResult(LeaseAllocationResult),
+    AllocatorEventKind(AllocatorEventKind),
+    AllocatorEventMetadata(AllocatorEventMetadata),
+    PersistedResourceLease(PersistedResourceLease),
+    ResourceObservationSource(ResourceObservationSource),
+    ObservedResourceState(ObservedResourceState),
+    ObservedHostResource(ObservedHostResource),
+    ReconciliationDecision(ReconciliationDecision),
+    ReconciliationRecord(ReconciliationRecord),
+    ReconciliationReport(ReconciliationReport),
     TypedError(ConstellationError),
     Frame(ConstellationFrame),
 }
@@ -364,7 +398,8 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 14] = [
+    let schemas: [(&str, RootSchema); 15] = [
+        ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
             "d2b-realm-core.json",

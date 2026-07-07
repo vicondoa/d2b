@@ -19,6 +19,8 @@
 //!   `deny_unknown_fields` (ADR 0010 strict wire discipline).
 
 pub mod access;
+pub mod allocator;
+pub mod allocator_engine;
 pub mod audit;
 pub mod capability;
 pub mod enrollment;
@@ -41,6 +43,21 @@ pub mod trace_context;
 pub mod workload;
 
 pub use access::{AccessBindingRef, RealmAccessBinding, RealmTransportBinding, UnixSocketPath};
+pub use allocator::{
+    ALLOCATOR_REASON_CODE_COUNT, AllocatorConflict, AllocatorEventKind, AllocatorEventMetadata,
+    AllocatorLease, AllocatorLeaseState, AllocatorReasonCode, GrantedHostResource,
+    HostResourceKind, LeaseAllocationRequest, LeaseAllocationResponse, LeaseAllocationResult,
+    LeaseOwner, LeaseResourceRequest, ObservedHostResource, ObservedResourceState,
+    PersistedResourceLease, ReconciliationDecision, ReconciliationRecord, ReconciliationReport,
+    ResourceAcquisitionKey, ResourceAcquisitionOrder, ResourceDelegation,
+    ResourceObservationSource, ResourceShareMode,
+};
+pub use allocator_engine::{
+    AllocatorAllocationDecision, AllocatorEngineAllocation, AllocatorEngineDecision,
+    AllocatorEngineOutcome, AllocatorEngineReconciliation, AllocatorMetricEvent,
+    AllocatorMetricLabels, AllocatorReconciliationAction, FakeAllocatorLedger,
+    FakeAllocatorLiveness, FakeObservedAllocatorState, LocalRootAllocatorEngine,
+};
 pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
 pub use enrollment::{
@@ -58,9 +75,9 @@ pub use frame::{
     StreamFlow, StreamOpen, StreamResume,
 };
 pub use ids::{
-    ControllerGenerationId, CorrelationId, EnrollmentId, ExecutionId, GatewayId, IdempotencyKey,
-    NodeId, OperationId, PrincipalId, ProviderId, RealmId, RevocationId, RouteId, StreamCursor,
-    StreamId, WorkloadId,
+    AllocatorLeaseId, ControllerGenerationId, CorrelationId, EnrollmentId, ExecutionId, GatewayId,
+    HostResourceId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
+    RevocationId, RouteId, StreamCursor, StreamId, WorkloadId,
 };
 pub use migration::{
     LegacySurface, MigrationErrorEnvelope, MigrationLegacyId, MigrationReasonCode,

@@ -450,6 +450,7 @@
           cp ${bundle.processesJson.path} $out/processes.json
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
+          cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
@@ -534,6 +535,7 @@
           cp ${bundle.processesJson.path} $out/processes.json
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
+          cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList

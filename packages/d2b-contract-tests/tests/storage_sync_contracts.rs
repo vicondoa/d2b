@@ -6,8 +6,10 @@ use std::{
 
 use d2b_contract_tests::{read_repo_file, repo_root};
 use d2b_core::{
+    allocator_config::{AllocatorJson, AllocatorRuntimeState},
+    bundle::Bundle,
     processes::ProcessesJson,
-    storage::{StorageJson, StoragePathKind},
+    storage::{SensitivityClass, StorageJson, StoragePathKind},
     sync::{LockKind, SyncJson},
 };
 use regex::Regex;
@@ -36,19 +38,113 @@ fn storage_and_sync_emitters_are_wired_into_private_bundle() {
             "bundle.nix missing storage/sync wiring: {needle}"
         );
     }
-
     let bundle_doc = read_repo_file("docs/reference/manifest-bundle.md");
     assert!(bundle_doc.contains("`storage.json`"));
     assert!(bundle_doc.contains("`sync.json`"));
 }
 
 #[test]
+fn allocator_artifact_is_wired_into_private_bundle() {
+    let default_nix = read_repo_file("nixos-modules/default.nix");
+    assert!(
+        default_nix.contains("./allocator-json.nix"),
+        "default.nix must import allocator-json.nix"
+    );
+
+    let bundle_artifacts = read_repo_file("nixos-modules/bundle-artifacts.nix");
+    assert!(
+        bundle_artifacts.contains("allocatorJson"),
+        "bundle-artifacts.nix must declare allocatorJson metadata"
+    );
+
+    let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
+    for needle in [
+        "allocatorPath = \"/etc/d2b/allocator.json\";",
+        "key = \"/etc/d2b/allocator.json\";",
+    ] {
+        assert!(
+            bundle_nix.contains(needle),
+            "bundle.nix missing allocator wiring: {needle}"
+        );
+    }
+
+    let allocator_nix = read_repo_file("nixos-modules/allocator-json.nix");
+    assert!(allocator_nix.contains("runtimeState = \"metadata-only\";"));
+    assert!(allocator_nix.contains("spawnsService = false;"));
+    assert!(allocator_nix.contains("classification = \"contractPrivateNonSecret\";"));
+    assert!(allocator_nix.contains("sensitivity = \"nonSecret\";"));
+
+    let bundle_doc = read_repo_file("docs/reference/manifest-bundle.md");
+    assert!(bundle_doc.contains("`allocator.json`"));
+}
+
+#[test]
+fn rendered_allocator_contract_shape_and_private_bundle_path_when_fixture_available() {
+    let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) else {
+        eprintln!("  (skipping rendered allocator contract check; D2B_FIXTURES unset)");
+        return;
+    };
+
+    let allocator: AllocatorJson = read_json(&dir, "allocator.json");
+    let bundle: Bundle = read_json(&dir, "bundle.json");
+    let storage: StorageJson = read_json(&dir, "storage.json");
+
+    assert_eq!(allocator.schema_version, "v2");
+    assert_eq!(
+        allocator.allocator.runtime_state,
+        AllocatorRuntimeState::MetadataOnly
+    );
+    assert!(!allocator.allocator.runtime.spawns_service);
+    assert!(!allocator.allocator.runtime.socket_activated);
+    assert!(allocator.allocator.runtime.service_name.is_none());
+    assert_eq!(
+        allocator.allocator.root_socket.as_str(),
+        "/run/d2b/allocator/local-root.sock"
+    );
+    assert_eq!(
+        allocator.allocator.lease_ledger.as_str(),
+        "/var/lib/d2b/allocator/leases.jsonl"
+    );
+    assert!(allocator.invariants.no_runtime_allocator_service);
+    assert!(allocator.invariants.preserves_env_runtime_source_of_truth);
+    assert!(allocator.invariants.private_metadata_only);
+
+    let mut resource_ids = BTreeSet::new();
+    for request in &allocator.resource_requests {
+        assert!(
+            resource_ids.insert(request.resource_id.as_str()),
+            "allocator resource id rendered more than once: {}",
+            request.resource_id
+        );
+        assert!(
+            !request.realm_path.is_empty(),
+            "allocator resource requests must remain rooted in a realm path"
+        );
+    }
+
+    assert_eq!(
+        bundle.allocator_path.as_deref(),
+        Some("/etc/d2b/allocator.json")
+    );
+    let allocator_path = storage
+        .paths
+        .iter()
+        .find(|path| path.path_template.as_str() == "/etc/d2b/allocator.json")
+        .expect("storage.json covers allocator.json as a private bundle artifact");
+    assert_eq!(allocator_path.kind, StoragePathKind::RegularFile);
+    assert_eq!(allocator_path.sensitivity, SensitivityClass::Private);
+    assert_eq!(allocator_path.mode, "0640");
+}
+
+#[test]
 fn storage_and_sync_schemas_are_committed_and_closed() {
     let storage_schema = read_repo_file("docs/reference/schemas/v2/storage.json");
     let sync_schema = read_repo_file("docs/reference/schemas/v2/sync.json");
+    let allocator_schema = read_repo_file("docs/reference/schemas/v2/allocator.json");
     for (name, schema) in [
         ("storage.json", storage_schema.as_str()),
         ("sync.json", sync_schema.as_str()),
+        ("allocator.json", allocator_schema.as_str()),
     ] {
         assert!(
             schema.contains("\"additionalProperties\": false"),
@@ -60,6 +156,8 @@ fn storage_and_sync_schemas_are_committed_and_closed() {
     assert!(sync_schema.contains("\"ofd\""));
     assert!(sync_schema.contains("\"scm-rights\""));
     assert!(sync_schema.contains("\"explicit-fd-mapping\""));
+    assert!(allocator_schema.contains("\"metadata-only\""));
+    assert!(allocator_schema.contains("\"namespace-boundary\""));
 }
 
 #[test]
@@ -166,6 +264,13 @@ fn rendered_storage_contract_covers_process_writable_paths_when_fixture_availabl
             .iter()
             .any(|path| path.path_template.as_str() == "/etc/d2b/sync.json"),
         "storage.json must describe sync.json as a private bundle artifact"
+    );
+    assert!(
+        storage
+            .paths
+            .iter()
+            .any(|path| path.path_template.as_str() == "/etc/d2b/allocator.json"),
+        "storage.json must describe allocator.json as a private bundle artifact"
     );
     assert!(
         storage

@@ -276,6 +276,7 @@ in
         work = cfg.d2b._index.envMeta.work.lanBridge;
       };
     };
+
     expected = {
       names = [ "archive" "dev" "home" "work" ];
       enabledNames = [ "dev" "home" "work" ];
@@ -300,6 +301,7 @@ in
           cidrRefs = [ "dev" "lab" ];
         };
       };
+
       home = {
         allowedUsers = [ "alice" ];
         paths = {
@@ -352,6 +354,133 @@ in
         dev = "br-dev-lan";
         home = "br-home-lan";
         work = "br-work-lan";
+      };
+    };
+  };
+
+  "realms/allocator-artifact-roots-enabled-realm-index" = {
+    expr =
+      let
+        data = cfg.d2b._bundle.allocatorJson.data;
+        firstRequest = resourceId:
+          lib.findFirst (row: row.resourceId == resourceId) null data.resourceRequests;
+        namespaceBoundaryRequests =
+          lib.filter (row: row.kind == "namespace-boundary") data.resourceRequests;
+        devNamespaceBoundaryRequests =
+          lib.filter (row: row.resourceId == "realm-dev-netns") namespaceBoundaryRequests;
+        namespaceBoundaryResourceIds = map (row: row.resourceId) namespaceBoundaryRequests;
+        envRow = realmPath: envName:
+          lib.findFirst
+            (row: row.realmPath == realmPath && row.envName == envName)
+            null
+            data.envBridge;
+      in
+      {
+        installFileName = cfg.d2b._bundle.allocatorJson.installFileName;
+        classification = cfg.d2b._bundle.allocatorJson.classification;
+        sensitivity = cfg.d2b._bundle.allocatorJson.sensitivity;
+        mode = cfg.d2b._bundle.allocatorJson.mode;
+        user = cfg.d2b._bundle.allocatorJson.user;
+        group = cfg.d2b._bundle.allocatorJson.group;
+        bundleAllocatorPath = cfg.d2b._bundle.bundle.data.allocatorPath;
+        storageCoversAllocator =
+          lib.any (path: path.pathTemplate == "/etc/d2b/allocator.json")
+            cfg.d2b._bundle.storageJson.data.paths;
+        allocatorRuntimeServices =
+          lib.filter
+            (name: lib.hasInfix "allocator" name || lib.hasInfix "local-root" name)
+            (lib.attrNames cfg.systemd.services);
+        allocator = {
+          inherit (data.allocator) enabled runtimeState rootSocket stateDir leaseLedger auditDir runtime;
+        };
+        realmPaths = map (row: row.realmPath) data.realms;
+        devNetns = firstRequest "realm-dev-netns";
+        devNetnsCount = lib.length devNamespaceBoundaryRequests;
+        namespaceBoundaryResourceIdsUnique =
+          lib.length namespaceBoundaryResourceIds == lib.length (lib.unique namespaceBoundaryResourceIds);
+        homeBridge = firstRequest "env-home-bridge";
+        workProvider = builtins.head data.providerPlacements;
+        devWorkBridge = envRow "dev.home" "work";
+        inherit (data) invariants;
+      };
+    expected = {
+      installFileName = "allocator.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+      mode = "0640";
+      user = "root";
+      group = "d2bd";
+      bundleAllocatorPath = "/etc/d2b/allocator.json";
+      storageCoversAllocator = true;
+      allocatorRuntimeServices = [ ];
+      allocator = {
+        enabled = true;
+        runtimeState = "metadata-only";
+        rootSocket = "/run/d2b/allocator/local-root.sock";
+        stateDir = "/var/lib/d2b/allocator";
+        leaseLedger = "/var/lib/d2b/allocator/leases.jsonl";
+        auditDir = "/var/lib/d2b/allocator/audit";
+        runtime = {
+          spawnsService = false;
+          socketActivated = false;
+          serviceName = null;
+        };
+      };
+      realmPaths = [ "dev.home" "home" "work.home" ];
+      devNetns = {
+        realmPath = "dev.home";
+        resourceId = "realm-dev-netns";
+        kind = "namespace-boundary";
+        share = "exclusive";
+        acquisitionOrder = {
+          phase = 31;
+          ordinal = 0;
+        };
+        source = {
+          kind = "realm-network";
+          refName = "dev";
+        };
+      };
+      devNetnsCount = 1;
+      namespaceBoundaryResourceIdsUnique = true;
+      homeBridge = {
+        realmPath = "home";
+        resourceId = "env-home-bridge";
+        kind = "bridge";
+        share = "shared-partition";
+        acquisitionOrder = {
+          phase = 30;
+          ordinal = 0;
+        };
+        source = {
+          kind = "env-bridge";
+          refName = "home";
+        };
+      };
+      workProvider = {
+        realmPath = "work.home";
+        providerName = "aca";
+        providerId = "aca";
+        enabled = true;
+        kind = "aca";
+        placement = "provider-agent";
+        capabilityRefs = [ "aca" "relay" ];
+        configRef = "work-aca-non-secret";
+      };
+      devWorkBridge = {
+        realmPath = "dev.home";
+        envName = "work";
+        declared = true;
+        enabled = true;
+        mode = "inherit-env";
+        netVm = "sys-work-net";
+        lanBridge = "br-work-lan";
+        uplinkBridge = "br-work-up";
+      };
+      invariants = {
+        noRuntimeAllocatorService = true;
+        preservesEnvRuntimeSourceOfTruth = true;
+        privateMetadataOnly = true;
       };
     };
   };

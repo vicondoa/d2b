@@ -1,0 +1,483 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AllocatorJson",
+  "type": "object",
+  "required": [
+    "allocator",
+    "invariants",
+    "realms",
+    "schemaVersion"
+  ],
+  "properties": {
+    "allocator": {
+      "$ref": "#/definitions/AllocatorRoot"
+    },
+    "envBridge": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorEnvBridge"
+      }
+    },
+    "invariants": {
+      "$ref": "#/definitions/AllocatorInvariants"
+    },
+    "pathPartitions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorPathPartition"
+      }
+    },
+    "providerPlacements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorProviderPlacement"
+      }
+    },
+    "realms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorRealm"
+      }
+    },
+    "resourceRequests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AllocatorResourceRequest"
+      }
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AllocatorAcquisitionOrder": {
+      "type": "object",
+      "required": [
+        "ordinal",
+        "phase"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorEnvBridge": {
+      "type": "object",
+      "required": [
+        "declared",
+        "enabled",
+        "envName",
+        "realmPath"
+      ],
+      "properties": {
+        "declared": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "envName": {
+          "type": "string"
+        },
+        "lanBridge": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllocatorEnvBridgeMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "netVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
+        },
+        "uplinkBridge": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorEnvBridgeMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "inherit-env",
+        "declared",
+        "external"
+      ]
+    },
+    "AllocatorHostResourceKind": {
+      "type": "string",
+      "enum": [
+        "bridge",
+        "tap",
+        "veth-pair",
+        "nftables-table",
+        "nftables-partition",
+        "cgroup-subtree",
+        "host-file-partition",
+        "namespace-boundary"
+      ]
+    },
+    "AllocatorInvariants": {
+      "type": "object",
+      "required": [
+        "noRuntimeAllocatorService",
+        "preservesEnvRuntimeSourceOfTruth",
+        "privateMetadataOnly"
+      ],
+      "properties": {
+        "noRuntimeAllocatorService": {
+          "type": "boolean"
+        },
+        "preservesEnvRuntimeSourceOfTruth": {
+          "type": "boolean"
+        },
+        "privateMetadataOnly": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorPathPartition": {
+      "type": "object",
+      "required": [
+        "auditDir",
+        "brokerSocket",
+        "publicSocket",
+        "realmPath",
+        "runDir",
+        "stateDir"
+      ],
+      "properties": {
+        "auditDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "brokerSocket": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "publicSocket": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
+        },
+        "runDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "stateDir": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorProviderKind": {
+      "description": "Opaque provider adapter kind slug, bounded for schema-only allocator metadata.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "AllocatorProviderPlacement": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "placement",
+        "providerId",
+        "providerName",
+        "realmPath"
+      ],
+      "properties": {
+        "capabilityRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AllocatorProviderKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "$ref": "#/definitions/RealmPlacement"
+        },
+        "providerId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRealm": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "hostMutation",
+        "placement",
+        "realmId",
+        "realmName",
+        "realmPath"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "envNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hostMutation": {
+          "type": "boolean"
+        },
+        "placement": {
+          "$ref": "#/definitions/RealmPlacement"
+        },
+        "placementProvider": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "providerSpecificPlacement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "realmId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "realmName": {
+          "type": "string"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRealmPath": {
+      "description": "Realm path copied from d2b.realms, most-specific first, with 1-16 DNS-style labels and a 255-byte cap.",
+      "type": "string",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){0,15}$"
+    },
+    "AllocatorResourceRequest": {
+      "type": "object",
+      "required": [
+        "acquisitionOrder",
+        "kind",
+        "realmPath",
+        "resourceId",
+        "share",
+        "source"
+      ],
+      "properties": {
+        "acquisitionOrder": {
+          "$ref": "#/definitions/AllocatorAcquisitionOrder"
+        },
+        "kind": {
+          "$ref": "#/definitions/AllocatorHostResourceKind"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/AllocatorRealmPath"
+        },
+        "resourceId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "share": {
+          "$ref": "#/definitions/AllocatorResourceShare"
+        },
+        "source": {
+          "$ref": "#/definitions/AllocatorResourceSource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorResourceShare": {
+      "type": "string",
+      "enum": [
+        "exclusive",
+        "shared-partition"
+      ]
+    },
+    "AllocatorResourceSource": {
+      "type": "object",
+      "required": [
+        "kind",
+        "refName"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/AllocatorResourceSourceKind"
+        },
+        "refName": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorResourceSourceKind": {
+      "type": "string",
+      "enum": [
+        "realm-path",
+        "realm-socket",
+        "realm-state-dir",
+        "realm-run-dir",
+        "realm-audit-dir",
+        "realm-network",
+        "realm-broker",
+        "env-bridge",
+        "env-net-vm"
+      ]
+    },
+    "AllocatorRoot": {
+      "type": "object",
+      "required": [
+        "auditDir",
+        "enabled",
+        "leaseLedger",
+        "rootSocket",
+        "runtime",
+        "runtimeState",
+        "stateDir"
+      ],
+      "properties": {
+        "auditDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "leaseLedger": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "rootSocket": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "runtime": {
+          "$ref": "#/definitions/AllocatorRuntime"
+        },
+        "runtimeState": {
+          "$ref": "#/definitions/AllocatorRuntimeState"
+        },
+        "stateDir": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRuntime": {
+      "type": "object",
+      "required": [
+        "socketActivated",
+        "spawnsService"
+      ],
+      "properties": {
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "socketActivated": {
+          "type": "boolean"
+        },
+        "spawnsService": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AllocatorRuntimeState": {
+      "type": "string",
+      "enum": [
+        "metadata-only"
+      ]
+    },
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "PathTemplate": {
+      "description": "Absolute path template with typed variables expanded by the broker.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^/[^\\u0000]*$"
+    },
+    "RealmPlacement": {
+      "type": "string",
+      "enum": [
+        "host-local",
+        "gateway-vm",
+        "cloud-full-host",
+        "provider-controller",
+        "provider-agent",
+        "provider-specific"
+      ]
+    }
+  }
+}

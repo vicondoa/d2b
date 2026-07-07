@@ -2959,6 +2959,7 @@ mod tests {
                 privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
                 sync_path: None,
+                allocator_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3299,6 +3300,7 @@ mod tests {
             privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             sync_path: None,
+            allocator_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),

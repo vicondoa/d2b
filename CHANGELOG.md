@@ -20,6 +20,24 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Documented the ADR 0043 local-root allocator contract for typed host-resource
+  leases, opaque resource ids, deterministic acquisition order, reconciliation,
+  quarantine/reclaim, immutable host-file boundaries, and the current
+  contract-only implementation status.
+- Added `d2b-realm-core` local-root allocator DTOs for ADR 0043 host-resource
+  leases, opaque resource ids, allocation/reconciliation responses, bounded
+  allocator audit/metric metadata, and generated JSON schema coverage.
+- Added a pure `d2b-realm-core` local-root allocator engine over fake ledger,
+  observation, and liveness backends for deterministic lease allocation,
+  idempotency replay, reconciliation decisions, and bounded low-cardinality
+  audit/metric metadata.
+- Added private `allocator.json` bundle metadata rooted in `d2b.realms`, covering
+  enabled realms, metadata-only local-root allocator resource requests,
+  path/socket partitions, provider placement, and the transitional env bridge
+  without starting an allocator runtime service.
+- Added Layer-1 allocator coverage for rendered `allocator.json` bundle wiring,
+  realm allocator metadata, fake-engine conflict/replay/reconcile paths, and
+  bounded reconciliation reports.
 - Added the public `d2b.realms.<realm>` Nix option schema foundation for
   ADR 0043 without changing existing `d2b.envs` runtime behavior, with
   reference documentation for placement, user access, provider/relay/policy/key
@@ -238,9 +256,20 @@ deprecations ship one minor release before removal.
 - Aligned current realm-core reference pages and generated schema companions
   with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
   grammar.
+- Kept ADR 0043 operator-troubleshooting identifiers visible in Rust `Debug`
+  output while preserving redaction for credential-, key-, and principal-like
+  identifiers.
+- Tightened `allocator.json` config typing so realm paths, provider kinds,
+  and transitional env-bridge modes carry bounded schema/runtime validation.
 
 ### Fixed
 
+- ADR 0043 allocator metric bounding now aggregates repeated low-cardinality
+  label sets before applying the event cap, preserving counts instead of
+  dropping later samples.
+- ADR 0043 allocator metadata now emits one namespace-boundary resource
+  request per networked realm, avoiding duplicate resource ids for realms
+  spanning multiple enabled environments.
 - ADR 0043 realm audit, operation, and typed-error envelopes now carry the
   cross-realm correlation id needed to reconstruct rejected routes.
 - ADR 0043 operation responses now carry the same required correlation id as
@@ -254,6 +283,9 @@ deprecations ship one minor release before removal.
 - Aligned ADR 0043 realm-core schema generation and identifier validation:
   `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
   tokens reject leading punctuation consistently with their JSON schemas.
+- Aligned ADR 0043 allocator reference docs with the generated realm-core
+  schema roots and documented the future repair-path shape for fail-closed
+  allocator reconciliation states.
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
   toplevel has acked its initial configure before attaching the VM identity rail,
   preventing Wayland compositors from rejecting proxied WeezTerm windows during
