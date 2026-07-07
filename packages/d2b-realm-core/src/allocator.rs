@@ -934,7 +934,7 @@ mod tests {
             AllocatorReasonCode::KernelStateUnknown,
         ];
         assert_eq!(reasons.len(), ALLOCATOR_REASON_CODE_COUNT);
-        assert!(ALLOCATOR_REASON_CODE_COUNT <= 16);
+        const { assert!(ALLOCATOR_REASON_CODE_COUNT <= 16) };
         let labels = reasons
             .iter()
             .map(|reason| reason.as_metric_label())
