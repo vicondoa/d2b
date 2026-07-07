@@ -29,6 +29,8 @@ deprecations ship one minor release before removal.
 - Added Layer-1 nix-unit coverage for the ADR 0043 realm option schema,
   normalized realm index, parent/path collision assertions, legacy gateway/ACA
   migration guidance, and minimal/multi-env eval compatibility.
+- Added realm `placementProvider` metadata and AF_UNIX socket path length
+  assertions for future realm public and broker socket declarations.
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.

@@ -158,6 +158,59 @@ let
     })
   ];
 
+  longSocketPath = "/run/d2b/realms/${lib.concatStrings (lib.genList (_: "a") 96)}/public.sock";
+
+  overlongPublicSocketMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work.paths.publicSocket = longSocketPath;
+    })
+  ];
+
+  overlongBrokerSocketMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work.paths.brokerSocket = longSocketPath;
+    })
+  ];
+
+  missingPlacementProviderMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work = {
+        placement = "provider-controller";
+        providers.aca.kind = "aca";
+      };
+    })
+  ];
+
+  missingProviderSpecificPlacementProviderMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work = {
+        placement = "provider-specific";
+        providerSpecificPlacement = "aca-managed-sandbox";
+        providers.aca.kind = "aca";
+      };
+    })
+  ];
+
+  unexpectedPlacementProviderMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work = {
+        placement = "gateway-vm";
+        placementProvider = "aca";
+        providers.aca.kind = "aca";
+      };
+    })
+  ];
+
+  validProviderPlacementCfg = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work = {
+        placement = "provider-agent";
+        placementProvider = "aca";
+        providers.aca.kind = "aca";
+      };
+    })
+  ]).config;
+
   legacyGatewayMessages = failureMessages [
     (lib.recursiveUpdate hostBase {
       d2b.gateways.work = {
@@ -210,7 +263,7 @@ in
         paths = realms.byPath.home.paths;
       };
       work = {
-        inherit (realms.byPath."work.home") placement;
+        inherit (realms.byPath."work.home") placement placementProvider;
         providerKeys = realms.byPath."work.home".providerKeys;
         enabledProviderKeys = realms.byPath."work.home".enabledProviderKeys;
         provider = realms.byPath."work.home".providers.aca;
@@ -259,6 +312,7 @@ in
       };
       work = {
         placement = "gateway-vm";
+        placementProvider = null;
         providerKeys = [ "aca" ];
         enabledProviderKeys = [ "aca" ];
         provider = {
@@ -349,6 +403,53 @@ in
       runDir = true;
       publicSocket = true;
       brokerSocket = true;
+    };
+  };
+
+  "realms/rejects-overlong-unix-socket-paths" = {
+    expr = {
+      publicSocket = hasMessage [
+        "paths.publicSocket must fit Linux AF_UNIX pathname"
+        "at most 107 bytes"
+        "work"
+      ] overlongPublicSocketMessages;
+      brokerSocket = hasMessage [
+        "paths.brokerSocket must fit Linux AF_UNIX pathname"
+        "at most 107 bytes"
+        "work"
+      ] overlongBrokerSocketMessages;
+    };
+    expected = {
+      publicSocket = true;
+      brokerSocket = true;
+    };
+  };
+
+  "realms/requires-provider-for-provider-backed-placement" = {
+    expr = {
+      missingProvider = hasMessage [
+        "provider-backed d2b.realms placements require"
+        "placementProvider"
+        "work (provider-controller)"
+      ] missingPlacementProviderMessages;
+      missingProviderSpecificProvider = hasMessage [
+        "provider-backed d2b.realms placements require"
+        "placementProvider"
+        "work (provider-specific)"
+      ] missingProviderSpecificPlacementProviderMessages;
+      rejectsLocal = hasMessage [
+        "placementProvider is valid only for provider-backed"
+        "work (gateway-vm)"
+      ] unexpectedPlacementProviderMessages;
+      validProvider = lib.all (a: a.assertion) validProviderPlacementCfg.assertions;
+      indexedProvider = validProviderPlacementCfg.d2b._index.realms.byPath.work.placementProvider;
+    };
+    expected = {
+      missingProvider = true;
+      missingProviderSpecificProvider = true;
+      rejectsLocal = true;
+      validProvider = true;
+      indexedProvider = "aca";
     };
   };
 

@@ -62,13 +62,15 @@ identifier families.
 | `host-local` | Realm controller as an isolated host-local service. |
 | `gateway-vm` | Realm controller inside a dedicated local gateway VM. |
 | `cloud-full-host` | Realm controller on a cloud VM running full d2b. |
-| `provider-controller` | Provider-supported controller environment. |
-| `provider-agent` | Agent inside or adjacent to a managed provider sandbox. |
-| `provider-specific` | Adapter-defined placement named by `providerSpecificPlacement`. |
+| `provider-controller` | Provider-supported controller environment named by `placementProvider`. |
+| `provider-agent` | Agent inside or adjacent to a managed provider sandbox named by `placementProvider`. |
+| `provider-specific` | Adapter-defined placement named by `placementProvider` plus `providerSpecificPlacement`. |
 
-`providerSpecificPlacement` is meaningful only with
-`placement = "provider-specific"`. The value is inert metadata in the
-current schema.
+`placementProvider` is required for `provider-controller`,
+`provider-agent`, and `provider-specific`, and must be null for
+`host-local`, `gateway-vm`, and `cloud-full-host`. `providerSpecificPlacement`
+is meaningful only with `placement = "provider-specific"`. Both values are
+inert metadata in the current schema.
 
 ## Local access metadata
 
@@ -88,7 +90,10 @@ The derived `paths.*` fields reserve future path shapes:
 | `paths.publicSocket` | `paths.runDir + "/public.sock"` |
 | `paths.brokerSocket` | `paths.runDir + "/broker.sock"` |
 
-These paths are not created or bound by the schema-only declaration.
+These paths are not created or bound by the schema-only declaration. Socket
+paths are still checked against Linux AF_UNIX pathname sockets and must fit in
+107 bytes, leaving the final `sockaddr_un.sun_path` byte for the terminating
+NUL.
 
 ## Env and network substrate bridge
 

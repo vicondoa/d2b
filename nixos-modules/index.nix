@@ -154,6 +154,7 @@ let
         then null
         else builtins.head (lib.splitString "." realm.parent);
       placement = realm.placement;
+      placementProvider = realm.placementProvider;
       providerSpecificPlacement = realm.providerSpecificPlacement;
       allowedUsers = sortNames (lib.unique realm.allowedUsers);
       defaultWorkloadNamespace = realm.defaultWorkloadNamespace;

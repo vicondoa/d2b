@@ -139,6 +139,20 @@ let
     "publicSocket"
     "brokerSocket"
   ];
+  realmUnixSocketFields = [
+    "publicSocket"
+    "brokerSocket"
+  ];
+  providerBackedRealmPlacements = [
+    "provider-controller"
+    "provider-agent"
+    "provider-specific"
+  ];
+  localRealmPlacements = [
+    "host-local"
+    "gateway-vm"
+    "cloud-full-host"
+  ];
 
   missingRealmParents = lib.filter
     (realm:
@@ -187,6 +201,21 @@ let
   realmParentCycles = lib.unique
     (lib.filter (cycle: cycle != null)
       (map realmParentCycleFor enabledRealmRows));
+  realmSocketPathTooLongRows = field:
+    lib.filter
+      (realm: builtins.stringLength realm.paths.${field} > 107)
+      enabledRealmRows;
+  realmMissingPlacementProviderRows = lib.filter
+    (realm:
+      builtins.elem realm.placement providerBackedRealmPlacements
+      && realm.placementProvider == null)
+    enabledRealmRows;
+  realmUnexpectedPlacementProviderRows = lib.filter
+    (realm:
+      builtins.elem realm.placement localRealmPlacements
+      && realm.placementProvider != null)
+    enabledRealmRows;
+
   realmAssertions = [
     {
       assertion = duplicateRealmIds == [ ];
@@ -225,7 +254,44 @@ let
         }.
       '';
     }
+    {
+      assertion = realmMissingPlacementProviderRows == [ ];
+      message = ''
+        provider-backed d2b.realms placements require
+        `placementProvider` so the realm can map to
+        RealmControllerPlacement.provider. Set
+        d2b.realms.<realm>.placementProvider for provider-controller,
+        provider-agent, and provider-specific realm(s): ${
+          lib.concatStringsSep ", " (map (realm: "${realm.path} (${realm.placement})") realmMissingPlacementProviderRows)
+        }.
+      '';
+    }
+    {
+      assertion = realmUnexpectedPlacementProviderRows == [ ];
+      message = ''
+        d2b.realms.<realm>.placementProvider is valid only for provider-backed
+        placements (provider-controller, provider-agent, provider-specific).
+        Leave it null for host-local, gateway-vm, and cloud-full-host realm(s): ${
+          lib.concatStringsSep ", " (map (realm: "${realm.path} (${realm.placement})") realmUnexpectedPlacementProviderRows)
+        }.
+      '';
+    }
   ] ++ map
+    (field:
+      let overlong = realmSocketPathTooLongRows field;
+      in {
+        assertion = overlong == [ ];
+        message = ''
+          d2b.realms.<realm>.paths.${field} must fit Linux AF_UNIX pathname
+          sockets: at most 107 bytes including path characters, leaving one
+          byte for the terminating NUL in sockaddr_un.sun_path. Overlong
+          realm socket path(s): ${
+            lib.concatStringsSep ", " (map (realm: "${realm.path} (${toString (builtins.stringLength realm.paths.${field})} bytes)") overlong)
+          }.
+        '';
+      })
+    realmUnixSocketFields
+  ++ map
     (field:
       let duplicates = duplicateEnabledRealmPathValues field;
       in {

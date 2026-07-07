@@ -593,7 +593,9 @@ realms/rejects-duplicate-id-and-path
 realms/rejects-duplicate-runtime-paths
 realms/rejects-legacy-gateway-aca-surface-with-migration-guidance
 realms/rejects-missing-parent
+realms/rejects-overlong-unix-socket-paths
 realms/rejects-parent-cycle
+realms/requires-provider-for-provider-backed-placement
 realms/valid-home-dev-work-keeps-env-substrate-active
 requested-vm-config/boot-selector-and-hotplug-source-coexist
 requested-vm-config/dark-env-declared

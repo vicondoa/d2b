@@ -151,6 +151,18 @@ in
             '';
           };
 
+          placementProvider = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "aca";
+            description = ''
+              Provider identifier that owns provider-backed controller
+              placements. Required when `placement` is `provider-controller`,
+              `provider-agent`, or `provider-specific`; must be null for local
+              placements.
+            '';
+          };
+
           providerSpecificPlacement = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
