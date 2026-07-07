@@ -169,6 +169,7 @@ pub struct RouteAdvertisement {
 
 impl RouteAdvertisement {
     /// Validate descendant-only and bounded route invariants.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         advertising_realm: RealmPath,
         tree_edge: RealmTreeEdge,
