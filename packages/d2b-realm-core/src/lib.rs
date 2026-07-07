@@ -42,7 +42,16 @@ pub mod token;
 pub mod trace_context;
 pub mod workload;
 
-pub use access::{AccessBindingRef, RealmAccessBinding, RealmTransportBinding, UnixSocketPath};
+pub use access::{
+    AccessBindingRef, CapabilityPreflightDenialReason, CapabilityPreflightStatus,
+    DefaultRealmSelectionMetadata, DefaultRealmSelectionSource, HostLocalPeerCredentialChecker,
+    HostLocalPeerCredentialSemantics, HostLocalPeerCredentialSource, HostLocalProxyStatus,
+    RealmAccessAliasBinding, RealmAccessAliasSource, RealmAccessBinding,
+    RealmAccessCapabilityPreflight, RealmAccessClientBinding, RealmAccessClientBindingKind,
+    RealmAccessClientContract, RealmAccessConflictCandidate, RealmAccessResolverDiagnostic,
+    RealmAccessResolverError, RealmAccessResolverRequest, RealmAccessResolverResponse,
+    RealmAccessTargetInput, RealmTransportBinding, UnixSocketPath,
+};
 pub use allocator::{
     ALLOCATOR_REASON_CODE_COUNT, AllocatorConflict, AllocatorEventKind, AllocatorEventMetadata,
     AllocatorLease, AllocatorLeaseState, AllocatorReasonCode, GrantedHostResource,

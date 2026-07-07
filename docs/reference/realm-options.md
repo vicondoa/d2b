@@ -52,9 +52,10 @@ runtime support consumes the realm declaration.
 | `defaultWorkloadNamespace` | realm path | `id` | Namespace future target resolution will use for unqualified workload declarations. Current VM names are unchanged. |
 
 Realm path labels use the same lowercase label shape as other
-realm-core identifiers. See [Naming conventions](./naming-conventions.md)
-and [Realm core model reference](./realm-core.md) for target grammar and
-identifier families.
+realm-core identifiers. See [Naming conventions](./naming-conventions.md),
+[Realm core model reference](./realm-core.md), and
+[Realm access resolver contract](./realm-access-resolver.md) for target grammar,
+access resolution, and identifier families.
 
 ## Placement
 
@@ -187,8 +188,9 @@ the host daemon.
 
 ## Related references
 
-- [ADR 0043 — Realm-native control plane](../adr/0043-realm-native-control-plane.md)
+- [Realm-native control-plane decision record](../adr/0043-realm-native-control-plane.md)
 - [Realm core model reference](./realm-core.md)
+- [Realm access resolver contract](./realm-access-resolver.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm policy](./realm-policy.md)
 - [Naming conventions](./naming-conventions.md)

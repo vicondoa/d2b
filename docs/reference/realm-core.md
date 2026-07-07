@@ -42,7 +42,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
-| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement and access-binding DTOs for future realm access discovery. |
+| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `RealmAccessResolverRequest` / `RealmAccessResolverResponse`, `RealmAccessResolverDiagnostic`, `RealmAccessClientBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement, access bindings, resolver input/output, alias/conflict diagnostics, capability preflight, and client binding DTOs for realm access discovery. |
 | `ProviderRegistryEntry`, `WorkloadPlacement`, `WorkloadPlacementSummary`, `RealmTreeEdge`, `DescendantRoute`, `RouteAdvertisement` | `src/registry.rs`, `src/routing.rs` | Provider/workload placement and tree-route metadata. |
 | `EnrollmentRecord`, `RevocationRecord`, `KeyPin`, `SignatureRef`, migration DTOs | `src/enrollment.rs`, `src/routing.rs`, `src/migration.rs` | Realm identity lifecycle, signed-route metadata, and typed migration-error envelopes. |
 | `LeaseAllocationRequest` / `LeaseAllocationResponse`, `AllocatorLease`, `ReconciliationReport`, allocator event DTOs | `src/allocator.rs` | Contract-only local-root host-resource leases, total acquisition order, reconciliation/quarantine/reclaim decisions, and bounded allocator observability metadata. |
@@ -79,7 +79,7 @@ callers that intentionally support bare aliases must use
 
 Parsing is fail-closed. Fully qualified public targets require the
 reserved `.d2b` suffix. `all`, `*`, and non-suffix `d2b` labels are
-rejected as target labels. Old ADR 0032 node-qualified targets are
+rejected as target labels. Old node-qualified targets are
 accepted only by the legacy diagnostic parser so migration tooling can
 produce a typed error and suggested realm-native target; new routing code
 must not treat node labels as part of the public target grammar.
@@ -129,6 +129,29 @@ Capability codes:
 Display, clipboard, audio, HID, and USB are deliberately independent so
 one capability cannot smuggle another. Local GPU acceleration is not
 automatically relay-exportable.
+
+## Realm access resolver contracts
+
+The access resolver DTOs define the target-to-binding contract shape without
+changing today's CLI routing or daemon APIs. See
+[Realm access resolver contract](./realm-access-resolver.md) for the complete
+resolver behavior reference.
+
+- `RealmAccessResolverRequest` carries a bounded target input, optional
+  default-realm metadata, bounded alias bindings, required capabilities, and
+  the client binding kinds the caller can consume.
+- `RealmAccessResolverResponse` returns the canonical `RealmTarget`, resolved
+  realm path, controller placement, selected access binding, client binding,
+  capability preflight result, alias/default-realm provenance, and bounded
+  diagnostics.
+- `RealmAccessResolverDiagnostic` is the typed, client-safe failure surface for
+  alias ambiguity, old node-qualified target forms, missing realm bindings,
+  unsupported cross-realm capabilities, and stale or missing realm controllers.
+- Host-local results use `RealmAccessClientBinding::DirectHostLocalUnix` with
+  `HostLocalPeerCredentialSemantics`. That shape explicitly says the client
+  connects directly to the Unix socket, `d2bd` checks `SO_PEERCRED`, and no
+  byte proxy is present. Remote/provider results are references only; they do
+  not carry credentials or endpoint secrets.
 
 ## Peer protocol handshake
 

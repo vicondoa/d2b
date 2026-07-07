@@ -93,6 +93,10 @@ The contracts. Stable interfaces a consumer can depend on.
   private `realm-controllers.json` metadata for deterministic host-local
   realm controller naming, sockets, allocator bindings, state, and audit
   boundaries.
+- [`reference/realm-access-resolver.md`](./reference/realm-access-resolver.md) —
+  canonical realm target grammar, alias/default-realm resolution, direct
+  host-local access bindings, capability preflight, and typed resolver
+  diagnostics.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.

@@ -90,6 +90,66 @@
       "$ref": "#/definitions/RealmAccessBinding"
     },
     {
+      "$ref": "#/definitions/RealmAccessTargetInput"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessAliasSource"
+    },
+    {
+      "$ref": "#/definitions/DefaultRealmSelectionSource"
+    },
+    {
+      "$ref": "#/definitions/DefaultRealmSelectionMetadata"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessAliasBinding"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessClientBindingKind"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessClientContract"
+    },
+    {
+      "$ref": "#/definitions/HostLocalPeerCredentialSource"
+    },
+    {
+      "$ref": "#/definitions/HostLocalPeerCredentialChecker"
+    },
+    {
+      "$ref": "#/definitions/HostLocalProxyStatus"
+    },
+    {
+      "$ref": "#/definitions/HostLocalPeerCredentialSemantics"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessClientBinding"
+    },
+    {
+      "$ref": "#/definitions/CapabilityPreflightStatus"
+    },
+    {
+      "$ref": "#/definitions/CapabilityPreflightDenialReason"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessCapabilityPreflight"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessConflictCandidate"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessResolverDiagnostic"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessResolverError"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessResolverRequest"
+    },
+    {
+      "$ref": "#/definitions/RealmAccessResolverResponse"
+    },
+    {
       "$ref": "#/definitions/ProviderRegistryEntry"
     },
     {
@@ -1306,6 +1366,63 @@
       },
       "additionalProperties": false
     },
+    "CapabilityPreflightDenialReason": {
+      "description": "Why capability preflight denied a binding.",
+      "type": "string",
+      "enum": [
+        "missing-capability",
+        "unsupported-cross-realm-capability",
+        "missing-realm-controller",
+        "stale-realm-controller"
+      ]
+    },
+    "CapabilityPreflightStatus": {
+      "description": "Capability preflight status for a resolved binding.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "satisfied"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "missing",
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "missing": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Capability"
+              },
+              "maxItems": 64
+            },
+            "reason": {
+              "$ref": "#/definitions/CapabilityPreflightDenialReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "denied"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "CapabilitySet": {
       "type": "array",
       "items": {
@@ -2002,6 +2119,56 @@
       "maxLength": 128,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "DefaultRealmSelectionMetadata": {
+      "description": "Metadata proving whether default-realm selection was involved in resolving a target.",
+      "type": "object",
+      "required": [
+        "applied",
+        "realm",
+        "source"
+      ],
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "source": {
+          "$ref": "#/definitions/DefaultRealmSelectionSource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DefaultRealmSelectionSource": {
+      "description": "Why a default realm was selected for a bare workload target.",
+      "oneOf": [
+        {
+          "description": "The process or daemon configuration selected the default.",
+          "type": "string",
+          "enum": [
+            "configuration"
+          ]
+        },
+        {
+          "description": "The caller selected the default explicitly.",
+          "type": "string",
+          "enum": [
+            "explicit-request"
+          ]
+        },
+        {
+          "description": "The resolver selected the reserved local realm for compatibility.",
+          "type": "string",
+          "enum": [
+            "local-compatibility"
+          ]
+        }
+      ]
     },
     "DescendantRoute": {
       "description": "One descendant route advertised by a realm controller.",
@@ -2738,6 +2905,63 @@
         "capability-mismatch",
         "channel-binding-mismatch",
         "malformed-handshake"
+      ]
+    },
+    "HostLocalPeerCredentialChecker": {
+      "description": "Component that verifies host-local peer credentials.",
+      "oneOf": [
+        {
+          "description": "The public daemon socket performs `SO_PEERCRED` admission.",
+          "type": "string",
+          "enum": [
+            "d2bd-public-socket"
+          ]
+        }
+      ]
+    },
+    "HostLocalPeerCredentialSemantics": {
+      "description": "Evidence that a direct host-local binding preserves OS peer credentials.",
+      "type": "object",
+      "required": [
+        "checkedBy",
+        "proxy",
+        "source"
+      ],
+      "properties": {
+        "checkedBy": {
+          "$ref": "#/definitions/HostLocalPeerCredentialChecker"
+        },
+        "proxy": {
+          "$ref": "#/definitions/HostLocalProxyStatus"
+        },
+        "source": {
+          "$ref": "#/definitions/HostLocalPeerCredentialSource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostLocalPeerCredentialSource": {
+      "description": "Source of peer credentials for a host-local direct socket.",
+      "oneOf": [
+        {
+          "description": "The connecting client process is the peer observed by `d2bd`.",
+          "type": "string",
+          "enum": [
+            "connecting-client-process"
+          ]
+        }
+      ]
+    },
+    "HostLocalProxyStatus": {
+      "description": "Whether a host-local result uses a byte proxy.",
+      "oneOf": [
+        {
+          "description": "No proxy process is inserted between the client and `d2bd`.",
+          "type": "string",
+          "enum": [
+            "no-byte-proxy"
+          ]
+        }
       ]
     },
     "HostResourceId": {
@@ -3562,6 +3786,107 @@
       },
       "additionalProperties": false
     },
+    "RealmAccessAliasBinding": {
+      "description": "One alias-table binding supplied as resolver input.",
+      "type": "object",
+      "required": [
+        "alias",
+        "sourceRef",
+        "target"
+      ],
+      "properties": {
+        "alias": {
+          "$ref": "#/definitions/WorkloadId"
+        },
+        "sourceRef": {
+          "$ref": "#/definitions/AccessBindingRef"
+        },
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessAliasSource": {
+      "description": "How a resolver learned about a target alias.",
+      "oneOf": [
+        {
+          "description": "The operator supplied a fully-qualified canonical target.",
+          "type": "object",
+          "required": [
+            "source"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "fully-qualified"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "The alias came from a local alias table.",
+          "type": "object",
+          "required": [
+            "alias",
+            "source",
+            "source_ref"
+          ],
+          "properties": {
+            "alias": {
+              "description": "Bare alias that matched the target.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/WorkloadId"
+                }
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "alias-table"
+              ]
+            },
+            "source_ref": {
+              "description": "Non-secret table/source identifier.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AccessBindingRef"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "The resolver appended a selected default realm to a bare workload.",
+          "type": "object",
+          "required": [
+            "selection",
+            "source"
+          ],
+          "properties": {
+            "selection": {
+              "description": "Default realm selection metadata.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/DefaultRealmSelectionMetadata"
+                }
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "default-realm"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "RealmAccessBinding": {
       "description": "Resolved access binding for a realm controller generation.",
       "type": "object",
@@ -3605,6 +3930,474 @@
         }
       },
       "additionalProperties": false
+    },
+    "RealmAccessCapabilityPreflight": {
+      "description": "Capability preflight input/output snapshot.",
+      "type": "object",
+      "required": [
+        "advertised",
+        "required",
+        "status"
+      ],
+      "properties": {
+        "advertised": {
+          "$ref": "#/definitions/CapabilitySet"
+        },
+        "required": {
+          "$ref": "#/definitions/CapabilitySet"
+        },
+        "status": {
+          "$ref": "#/definitions/CapabilityPreflightStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessClientBinding": {
+      "description": "Client-consumable binding selected by the access resolver. The host-local variant is explicitly direct; a byte-proxy implementation would require a different, incompatible variant.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "binding",
+            "peer_credentials",
+            "socket_path"
+          ],
+          "properties": {
+            "binding": {
+              "type": "string",
+              "enum": [
+                "direct-host-local-unix"
+              ]
+            },
+            "peer_credentials": {
+              "$ref": "#/definitions/HostLocalPeerCredentialSemantics"
+            },
+            "socket_path": {
+              "$ref": "#/definitions/UnixSocketPath"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "binding",
+            "binding_ref",
+            "transport"
+          ],
+          "properties": {
+            "binding": {
+              "type": "string",
+              "enum": [
+                "remote-realm-transport-ref"
+              ]
+            },
+            "binding_ref": {
+              "$ref": "#/definitions/AccessBindingRef"
+            },
+            "transport": {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "binding",
+            "binding_ref",
+            "provider",
+            "transport"
+          ],
+          "properties": {
+            "binding": {
+              "type": "string",
+              "enum": [
+                "provider-realm-transport-ref"
+              ]
+            },
+            "binding_ref": {
+              "$ref": "#/definitions/AccessBindingRef"
+            },
+            "provider": {
+              "$ref": "#/definitions/ProviderId"
+            },
+            "transport": {
+              "$ref": "#/definitions/ProtocolToken"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RealmAccessClientBindingKind": {
+      "description": "Client-supported access binding kinds. This is a contract declaration, not a transport implementation.",
+      "oneOf": [
+        {
+          "description": "Client can connect directly to a host-local Unix socket and preserve kernel `SO_PEERCRED` semantics.",
+          "type": "string",
+          "enum": [
+            "direct-host-local-unix-socket"
+          ]
+        },
+        {
+          "description": "Client can use a remote realm transport reference.",
+          "type": "string",
+          "enum": [
+            "remote-realm-transport-ref"
+          ]
+        },
+        {
+          "description": "Client can use a provider transport reference.",
+          "type": "string",
+          "enum": [
+            "provider-realm-transport-ref"
+          ]
+        }
+      ]
+    },
+    "RealmAccessClientContract": {
+      "description": "Client-side access contract presented to the resolver.",
+      "type": "object",
+      "required": [
+        "requireDirectLocalSoPeercred",
+        "supportedBindings"
+      ],
+      "properties": {
+        "requireDirectLocalSoPeercred": {
+          "description": "When true, a host-local result must be a direct socket connection; a byte proxy is not acceptable because it would hide the original peer credentials from `d2bd`.",
+          "type": "boolean"
+        },
+        "supportedBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmAccessClientBindingKind"
+          },
+          "maxItems": 8
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessConflictCandidate": {
+      "description": "Candidate involved in alias ambiguity or binding conflict diagnostics.",
+      "type": "object",
+      "required": [
+        "aliasSource",
+        "realm",
+        "target"
+      ],
+      "properties": {
+        "aliasSource": {
+          "$ref": "#/definitions/RealmAccessAliasSource"
+        },
+        "placement": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmControllerPlacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessResolverDiagnostic": {
+      "description": "Typed resolver diagnostics. These are safe to return to clients and audit: they carry bounded ids, targets, capabilities, and generation ids only.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "alias",
+            "candidates",
+            "kind"
+          ],
+          "properties": {
+            "alias": {
+              "$ref": "#/definitions/WorkloadId"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmAccessConflictCandidate"
+              },
+              "maxItems": 16
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "alias-ambiguous"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "legacy_target",
+            "suggested"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "old-node-qualified-target"
+              ]
+            },
+            "legacy_target": {
+              "$ref": "#/definitions/RealmAccessTargetInput"
+            },
+            "suggested": {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realm",
+            "target"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "missing-realm-binding"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            },
+            "target": {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "capability",
+            "kind",
+            "placement",
+            "target"
+          ],
+          "properties": {
+            "capability": {
+              "$ref": "#/definitions/Capability"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "unsupported-cross-realm-capability"
+              ]
+            },
+            "placement": {
+              "$ref": "#/definitions/RealmControllerPlacement"
+            },
+            "target": {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "expected_generation",
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "expected_generation": {
+              "$ref": "#/definitions/ControllerGenerationId"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "stale-realm-controller"
+              ]
+            },
+            "observed_generation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ControllerGenerationId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realm"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "missing-realm-controller"
+              ]
+            },
+            "realm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RealmId"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RealmAccessResolverError": {
+      "description": "Fail-closed resolver error shape.",
+      "type": "object",
+      "required": [
+        "diagnostic"
+      ],
+      "properties": {
+        "diagnostic": {
+          "$ref": "#/definitions/RealmAccessResolverDiagnostic"
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmAccessResolverDiagnostic"
+          },
+          "maxItems": 16
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessResolverRequest": {
+      "description": "Input DTO for realm access resolution. Runtime routing can continue using existing paths while callers and tests exchange this contract shape.",
+      "type": "object",
+      "required": [
+        "client",
+        "requestedTarget",
+        "requiredCapabilities"
+      ],
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmAccessAliasBinding"
+          },
+          "maxItems": 64
+        },
+        "client": {
+          "$ref": "#/definitions/RealmAccessClientContract"
+        },
+        "defaultRealm": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultRealmSelectionMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedTarget": {
+          "$ref": "#/definitions/RealmAccessTargetInput"
+        },
+        "requiredCapabilities": {
+          "$ref": "#/definitions/CapabilitySet"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessResolverResponse": {
+      "description": "Successful resolver output for a canonical target and binding.",
+      "type": "object",
+      "required": [
+        "accessBinding",
+        "aliasSource",
+        "canonicalTarget",
+        "capabilityPreflight",
+        "clientBinding",
+        "placement",
+        "resolvedRealm"
+      ],
+      "properties": {
+        "accessBinding": {
+          "$ref": "#/definitions/RealmAccessBinding"
+        },
+        "aliasSource": {
+          "$ref": "#/definitions/RealmAccessAliasSource"
+        },
+        "canonicalTarget": {
+          "$ref": "#/definitions/RealmTarget"
+        },
+        "capabilityPreflight": {
+          "$ref": "#/definitions/RealmAccessCapabilityPreflight"
+        },
+        "clientBinding": {
+          "$ref": "#/definitions/RealmAccessClientBinding"
+        },
+        "defaultRealm": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DefaultRealmSelectionMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmAccessResolverDiagnostic"
+          },
+          "maxItems": 16
+        },
+        "placement": {
+          "$ref": "#/definitions/RealmControllerPlacement"
+        },
+        "resolvedRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAccessTargetInput": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[^\\0\\s]+$"
     },
     "RealmControllerPlacement": {
       "description": "Where a realm controller is placed in the realm-native model.\n\nThis is capability-neutral placement metadata. Whether a placement can perform lifecycle, exec, display, or provider operations is advertised separately through [`crate::capability::CapabilitySet`].",

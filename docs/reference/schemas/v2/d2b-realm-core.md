@@ -27,7 +27,17 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `AllocatorLeaseId`, `HostResourceId`, `EnrollmentId`, `RevocationId`;
 - `Capability`, `CapabilitySet`, `CapabilityNegotiation`;
 - `RealmControllerPlacement`, `UnixSocketPath`, `AccessBindingRef`,
-  `RealmTransportBinding`, `RealmAccessBinding`;
+  `RealmTransportBinding`, `RealmAccessBinding`,
+  `RealmAccessTargetInput`, `RealmAccessAliasSource`,
+  `DefaultRealmSelectionSource`, `DefaultRealmSelectionMetadata`,
+  `RealmAccessAliasBinding`, `RealmAccessClientBindingKind`,
+  `RealmAccessClientContract`, `HostLocalPeerCredentialSource`,
+  `HostLocalPeerCredentialChecker`, `HostLocalProxyStatus`,
+  `HostLocalPeerCredentialSemantics`, `RealmAccessClientBinding`,
+  `CapabilityPreflightStatus`, `CapabilityPreflightDenialReason`,
+  `RealmAccessCapabilityPreflight`, `RealmAccessConflictCandidate`,
+  `RealmAccessResolverDiagnostic`, `RealmAccessResolverError`,
+  `RealmAccessResolverRequest`, `RealmAccessResolverResponse`;
 - `ProviderRegistryEntry`, `WorkloadPlacement`,
   `WorkloadPlacementSummary`;
 - `KeyFingerprint`, `RealmKeyRole`, `KeyPin`, `EnrollmentStatus`,
@@ -77,6 +87,11 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   require resolver context and are not schema-valid standalone targets.
 - Capabilities are positive assertions. Missing capability means typed
   refusal, not fallback.
+- Access resolver roots model canonical targets, alias/default-realm
+  provenance, conflict candidates, capability preflight, and direct host-local
+  client bindings. A host-local client binding is explicitly
+  `direct-host-local-unix` with `SO_PEERCRED` checked by `d2bd` and
+  `no-byte-proxy`.
 - `CapabilityNegotiation` carries a schema version and deterministic
   bounded fingerprint for audit correlation.
 - Mutating operation requests require an idempotency key at decode.

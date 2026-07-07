@@ -5308,18 +5308,7 @@ fn load_realm_entrypoint_table_from_path(
                         ),
                     )
                 })?;
-                let gateway_target =
-                    d2b_realm_core::TargetName::parse(&gateway).map_err(|err| {
-                        CliFailure::new(
-                            1,
-                            format!(
-                                "realm `{}` gateway target `{}` is invalid: {}",
-                                safe_error_snippet(&realm_raw),
-                                safe_error_snippet(&gateway),
-                                safe_error_snippet(&err.to_string())
-                            ),
-                        )
-                    })?;
+                let gateway_target = parse_gateway_target_text(&realm_raw, &gateway)?;
                 table.gateway_backed(realm, gateway_target);
             }
             other => {
@@ -5365,11 +5354,19 @@ fn configured_realm_gateways(json: bool) -> Result<Vec<ResolvedRealmGateway>, Cl
                 ),
             )
         })?;
+        let canonical_gateway_target = target_name_from_gateway_text(&gateway_target)
+            .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
+                realm: realm.target_form(),
+                gateway: safe_error_snippet(&gateway_target),
+                reason: err.to_string(),
+            })
+            .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?
+            .to_string();
         gateways.push(ResolvedRealmGateway {
             realm: realm.target_form(),
             gateway_vm: gateway_vm_from_target_text(&realm.target_form(), &gateway_target)
                 .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?,
-            gateway_target,
+            gateway_target: canonical_gateway_target,
         });
     }
     gateways.sort_by(|a, b| a.realm.cmp(&b.realm));
@@ -5380,13 +5377,48 @@ fn gateway_vm_from_target_text(
     realm: &str,
     target: &str,
 ) -> Result<String, target_routing::RouteError> {
-    d2b_realm_core::TargetName::parse(target)
+    target_name_from_gateway_text(target)
         .map(|target| target.workload.as_str().to_owned())
         .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
             realm: realm.to_owned(),
             gateway: safe_error_snippet(target),
             reason: err.to_string(),
         })
+}
+
+fn target_name_from_gateway_text(
+    target: &str,
+) -> Result<d2b_realm_core::TargetName, d2b_realm_core::TargetParseError> {
+    match d2b_realm_core::TargetName::parse(target) {
+        Ok(target) => Ok(target),
+        Err(d2b_realm_core::TargetParseError::MissingRealm) => {
+            let body = target.strip_prefix("d2b://").unwrap_or(target);
+            let labels = body.split('.').collect::<Vec<_>>();
+            if let [vm, "d2b"] = labels.as_slice() {
+                d2b_realm_core::TargetName::parse(&format!("{vm}.local.d2b"))
+            } else {
+                Err(d2b_realm_core::TargetParseError::MissingRealm)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn parse_gateway_target_text(
+    realm: &str,
+    gateway: &str,
+) -> Result<d2b_realm_core::TargetName, CliFailure> {
+    target_name_from_gateway_text(gateway).map_err(|err| {
+        CliFailure::new(
+            1,
+            format!(
+                "realm `{}` gateway target `{}` is invalid: {}",
+                safe_error_snippet(realm),
+                safe_error_snippet(gateway),
+                safe_error_snippet(&err.to_string())
+            ),
+        )
+    })
 }
 
 fn conventional_gateway_route(raw: &str, json: bool) -> Result<Option<VmTargetRoute>, CliFailure> {
@@ -5591,12 +5623,9 @@ fn resolve_realm_gateway(
         }
     } else {
         let gateway_vm = target_routing::gateway_vm_name(&realm);
-        (
-            gateway_vm.clone(),
-            target_routing::gateway_target_name(&realm)
-                .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?
-                .to_string(),
-        )
+        let gateway_target = target_routing::gateway_target_name(&realm)
+            .map_err(|err| emit_route_error(err, json).unwrap_or_else(|failure| failure))?;
+        (gateway_vm, gateway_target.to_string())
     };
     let manifest = context.load_manifest()?;
     if manifest.get_vm(&gateway_vm).is_none() {
@@ -5794,7 +5823,7 @@ fn realm_policy_rows_from_entries(
                         ),
                     )
                 })?;
-                let gateway_vm = gateway_vm_from_target_text(&realm_target, &gateway_target)
+                let canonical_gateway_target = target_name_from_gateway_text(&gateway_target)
                     .map_err(|err| {
                         CliFailure::new(
                             1,
@@ -5805,6 +5834,8 @@ fn realm_policy_rows_from_entries(
                             ),
                         )
                     })?;
+                let gateway_vm = canonical_gateway_target.workload.as_str().to_owned();
+                let gateway_target = canonical_gateway_target.to_string();
                 let gateway_state = gateway_states
                     .get(&gateway_vm)
                     .map(String::as_str)
