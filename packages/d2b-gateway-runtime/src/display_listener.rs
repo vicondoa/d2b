@@ -230,7 +230,7 @@ impl DisplayListener for RelayDisplayListener {
 mod tests {
     use super::*;
     use crate::agent_prologue;
-    use d2b_constellation_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
+    use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
     use d2b_gateway::{DisplaySessionId, SECRET_LEN};
 
     fn binding(generation: u64, not_after: u64) -> (SessionBinding, SessionSecret) {

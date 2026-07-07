@@ -16,8 +16,8 @@ workspace = true
 # public.sock wire (delegates to d2b-contracts public-wire types; no new
 # wire). relay/direct_tls are declared-but-unimplemented slots.
 [dependencies]
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
-d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 nix = { version = "0.29", default-features = false, features = ["socket"] }

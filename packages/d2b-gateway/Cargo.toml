@@ -21,7 +21,7 @@ workspace = true
 # live Azure in unit tests. Host-side leaf crate: nothing in the constellation
 # contract crates depends on it (dep-direction gate).
 [dependencies]
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 hmac = "0.12"
 sha2 = "0.10"

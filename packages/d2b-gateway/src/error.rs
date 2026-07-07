@@ -3,7 +3,7 @@
 //! No stringly errors leak across the boundary.
 
 use crate::handshake::HandshakeError;
-use d2b_constellation_core::{ConstellationError, ErrorKind};
+use d2b_realm_core::{ConstellationError, ErrorKind};
 
 /// A gateway display-orchestration failure. Each variant maps to exactly one
 /// [`ErrorKind`]; the gateway never surfaces a raw provider/relay error string

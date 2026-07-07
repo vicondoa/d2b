@@ -6,7 +6,7 @@
 //! relay tokens, session secrets, socket paths, or provider error strings.
 
 use crate::{DisplaySessionId, GatewayError, SessionState};
-use d2b_constellation_core::{
+use d2b_realm_core::{
     AuditEnvelope, AuthorizationScope, AuthzDecision, Capability, NodeId, OperationId, PrincipalId,
     RealmPath, WorkloadId,
 };
@@ -81,7 +81,7 @@ pub fn display_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{RealmId, WorkloadId};
+    use d2b_realm_core::{RealmId, WorkloadId};
 
     #[test]
     fn display_envelope_is_redacted_and_principal_consistent() {

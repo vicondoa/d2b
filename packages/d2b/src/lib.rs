@@ -5228,7 +5228,7 @@ fn realm_entrypoints_path() -> PathBuf {
 }
 
 fn load_realm_entrypoint_table()
--> Result<Option<d2b_constellation_router::RealmEntrypointTable>, CliFailure> {
+-> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
     let path = realm_entrypoints_path();
     load_realm_entrypoint_table_from_path(&path)
 }
@@ -5273,11 +5273,11 @@ fn load_realm_entrypoint_document_from_path(
 
 fn load_realm_entrypoint_table_from_path(
     path: &Path,
-) -> Result<Option<d2b_constellation_router::RealmEntrypointTable>, CliFailure> {
+) -> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
     let Some(doc) = load_realm_entrypoint_document_from_path(path)? else {
         return Ok(None);
     };
-    let mut table = d2b_constellation_router::RealmEntrypointTable::new();
+    let mut table = d2b_realm_router::RealmEntrypointTable::new();
     for (realm_raw, entry) in normalize_realm_entrypoint_entries(doc.entries)? {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
@@ -5302,7 +5302,7 @@ fn load_realm_entrypoint_table_from_path(
                     )
                 })?;
                 let gateway_target =
-                    d2b_constellation_core::TargetName::parse(&gateway).map_err(|err| {
+                    d2b_realm_core::TargetName::parse(&gateway).map_err(|err| {
                         CliFailure::new(
                             1,
                             format!(
@@ -5373,7 +5373,7 @@ fn gateway_vm_from_target_text(
     realm: &str,
     target: &str,
 ) -> Result<String, target_routing::RouteError> {
-    d2b_constellation_core::TargetName::parse(target)
+    d2b_realm_core::TargetName::parse(target)
         .map(|target| target.workload.as_str().to_owned())
         .map_err(|err| target_routing::RouteError::InvalidGatewayTarget {
             realm: realm.to_owned(),
@@ -5471,7 +5471,7 @@ fn route_vm_target_with_table(
     context: &Context,
     raw: &str,
     json: bool,
-    table: Option<d2b_constellation_router::RealmEntrypointTable>,
+    table: Option<d2b_realm_router::RealmEntrypointTable>,
 ) -> Result<VmTargetRoute, CliFailure> {
     if table.is_none() {
         if let Some(route) = conventional_gateway_route(raw, json)? {
@@ -5498,11 +5498,11 @@ fn route_vm_target_with_table(
             }
             return Ok(route);
         }
-        let table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+        let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         return match target_routing::route(raw, &table) {
             Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
             Ok(target_routing::Route::Gateway { gateway, target }) => {
-                let realm = d2b_constellation_core::TargetName::parse(&target)
+                let realm = d2b_realm_core::TargetName::parse(&target)
                     .map(|target| target.realm.target_form())
                     .unwrap_or_else(|_| "unknown".to_owned());
                 let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
@@ -5522,7 +5522,7 @@ fn route_vm_target_with_table(
     match target_routing::route(raw, table.as_ref().expect("checked above")) {
         Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
-            let realm = d2b_constellation_core::TargetName::parse(&target)
+            let realm = d2b_realm_core::TargetName::parse(&target)
                 .map(|target| target.realm.target_form())
                 .unwrap_or_else(|_| "unknown".to_owned());
             let gateway_vm = gateway_vm_from_target_text(&realm, &gateway)
@@ -5925,7 +5925,7 @@ fn op_inspect_trace(args: &OpInspectArgs) -> Result<Option<OpInspectTraceOutputV
     let (Some(trace_id), Some(span_id)) = (&args.trace_id, &args.span_id) else {
         return Ok(None);
     };
-    let trace = d2b_constellation_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
+    let trace = d2b_realm_core::TraceContext::new(trace_id, span_id).ok_or_else(|| {
         CliFailure::new(
             2,
             "op inspect: trace context fields must be non-empty, bounded, and contain no whitespace",
@@ -6083,7 +6083,7 @@ fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailu
 /// gateway-mode `d2bd` owns gateway-backed targets.
 #[cfg(test)]
 fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
-    let table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+    let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
     match target_routing::route(raw, &table) {
         Ok(target_routing::Route::Local { .. }) => Ok(()),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
@@ -12122,13 +12122,13 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "vm-a");
-        let mut table = d2b_constellation_router::RealmEntrypointTable::with_local_default();
+        let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         table.gateway_backed(
-            d2b_constellation_core::RealmPath::new(vec![
-                d2b_constellation_core::RealmId::parse("work").unwrap(),
+            d2b_realm_core::RealmPath::new(vec![
+                d2b_realm_core::RealmId::parse("work").unwrap(),
             ])
             .unwrap(),
-            d2b_constellation_core::TargetName::parse("corp-gateway.d2b").unwrap(),
+            d2b_realm_core::TargetName::parse("corp-gateway.d2b").unwrap(),
         );
         let context = Context {
             manifest_path: manifest_path.clone(),

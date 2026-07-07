@@ -4,9 +4,9 @@
 #
 # The constellation contract crates must stay codec-/transport-/host-neutral:
 #
-#   * d2b-constellation-core   — depends on NO other workspace crate and
+#   * d2b-realm-core   — depends on NO other workspace crate and
 #                                    NOT on prost (pure, codec-neutral model).
-#   * d2b-constellation-provider, -router, -transport (when present) —
+#   * d2b-realm-provider, -router, -transport (when present) —
 #                                    may depend only on the contract crate(s)
 #                                    listed below, and NOT on prost, a codec
 #                                    crate, a transport impl crate, or any
@@ -155,16 +155,16 @@ check_pure_crate() {
     | select(.kind != "dev") | .name')
 }
 
-# d2b-constellation-core: depends on no workspace crate, no prost.
-check_pure_crate d2b-constellation-core
-# d2b-constellation-provider: only the core contract crate.
-check_pure_crate d2b-constellation-provider d2b-constellation-core
-# d2b-constellation-router (s8): core + provider only, when it lands.
-check_pure_crate d2b-constellation-router \
-  d2b-constellation-core d2b-constellation-provider
-# d2b-constellation-transport (s5): trait/mock home; core + provider only.
-check_pure_crate d2b-constellation-transport \
-  d2b-constellation-core d2b-constellation-provider
+# d2b-realm-core: depends on no workspace crate, no prost.
+check_pure_crate d2b-realm-core
+# d2b-realm-provider: only the core contract crate.
+check_pure_crate d2b-realm-provider d2b-realm-core
+# d2b-realm-router (s8): core + provider only, when it lands.
+check_pure_crate d2b-realm-router \
+  d2b-realm-core d2b-realm-provider
+# d2b-realm-transport (s5): trait/mock home; core + provider only.
+check_pure_crate d2b-realm-transport \
+  d2b-realm-core d2b-realm-provider
 
 # Prost stays confined to the protobuf codec crate (and a legitimate
 # peer-session encoder, none yet); the checks above assert it never reaches a

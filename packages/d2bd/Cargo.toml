@@ -21,11 +21,11 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
-# src/constellation_stubs.rs wire this trait surface; they are compile-only
+# src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
-d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
-d2b-constellation-router = { path = "../d2b-constellation-router", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
+d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }
 d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
 d2b-gateway-runtime = { path = "../d2b-gateway-runtime", version = "0.0.0-bootstrap" }
 d2b-provider-aca = { path = "../d2b-provider-aca", version = "0.0.0-bootstrap" }

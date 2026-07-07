@@ -62,7 +62,7 @@
         } // args);
         guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages/d2b-constellation-core} $out/packages/d2b-constellation-core
+          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
           cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
@@ -71,10 +71,10 @@
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-constellation-core
-          cat > $out/packages/d2b-constellation-core/Cargo.toml <<'EOF'
+          chmod -R u+w $out/packages/d2b-realm-core
+          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
           [package]
-          name = "d2b-constellation-core"
+          name = "d2b-realm-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -121,7 +121,7 @@
           [workspace]
           resolver = "2"
           members = [
-            "d2b-constellation-core",
+            "d2b-realm-core",
             "d2b-core",
             "d2b-contracts",
             "d2b-guestd",
@@ -558,7 +558,7 @@
         '';
         guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages/d2b-constellation-core} $out/packages/d2b-constellation-core
+          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
           cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
@@ -567,10 +567,10 @@
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-constellation-core
-          cat > $out/packages/d2b-constellation-core/Cargo.toml <<'EOF'
+          chmod -R u+w $out/packages/d2b-realm-core
+          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
           [package]
-          name = "d2b-constellation-core"
+          name = "d2b-realm-core"
           version = "0.0.0-bootstrap"
           edition = "2024"
           publish = false
@@ -617,7 +617,7 @@
           [workspace]
           resolver = "2"
           members = [
-            "d2b-constellation-core",
+            "d2b-realm-core",
             "d2b-core",
             "d2b-contracts",
             "d2b-guestd",

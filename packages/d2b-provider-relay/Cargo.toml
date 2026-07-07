@@ -17,8 +17,8 @@ workspace = true
 # Send bearer (not the SAS rule key) because ACA Entra Relay substreams are not
 # reliable enough for Waypipe. All secret material has a redacted Debug.
 [dependencies]
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
-d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 hmac = "0.12"
 sha2 = "0.10"

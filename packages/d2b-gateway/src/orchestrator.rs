@@ -19,7 +19,7 @@ use crate::error::GatewayError;
 use crate::handshake::{DisplaySessionId, SessionBinding, SessionSecret};
 use crate::ledger::{LedgerLimits, OpOutcome, SessionLedger, SessionState, TargetKey};
 use crate::types::{AppCommand, DisplaySessionContext};
-use d2b_constellation_core::{
+use d2b_realm_core::{
     AuthzDecision, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
 };
 
@@ -462,22 +462,22 @@ impl GatewayOrchestrator {
 #[derive(Debug, Clone)]
 pub struct ContextSeed {
     /// Realm of the authorizing operation.
-    pub realm: d2b_constellation_core::RealmPath,
+    pub realm: d2b_realm_core::RealmPath,
     /// Authorizing operation id.
-    pub operation_id: d2b_constellation_core::OperationId,
+    pub operation_id: d2b_realm_core::OperationId,
     /// Authorizing caller principal.
-    pub principal: d2b_constellation_core::PrincipalId,
+    pub principal: d2b_realm_core::PrincipalId,
     /// Gateway node handling the operation.
-    pub node: d2b_constellation_core::NodeId,
+    pub node: d2b_realm_core::NodeId,
     /// Workload presenting the UI.
-    pub workload: d2b_constellation_core::WorkloadId,
+    pub workload: d2b_realm_core::WorkloadId,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::handshake::SECRET_LEN;
-    use d2b_constellation_core::{
+    use d2b_realm_core::{
         NodeId, OperationId, PrincipalId, RealmId, RealmPath, WorkloadId,
     };
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

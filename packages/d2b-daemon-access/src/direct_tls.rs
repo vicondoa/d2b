@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use d2b_constellation_core::{PrincipalId, ProviderId};
-use d2b_constellation_provider::{
+use d2b_realm_core::{PrincipalId, ProviderId};
+use d2b_realm_provider::{
     error::{ProviderError, ProviderResult},
     provider::DaemonAccessTransport,
     types::{DaemonAccessMode, TransportSession, TransportTarget},

@@ -26,8 +26,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
-use d2b_constellation_core::TargetName;
-use d2b_constellation_provider::provider::WorkloadProvider;
+use d2b_realm_core::TargetName;
+use d2b_realm_provider::provider::WorkloadProvider;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     broker_wire::{
@@ -238,10 +238,10 @@ pub mod concurrency;
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
 
-// ADR 0032: compile-only peer-module skeletons wiring the v2
-// constellation provider/router trait surface. NOT called from the running
+// ADR 0032/0043: compile-only peer-module skeletons wiring the realm
+// provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
-pub mod constellation_stubs;
+pub mod realm_stubs;
 
 use typed_error::TypedError;
 
@@ -3038,7 +3038,7 @@ fn dispatch_gateway_display(
                 TargetName::parse(&args.target).map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay target parse failed: {err}"),
                 })?;
-            let operation_id = d2b_constellation_core::OperationId::parse(args.operation_id)
+            let operation_id = d2b_realm_core::OperationId::parse(args.operation_id)
                 .map_err(|err| TypedError::WireInvalidFrame {
                     detail: format!("gatewayDisplay operation_id invalid: {err}"),
                 })?;
@@ -3242,12 +3242,12 @@ fn parse_gateway_display_lifecycle_target(
         detail: format!("gatewayDisplay target parse failed: {err}"),
     })?;
     let _operation_id =
-        d2b_constellation_core::OperationId::parse(operation_id).map_err(|err| {
+        d2b_realm_core::OperationId::parse(operation_id).map_err(|err| {
             TypedError::WireInvalidFrame {
                 detail: format!("gatewayDisplay operation_id invalid: {err}"),
             }
         })?;
-    let _principal = d2b_constellation_core::PrincipalId::parse(principal).map_err(|err| {
+    let _principal = d2b_realm_core::PrincipalId::parse(principal).map_err(|err| {
         TypedError::WireInvalidFrame {
             detail: format!("gatewayDisplay principal invalid: {err}"),
         }
@@ -3666,7 +3666,7 @@ fn aca_provider_from_gateway_config(
         .insert("d2b-realm".to_owned(), config.realm.clone());
     let provider = AcaWorkloadProvider::new(
         provider_config,
-        d2b_constellation_core::NodeId::parse("gateway")
+        d2b_realm_core::NodeId::parse("gateway")
             .map_err(|_| GatewayError::ProviderAllocationFailed)?,
     )
     .map_err(|err| {

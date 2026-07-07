@@ -13,7 +13,7 @@ workspace = true
 clap_complete = "4"
 clap_mangen = "0.2"
 d2b = { path = "../d2b", version = "0.0.0-bootstrap" }
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 protobuf-codegen = "3.7.2"

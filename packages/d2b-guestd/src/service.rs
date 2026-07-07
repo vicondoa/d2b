@@ -501,9 +501,9 @@ fn derive_capabilities_config(inputs: CapabilitiesInputs) -> CapabilitiesConfig 
 /// capability contract. The core `persistent-shell` capability is advertised
 /// only when guestd can attach, manage, force-attach, and report bounded shell
 /// limits; partial guest-control fragments remain fail-closed.
-pub fn constellation_shell_capability_set(
+pub fn realm_shell_capability_set(
     config: &CapabilitiesConfig,
-) -> d2b_constellation_core::CapabilitySet {
+) -> d2b_realm_core::CapabilitySet {
     let shell_ready = config.shell_attached
         && config.shell_management
         && config.shell_force_attach
@@ -511,10 +511,10 @@ pub fn constellation_shell_capability_set(
         && (1..=64).contains(&config.shell_attached_sessions_per_vm)
         && config.shell_attached_sessions_per_vm <= config.shell_sessions_per_vm;
     if shell_ready {
-        d2b_constellation_core::CapabilitySet::empty()
-            .with(d2b_constellation_core::Capability::PersistentShell)
+        d2b_realm_core::CapabilitySet::empty()
+            .with(d2b_realm_core::Capability::PersistentShell)
     } else {
-        d2b_constellation_core::CapabilitySet::empty()
+        d2b_realm_core::CapabilitySet::empty()
     }
 }
 
@@ -6991,8 +6991,8 @@ mod tests {
         assert_eq!(with.capabilities.limits.shell_sessions_per_vm, 12);
         assert_eq!(with.capabilities.limits.shell_attached_sessions_per_vm, 2);
         assert!(
-            constellation_shell_capability_set(&shell_config)
-                .has(d2b_constellation_core::Capability::PersistentShell)
+            realm_shell_capability_set(&shell_config)
+                .has(d2b_realm_core::Capability::PersistentShell)
         );
 
         let without = RuntimeCapabilitiesProvider::new(CapabilitiesConfig::default())
@@ -7008,7 +7008,7 @@ mod tests {
             0
         );
         assert!(
-            !constellation_shell_capability_set(&CapabilitiesConfig {
+            !realm_shell_capability_set(&CapabilitiesConfig {
                 shell_attached: true,
                 shell_management: true,
                 shell_force_attach: false,
@@ -7016,7 +7016,7 @@ mod tests {
                 shell_attached_sessions_per_vm: 2,
                 ..CapabilitiesConfig::default()
             })
-            .has(d2b_constellation_core::Capability::PersistentShell)
+            .has(d2b_realm_core::Capability::PersistentShell)
         );
     }
 

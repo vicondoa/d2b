@@ -18,8 +18,8 @@ workspace = true
 # host adapter); the dependency-direction gate does NOT treat it as a pure
 # contract crate, so the provider TRAIT crates never gain a host edge.
 [dependencies]
-d2b-constellation-core = { path = "../d2b-constellation-core", version = "0.0.0-bootstrap" }
-d2b-constellation-provider = { path = "../d2b-constellation-provider", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 async-trait = "0.1"

@@ -829,8 +829,8 @@ name = "d2b"
 version = "0.0.0-bootstrap"
 dependencies = [
  "clap",
- "d2b-constellation-core",
- "d2b-constellation-router",
+ "d2b-realm-core",
+ "d2b-realm-router",
  "d2b-contracts",
  "d2b-core",
  "nix 0.29.0",
@@ -863,18 +863,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-codec-protobuf"
+name = "d2b-realm-codec-protobuf"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-contracts",
  "prost 0.13.5",
  "serde_json",
 ]
 
 [[package]]
-name = "d2b-constellation-core"
+name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
@@ -883,11 +883,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-provider"
+name = "d2b-realm-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "schemars",
  "serde",
  "serde_json",
@@ -896,14 +896,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-router"
+name = "d2b-realm-router"
 version = "0.0.0-bootstrap"
 dependencies = [
  "chacha20poly1305",
- "d2b-constellation-codec-protobuf",
- "d2b-constellation-core",
- "d2b-constellation-provider",
- "d2b-constellation-transport",
+ "d2b-realm-codec-protobuf",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "d2b-realm-transport",
  "hmac",
  "serde",
  "serde_json",
@@ -914,12 +914,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-transport"
+name = "d2b-realm-transport"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "tokio",
 ]
 
@@ -966,8 +966,8 @@ name = "d2b-daemon-access"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-contracts",
  "nix 0.29.0",
  "serde",
@@ -987,7 +987,7 @@ name = "d2b-gateway"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "hmac",
  "serde",
  "serde_json",
@@ -1003,8 +1003,8 @@ dependencies = [
  "azure_core",
  "base64",
  "chacha20poly1305",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-gateway",
  "d2b-provider-aca",
  "d2b-provider-relay",
@@ -1024,7 +1024,7 @@ name = "d2b-guestd"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "d2b-contracts",
  "d2b-exec-runner",
  "futures",
@@ -1042,8 +1042,8 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-contracts",
  "d2b-core",
  "libc",
@@ -1071,8 +1071,8 @@ name = "d2b-host-providers"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-core",
  "d2b-host",
  "serde_json",
@@ -1096,8 +1096,8 @@ dependencies = [
  "async-trait",
  "azure_core",
  "azure_identity",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1112,8 +1112,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "futures-util",
  "hmac",
  "libc",
@@ -1169,9 +1169,9 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
- "d2b-constellation-core",
- "d2b-constellation-provider",
- "d2b-constellation-router",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "d2b-realm-router",
  "d2b-contracts",
  "d2b-core",
  "d2b-gateway",
@@ -4812,7 +4812,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "d2b",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "d2b-contracts",
  "d2b-core",
  "protobuf-codegen",

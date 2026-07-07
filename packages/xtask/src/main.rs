@@ -9,7 +9,7 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use d2b_constellation_core::{
+use d2b_realm_core::{
     AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation, CapabilitySet,
     ConstellationError, ConstellationFrame, ExecAttachMode, ExecAttachRequest, ExecCancelRequest,
     ExecLogsRequest, ExecStartRequest, ExecutionGeneration, ExecutionId, ExecutionSummary,

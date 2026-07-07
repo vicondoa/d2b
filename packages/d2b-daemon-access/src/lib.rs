@@ -18,11 +18,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_constellation_core::{
+use d2b_realm_core::{
     Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId, RealmPath, WorkloadId,
     WorkloadState, WorkloadSummary,
 };
-use d2b_constellation_provider::{
+use d2b_realm_provider::{
     error::{ProviderError, ProviderResult},
     provider::{DaemonAccessApi, DaemonAccessTransport},
     types::{DaemonAccessMode, SafeLabel, TransportSession, TransportTarget},
@@ -930,7 +930,7 @@ fn connect_seqpacket(path: &Path) -> io::Result<StdUnixStream> {
 }
 
 async fn send_frame(
-    stream: &mut dyn d2b_constellation_provider::types::ByteStream,
+    stream: &mut dyn d2b_realm_provider::types::ByteStream,
     payload: &[u8],
 ) -> ProviderResult<()> {
     if payload.len() > MAX_FRAME_SIZE {
@@ -958,7 +958,7 @@ async fn send_frame(
 }
 
 async fn recv_frame(
-    stream: &mut dyn d2b_constellation_provider::types::ByteStream,
+    stream: &mut dyn d2b_realm_provider::types::ByteStream,
 ) -> ProviderResult<Vec<u8>> {
     let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 5];
     let received = stream.read(&mut buffer).await.map_err(|err| {

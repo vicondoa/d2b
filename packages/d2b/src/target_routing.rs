@@ -15,8 +15,8 @@
 //!   `local` realm (the host carries no realm config), so any realm target
 //!   surfaces a typed, actionable diagnostic rather than a host dispatch.
 
-use d2b_constellation_core::{RealmId, RealmPath, TargetName};
-use d2b_constellation_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
+use d2b_realm_core::{RealmId, RealmPath, TargetName};
+use d2b_realm_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
 
 /// The routing decision for a `vm start/exec <target>` argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,8 +222,8 @@ pub fn gateway_hint(raw: &str) -> Result<Option<GatewayHint>, RouteError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{EntrypointMode, RealmId, TargetName};
-    use d2b_constellation_router::RealmEntrypoint;
+    use d2b_realm_core::{EntrypointMode, RealmId, TargetName};
+    use d2b_realm_router::RealmEntrypoint;
 
     fn realm(labels: &[&str]) -> RealmPath {
         RealmPath::new(labels.iter().map(|l| RealmId::parse(*l).unwrap()).collect()).unwrap()

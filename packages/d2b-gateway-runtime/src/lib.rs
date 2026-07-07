@@ -87,7 +87,7 @@ pub fn make_prologue_verifier(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
+    use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
     use d2b_gateway::{DisplaySessionId, SECRET_LEN};
 
     fn binding(generation: u64, not_after: u64) -> (SessionBinding, SessionSecret) {

@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_constellation_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
-use d2b_constellation_provider::{
+use d2b_realm_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
+use d2b_realm_provider::{
     RuntimeProvider,
     capabilities::RuntimeCapabilitySet,
     error::{ProviderError, ProviderResult},
@@ -256,7 +256,7 @@ fn ch_argv_error(err: ChArgvError) -> ProviderError {
 mod tests {
     use super::*;
     use crate::ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock};
-    use d2b_constellation_core::WorkloadId;
+    use d2b_realm_core::WorkloadId;
     use std::sync::{Arc, Mutex};
 
     fn workload_id(raw: &str) -> WorkloadId {

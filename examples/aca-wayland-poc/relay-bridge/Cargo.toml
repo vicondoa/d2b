@@ -9,7 +9,7 @@ license = "Apache-2.0"
 # an Azure Relay Hybrid Connection so the in-sandbox `waypipe server` can
 # reach the host `waypipe client` with no inbound ports. Deliberately kept
 # out of the main `packages/` workspace; the productionized form is the
-# planned `d2b-constellation-transport-azure-relay` crate.
+# planned `d2b-realm-transport-azure-relay` crate.
 
 [[bin]]
 name = "d2b-relay-bridge"

@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use d2b_constellation_core as constellation;
+use d2b_realm_core as realm_core;
 use d2b_contracts::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
@@ -679,14 +679,14 @@ impl ShellRuntime {
         state.read_events_since(after_seq, limit)
     }
 
-    pub fn core_generation(&self) -> Result<constellation::ShellGeneration, ShellCoreAdaptError> {
+    pub fn core_generation(&self) -> Result<realm_core::ShellGeneration, ShellCoreAdaptError> {
         if !self.enabled {
             return Err(ShellCoreAdaptError::Disabled);
         }
         shell_generation_from_config(&self.config)
     }
 
-    pub fn list_core(&self) -> Result<constellation::ShellListResponse, ShellCoreAdaptError> {
+    pub fn list_core(&self) -> Result<realm_core::ShellListResponse, ShellCoreAdaptError> {
         let generation = self.core_generation()?;
         let state = self
             .state
@@ -697,7 +697,7 @@ impl ShellRuntime {
             .values()
             .map(|session| shell_summary_to_core(session, &self.config.default_name))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(constellation::ShellListResponse {
+        Ok(realm_core::ShellListResponse {
             generation,
             summaries,
         })
@@ -707,7 +707,7 @@ impl ShellRuntime {
         &self,
         after_seq: u64,
         limit: usize,
-    ) -> Result<constellation::ShellEventBatch, ShellCoreAdaptError> {
+    ) -> Result<realm_core::ShellEventBatch, ShellCoreAdaptError> {
         let generation = self.core_generation()?;
         let batch = self.read_events_since(after_seq, limit);
         let mut reconciliation_gap = false;
@@ -721,7 +721,7 @@ impl ShellRuntime {
                 shell_event_to_core(*event, &generation)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(constellation::ShellEventBatch {
+        Ok(realm_core::ShellEventBatch {
             generation,
             events,
             cursor: shell_event_cursor(batch.cursor)?,
@@ -800,13 +800,13 @@ fn generate_opaque_id(prefix: &str) -> Option<String> {
 
 fn shell_generation_from_config(
     config: &ShellRuntimeConfig,
-) -> Result<constellation::ShellGeneration, ShellCoreAdaptError> {
-    Ok(constellation::ShellGeneration {
-        guest_boot_id: constellation::ProtocolToken::parse(config.guest_boot_id.clone())
+) -> Result<realm_core::ShellGeneration, ShellCoreAdaptError> {
+    Ok(realm_core::ShellGeneration {
+        guest_boot_id: realm_core::ProtocolToken::parse(config.guest_boot_id.clone())
             .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
-        guestd_instance_id: constellation::ProtocolToken::parse(config.guestd_instance_id.clone())
+        guestd_instance_id: realm_core::ProtocolToken::parse(config.guestd_instance_id.clone())
             .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
-        shell_daemon_instance_id: constellation::ProtocolToken::parse(
+        shell_daemon_instance_id: realm_core::ProtocolToken::parse(
             config.daemon_instance_id.clone(),
         )
         .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
@@ -816,29 +816,29 @@ fn shell_generation_from_config(
 fn shell_summary_to_core(
     session: &ShellSession,
     default_name: &str,
-) -> Result<constellation::ShellSummary, ShellCoreAdaptError> {
-    Ok(constellation::ShellSummary {
-        name: constellation::ShellName::parse(session.name.clone())
+) -> Result<realm_core::ShellSummary, ShellCoreAdaptError> {
+    Ok(realm_core::ShellSummary {
+        name: realm_core::ShellName::parse(session.name.clone())
             .map_err(|_| ShellCoreAdaptError::InvalidName)?,
         state: if session.attached {
-            constellation::ShellState::Attached
+            realm_core::ShellState::Attached
         } else {
-            constellation::ShellState::Detached
+            realm_core::ShellState::Detached
         },
-        generation: constellation::ShellGeneration {
-            guest_boot_id: constellation::ProtocolToken::parse(session.guest_boot_id.clone())
+        generation: realm_core::ShellGeneration {
+            guest_boot_id: realm_core::ProtocolToken::parse(session.guest_boot_id.clone())
                 .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
-            guestd_instance_id: constellation::ProtocolToken::parse(
+            guestd_instance_id: realm_core::ProtocolToken::parse(
                 session.guestd_instance_id.clone(),
             )
             .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
-            shell_daemon_instance_id: constellation::ProtocolToken::parse(
+            shell_daemon_instance_id: realm_core::ProtocolToken::parse(
                 session.daemon_instance_id.clone(),
             )
             .map_err(|_| ShellCoreAdaptError::InvalidGeneration)?,
         },
         session_instance_id: Some(
-            constellation::ShellSessionInstanceId::parse(session.shell_session_instance_id.clone())
+            realm_core::ShellSessionInstanceId::parse(session.shell_session_instance_id.clone())
                 .map_err(|_| ShellCoreAdaptError::InvalidOpaqueId)?,
         ),
         attached: session.attached,
@@ -847,38 +847,38 @@ fn shell_summary_to_core(
     })
 }
 
-fn shell_event_cursor(seq: u64) -> Result<constellation::StreamCursor, ShellCoreAdaptError> {
-    constellation::StreamCursor::parse(format!("shell-event-{seq}"))
+fn shell_event_cursor(seq: u64) -> Result<realm_core::StreamCursor, ShellCoreAdaptError> {
+    realm_core::StreamCursor::parse(format!("shell-event-{seq}"))
         .map_err(|_| ShellCoreAdaptError::InvalidCursor)
 }
 
 fn shell_event_to_core(
     event: ShellEvent,
-    generation: &constellation::ShellGeneration,
-) -> Result<constellation::ShellEventSummary, ShellCoreAdaptError> {
+    generation: &realm_core::ShellGeneration,
+) -> Result<realm_core::ShellEventSummary, ShellCoreAdaptError> {
     let (state, cause) = match event.kind {
         ShellEventKind::AttachCreated | ShellEventKind::AttachReused => (
-            constellation::ShellState::Attached,
-            constellation::ShellCause::Unknown,
+            realm_core::ShellState::Attached,
+            realm_core::ShellCause::Unknown,
         ),
         ShellEventKind::ForceEvicted => (
-            constellation::ShellState::Detached,
-            constellation::ShellCause::ForceDetach,
+            realm_core::ShellState::Detached,
+            realm_core::ShellCause::ForceDetach,
         ),
         ShellEventKind::Detached => (
-            constellation::ShellState::Detached,
-            constellation::ShellCause::AdminDetach,
+            realm_core::ShellState::Detached,
+            realm_core::ShellCause::AdminDetach,
         ),
         ShellEventKind::Killed => (
-            constellation::ShellState::Exited,
-            constellation::ShellCause::AdminKill,
+            realm_core::ShellState::Exited,
+            realm_core::ShellCause::AdminKill,
         ),
         ShellEventKind::ReconciliationGap => (
-            constellation::ShellState::Lost,
-            constellation::ShellCause::ReconciliationGap,
+            realm_core::ShellState::Lost,
+            realm_core::ShellCause::ReconciliationGap,
         ),
     };
-    Ok(constellation::ShellEventSummary {
+    Ok(realm_core::ShellEventSummary {
         cursor: shell_event_cursor(event.seq)?,
         generation: generation.clone(),
         state,
@@ -955,7 +955,7 @@ mod tests {
             .expect("first session id");
         assert!(first.starts_with("shell-"));
         assert_ne!(first, "shell-0000000000000001");
-        assert!(constellation::ShellAttachId::parse(first.clone()).is_ok());
+        assert!(realm_core::ShellAttachId::parse(first.clone()).is_ok());
 
         let _ = runtime.detach(None);
         let mut other = pb::ShellAttachRequest::new();
@@ -1272,7 +1272,7 @@ mod tests {
         let listed = runtime.list_core().expect("core list");
         assert_eq!(
             listed.generation.guest_boot_id,
-            constellation::ProtocolToken::parse("boot-1").unwrap()
+            realm_core::ProtocolToken::parse("boot-1").unwrap()
         );
         assert_eq!(listed.summaries.len(), 1);
         assert!(listed.summaries[0].attached);
@@ -1296,9 +1296,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             events[0].cause,
-            constellation::ShellCause::ReconciliationGap
+            realm_core::ShellCause::ReconciliationGap
         );
-        assert_eq!(events[0].state, constellation::ShellState::Lost);
+        assert_eq!(events[0].state, realm_core::ShellState::Lost);
 
         let core_batch = runtime.events_core_since(0, 16).expect("core event batch");
         assert_eq!(core_batch.cursor.as_str(), "shell-event-1");

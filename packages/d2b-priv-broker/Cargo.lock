@@ -93,7 +93,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-core"
+name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "schemars",
@@ -101,11 +101,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-constellation-provider"
+name = "d2b-realm-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
+ "d2b-realm-core",
  "schemars",
  "serde",
  "tokio",
@@ -140,8 +140,8 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-constellation-core",
- "d2b-constellation-provider",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "d2b-contracts",
  "d2b-core",
  "libc",

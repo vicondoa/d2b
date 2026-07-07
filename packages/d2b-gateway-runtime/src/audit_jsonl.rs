@@ -160,7 +160,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{
+    use d2b_realm_core::{
         AuthzDecision, NodeId, OperationId, PrincipalId, RealmPath, WorkloadId,
     };
     use d2b_gateway::{GatewayAuditKind, SessionState, display_envelope};

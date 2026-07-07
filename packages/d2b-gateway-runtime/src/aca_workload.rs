@@ -24,7 +24,7 @@
 
 use async_trait::async_trait;
 use base64::Engine;
-use d2b_constellation_core::WorkloadId;
+use d2b_realm_core::WorkloadId;
 use d2b_gateway::{AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload, SessionBinding};
 use d2b_provider_aca::AcaWorkloadProvider;
 
@@ -402,7 +402,7 @@ impl GatewayWorkload for AcaGatewayWorkload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_constellation_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
+    use d2b_realm_core::{OperationId, PrincipalId, RealmId, RealmPath, WorkloadId};
     use d2b_gateway::SECRET_LEN;
     use d2b_gateway::{AppCommand, DisplaySessionContext, DisplaySessionId, SessionSecret};
 
@@ -608,7 +608,7 @@ mod tests {
                 _url: &str,
                 _bearer: &str,
                 _body: Option<String>,
-            ) -> d2b_constellation_provider::error::ProviderResult<HttpResponse> {
+            ) -> d2b_realm_provider::error::ProviderResult<HttpResponse> {
                 panic!("invalid handle cleanup must not call provider")
             }
         }
@@ -622,7 +622,7 @@ mod tests {
                 endpoint: None,
                 managed_identity_client_id: None,
             },
-            d2b_constellation_core::NodeId::parse("gateway").unwrap(),
+            d2b_realm_core::NodeId::parse("gateway").unwrap(),
             Arc::new(FakeCredential),
             Arc::new(NeverHttp),
         );

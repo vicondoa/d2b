@@ -199,6 +199,13 @@ deprecations ship one minor release before removal.
   interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
   forwarding.
 
+### Changed
+
+- Renamed the ADR 0043 Rust foundation crates from
+  `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
+  establishing realm-native package/import names for follow-up parser and DTO
+  work.
+
 ### Fixed
 
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper

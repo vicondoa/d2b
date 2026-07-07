@@ -3,7 +3,7 @@
 **Diataxis category:** reference.
 
 This page documents the committed ADR 0032 constellation core model in
-`packages/d2b-constellation-core`. It is a contributor-facing
+`packages/d2b-realm-core`. It is a contributor-facing
 contract for target names, identifiers, capability checks, redacted audit
 metadata, typed errors, and semantic frame schema roots. It does not
 describe live validation evidence, provider credentials, or relay
