@@ -37,8 +37,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use d2b_realm_core::{
-    AuthorizationScope, Capability, CapabilitySet, IdempotencyKey, NodeId, OpaquePayload,
-    OperationId, OperationKind, OperationRequest, PrincipalId, RealmPath,
+    AuthorizationScope, Capability, CapabilitySet, ConstellationError, ErrorKind, IdempotencyKey,
+    NodeId, OpaquePayload, OperationId, OperationKind, OperationRequest, PrincipalId, RealmPath,
 };
 
 pub mod display_transport;
@@ -440,6 +440,17 @@ impl<C: Clock> OperationRouter<C> {
         self.dedup.len()
     }
 
+    /// Convert a refusal for `req` into a typed error carrying the request's
+    /// cross-realm correlation id. Accept/replay/in-progress decisions are not
+    /// errors and return `None`.
+    pub fn error_for_decision(
+        &self,
+        req: &OperationRequest,
+        decision: &RouteDecision,
+    ) -> Option<ConstellationError> {
+        route_decision_error(req, decision)
+    }
+
     /// List in-progress leases whose age exceeds `older_than`, oldest first,
     /// for **provider-side reconciliation**. This is read-only: it surfaces a
     /// stale lease but never resolves it. An unknown / timed-out operation
@@ -470,6 +481,45 @@ impl<C: Clock> OperationRouter<C> {
     }
 }
 
+/// Convert a router refusal into an operator-safe typed error that preserves
+/// the operation's cross-realm correlation id for route reconstruction.
+pub fn route_decision_error(
+    req: &OperationRequest,
+    decision: &RouteDecision,
+) -> Option<ConstellationError> {
+    let error = match decision {
+        RouteDecision::PrincipalMismatch => {
+            ConstellationError::new(ErrorKind::Unauthorized, "principal binding mismatch")
+        }
+        RouteDecision::CapabilityDenied {
+            capability,
+            negotiated_fingerprint,
+        } => ConstellationError::capability_denied_with_fingerprint(
+            *capability,
+            Some(negotiated_fingerprint.clone()),
+        ),
+        RouteDecision::MissingIdempotencyKey => ConstellationError::new(
+            ErrorKind::MalformedFrame,
+            "mutating operation requires an idempotency key",
+        ),
+        RouteDecision::IdempotencyKeyConflict => ConstellationError::new(
+            ErrorKind::IdempotencyKeyConflict,
+            "idempotency key conflicts with an existing operation",
+        ),
+        RouteDecision::IdempotencyKeyExpired => ConstellationError::new(
+            ErrorKind::IdempotencyKeyExpired,
+            "idempotency key was reused after retention",
+        ),
+        RouteDecision::DedupCapacityExceeded => {
+            ConstellationError::new(ErrorKind::Backpressure, "deduplication capacity exceeded")
+        }
+        RouteDecision::Accept { .. }
+        | RouteDecision::Replay { .. }
+        | RouteDecision::InProgress { .. } => return None,
+    };
+    Some(error.with_correlation_id(req.correlation_id.clone()))
+}
+
 /// A stale in-progress lease surfaced by
 /// [`OperationRouter::reconcilable_leases`] for provider-side reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,7 +540,9 @@ pub fn required_capability(req: &OperationRequest) -> Option<Capability> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_realm_core::{NodeId, OpaquePayload, OperationId, OperationKind, RealmPath};
+    use d2b_realm_core::{
+        CorrelationId, NodeId, OpaquePayload, OperationId, OperationKind, RealmPath,
+    };
     use std::sync::{Arc, Mutex};
 
     // A manual, deterministic clock for expiry tests (Send + Sync, no unsafe).
@@ -528,6 +580,7 @@ mod tests {
     ) -> OperationRequest {
         OperationRequest {
             operation_id: OperationId::parse(op_id).unwrap(),
+            correlation_id: CorrelationId::parse("corr-1").unwrap(),
             idempotency_key: key.map(|k| IdempotencyKey::parse(k).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("gw").unwrap(),
@@ -578,12 +631,20 @@ mod tests {
         let mut r = OperationRouter::new();
         let p = principal("alice");
         let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let decision = r.route_with_capabilities(&req, &p, &CapabilitySet::empty());
         assert_eq!(
-            r.route_with_capabilities(&req, &p, &CapabilitySet::empty()),
+            decision,
             RouteDecision::CapabilityDenied {
                 capability: Capability::Lifecycle,
                 negotiated_fingerprint: CapabilitySet::empty().stable_fingerprint(),
             }
+        );
+        let error = route_decision_error(&req, &decision).unwrap();
+        assert_eq!(error.kind(), ErrorKind::CapabilityDenied);
+        assert_eq!(error.missing_capability(), Some(Capability::Lifecycle));
+        assert_eq!(
+            error.correlation_id().map(CorrelationId::as_str),
+            Some("corr-1")
         );
         assert_eq!(r.tracked(), 0);
         assert!(matches!(

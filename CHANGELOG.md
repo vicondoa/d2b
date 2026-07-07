@@ -218,6 +218,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- ADR 0043 realm audit, operation, and typed-error envelopes now carry the
+  cross-realm correlation id needed to reconstruct rejected routes.
 - Realm Unix socket access-binding DTOs now reject paths longer than the Linux
   `sockaddr_un.sun_path` limit before bind/connect.
 - Realm capability-negotiation JSON now rejects unknown outer envelope fields

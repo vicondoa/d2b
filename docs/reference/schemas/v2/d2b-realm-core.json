@@ -296,6 +296,7 @@
       "description": "A redacted pre-auth/session-admission denial record. This is separate from [`AuditEnvelope`] because no authenticated principal may exist yet.",
       "type": "object",
       "required": [
+        "correlation_id",
         "decision",
         "node",
         "operation_id",
@@ -304,6 +305,14 @@
         "scope"
       ],
       "properties": {
+        "correlation_id": {
+          "description": "Cross-realm correlation id shared across route and audit hops.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
         "decision": {
           "description": "Admission decision. Admission records are denials only.",
           "allOf": [
@@ -489,6 +498,7 @@
       "description": "A redacted post-auth audit envelope for one mutating operation or stream-open.\n\nConstruct via [`AuditEnvelope::post_auth`]. The principal is a mandatory value, not an `Option`, so an operation/stream audit event can never be recorded without an accountable authenticated principal.",
       "type": "object",
       "required": [
+        "correlation_id",
         "decision",
         "node",
         "operation_id",
@@ -497,6 +507,14 @@
         "scope"
       ],
       "properties": {
+        "correlation_id": {
+          "description": "Cross-realm correlation id shared across route and audit hops.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
         "decision": {
           "description": "Authorization decision.",
           "allOf": [
@@ -1074,6 +1092,17 @@
             }
           ]
         },
+        "correlation_id": {
+          "description": "Cross-realm correlation id when this error is tied to an operation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "kind": {
           "description": "Stable classification. Private so the `CapabilityDenied` => `Some(capability)` invariant cannot be broken by external mutation or struct-literal construction.",
           "allOf": [
@@ -1214,6 +1243,7 @@
           "type": "object",
           "required": [
             "body",
+            "correlation_id",
             "frame",
             "kind",
             "node",
@@ -1227,6 +1257,14 @@
               "allOf": [
                 {
                   "$ref": "#/definitions/OpaquePayload"
+                }
+              ]
+            },
+            "correlation_id": {
+              "description": "Cross-realm correlation id shared across route and audit hops.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CorrelationId"
                 }
               ]
             },
@@ -1562,6 +1600,17 @@
                 }
               ]
             },
+            "correlation_id": {
+              "description": "Cross-realm correlation id when this error is tied to an operation.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CorrelationId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "frame": {
               "type": "string",
               "enum": [
@@ -1595,6 +1644,7 @@
           "description": "A redacted pre-auth/session-admission denial frame.",
           "type": "object",
           "required": [
+            "correlation_id",
             "decision",
             "frame",
             "node",
@@ -1604,6 +1654,14 @@
             "scope"
           ],
           "properties": {
+            "correlation_id": {
+              "description": "Cross-realm correlation id shared across route and audit hops.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CorrelationId"
+                }
+              ]
+            },
             "decision": {
               "description": "Admission decision. Admission records are denials only.",
               "allOf": [
@@ -2682,6 +2740,7 @@
       "type": "object",
       "required": [
         "body",
+        "correlation_id",
         "kind",
         "node",
         "operation_id",
@@ -2694,6 +2753,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/OpaquePayload"
+            }
+          ]
+        },
+        "correlation_id": {
+          "description": "Cross-realm correlation id shared across route and audit hops.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
             }
           ]
         },

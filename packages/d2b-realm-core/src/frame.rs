@@ -7,7 +7,8 @@ use crate::audit::AdmissionAuditRecord;
 use crate::capability::{Capability, CapabilityNegotiation};
 use crate::error::ConstellationError;
 use crate::ids::{
-    IdempotencyKey, NodeId, OperationId, PrincipalId, StreamCursor, StreamId, WorkloadId,
+    CorrelationId, IdempotencyKey, NodeId, OperationId, PrincipalId, StreamCursor, StreamId,
+    WorkloadId,
 };
 use crate::payload::OpaquePayload;
 use crate::realm::RealmPath;
@@ -189,6 +190,8 @@ impl OperationKind {
 pub struct OperationRequest {
     /// Audit/correlation id (per attempt).
     pub operation_id: OperationId,
+    /// Cross-realm correlation id shared across route and audit hops.
+    pub correlation_id: CorrelationId,
     /// Caller-generated idempotency key (required for mutating ops).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub idempotency_key: Option<IdempotencyKey>,
@@ -222,6 +225,7 @@ impl<'de> Deserialize<'de> for OperationRequest {
         #[serde(deny_unknown_fields)]
         struct Raw {
             operation_id: OperationId,
+            correlation_id: CorrelationId,
             #[serde(default)]
             idempotency_key: Option<IdempotencyKey>,
             realm: RealmPath,
@@ -242,6 +246,7 @@ impl<'de> Deserialize<'de> for OperationRequest {
         }
         Ok(OperationRequest {
             operation_id: raw.operation_id,
+            correlation_id: raw.correlation_id,
             idempotency_key: raw.idempotency_key,
             realm: raw.realm,
             node: raw.node,
@@ -272,7 +277,7 @@ impl OperationRequest {
     /// different-request* conflict. It includes exactly the
     /// request-identifying fields — `kind`, `realm`, `node`, `workload`,
     /// `principal`, and `body` — and deliberately EXCLUDES `operation_id`
-    /// (per-attempt), `idempotency_key`, and `trace`.
+    /// (per-attempt), `correlation_id`, `idempotency_key`, and `trace`.
     /// The dedup owner (the gateway/router, never the provider) hashes
     /// this with a collision-resistant digest.
     pub fn dedup_fingerprint_input(&self) -> Vec<u8> {
@@ -537,11 +542,12 @@ mod tests {
     fn admission_audit_frame_uses_denial_record_shape() {
         use crate::audit::AuthorizationScope;
         use crate::error::ErrorKind;
-        use crate::ids::{NodeId, OperationId, RealmId};
+        use crate::ids::{CorrelationId, NodeId, OperationId, RealmId};
 
         let realm = RealmPath::new(vec![RealmId::parse("work").unwrap()]).unwrap();
         let record = AdmissionAuditRecord::denied(
             OperationId::parse("op-1").unwrap(),
+            CorrelationId::parse("corr-1").unwrap(),
             realm,
             NodeId::parse("gw").unwrap(),
             AuthorizationScope::Enrollment,
@@ -555,7 +561,7 @@ mod tests {
         let back: ConstellationFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
 
-        let bad = "{\"frame\":\"admission-audit\",\"operation_id\":\"op-1\",\
+        let bad = "{\"frame\":\"admission-audit\",\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\
                    \"realm\":[\"work\"],\"node\":\"gw\",\
                    \"scope\":{\"scope\":\"enrollment\"},\"decision\":\"allow\",\
                    \"reason\":\"authentication-failed\"}";
@@ -647,28 +653,28 @@ mod tests {
     #[test]
     fn operation_request_decode_requires_idempotency_key_for_mutating() {
         // WorkloadStart is mutating: omitting the key fails closed.
-        let no_key = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+        let no_key = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                       \"principal\":\"p1\",\"kind\":\"workload-start\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(no_key).is_err());
         // With a key it decodes.
-        let with_key = "{\"operation_id\":\"op1\",\"idempotency_key\":\"k1\",\
+        let with_key = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"idempotency_key\":\"k1\",\
                         \"realm\":[\"work\"],\"node\":\"n1\",\"principal\":\"p1\",\
                         \"kind\":\"workload-start\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(with_key).is_ok());
         // A non-mutating op needs no key.
-        let read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+        let read = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                     \"principal\":\"p1\",\"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(read).is_ok());
 
-        let shell_read = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+        let shell_read = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                          \"principal\":\"p1\",\"kind\":\"shell-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(shell_read).is_ok());
-        let shell_attach_no_key = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+        let shell_attach_no_key = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                                   \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(shell_attach_no_key).is_err());
         // Envelope decoding owns idempotency. Runtime routing separately
         // requires a workload for shell operations before dispatch.
-        let shell_attach_with_key = "{\"operation_id\":\"op1\",\"idempotency_key\":\"k1\",\
+        let shell_attach_with_key = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"idempotency_key\":\"k1\",\
                                     \"realm\":[\"work\"],\"node\":\"n1\",\
                                     \"principal\":\"p1\",\"kind\":\"shell-attach\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(shell_attach_with_key).is_ok());
@@ -676,13 +682,25 @@ mod tests {
 
     #[test]
     fn operation_request_requires_realm_and_principal() {
-        let no_realm = "{\"operation_id\":\"op1\",\"node\":\"n1\",\"principal\":\"p1\",\
+        let no_realm = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"node\":\"n1\",\"principal\":\"p1\",\
                         \"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(no_realm).is_err());
 
-        let no_principal = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+        let no_principal = "{\"operation_id\":\"op1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"n1\",\
                             \"kind\":\"workload-list\",\"body\":[]}";
         assert!(serde_json::from_str::<OperationRequest>(no_principal).is_err());
+    }
+
+    #[test]
+    fn operation_request_requires_bounded_correlation_id() {
+        let missing = "{\"operation_id\":\"op1\",\"realm\":[\"work\"],\"node\":\"n1\",\
+                       \"principal\":\"p1\",\"kind\":\"workload-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(missing).is_err());
+
+        let malformed = "{\"operation_id\":\"op1\",\"correlation_id\":\"secret-token\",\
+                         \"realm\":[\"work\"],\"node\":\"n1\",\"principal\":\"p1\",\
+                         \"kind\":\"workload-list\",\"body\":[]}";
+        assert!(serde_json::from_str::<OperationRequest>(malformed).is_err());
     }
 
     #[test]

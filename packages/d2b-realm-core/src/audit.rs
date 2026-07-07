@@ -7,7 +7,9 @@
 
 use crate::capability::Capability;
 use crate::error::ErrorKind;
-use crate::ids::{ExecutionId, NodeId, OperationId, PrincipalId, StreamId, WorkloadId};
+use crate::ids::{
+    CorrelationId, ExecutionId, NodeId, OperationId, PrincipalId, StreamId, WorkloadId,
+};
 use crate::realm::RealmPath;
 use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -459,6 +461,8 @@ where
 pub struct AuditEnvelope {
     /// Stable audit id for this event.
     pub operation_id: OperationId,
+    /// Cross-realm correlation id shared across route and audit hops.
+    pub correlation_id: CorrelationId,
     /// Realm path (mandatory; supports nested realms).
     pub realm: RealmPath,
     /// Authenticated principal (never a relay credential).
@@ -488,6 +492,7 @@ impl AuditEnvelope {
     /// never be recorded without an accountable principal.
     pub fn post_auth(
         operation_id: OperationId,
+        correlation_id: CorrelationId,
         realm: RealmPath,
         principal: PrincipalId,
         node: NodeId,
@@ -496,6 +501,7 @@ impl AuditEnvelope {
     ) -> Self {
         Self {
             operation_id,
+            correlation_id,
             realm,
             principal,
             node,
@@ -552,6 +558,7 @@ impl<'de> Deserialize<'de> for AuditEnvelope {
         #[serde(deny_unknown_fields)]
         struct Raw {
             operation_id: OperationId,
+            correlation_id: CorrelationId,
             realm: RealmPath,
             principal: PrincipalId,
             node: NodeId,
@@ -569,6 +576,7 @@ impl<'de> Deserialize<'de> for AuditEnvelope {
         let raw = Raw::deserialize(deserializer)?;
         let env = AuditEnvelope {
             operation_id: raw.operation_id,
+            correlation_id: raw.correlation_id,
             realm: raw.realm,
             principal: raw.principal,
             node: raw.node,
@@ -590,6 +598,8 @@ impl<'de> Deserialize<'de> for AuditEnvelope {
 pub struct AdmissionAuditRecord {
     /// Stable audit/correlation id for this event.
     pub operation_id: OperationId,
+    /// Cross-realm correlation id shared across route and audit hops.
+    pub correlation_id: CorrelationId,
     /// Realm path for the attempted admission.
     pub realm: RealmPath,
     /// Authenticated principal, when admission failed after a principal was
@@ -613,6 +623,7 @@ impl AdmissionAuditRecord {
     /// Build a pre-auth/session-admission denial.
     pub fn denied(
         operation_id: OperationId,
+        correlation_id: CorrelationId,
         realm: RealmPath,
         node: NodeId,
         scope: AuthorizationScope,
@@ -620,6 +631,7 @@ impl AdmissionAuditRecord {
     ) -> Self {
         Self {
             operation_id,
+            correlation_id,
             realm,
             principal: None,
             node,
@@ -657,6 +669,7 @@ impl<'de> Deserialize<'de> for AdmissionAuditRecord {
         #[serde(deny_unknown_fields)]
         struct Raw {
             operation_id: OperationId,
+            correlation_id: CorrelationId,
             realm: RealmPath,
             #[serde(default)]
             principal: Option<PrincipalId>,
@@ -675,6 +688,7 @@ impl<'de> Deserialize<'de> for AdmissionAuditRecord {
         }
         Ok(Self {
             operation_id: raw.operation_id,
+            correlation_id: raw.correlation_id,
             realm: raw.realm,
             principal: raw.principal,
             node: raw.node,
@@ -689,7 +703,7 @@ impl<'de> Deserialize<'de> for AdmissionAuditRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{NodeId, OperationId, RealmId};
+    use crate::ids::{CorrelationId, NodeId, OperationId, RealmId};
 
     fn realm(label: &str) -> RealmPath {
         RealmPath::new(vec![RealmId::parse(label).unwrap()]).unwrap()
@@ -709,10 +723,15 @@ mod tests {
         )
     }
 
+    fn corr() -> CorrelationId {
+        CorrelationId::parse("corr-1").unwrap()
+    }
+
     #[test]
     fn admission_denial_record_may_omit_principal() {
         let env = AdmissionAuditRecord::denied(
             OperationId::parse("op-1").unwrap(),
+            corr(),
             realm("work"),
             NodeId::parse("gw").unwrap(),
             AuthorizationScope::capability(Capability::Lifecycle),
@@ -728,6 +747,7 @@ mod tests {
     fn node_control_op_audits_without_a_capability() {
         let env = AuditEnvelope::post_auth(
             OperationId::parse("op-nr").unwrap(),
+            corr(),
             realm("work"),
             PrincipalId::parse("principal-1").unwrap(),
             NodeId::parse("gw").unwrap(),
@@ -742,36 +762,53 @@ mod tests {
 
     #[test]
     fn deserialize_rejects_audit_envelope_without_principal() {
-        let json = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
+        let json = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
                     \"scope\":{\"scope\":\"node-control\"},\"decision\":\"allow\"}";
         assert!(serde_json::from_str::<AuditEnvelope>(json).is_err());
-        let json_deny = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
+        let json_deny = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
                          \"scope\":{\"scope\":\"node-control\"},\"decision\":\"deny\"}";
         assert!(serde_json::from_str::<AuditEnvelope>(json_deny).is_err());
     }
 
     #[test]
     fn admission_audit_rejects_allow_and_unknown_scope_fields() {
-        let allow = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
+        let allow = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
                      \"scope\":{\"scope\":\"node-control\"},\"decision\":\"allow\",\
                      \"reason\":\"authentication-failed\"}";
         assert!(serde_json::from_str::<AdmissionAuditRecord>(allow).is_err());
 
-        let extra_scope = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
+        let extra_scope = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\"node\":\"gw\",\
                            \"scope\":{\"scope\":\"node-control\",\"extra\":true},\
                            \"decision\":\"deny\",\"reason\":\"authentication-failed\"}";
         assert!(serde_json::from_str::<AdmissionAuditRecord>(extra_scope).is_err());
 
-        let missing_capability = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\
+        let missing_capability = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\
                                   \"node\":\"gw\",\"scope\":{\"scope\":\"capability\"},\
                                   \"decision\":\"deny\",\"reason\":\"authentication-failed\"}";
         assert!(serde_json::from_str::<AdmissionAuditRecord>(missing_capability).is_err());
 
-        let capability_on_node_scope = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\
+        let capability_on_node_scope = "{\"operation_id\":\"op-1\",\"correlation_id\":\"corr-1\",\"realm\":[\"work\"],\
                                         \"node\":\"gw\",\
                                         \"scope\":{\"scope\":\"node-control\",\"capability\":\"exec\"},\
                                         \"decision\":\"deny\",\"reason\":\"authentication-failed\"}";
         assert!(serde_json::from_str::<AdmissionAuditRecord>(capability_on_node_scope).is_err());
+    }
+
+    #[test]
+    fn audit_records_require_bounded_correlation_id() {
+        let without_corr = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\"principal\":\"p1\",\
+                           \"node\":\"gw\",\"scope\":{\"scope\":\"node-control\"},\"decision\":\"allow\"}";
+        assert!(serde_json::from_str::<AuditEnvelope>(without_corr).is_err());
+
+        let malformed_corr = "{\"operation_id\":\"op-1\",\"correlation_id\":\"../secret\",\
+                              \"realm\":[\"work\"],\"principal\":\"p1\",\"node\":\"gw\",\
+                              \"scope\":{\"scope\":\"node-control\"},\"decision\":\"allow\"}";
+        assert!(serde_json::from_str::<AuditEnvelope>(malformed_corr).is_err());
+
+        let admission_without_corr = "{\"operation_id\":\"op-1\",\"realm\":[\"work\"],\
+                                     \"node\":\"gw\",\"scope\":{\"scope\":\"enrollment\"},\
+                                     \"decision\":\"deny\",\"reason\":\"authentication-failed\"}";
+        assert!(serde_json::from_str::<AdmissionAuditRecord>(admission_without_corr).is_err());
     }
 
     #[test]

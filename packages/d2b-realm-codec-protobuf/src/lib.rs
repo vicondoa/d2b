@@ -1,23 +1,23 @@
 //! Protobuf `ProtocolCodec` implementation for ADR 0032 constellation frames.
 
+use d2b_contracts::MAX_FRAME_SIZE;
 use d2b_realm_core::{
     AdmissionAuditRecord, AuthorizationScope, AuthzDecision, Capability, CapabilityNegotiation,
-    CapabilitySet, ConstellationError, ConstellationFrame, ErrorKind, Handshake, HandshakeAccepted,
-    HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId, OpaquePayload, OperationId,
-    OperationKind, OperationRequest, OperationResponse, PeerContext, PrincipalId, ProtocolToken,
-    RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose, StreamCloseReason, StreamCursor,
-    StreamData, StreamDescriptor, StreamFlow, StreamId, StreamKind, StreamOpen, StreamResume,
-    TraceContext, WorkloadId,
+    CapabilitySet, ConstellationError, ConstellationFrame, CorrelationId, ErrorKind, Handshake,
+    HandshakeAccepted, HandshakeRejected, HandshakeRejectedReason, IdempotencyKey, NodeId,
+    OpaquePayload, OperationId, OperationKind, OperationRequest, OperationResponse, PeerContext,
+    PrincipalId, ProtocolToken, RealmId, RealmPath, StreamAuthz, StreamChannel, StreamClose,
+    StreamCloseReason, StreamCursor, StreamData, StreamDescriptor, StreamFlow, StreamId,
+    StreamKind, StreamOpen, StreamResume, TraceContext, WorkloadId,
 };
 use d2b_realm_provider::ProtocolCodec;
-use d2b_contracts::MAX_FRAME_SIZE;
 use prost::Message;
 
 /// Stable codec id negotiated by ADR 0032 protobuf peers.
 pub const CODEC_ID: &str = "protobuf.v1";
 
 /// Deterministic fingerprint for the hand-authored prost schema in this crate.
-pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op18:sk13:err19:audit11:cap21";
+pub const SCHEMA_FINGERPRINT: &str = "pb.v1:f12:h6:op19:sk13:err20:audit12:cap21";
 
 /// A prost-backed constellation frame codec.
 #[derive(Debug, Clone, Copy, Default)]
@@ -156,6 +156,8 @@ struct ProtoOperationRequest {
     trace: Option<ProtoTraceContext>,
     #[prost(message, optional, tag = "9")]
     body: Option<ProtoPayload>,
+    #[prost(string, tag = "10")]
+    correlation_id: String,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -242,6 +244,8 @@ struct ProtoError {
     message: Option<String>,
     #[prost(string, optional, tag = "4")]
     negotiated_capability_fingerprint: Option<String>,
+    #[prost(string, optional, tag = "5")]
+    correlation_id: Option<String>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -268,6 +272,8 @@ struct ProtoAuditEnvelope {
     trace: Option<ProtoTraceContext>,
     #[prost(int32, optional, tag = "11")]
     reason: Option<i32>,
+    #[prost(string, tag = "12")]
+    correlation_id: String,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -545,6 +551,7 @@ fn encode_operation_request(
 ) -> Result<ProtoOperationRequest, ConstellationError> {
     Ok(ProtoOperationRequest {
         operation_id: frame.operation_id.as_str().to_owned(),
+        correlation_id: frame.correlation_id.as_str().to_owned(),
         idempotency_key: frame
             .idempotency_key
             .as_ref()
@@ -568,6 +575,10 @@ fn decode_operation_request(
     let kind = decode_operation_kind(frame.kind)?;
     let request = OperationRequest {
         operation_id: parse_operation_id(frame.operation_id, "operation_request operation_id")?,
+        correlation_id: parse_correlation_id(
+            frame.correlation_id,
+            "operation_request correlation_id",
+        )?,
         idempotency_key: frame
             .idempotency_key
             .map(|key| parse_idempotency_key(key, "operation_request idempotency_key"))
@@ -751,6 +762,7 @@ fn encode_error(error: &ConstellationError) -> Result<ProtoError, ConstellationE
         negotiated_capability_fingerprint: error
             .negotiated_capability_fingerprint()
             .map(ToOwned::to_owned),
+        correlation_id: error.correlation_id().map(|id| id.as_str().to_owned()),
     })
 }
 
@@ -764,10 +776,16 @@ fn decode_error(error: ProtoError) -> Result<ConstellationError, ConstellationEr
         let capability = capability.ok_or_else(|| {
             malformed("capability-denied typed_error is missing the capability field")
         })?;
-        let decoded = ConstellationError::capability_denied_with_fingerprint(
+        let mut decoded = ConstellationError::capability_denied_with_fingerprint(
             capability,
             error.negotiated_capability_fingerprint,
         );
+        if let Some(correlation_id) = error.correlation_id {
+            decoded = decoded.with_correlation_id(parse_correlation_id(
+                correlation_id,
+                "typed_error correlation_id",
+            )?);
+        }
         if decoded.message() != message {
             return Err(malformed(
                 "capability-denied typed_error message is not canonical",
@@ -779,7 +797,14 @@ fn decode_error(error: ProtoError) -> Result<ConstellationError, ConstellationEr
             "non-capability-denied typed_error carries capability-denial context",
         ))
     } else {
-        Ok(ConstellationError::new(kind, message))
+        let mut decoded = ConstellationError::new(kind, message);
+        if let Some(correlation_id) = error.correlation_id {
+            decoded = decoded.with_correlation_id(parse_correlation_id(
+                correlation_id,
+                "typed_error correlation_id",
+            )?);
+        }
+        Ok(decoded)
     }
 }
 
@@ -788,6 +813,7 @@ fn encode_admission_audit(
 ) -> Result<ProtoAuditEnvelope, ConstellationError> {
     Ok(ProtoAuditEnvelope {
         operation_id: audit.operation_id.as_str().to_owned(),
+        correlation_id: audit.correlation_id.as_str().to_owned(),
         realm: encode_realm(&audit.realm),
         principal: audit
             .principal
@@ -814,6 +840,7 @@ fn decode_admission_audit(
     }
     let record = AdmissionAuditRecord {
         operation_id: parse_operation_id(audit.operation_id, "audit operation_id")?,
+        correlation_id: parse_correlation_id(audit.correlation_id, "audit correlation_id")?,
         realm: decode_realm(audit.realm, "audit realm")?,
         principal: audit
             .principal
@@ -924,6 +951,7 @@ macro_rules! parse_id_fn {
 }
 
 parse_id_fn!(parse_operation_id, OperationId);
+parse_id_fn!(parse_correlation_id, CorrelationId);
 parse_id_fn!(parse_idempotency_key, IdempotencyKey);
 parse_id_fn!(parse_node_id, NodeId);
 parse_id_fn!(parse_workload_id, WorkloadId);
@@ -1266,6 +1294,7 @@ mod tests {
                 kind: encode_operation_kind(OperationKind::WorkloadList).unwrap(),
                 trace: None,
                 body: Some(ProtoPayload { bytes: Vec::new() }),
+                correlation_id: "corr-1".to_owned(),
             })),
         }
         .encode_to_vec();
@@ -1294,6 +1323,7 @@ mod tests {
                 kind: 99,
                 trace: None,
                 body: Some(ProtoPayload { bytes: Vec::new() }),
+                correlation_id: "corr-1".to_owned(),
             })),
         }
         .encode_to_vec();
@@ -1524,6 +1554,7 @@ mod tests {
             }),
             ConstellationFrame::OperationRequest(OperationRequest {
                 operation_id: operation_id.clone(),
+                correlation_id: correlation_id(),
                 idempotency_key: Some(idempotency_key("idem-1")),
                 realm: realm.clone(),
                 node: node.clone(),
@@ -1571,12 +1602,14 @@ mod tests {
                 stream: stream.clone(),
                 cursor: StreamCursor::parse("cur-resume").unwrap(),
             }),
-            ConstellationFrame::TypedError(ConstellationError::capability_denied(
-                Capability::WindowForwarding,
-            )),
+            ConstellationFrame::TypedError(
+                ConstellationError::capability_denied(Capability::WindowForwarding)
+                    .with_correlation_id(correlation_id()),
+            ),
             ConstellationFrame::AdmissionAudit(
                 AdmissionAuditRecord::denied(
                     operation_id,
+                    correlation_id(),
                     realm,
                     node,
                     AuthorizationScope::capability(Capability::Exec),
@@ -1594,6 +1627,10 @@ mod tests {
 
     fn operation_id(raw: &str) -> OperationId {
         OperationId::parse(raw).unwrap()
+    }
+
+    fn correlation_id() -> CorrelationId {
+        CorrelationId::parse("corr-1").unwrap()
     }
 
     fn idempotency_key(raw: &str) -> IdempotencyKey {
@@ -1619,6 +1656,7 @@ mod tests {
     fn valid_admission_audit_proto() -> ProtoAuditEnvelope {
         ProtoAuditEnvelope {
             operation_id: "op-1".to_owned(),
+            correlation_id: "corr-1".to_owned(),
             realm: vec!["work".to_owned()],
             principal: None,
             node: "node-a".to_owned(),
