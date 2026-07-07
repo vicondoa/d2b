@@ -7,6 +7,13 @@ host starts and enters the gateway VM as a normal d2b workload, while
 realm relay credentials, provider configuration, remote registries, and
 realm audit live inside the gateway guest.
 
+The current `d2b.realms.<realm>` Nix namespace is a schema foundation for
+the realm-native model. It does not replace this gateway workflow yet and
+does not spawn per-realm daemons, brokers, sockets, or network substrate
+by itself. Continue using the documented `d2b.gateways`, `d2b.envs`, and
+`d2b.vms.<vm>.env` surfaces for the implemented gateway path until future
+runtime support consumes realm declarations.
+
 ## Declare a gateway-backed realm
 
 Add one gateway per trust-boundary realm and keep each gateway in a

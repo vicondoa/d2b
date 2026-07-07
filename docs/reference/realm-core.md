@@ -8,6 +8,12 @@ names, identifiers, capability checks, redacted audit metadata, typed
 errors, realm-controller metadata, route/enrollment DTOs, and semantic
 frame schema roots.
 
+For the current Nix option surface, see
+[Realm option schema](./realm-options.md). The `d2b.realms.<realm>`
+namespace validates realm declaration shape only in the current release;
+it does not yet instantiate the per-realm runtime described by the DTO
+model below.
+
 The crate is intentionally codec-neutral. Protocol codecs map bytes to
 and from `ConstellationFrame`; routing, authorization, audit, and
 provider code reason over the Rust model below rather than over a
@@ -252,4 +258,5 @@ the structured capability.
 - [Constellation peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)
+- [Realm option schema](./realm-options.md)
 - [Manifest bundle reference](./manifest-bundle.md)

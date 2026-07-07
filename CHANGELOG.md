@@ -21,7 +21,9 @@ deprecations ship one minor release before removal.
 ### Added
 
 - Added the public `d2b.realms.<realm>` Nix option schema foundation for
-  ADR 0043 without changing existing `d2b.envs` runtime behavior.
+  ADR 0043 without changing existing `d2b.envs` runtime behavior, with
+  reference documentation for placement, user access, provider/relay/policy/key
+  references, and the transitional env/network bridge.
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.
