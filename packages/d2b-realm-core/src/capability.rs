@@ -336,7 +336,7 @@ impl<'de> Deserialize<'de> for CapabilityNegotiation {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Raw {
             schema_version: u32,
             capabilities: CapabilitySet,
@@ -423,13 +423,30 @@ mod tests {
     }
 
     #[test]
-    fn capability_negotiation_decode_allows_unknown_future_fields() {
+    fn capability_negotiation_decode_preserves_unknown_future_capability_tokens() {
         let caps: CapabilityNegotiation = serde_json::from_str(
-            "{\"schemaVersion\":1,\"capabilities\":[\"exec\"],\
-             \"fingerprint\":\"cap-v1-af63bd4c8601b7df\",\"futureField\":true}",
+            "{\"schemaVersion\":1,\"capabilities\":[\"exec\",\"future-capability\"],\
+             \"fingerprint\":\"cap-v1-af63bd4c8601b7df\"}",
         )
         .unwrap();
         assert!(caps.capabilities.has(Capability::Exec));
+        assert_eq!(
+            caps.capabilities
+                .unknown_iter()
+                .map(ProtocolToken::as_str)
+                .collect::<Vec<_>>(),
+            ["future-capability"]
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_decode_rejects_unknown_outer_fields() {
+        let err = serde_json::from_str::<CapabilityNegotiation>(
+            "{\"schemaVersion\":1,\"capabilities\":[\"exec\"],\
+             \"fingerprint\":\"cap-v1-af63bd4c8601b7df\",\"futureField\":true}",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
