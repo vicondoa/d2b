@@ -11,8 +11,8 @@ This schema is **not** the local daemon, broker, or guest-control wire
 protocol. It documents the shared model roots used by realm target
 addressing, operation routing, stream authorization, redacted audit
 metadata, provider/workload placement, route/enrollment metadata, and typed
-error handling. Runtime/Nix realm cutover waves may still be future work
-even when their DTO roots are present here.
+error handling. Some components of this schema are reserved for future runtime
+surfaces.
 
 ## Top-level roots
 

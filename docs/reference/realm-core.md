@@ -6,9 +6,7 @@ This page documents the committed `d2b-realm-core` DTO and parser
 contract. It is a contributor-facing reference for ADR 0043 realm target
 names, identifiers, capability checks, redacted audit metadata, typed
 errors, realm-controller metadata, route/enrollment DTOs, and semantic
-frame schema roots. It does not claim that later runtime or Nix module
-cutover waves have shipped, and it does not describe live validation
-evidence, provider credentials, or relay secrets.
+frame schema roots.
 
 The crate is intentionally codec-neutral. Protocol codecs map bytes to
 and from `ConstellationFrame`; routing, authorization, audit, and

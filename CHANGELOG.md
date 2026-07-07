@@ -214,10 +214,13 @@ deprecations ship one minor release before removal.
   work.
 - Aligned current realm-core reference pages and generated schema companions
   with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
-  grammar, without claiming later runtime/Nix cutover work is implemented.
+  grammar.
 
 ### Fixed
 
+- Realm capability-negotiation JSON now rejects unknown outer envelope fields
+  while still preserving unknown future capability tokens inside the
+  capability set.
 - Aligned ADR 0043 realm-core schema generation and identifier validation:
   `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
   tokens reject leading punctuation consistently with their JSON schemas.
