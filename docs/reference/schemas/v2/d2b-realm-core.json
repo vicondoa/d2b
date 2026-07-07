@@ -4190,7 +4190,7 @@
     },
     "UnixSocketPath": {
       "type": "string",
-      "maxLength": 255,
+      "maxLength": 108,
       "minLength": 1,
       "pattern": "^/[^\\0]*$"
     },

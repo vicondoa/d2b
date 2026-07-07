@@ -218,6 +218,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Realm Unix socket access-binding DTOs now reject paths longer than the Linux
+  `sockaddr_un.sun_path` limit before bind/connect.
 - Realm capability-negotiation JSON now rejects unknown outer envelope fields
   while still preserving unknown future capability tokens inside the
   capability set.

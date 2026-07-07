@@ -11,8 +11,8 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Maximum bytes in a local realm Unix socket path.
-pub const MAX_UNIX_SOCKET_PATH_LEN: usize = 255;
+/// Maximum bytes in a Linux `sockaddr_un.sun_path` socket path.
+pub const MAX_UNIX_SOCKET_PATH_LEN: usize = 108;
 /// Maximum bytes in a non-secret access-binding reference.
 pub const MAX_ACCESS_REF_LEN: usize = 128;
 
@@ -252,5 +252,21 @@ mod tests {
     fn access_binding_schema_is_generated() {
         let schema = schema_for!(RealmAccessBinding);
         assert!(schema.schema.metadata.is_some());
+        let schema = schema_for!(UnixSocketPath);
+        assert_eq!(
+            schema.schema.string.unwrap().max_length,
+            Some(MAX_UNIX_SOCKET_PATH_LEN as u32)
+        );
+    }
+
+    #[test]
+    fn unix_socket_path_rejects_kernel_incompatible_paths() {
+        assert!(UnixSocketPath::parse(format!("/{}", "x".repeat(107))).is_some());
+        assert!(UnixSocketPath::parse(format!("/{}", "x".repeat(108))).is_none());
+        assert!(UnixSocketPath::parse("\0abstract").is_none());
+        assert!(UnixSocketPath::parse("@abstract").is_none());
+
+        let overlong = format!("\"/{}\"", "x".repeat(108));
+        assert!(serde_json::from_str::<UnixSocketPath>(&overlong).is_err());
     }
 }
