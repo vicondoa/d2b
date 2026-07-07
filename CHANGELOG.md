@@ -20,11 +20,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Documented the ADR 0043 local-root allocator contract for typed host-resource
+- Documented the local-root allocator contract for typed host-resource
   leases, opaque resource ids, deterministic acquisition order, reconciliation,
   quarantine/reclaim, immutable host-file boundaries, and the current
   contract-only implementation status.
-- Added `d2b-realm-core` local-root allocator DTOs for ADR 0043 host-resource
+- Added `d2b-realm-core` local-root allocator DTOs for realm host-resource
   leases, opaque resource ids, allocation/reconciliation responses, bounded
   allocator audit/metric metadata, and generated JSON schema coverage.
 - Added a pure `d2b-realm-core` local-root allocator engine over fake ledger,
@@ -35,29 +35,46 @@ deprecations ship one minor release before removal.
   enabled realms, metadata-only local-root allocator resource requests,
   path/socket partitions, provider placement, and the transitional env bridge
   without starting an allocator runtime service.
+- Added private `realm-controllers.json` bundle metadata rooted in `d2b.realms`,
+  covering deterministic per-realm daemon, broker, socket, state, audit,
+  allocator binding, provider placement, and direct-access metadata.
+- Added host-local realm control-plane materialization from `d2b.realms`,
+  including deterministic bounded unit names, daemon/broker users and groups,
+  socket access groups for allowed users, runtime/state/audit directories, and
+  parent-before-child ordering.
+- Added Rust daemon, broker, and bundle-resolver loading for
+  `realm-controllers.json` artifacts, including strict parsing and validation
+  while keeping runtime realm routing inert.
+- Added Layer-1 coverage for host-local realm controller units, sockets,
+  principals, tmpfiles paths, disabled-realm omissions, bundle classification,
+  daemon/broker loading defaults, and bundle-resolver loading.
+- Documented the private `realm-controllers.json` contract for deterministic
+  host-local realm controller unit/socket naming, direct realm socket
+  authorization, local-root allocator resolution, state/audit separation, and
+  the access-layer/routing boundary.
 - Added Layer-1 allocator coverage for rendered `allocator.json` bundle wiring,
   realm allocator metadata, fake-engine conflict/replay/reconcile paths, and
   bounded reconciliation reports.
 - Added the public `d2b.realms.<realm>` Nix option schema foundation for
-  ADR 0043 without changing existing `d2b.envs` runtime behavior, with
-  reference documentation for placement, user access, provider/relay/policy/key
+  the realm-native control plane without changing existing `d2b.envs`
+  runtime behavior, with normalized internal realm index metadata, eval-time
+  assertions for realm identity/parent/path uniqueness, and reference
+  documentation for placement, user access, provider/relay/policy/key
   references, and the transitional env/network bridge.
-- Added normalized internal realm index metadata plus eval-time assertions for
-  realm identity, parent graph, and derived path uniqueness.
-- Added Layer-1 nix-unit coverage for the ADR 0043 realm option schema,
+- Added Layer-1 nix-unit coverage for the realm option schema,
   normalized realm index, parent/path collision assertions, legacy gateway/ACA
   migration guidance, and minimal/multi-env eval compatibility.
 - Added realm `placementProvider` metadata and AF_UNIX socket path length
-  assertions for future realm public and broker socket declarations.
-- Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
+  assertions for realm public and broker socket declarations.
+- Added the `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.
-- Add accepted ADR 0043, superseding the host-centric constellation model with a
-  realm-native control plane: per-realm daemon, broker, state, and audit
-  boundaries; first-class `home`, `dev`, and `work` realms to replace the
-  current grouping model; and a clean cutover from old realm/ACA sandbox
+- Added an accepted realm-native control-plane decision record, superseding the
+  host-centric constellation model with per-realm daemon, broker, state, and
+  audit boundaries; first-class `home`, `dev`, and `work` realms to replace
+  the current grouping model; and a clean cutover from old realm/ACA sandbox
   surfaces into `d2b.realms`.
-- Added ADR 0043 core realm DTOs in `d2b-realm-core` for controller placement,
+- Added core realm DTOs in `d2b-realm-core` for controller placement,
   access bindings, provider/workload placement summaries, tree route
   advertisements, enrollment/key lifecycle metadata, and migration-error
   envelopes.
@@ -245,18 +262,18 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- Renamed the ADR 0043 Rust foundation crates from
+- Renamed the Rust realm foundation crates from
   `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
   establishing realm-native package/import names for follow-up parser and DTO
   work.
-- Added ADR 0043 eval-time migration errors for legacy `d2b.gateways` and
+- Added eval-time migration errors for legacy `d2b.gateways` and
   nested gateway/ACA sandbox configuration, pointing operators to
   `d2b.realms` while preserving current `d2b.envs` behavior when no legacy
   gateway surface is declared.
 - Aligned current realm-core reference pages and generated schema companions
-  with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
+  with `d2b-realm-core` naming and the realm-qualified target
   grammar.
-- Kept ADR 0043 operator-troubleshooting identifiers visible in Rust `Debug`
+- Kept realm operator-troubleshooting identifiers visible in Rust `Debug`
   output while preserving redaction for credential-, key-, and principal-like
   identifiers.
 - Tightened `allocator.json` config typing so realm paths, provider kinds,
@@ -264,26 +281,40 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- ADR 0043 allocator metric bounding now aggregates repeated low-cardinality
+- Host-local realm daemons now emit only strict `DaemonConfig` fields
+  and use realm-scoped daemon state directories, with realm brokers explicitly
+  loading the shared `realm-controllers.json` contract.
+- Allocator metric bounding now aggregates repeated low-cardinality
   label sets before applying the event cap, preserving counts instead of
   dropping later samples.
-- ADR 0043 allocator metadata now emits one namespace-boundary resource
+- Allocator metadata now emits one namespace-boundary resource
   request per networked realm, avoiding duplicate resource ids for realms
   spanning multiple enabled environments.
-- ADR 0043 realm audit, operation, and typed-error envelopes now carry the
+- Realm audit, operation, and typed-error envelopes now carry the
   cross-realm correlation id needed to reconstruct rejected routes.
-- ADR 0043 operation responses now carry the same required correlation id as
+- Operation responses now carry the same required correlation id as
   requests so response-frame return paths can emit correlated audit and trace
   records.
+- `realm-controllers.json` validation now accepts host-local materialized
+  unit/socket metadata when the artifact declares that systemd units are
+  materialized, while still rejecting drift when it claims none are emitted.
+- Hardened host-local realm materialization by making realm runtime
+  directories non-group-writable, moving default per-realm audit directories out
+  of daemon-owned realm state, avoiding global systemd manager environment
+  mutation for broker uid/gid discovery, and removing host paths from new
+  startup/config tracing fields.
+- Host-local realm allowed users who are also `d2b.site.launcherUsers` now keep
+  both the canonical `d2b` lifecycle group and their deterministic realm
+  socket-access groups.
 - Realm Unix socket access-binding DTOs now reject paths longer than the Linux
   `sockaddr_un.sun_path` limit before bind/connect.
 - Realm capability-negotiation JSON now rejects unknown outer envelope fields
   while still preserving unknown future capability tokens inside the
   capability set.
-- Aligned ADR 0043 realm-core schema generation and identifier validation:
+- Aligned realm-core schema generation and identifier validation:
   `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
   tokens reject leading punctuation consistently with their JSON schemas.
-- Aligned ADR 0043 allocator reference docs with the generated realm-core
+- Aligned allocator reference docs with the generated realm-core
   schema roots and documented the future repair-path shape for fail-closed
   allocator reconciliation states.
 - `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper

@@ -3,11 +3,14 @@
 **Diataxis category:** reference.
 
 `d2b.realms.<realm>` is the public Nix option namespace for the
-realm-native control-plane model. In the current release it is a schema
-foundation only: defining a realm records intent and validates option
-shape, but it does not spawn per-realm daemons or brokers, bind realm
-sockets, allocate network resources, create users or groups, migrate VMs,
-or change the active `d2b.envs` / `d2b.vms.<vm>.env` runtime model.
+realm-native control-plane model. In the current release it records intent,
+validates option shape, emits private host-local controller metadata in
+`/etc/d2b/realm-controllers.json`, and materializes host-local scaffolding:
+deterministic daemon/broker units and sockets, realm users and groups,
+tmpfiles-managed state/runtime/audit paths, config metadata, and local
+socket access ACLs. It does not allocate realm-owned network resources,
+migrate VMs, start provider adapters, or enable realm routing/identity/access
+policy beyond that inert host-local scaffolding.
 
 Existing `d2b.envs` declarations remain the implemented network substrate.
 Workload VMs still join that substrate with `d2b.vms.<vm>.env = "<env>"`.
@@ -41,7 +44,7 @@ runtime support consumes the realm declaration.
 
 | Option | Type / values | Default | Meaning |
 | --- | --- | --- | --- |
-| `enable` | boolean | `true` | Includes the realm declaration in future realm-native planning. It has no runtime side effect today. |
+| `enable` | boolean | `true` | Includes the realm declaration in realm metadata and, for enabled host-local realms, host-local scaffolding materialization. Disabled realms are omitted. |
 | `id` | lowercase label matching `^[a-z][a-z0-9-]*$` | attribute name | Stable realm id used for derived paths. |
 | `name` | string | attribute name | Human-readable realm name. |
 | `parent` | realm path or `null` | `null` | Optional parent realm path. Parent/child validation and routing are future runtime work. |
@@ -74,26 +77,51 @@ inert metadata in the current schema.
 
 ## Local access metadata
 
-`allowedUsers` lists host user names intended to receive direct access to
-the realm's future local public socket. The option does not create those
-users, groups, socket ACLs, or systemd units today. Local lifecycle
-authorization for the current implementation remains the existing
-`SO_PEERCRED` plus `d2b` group check on `/run/d2b/public.sock`.
+`allowedUsers` lists host user names that receive membership in the
+realm's deterministic socket-access group for the local public socket.
+`allowedGroups` does the same for existing host groups. Both are emitted into
+`realm-controllers.json` as access metadata, along with inherited
+`d2b.site.adminUsers`, and host-local materialization creates the required
+realm users/groups, socket ACLs, and systemd units. Local lifecycle
+authorization for existing VM operations remains the `SO_PEERCRED` plus `d2b`
+group check on `/run/d2b/public.sock`; the realm access layer is scaffolded
+but not yet a routing or identity authority.
 
-The derived `paths.*` fields reserve future path shapes:
+Future realm access is direct socket access: an authorized local user connects
+to the owning realm's public AF_UNIX socket and is checked there. The global
+host daemon is not a byte proxy for realm public sockets.
+
+The derived `paths.*` fields define the materialized host-local path shapes:
 
 | Option | Default |
 | --- | --- |
 | `paths.stateDir` | `config.d2b.site.stateDir + "/realms/<realm>"` |
-| `paths.auditDir` | `paths.stateDir + "/audit"` |
+| `paths.auditDir` | `/var/lib/d2b/audit/realms/<realm>` |
 | `paths.runDir` | `/run/d2b/realms/<realm>` |
 | `paths.publicSocket` | `paths.runDir + "/public.sock"` |
 | `paths.brokerSocket` | `paths.runDir + "/broker.sock"` |
 
-These paths are not created or bound by the schema-only declaration. Socket
+These paths are emitted into the private realm controller artifact. Host-local
+realm controllers materialize the state, audit, and runtime directories through
+tmpfiles. The default audit path is not nested under daemon-owned realm state,
+preserving the root-owned append-only audit boundary. Runtime directories are
+root-owned and not group-writable; the daemon gets an explicit ACL for socket
+creation while authorized local users get traversal to known socket paths. Socket
 paths are still checked against Linux AF_UNIX pathname sockets and must fit in
-107 bytes, leaving the final `sockaddr_un.sun_path` byte for the terminating
-NUL.
+107 bytes, leaving the final `sockaddr_un.sun_path` byte for the terminating NUL.
+
+The realm controller metadata also defines deterministic unit names:
+
+| Reserved name | Shape |
+| --- | --- |
+| Realm daemon | `d2b-realm-<hash>-daemon.service` |
+| Realm broker socket | `d2b-realm-<hash>-priv-broker.socket` |
+| Realm broker service | `d2b-realm-<hash>-priv-broker.service` |
+
+Host-local realm controllers emit the daemon service and, when host mutation is
+enabled, the broker socket/service. Provider-backed realms keep these names as
+reservations and carry `materializedService = false` /
+`materializedSocket = false` in the private artifact.
 
 ## Env and network substrate bridge
 
@@ -146,13 +174,21 @@ policy, idempotency, and bounded audit.
 ## Broker placeholder
 
 `broker.enable` and `broker.hostMutation` are deliberately default-off
-placeholders for future realm-local privileged broker work. Setting them in
-the current schema records intent only; it does not start a broker, bind
-`paths.brokerSocket`, or grant host mutation authority.
+controls for realm-local privileged broker scaffolding. Enabling the broker
+for a host-local realm materializes the deterministic broker socket/service
+metadata and units, but it does not grant host mutation authority or route
+free-form host operations through the realm.
+
+The private controller artifact records each realm's local-root allocator
+binding to `/etc/d2b/allocator.json`. That binding is a typed resolver
+contract for future host-resource leases; it is not permission for a realm
+broker to send raw commands, raw host paths, or free-form network rules through
+the host daemon.
 
 ## Related references
 
 - [ADR 0043 — Realm-native control plane](../adr/0043-realm-native-control-plane.md)
 - [Realm core model reference](./realm-core.md)
+- [Realm controller configuration](./realm-controller-config.md)
 - [Realm policy](./realm-policy.md)
 - [Naming conventions](./naming-conventions.md)

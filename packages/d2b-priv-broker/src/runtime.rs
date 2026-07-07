@@ -60,6 +60,7 @@ use d2b_contracts::broker_wire::{
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 
 /// Default socket path.  When `LISTEN_FDS=1` (socket activation) this path
 /// is informational only; the broker adopts fd 3 from systemd and MUST NOT
@@ -78,6 +79,7 @@ const DEFAULT_AUDIT_DIR: &str = "/var/lib/d2b/audit";
 /// to disable pruning.
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
+const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
 const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
@@ -96,6 +98,10 @@ pub struct ServerConfig {
     /// `/var/lib/d2b/current-bundle/manifest.json`; the NixOS module's
     /// `d2b.site.bundle.currentManifest` option overrides.
     pub bundle_path: PathBuf,
+    /// Optional metadata-only realm-controller artifact. Loading it is
+    /// validation/logging only; the broker still uses direct
+    /// SO_PEERCRED/SCM_RIGHTS Unix-socket semantics for every request.
+    pub realm_controllers_path: PathBuf,
     pub state_dir: PathBuf,
     pub d2bd_uid: u32,
     pub d2bd_gid: u32,
@@ -325,6 +331,7 @@ where
             let mut audit_dir = PathBuf::from(DEFAULT_AUDIT_DIR);
             let mut audit_retention_days = DEFAULT_AUDIT_RETENTION_DAYS;
             let mut bundle_path = PathBuf::from(DEFAULT_BUNDLE_PATH);
+            let mut realm_controllers_path = PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH);
             let mut state_dir = PathBuf::from(DEFAULT_STATE_DIR);
             let mut store_sync_export_dir =
                 PathBuf::from(crate::ops::store_sync_export::DEFAULT_STORE_SYNC_EXPORT_DIR);
@@ -361,6 +368,11 @@ where
                         // names a bundle path on the wire.
                         index += 1;
                         bundle_path = PathBuf::from(expect_arg(&rest, index, "--bundle-path")?);
+                    }
+                    "--realm-controllers-path" => {
+                        index += 1;
+                        realm_controllers_path =
+                            PathBuf::from(expect_arg(&rest, index, "--realm-controllers-path")?);
                     }
                     "--state-dir" => {
                         index += 1;
@@ -430,6 +442,7 @@ where
                 audit_dir,
                 audit_retention_days,
                 bundle_path,
+                realm_controllers_path,
                 state_dir,
                 d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
                 d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
@@ -616,7 +629,46 @@ fn sd_notify_ready() {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct LoadedRealmControllersConfig {
+    pub config: RealmControllersJson,
+    pub summary: RealmControllerMetadataSummary,
+}
+
+pub fn load_realm_controllers_config(
+    path: &Path,
+) -> Result<Option<LoadedRealmControllersConfig>, RunError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(RunError::Io)?;
+    let config: RealmControllersJson = serde_json::from_slice(&bytes)
+        .map_err(|err| RunError::Protocol(format!("invalid realm controller config: {err}")))?;
+    let summary = config.validate_metadata_only().map_err(|err| {
+        RunError::Protocol(format!("invalid realm controller config: {err}"))
+    })?;
+    Ok(Some(LoadedRealmControllersConfig { config, summary }))
+}
+
 fn run_server(config: ServerConfig) -> Result<(), RunError> {
+    if let Some(realm_controllers) = load_realm_controllers_config(&config.realm_controllers_path)?
+    {
+        tracing::info!(
+            config_source = "realm-controllers",
+            config_present = true,
+            controller_count = realm_controllers.summary.controller_count,
+            host_local_controller_count = realm_controllers.summary.host_local_controller_count,
+            broker_enabled_count = realm_controllers.summary.broker_enabled_count,
+            "realm-controller metadata loaded; broker runtime remains direct-socket only",
+        );
+    } else {
+        tracing::debug!(
+            config_source = "realm-controllers",
+            config_present = false,
+            "realm-controller metadata not present; broker keeps single-root config defaults",
+        );
+    }
+
     let listener = match adopt_listen_fd() {
         Some(Ok(fd)) => {
             // Socket-activated: systemd owns bind+listen+ACL.
@@ -9441,6 +9493,164 @@ mod tests {
         root.join(format!("{test_name}-{}-{unique}", std::process::id()))
     }
 
+    fn realm_controllers_json() -> &'static str {
+        r#"{
+          "schemaVersion": "v2",
+          "runtimeState": "metadata-only",
+          "controllers": [
+            {
+              "realmName": "Work",
+              "realmId": "work",
+              "realmPath": "corp.work",
+              "placement": "host-local",
+              "daemon": {
+                "user": "d2br-0123456789abcdef",
+                "group": "d2br-0123456789abcdef",
+                "publicSocketGroup": "d2br-0123456789abcdef",
+                "serviceName": "d2b-realm-work-daemon.service",
+                "configPath": "/etc/d2b/realms/work/daemon-config.json",
+                "stateLockPath": "/run/d2b/realms/work/daemon.lock",
+                "locksDir": "/run/d2b/realms/work/locks",
+                "socketActivated": false,
+                "materializedService": false
+              },
+              "broker": {
+                "enabled": true,
+                "hostMutation": false,
+                "user": "root",
+                "group": "d2br-0123456789abcdef",
+                "socketPath": "/run/d2b/realms/work/priv.sock",
+                "socketUnitName": "d2b-realm-work-priv-broker.socket",
+                "serviceUnitName": "d2b-realm-work-priv-broker.service",
+                "auditDir": "/var/lib/d2b/realms/work/audit",
+                "materializedSocket": false,
+                "materializedService": false
+              },
+              "paths": {
+                "runDir": "/run/d2b/realms/work",
+                "stateDir": "/var/lib/d2b/realms/work",
+                "auditDir": "/var/lib/d2b/realms/work/audit"
+              },
+              "sockets": {
+                "publicSocketPath": "/run/d2b/realms/work/public.sock",
+                "brokerSocketPath": "/run/d2b/realms/work/priv.sock"
+              },
+              "allocator": {
+                "kind": "local-root-metadata",
+                "configPath": "/etc/d2b/allocator.json",
+                "rootSocket": "/run/d2b/allocator.sock"
+              },
+              "access": {
+                "allowedUsers": ["alice"],
+                "allowedGroups": ["d2b"],
+                "inheritedAdminUsers": ["admin"]
+              }
+            }
+          ],
+          "invariants": {
+            "metadataOnly": true,
+            "noSystemdUnitsMaterialized": true,
+            "preservesGlobalDaemonBehavior": true,
+            "preservesDirectUnixSocketSemantics": true
+          }
+        }"#
+    }
+
+    #[test]
+    fn parse_command_accepts_realm_controllers_path_without_changing_socket_defaults() {
+        let mode = parse_command([
+            "serve".to_owned(),
+            "--realm-controllers-path".to_owned(),
+            "/etc/d2b/custom-realm-controllers.json".to_owned(),
+            "--test-mode".to_owned(),
+        ])
+        .expect("serve command parses");
+
+        let config = match mode {
+            BrokerMode::Serve(config) => config,
+            #[cfg(feature = "layer1-bootstrap")]
+            other => panic!("expected serve mode, got {other:?}"),
+        };
+        assert_eq!(
+            config.realm_controllers_path,
+            PathBuf::from("/etc/d2b/custom-realm-controllers.json")
+        );
+        assert_eq!(config.socket_path, PathBuf::from(DEFAULT_SOCKET_PATH));
+    }
+
+    #[test]
+    fn parse_command_defaults_realm_controllers_path() {
+        let mode = parse_command(["serve".to_owned(), "--test-mode".to_owned()])
+            .expect("serve command parses with defaults");
+
+        let config = match mode {
+            BrokerMode::Serve(config) => config,
+            #[cfg(feature = "layer1-bootstrap")]
+            other => panic!("expected serve mode, got {other:?}"),
+        };
+        assert_eq!(
+            config.realm_controllers_path,
+            PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH)
+        );
+    }
+
+    #[test]
+    fn broker_realm_controller_loader_handles_missing_and_strict_metadata() {
+        let root = test_audit_dir("realm-controller-loader");
+        fs::create_dir_all(&root).expect("create realm controller test root");
+        let missing_path = root.join("missing-realm-controllers.json");
+        assert!(
+            load_realm_controllers_config(&missing_path)
+                .expect("missing realm controllers is optional")
+                .is_none()
+        );
+
+        let config_path = root.join("realm-controllers.json");
+        fs::write(&config_path, realm_controllers_json()).expect("write realm controllers");
+        let loaded = load_realm_controllers_config(&config_path)
+            .expect("realm controllers parse")
+            .expect("realm controllers present");
+        assert_eq!(loaded.summary.controller_count, 1);
+        let controller = &loaded.config.controllers[0];
+        assert_eq!(controller.daemon.user.as_str(), "d2br-0123456789abcdef");
+        assert_eq!(controller.broker.user.as_str(), "root");
+        assert_eq!(
+            controller.sockets.broker_socket_path.as_str(),
+            "/run/d2b/realms/work/priv.sock"
+        );
+
+        let bad_path = root.join("bad-realm-controllers.json");
+        fs::write(
+            &bad_path,
+            realm_controllers_json().replace(
+                r#""preservesDirectUnixSocketSemantics": true"#,
+                r#""preservesDirectUnixSocketSemantics": false"#,
+            ),
+        )
+        .expect("write invalid realm controllers");
+        assert!(load_realm_controllers_config(&bad_path).is_err());
+
+        let materialized_path = root.join("materialized-realm-controllers.json");
+        let materialized = realm_controllers_json()
+            .replace(
+                r#""materializedService": false"#,
+                r#""materializedService": true"#,
+            )
+            .replace(
+                r#""materializedSocket": false"#,
+                r#""materializedSocket": true"#,
+            )
+            .replace(
+                r#""noSystemdUnitsMaterialized": true"#,
+                r#""noSystemdUnitsMaterialized": false"#,
+            );
+        fs::write(&materialized_path, materialized).expect("write materialized realm controllers");
+        let materialized_loaded = load_realm_controllers_config(&materialized_path)
+            .expect("materialized host-local unit metadata remains loadable")
+            .expect("realm controllers present");
+        assert_eq!(materialized_loaded.summary.host_local_controller_count, 1);
+    }
+
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn write_json_file<T: Serialize>(path: &Path, value: &T) {
         use std::os::unix::fs::PermissionsExt;
@@ -9751,6 +9961,7 @@ mod tests {
             storage_path: None,
             sync_path: None,
             allocator_path: None,
+            realm_controllers_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),
@@ -9961,6 +10172,7 @@ mod tests {
             audit_dir: root.join("audit"),
             audit_retention_days: 14,
             bundle_path: manifest_path.to_path_buf(),
+            realm_controllers_path: root.join("realm-controllers.json"),
             state_dir: root.join("state"),
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),

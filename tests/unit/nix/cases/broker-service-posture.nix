@@ -4,7 +4,7 @@
 # cgroup-delegation operations. Its unit must stay in d2b.slice,
 # must be explicitly delegated, and must not use systemd service teardown
 # as the runner lifecycle mechanism.
-{ mkEval, ... }:
+{ mkEval, lib, ... }:
 
 let
   minimal = { ... }: {
@@ -20,6 +20,7 @@ let
   cfg = (mkEval [ minimal ]).config;
   svcCfg = cfg.systemd.services.d2b-priv-broker.serviceConfig or { };
   sliceCfg = cfg.systemd.slices.d2b.sliceConfig or { };
+  tmpfiles = cfg.systemd.tmpfiles.rules;
 in
 {
   "broker-service-posture/service-slice" = {
@@ -40,5 +41,23 @@ in
   "broker-service-posture/slice-delegate-controllers" = {
     expr = sliceCfg.Delegate or "";
     expected = "cpu memory pids io cpuset";
+  };
+
+  "broker-service-posture/no-global-manager-environment-mutation" = {
+    expr = {
+      execStartPreAvoidsSetEnvironment =
+        !(lib.hasInfix "set-environment" (svcCfg.ExecStartPre or ""));
+      execStartAvoidsSetEnvironment =
+        !(lib.hasInfix "set-environment" (svcCfg.ExecStart or ""));
+      usesUnitLocalEnvironmentFile = svcCfg.EnvironmentFile or "";
+      environmentFileParentNotGroupWritable =
+        builtins.elem "d /run/d2b/broker 0750 root d2bd -" tmpfiles;
+    };
+    expected = {
+      execStartPreAvoidsSetEnvironment = true;
+      execStartAvoidsSetEnvironment = true;
+      usesUnitLocalEnvironmentFile = "/run/d2b/broker/priv-broker.env";
+      environmentFileParentNotGroupWritable = true;
+    };
   };
 }

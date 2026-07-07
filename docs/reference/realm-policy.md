@@ -7,13 +7,14 @@ fast path for bare VM names and the reserved `local` realm. Gateway-backed
 realms are fronted by a dedicated gateway guest in a separate d2b env/L2
 segment.
 
-Current Nix support for `d2b.realms.<realm>` is schema-only. Defining a
-realm can record intended placement, users, provider/relay/policy/key
-references, and associated existing envs, but it does not yet create the
-per-realm policy evaluator, daemon, broker, socket, audit domain, or
-network partition described by future runtime support. Existing
-`d2b.envs` and `d2b.vms.<vm>.env` declarations remain the implemented
-substrate.
+Current Nix support for `d2b.realms.<realm>` records the declaration,
+emits private host-local controller metadata, and materializes host-local
+control-plane scaffolding: deterministic daemon/broker units and sockets,
+realm users and groups, tmpfiles-managed state/runtime/audit paths, config
+metadata, and local socket access ACLs. Realm access-layer routing, policy
+evaluation, identity/enrollment, and realm-owned network partitions remain
+future work. Existing `d2b.envs` and `d2b.vms.<vm>.env` declarations remain
+the implemented workload substrate.
 
 ## Policy modes
 
@@ -50,6 +51,12 @@ Local host authorization remains `SO_PEERCRED` plus the canonical `d2b`
 lifecycle group. Relay, gateway, and cross-realm identities never map to local
 lifecycle roles.
 
+Future host-local realm access uses direct realm socket authorization. A local
+user or group listed for a realm is intended to connect to that realm's public
+AF_UNIX socket directly and be authorized there. The global host daemon must not
+act as a byte proxy that forwards opaque traffic between local users and realm
+controllers.
+
 Default-deny decisions are operator-visible through typed errors and bounded
 audit events. Audit and error surfaces carry only low-cardinality realm,
 operation or stream kind, decision, and reason labels. They must not contain
@@ -59,4 +66,5 @@ endpoints, host paths, or PII.
 ## Related references
 
 - [Realm option schema](./realm-options.md)
+- [Realm controller configuration](./realm-controller-config.md)
 - [Realm core model reference](./realm-core.md)

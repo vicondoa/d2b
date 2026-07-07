@@ -1,4 +1,4 @@
-//! `d2b-realm-core` is the pure, codec-neutral v2 realm model. ADR 0043
+//! `d2b-realm-core` is the pure, codec-neutral v2 realm model. The realm-native
 //! supersedes ADR 0032's host-centric entrypoint model while preserving the
 //! semantic operation, stream, capability, idempotency, relay-as-reachability,
 //! and bounded-audit invariants. The crate defines identifiers, realm targets,

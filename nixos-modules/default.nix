@@ -61,6 +61,7 @@
     ./storage-json.nix
     ./sync-json.nix
     ./allocator-json.nix
+    ./realm-controller-config-json.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix

@@ -78,6 +78,7 @@ use crate::processes::{
     ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode, ProcessRole, ProcessesJson,
     RoleProfile, VmProcessDag,
 };
+use crate::realm_controller_config::RealmControllersJson;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use sha2::Digest as _;
@@ -96,6 +97,7 @@ pub struct BundleResolver {
     pub processes: ProcessesJson,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
+    pub realm_controllers: Option<RealmControllersJson>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
@@ -124,6 +126,7 @@ struct ParsedBundleArtifacts {
     processes: ProcessesJson,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
+    realm_controllers: Option<RealmControllersJson>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
 }
@@ -979,6 +982,7 @@ impl BundleResolver {
                 processes,
                 storage: None,
                 sync: None,
+                realm_controllers: None,
                 manifest,
                 closures,
             },
@@ -995,6 +999,7 @@ impl BundleResolver {
             processes,
             storage,
             sync,
+            realm_controllers,
             manifest,
             closures,
         } = artifacts;
@@ -1027,6 +1032,7 @@ impl BundleResolver {
             processes,
             storage,
             sync,
+            realm_controllers,
             manifest,
             nft_intents,
             route_intents,
@@ -1055,6 +1061,7 @@ impl BundleResolver {
         processes: ProcessesJson,
         storage: Option<StorageJson>,
         sync: Option<SyncJson>,
+        realm_controllers: Option<RealmControllersJson>,
         manifest: ManifestV04,
     ) -> Self {
         let bundle_hash = stable_digest_bytes(
@@ -1070,6 +1077,7 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
+                realm_controllers,
                 manifest,
                 closures: Vec::new(),
             },
@@ -1107,6 +1115,8 @@ impl BundleResolver {
         })?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
+        let realm_controllers =
+            load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
         // which is root-owned 0444; skip the private-artifact policy for it.
         let manifest = ManifestV04::from_path(manifest_path)?;
@@ -1119,6 +1129,7 @@ impl BundleResolver {
                 processes,
                 storage,
                 sync,
+                realm_controllers,
                 manifest,
                 closures,
             },
@@ -2852,6 +2863,34 @@ fn load_optional_sync_artifact(
     Ok(Some(sync))
 }
 
+fn load_optional_realm_controllers_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<RealmControllersJson>, Error> {
+    let Some(realm_controllers_ref) = bundle.realm_controllers_path.as_deref() else {
+        return Ok(None);
+    };
+    let realm_controllers_path = resolve_bundle_ref(bundle_root, realm_controllers_ref);
+    let bytes = secure_open_and_read(&realm_controllers_path, policy)?;
+    verify_artifact_hash(
+        &realm_controllers_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        realm_controllers_ref,
+    )?;
+    let realm_controllers: RealmControllersJson = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::manifest_parse_error(
+            "realm-controllers.json",
+            manifest_parse_reason(&e.to_string()),
+        )
+    })?;
+    realm_controllers
+        .validate_metadata_only()
+        .map_err(|err| Error::manifest_parse_error("realm-controllers.json", err.to_string()))?;
+    Ok(Some(realm_controllers))
+}
+
 // ---------------------------------------------------------------
 // Stable digest helper.
 // ---------------------------------------------------------------
@@ -2960,6 +2999,7 @@ mod tests {
                 storage_path: None,
                 sync_path: None,
                 allocator_path: None,
+                realm_controllers_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
                 managed_keys: Default::default(),
@@ -3301,6 +3341,7 @@ mod tests {
             storage_path: None,
             sync_path: None,
             allocator_path: None,
+            realm_controllers_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),
                 path: "closures/personal-dev.json".to_owned(),
@@ -3371,6 +3412,155 @@ mod tests {
         };
         BundleResolver::load_with_policy(&bundle_path, &test_policy)
             .expect("load personal-dev test bundle")
+    }
+
+    fn write_hashed_test_bundle(bundle_path: &Path, mut as_value: serde_json::Value) {
+        if let serde_json::Value::Object(map) = &mut as_value {
+            map.remove("bundleHash");
+            map.insert("artifactHashes".to_owned(), serde_json::Value::Null);
+        }
+        let canonical =
+            serde_json::to_vec(&as_value).expect("canonical-serialize bundle for hashing");
+        let digest = {
+            use sha2::Digest as _;
+            let raw: [u8; 32] = sha2::Sha256::digest(&canonical).into();
+            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            format!("sha256:{hex}")
+        };
+        if let serde_json::Value::Object(map) = &mut as_value {
+            map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
+        }
+        fs::write(
+            bundle_path,
+            serde_json::to_vec(&as_value).expect("serialize bundle with hash"),
+        )
+        .expect("write bundle with hash");
+    }
+
+    fn current_user_bundle_policy() -> BundleVerifyPolicy {
+        BundleVerifyPolicy {
+            required_uid: rustix::process::getuid().as_raw(),
+            required_gid: Some(rustix::process::getgid().as_raw()),
+            required_mode: 0o640,
+        }
+    }
+
+    fn realm_controllers_artifact_value(no_systemd_units_materialized: bool) -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "v2",
+            "runtimeState": "metadata-only",
+            "controllers": [
+                {
+                    "realmName": "Home",
+                    "realmId": "home",
+                    "realmPath": "home",
+                    "placement": "host-local",
+                    "daemon": {
+                        "user": "d2br-0123456789abcdef",
+                        "group": "d2br-0123456789abcdef",
+                        "publicSocketGroup": "d2bra-0123456789abcdef",
+                        "serviceName": "d2b-realm-0123456789abcdef-daemon.service",
+                        "configPath": "/etc/d2b/realms/home/daemon-config.json",
+                        "stateLockPath": "/run/d2b/realms/home/daemon.lock",
+                        "locksDir": "/run/d2b/realms/home/locks",
+                        "socketActivated": false,
+                        "materializedService": !no_systemd_units_materialized
+                    },
+                    "broker": {
+                        "enabled": true,
+                        "hostMutation": true,
+                        "user": "root",
+                        "group": "d2br-0123456789abcdef",
+                        "socketPath": "/run/d2b/realms/home/broker.sock",
+                        "socketUnitName": "d2b-realm-0123456789abcdef-priv-broker.socket",
+                        "serviceUnitName": "d2b-realm-0123456789abcdef-priv-broker.service",
+                        "auditDir": "/var/lib/d2b/realms/home/audit",
+                        "materializedSocket": !no_systemd_units_materialized,
+                        "materializedService": !no_systemd_units_materialized
+                    },
+                    "paths": {
+                        "runDir": "/run/d2b/realms/home",
+                        "stateDir": "/var/lib/d2b/realms/home",
+                        "auditDir": "/var/lib/d2b/realms/home/audit"
+                    },
+                    "sockets": {
+                        "publicSocketPath": "/run/d2b/realms/home/public.sock",
+                        "brokerSocketPath": "/run/d2b/realms/home/broker.sock"
+                    },
+                    "allocator": {
+                        "kind": "local-root-metadata",
+                        "configPath": "/etc/d2b/allocator.json",
+                        "rootSocket": "/run/d2b/allocator/local-root.sock",
+                        "resourceRequestRefs": ["realm-home-state"]
+                    },
+                    "access": {
+                        "allowedUsers": ["alice"],
+                        "allowedGroups": ["realm-home"],
+                        "inheritedAdminUsers": []
+                    },
+                    "providers": []
+                }
+            ],
+            "invariants": {
+                "metadataOnly": true,
+                "noSystemdUnitsMaterialized": no_systemd_units_materialized,
+                "preservesGlobalDaemonBehavior": true,
+                "preservesDirectUnixSocketSemantics": true
+            }
+        })
+    }
+
+    #[test]
+    fn bundle_resolver_loads_realm_controller_artifact() {
+        let root = test_root("realm-controller-artifact");
+        let _baseline = build_personal_dev_bundle(&root);
+        let bundle_dir = root.join("bundle");
+        let bundle_path = bundle_dir.join("bundle.json");
+        let realm_controllers_path = bundle_dir.join("realm-controllers.json");
+
+        write_json(
+            &realm_controllers_path,
+            &realm_controllers_artifact_value(false),
+        );
+
+        let mut bundle_value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&bundle_path).expect("read bundle json"))
+                .expect("bundle json parses");
+        if let serde_json::Value::Object(map) = &mut bundle_value {
+            map.insert(
+                "realmControllersPath".to_owned(),
+                serde_json::Value::String("realm-controllers.json".to_owned()),
+            );
+        }
+        write_hashed_test_bundle(&bundle_path, bundle_value);
+
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640)).expect("chmod bundle");
+        fs::set_permissions(&realm_controllers_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod realm controllers");
+
+        let resolver =
+            BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
+                .expect("load bundle with realm controllers");
+        let controllers = resolver
+            .realm_controllers
+            .as_ref()
+            .expect("realm controller artifact loaded");
+        assert_eq!(controllers.controllers.len(), 1);
+        assert_eq!(controllers.controllers[0].realm_path.as_str(), "home");
+        assert!(controllers.controllers[0].daemon.materialized_service);
+
+        let mut invalid = realm_controllers_artifact_value(true);
+        invalid["controllers"][0]["daemon"]["materializedService"] = serde_json::Value::Bool(true);
+        write_json(&realm_controllers_path, &invalid);
+        fs::set_permissions(&realm_controllers_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod invalid realm controllers");
+        let err = BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
+            .expect_err("bundle resolver rejects invalid realm controller metadata");
+        assert!(
+            err.to_string().contains("realm-controllers.json"),
+            "error names realm-controller artifact: {err}"
+        );
     }
 
     #[test]

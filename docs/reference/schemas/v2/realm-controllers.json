@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RealmControllersJson",
+  "type": "object",
+  "required": [
+    "invariants",
+    "runtimeState",
+    "schemaVersion"
+  ],
+  "properties": {
+    "controllers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RealmControllerConfig"
+      }
+    },
+    "invariants": {
+      "$ref": "#/definitions/RealmControllerInvariants"
+    },
+    "runtimeState": {
+      "$ref": "#/definitions/RealmControllerRuntimeState"
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "PathTemplate": {
+      "description": "Absolute path template with typed variables expanded by the broker.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "^/[^\\u0000]*$"
+    },
+    "RealmAllocatorBinding": {
+      "type": "object",
+      "required": [
+        "configPath",
+        "kind",
+        "rootSocket"
+      ],
+      "properties": {
+        "configPath": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "kind": {
+          "$ref": "#/definitions/RealmAllocatorBindingKind"
+        },
+        "resourceRequestRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContractId"
+          }
+        },
+        "rootSocket": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmAllocatorBindingKind": {
+      "type": "string",
+      "enum": [
+        "local-root-metadata"
+      ]
+    },
+    "RealmBrokerConfig": {
+      "type": "object",
+      "required": [
+        "auditDir",
+        "enabled",
+        "group",
+        "hostMutation",
+        "materializedService",
+        "materializedSocket",
+        "serviceUnitName",
+        "socketPath",
+        "socketUnitName",
+        "user"
+      ],
+      "properties": {
+        "auditDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "group": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "hostMutation": {
+          "type": "boolean"
+        },
+        "materializedService": {
+          "type": "boolean"
+        },
+        "materializedSocket": {
+          "type": "boolean"
+        },
+        "serviceUnitName": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "socketPath": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "socketUnitName": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "user": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerAccess": {
+      "type": "object",
+      "properties": {
+        "allowedGroups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedUsers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inheritedAdminUsers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerConfig": {
+      "type": "object",
+      "required": [
+        "access",
+        "allocator",
+        "broker",
+        "daemon",
+        "paths",
+        "placement",
+        "realmId",
+        "realmName",
+        "realmPath",
+        "sockets"
+      ],
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/RealmControllerAccess"
+        },
+        "allocator": {
+          "$ref": "#/definitions/RealmAllocatorBinding"
+        },
+        "broker": {
+          "$ref": "#/definitions/RealmBrokerConfig"
+        },
+        "daemon": {
+          "$ref": "#/definitions/RealmDaemonConfig"
+        },
+        "paths": {
+          "$ref": "#/definitions/RealmControllerPaths"
+        },
+        "placement": {
+          "$ref": "#/definitions/RealmControllerPlacement"
+        },
+        "providerPlacement": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmControllerProviderPlacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmControllerProvider"
+          }
+        },
+        "realmId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "realmName": {
+          "type": "string"
+        },
+        "realmPath": {
+          "$ref": "#/definitions/RealmControllerRealmPath"
+        },
+        "sockets": {
+          "$ref": "#/definitions/RealmControllerSockets"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerInvariants": {
+      "type": "object",
+      "required": [
+        "metadataOnly",
+        "noSystemdUnitsMaterialized",
+        "preservesDirectUnixSocketSemantics",
+        "preservesGlobalDaemonBehavior"
+      ],
+      "properties": {
+        "metadataOnly": {
+          "type": "boolean"
+        },
+        "noSystemdUnitsMaterialized": {
+          "type": "boolean"
+        },
+        "preservesDirectUnixSocketSemantics": {
+          "type": "boolean"
+        },
+        "preservesGlobalDaemonBehavior": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerPaths": {
+      "type": "object",
+      "required": [
+        "auditDir",
+        "runDir",
+        "stateDir"
+      ],
+      "properties": {
+        "auditDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "runDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "stateDir": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerPlacement": {
+      "type": "string",
+      "enum": [
+        "host-local",
+        "gateway-vm",
+        "cloud-full-host",
+        "provider-controller",
+        "provider-agent",
+        "provider-specific"
+      ]
+    },
+    "RealmControllerProvider": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "placement",
+        "providerId",
+        "providerName"
+      ],
+      "properties": {
+        "capabilityRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmControllerProviderKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "$ref": "#/definitions/RealmControllerPlacement"
+        },
+        "providerId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "providerName": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerProviderKind": {
+      "description": "Opaque provider adapter kind slug used by realm-controller metadata.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmControllerProviderPlacement": {
+      "type": "object",
+      "required": [
+        "providerId",
+        "providerName"
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmControllerProviderKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerSpecificPlacement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerRealmPath": {
+      "description": "Realm path copied from d2b.realms, most-specific first, with 1-16 DNS-style labels and a 255-byte cap.",
+      "type": "string",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){0,15}$"
+    },
+    "RealmControllerRuntimeState": {
+      "type": "string",
+      "enum": [
+        "metadata-only"
+      ]
+    },
+    "RealmControllerSockets": {
+      "type": "object",
+      "required": [
+        "brokerSocketPath",
+        "publicSocketPath"
+      ],
+      "properties": {
+        "brokerSocketPath": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "publicSocketPath": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmDaemonConfig": {
+      "type": "object",
+      "required": [
+        "configPath",
+        "group",
+        "locksDir",
+        "materializedService",
+        "publicSocketGroup",
+        "serviceName",
+        "socketActivated",
+        "stateLockPath",
+        "user"
+      ],
+      "properties": {
+        "configPath": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "group": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "locksDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "materializedService": {
+          "type": "boolean"
+        },
+        "publicSocketGroup": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "serviceName": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "socketActivated": {
+          "type": "boolean"
+        },
+        "stateLockPath": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "user": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

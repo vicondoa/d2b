@@ -83,11 +83,16 @@ The contracts. Stable interfaces a consumer can depend on.
   behavior, authorization, audit, and network isolation boundaries.
 - [`reference/realm-options.md`](./reference/realm-options.md) —
   current `d2b.realms.<realm>` Nix option shape and transition boundary:
-  schema-only realm declarations while `d2b.envs` remains the active
-  runtime substrate.
+  host-local realm scaffolding is materialized while access-layer routing,
+  identity, and realm networking remain future work over the active `d2b.envs`
+  substrate.
 - [`reference/local-root-allocator.md`](./reference/local-root-allocator.md) —
   typed host-resource lease contract for future local-root allocation,
   reconciliation, quarantine, reclaim, and realm-broker boundaries.
+- [`reference/realm-controller-config.md`](./reference/realm-controller-config.md) —
+  private `realm-controllers.json` metadata for deterministic host-local
+  realm controller naming, sockets, allocator bindings, state, and audit
+  boundaries.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.
@@ -192,6 +197,9 @@ Understanding-oriented prose. The "why" behind the design choices.
 - [`explanation/storage-lifecycle.md`](./explanation/storage-lifecycle.md) —
   why d2b treats host paths, restart adoption, locks, cleanup, and
   degraded-state reporting as explicit control-plane contracts.
+- [`explanation/realm-controller-boundaries.md`](./explanation/realm-controller-boundaries.md) —
+  why host-local realm controller metadata keeps direct socket authorization,
+  local-root resolution, state, and audit boundaries separate.
 - [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) —
   persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and
   non-goals for persistent named guest shells.

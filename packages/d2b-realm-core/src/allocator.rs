@@ -1,4 +1,4 @@
-//! Pure local-root host-resource allocator DTOs (ADR 0043).
+//! Pure local-root host-resource allocator DTOs.
 //!
 //! This module defines the shared contract for typed host-resource leases,
 //! reconciliation observations, and bounded allocator audit/metric metadata. It

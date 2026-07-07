@@ -1,4 +1,4 @@
-//! Tree-only route advertisements for ADR 0043 realm routing.
+//! Tree-only route advertisements for realm-native routing.
 
 use crate::capability::CapabilitySet;
 use crate::enrollment::{KeyFingerprint, RealmKeyRole};

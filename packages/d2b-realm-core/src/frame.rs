@@ -1,4 +1,4 @@
-//! The semantic `ConstellationFrame` preserved by the ADR 0043 realm model.
+//! The semantic `ConstellationFrame` preserved by the realm-native model.
 //! This is the codec-neutral frame API: protocol codecs map bytes to/from these
 //! types, and the operation/routing layer depends only on this module — never
 //! on a wire encoding (`prost`, protobuf-generated types, etc.).

@@ -1,4 +1,4 @@
-//! Realm-native target address parser (ADR 0043).
+//! Realm-native target address parser.
 //!
 //! A public target address names a workload inside a realm, not a physical
 //! node:
@@ -29,12 +29,12 @@ pub const TARGET_SUFFIX: &str = "d2b";
 
 /// Legacy ADR 0032 CLI alias for the current host's local node.
 ///
-/// ADR 0043 realm targets do not encode node labels. This constant remains only
+/// Realm-native targets do not encode node labels. This constant remains only
 /// for migration diagnostics and older callers while they move to
 /// [`RealmTarget`].
 pub const THIS_NODE_ALIAS: &str = "this";
 
-/// A parsed ADR 0043 realm target: a workload inside a realm path.
+/// A parsed realm target: a workload inside a realm path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RealmTarget {
     /// The named workload (VM, session, or provider-backed workload).
@@ -49,7 +49,7 @@ impl RealmTarget {
         Self { workload, realm }
     }
 
-    /// Parse a fully-qualified ADR 0043 target.
+    /// Parse a fully-qualified realm target.
     ///
     /// Bare workload aliases require resolver context; use
     /// [`RealmTargetParser`] with a default realm or alias table when a caller
@@ -58,7 +58,7 @@ impl RealmTarget {
         parse_realm_target(raw)
     }
 
-    /// Render the canonical ADR 0043 target address.
+    /// Render the canonical realm target address.
     pub fn to_canonical(&self) -> String {
         format!(
             "{}.{}.{}",
@@ -68,13 +68,13 @@ impl RealmTarget {
         )
     }
 
-    /// Compatibility shim for older callers. ADR 0043 targets never carry a
+    /// Compatibility shim for older callers. Realm-native targets never carry a
     /// node label, so this is always false.
     pub fn node_is_this(&self) -> bool {
         false
     }
 
-    /// Compatibility shim for older callers. ADR 0043 targets never carry a
+    /// Compatibility shim for older callers. Realm-native targets never carry a
     /// node label, so the target is returned unchanged.
     pub fn with_local_node(self, _local: NodeId) -> Self {
         self
@@ -121,14 +121,14 @@ impl JsonSchema for RealmTarget {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetName {
     target: RealmTarget,
-    /// Compatibility field for ADR 0032 callers. ADR 0043 targets never encode
+    /// Compatibility field for ADR 0032 callers. Realm-native targets never encode
     /// a node, so parsed targets carry the unresolved `this` alias until callers
     /// explicitly resolve it for legacy-local behavior.
     pub node: NodeId,
 }
 
 impl TargetName {
-    /// Parse an ADR 0043 target address while preserving legacy field access.
+    /// Parse a realm target address while preserving legacy field access.
     pub fn parse(raw: &str) -> Result<Self, TargetParseError> {
         RealmTarget::parse(raw).map(Self::from_realm_target)
     }
@@ -141,12 +141,12 @@ impl TargetName {
         }
     }
 
-    /// Borrow the ADR 0043 target.
+    /// Borrow the realm target.
     pub fn as_realm_target(&self) -> &RealmTarget {
         &self.target
     }
 
-    /// Return the ADR 0043 target.
+    /// Return the realm target.
     pub fn into_realm_target(self) -> RealmTarget {
         self.target
     }
@@ -157,7 +157,7 @@ impl TargetName {
     }
 
     /// Resolve the compatibility `this` node field for older local-only callers.
-    /// The node is not part of canonical ADR 0043 routing.
+    /// The node is not part of canonical realm routing.
     pub fn with_local_node(mut self, local: NodeId) -> Self {
         if self.node_is_this() {
             self.node = local;
@@ -165,7 +165,7 @@ impl TargetName {
         self
     }
 
-    /// Render the canonical ADR 0043 target address.
+    /// Render the canonical realm target address.
     pub fn to_canonical(&self) -> String {
         self.target.to_canonical()
     }
@@ -256,7 +256,7 @@ impl LegacyNodeQualifiedTarget {
         parse_legacy_node_qualified(raw)
     }
 
-    /// Return the ADR 0043 target obtained by dropping the legacy node label.
+    /// Return the realm target obtained by dropping the legacy node label.
     pub fn suggested_realm_target(&self) -> RealmTarget {
         RealmTarget::new(self.workload.clone(), self.realm.clone())
     }
@@ -304,7 +304,7 @@ pub enum RealmTargetParseError {
     },
     /// The address matches an old ADR 0032 node-qualified shape for a known
     /// legacy node label. It is reported as a migration diagnostic, not accepted
-    /// as a normal ADR 0043 route.
+    /// as a normal realm route.
     LegacyNodeQualified {
         legacy: LegacyNodeQualifiedTarget,
         suggested: RealmTarget,
@@ -367,7 +367,7 @@ impl core::fmt::Display for RealmTargetParseError {
 
 impl std::error::Error for RealmTargetParseError {}
 
-/// Context-aware ADR 0043 parser for callers that intentionally support bare
+/// Context-aware realm parser for callers that intentionally support bare
 /// aliases or need old node-qualified migration diagnostics.
 #[derive(Debug, Clone, Default)]
 pub struct RealmTargetParser {

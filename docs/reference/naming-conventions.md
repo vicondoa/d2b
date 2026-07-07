@@ -67,7 +67,7 @@ names or terminal session handles.
 ## Constellation target and model identifiers
 
 Constellation targets extend the VM/env naming rules without making a
-target address a network address. The canonical ADR 0043 target form is:
+target address a network address. The canonical realm target form is:
 
 ```text
 <workload>.<realm>[.<ancestor>...].d2b

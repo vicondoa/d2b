@@ -1,10 +1,10 @@
 # d2b.realms.<realm>.* — realm-native control-plane option foundation.
 #
-# This file declares the public Nix schema selected by ADR 0043 without
-# materialising per-realm daemons, brokers, networks, allocators, or VM/env
-# migrations. Existing `d2b.envs` and `d2b.vms.<vm>.env` behaviour remains the
-# runtime source of truth; the realm index and assertions only normalize and
-# validate inert planning metadata.
+# This file declares the public realm-native Nix schema without
+# materialising networks, allocators, or VM/env migrations. Host-local realms
+# do materialise their control-plane users, groups, sockets, and unit
+# definitions; existing `d2b.envs` and `d2b.vms.<vm>.env` behaviour remains the
+# runtime source of truth.
 { lib, config, ... }:
 
 let
@@ -81,17 +81,18 @@ in
     description = ''
       Realm-native control-plane declarations. A realm is the future unit of
       daemon, broker, state, audit, provider, relay, policy, and workload
-      namespace ownership selected by ADR 0043.
+      namespace ownership selected by the realm-native model.
 
-      This release exposes the option schema only. Declaring a realm does not
-      spawn per-realm daemons or brokers, allocate network resources, or alter
-      current `d2b.envs` / `d2b.vms.<vm>.env` behaviour.
+      Host-local realms materialise deterministic control-plane units and
+      access principals. Declaring a realm does not allocate network resources
+      or alter current `d2b.envs` / `d2b.vms.<vm>.env` behaviour.
     '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }:
       let
         realmConfig = config;
         realmStateDir = "${toString outerConfig.d2b.site.stateDir}/realms/${realmConfig.id}";
+        realmAuditDir = "/var/lib/d2b/audit/realms/${realmConfig.id}";
         realmRunDir = "/run/d2b/realms/${realmConfig.id}";
       in
       {
@@ -180,8 +181,21 @@ in
             example = [ "alice" ];
             description = ''
               Host users intended to receive direct access to this realm's
-              future local public socket. This option does not create users,
-              groups, ACLs, or socket units in the current scope.
+              local public socket. Host-local realms map these users into a
+              deterministic realm socket-access group; users must still be
+              declared elsewhere in the host configuration.
+            '';
+          };
+
+          allowedGroups = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "realm-work" ];
+            description = ''
+              Host groups intended to receive direct access to this realm's
+              local public socket. It is preserved as direct-access metadata
+              for controllers that can apply ACLs without making users members
+              of the daemon's own group.
             '';
           };
 
@@ -343,37 +357,41 @@ in
               default = realmStateDir;
               defaultText = lib.literalExpression "config.d2b.site.stateDir + \"/realms/<realm>\"";
               description = ''
-                Derived realm state directory. It is not created or managed by
-                this schema-only scope.
+                Derived realm state directory. Host-local realm controller
+                units create and own it through tmpfiles.
               '';
             };
 
             auditDir = lib.mkOption {
               type = lib.types.strMatching absolutePath;
-              default = "${realmStateDir}/audit";
-              defaultText = lib.literalExpression "paths.stateDir + \"/audit\"";
-              description = "Derived per-realm audit directory placeholder.";
+              default = realmAuditDir;
+              defaultText = lib.literalExpression "\"/var/lib/d2b/audit/realms/<realm>\"";
+              description = ''
+                Derived per-realm audit directory. The default is deliberately
+                outside `paths.stateDir` so daemon-owned mutable state cannot
+                replace or spoof the broker-owned audit stream.
+              '';
             };
 
             runDir = lib.mkOption {
               type = lib.types.strMatching absolutePath;
               default = realmRunDir;
               defaultText = lib.literalExpression "\"/run/d2b/realms/<realm>\"";
-              description = "Derived per-realm runtime directory placeholder.";
+              description = "Derived per-realm runtime directory.";
             };
 
             publicSocket = lib.mkOption {
               type = lib.types.strMatching absolutePath;
               default = "${realmRunDir}/public.sock";
               defaultText = lib.literalExpression "paths.runDir + \"/public.sock\"";
-              description = "Future realm public socket path. No socket is bound in this scope.";
+              description = "Realm public socket path for host-local controller units.";
             };
 
             brokerSocket = lib.mkOption {
               type = lib.types.strMatching absolutePath;
               default = "${realmRunDir}/broker.sock";
               defaultText = lib.literalExpression "paths.runDir + \"/broker.sock\"";
-              description = "Future realm broker socket path. No broker is started in this scope.";
+              description = "Realm broker socket path when host mutation is enabled.";
             };
           };
 
@@ -382,8 +400,9 @@ in
               type = lib.types.bool;
               default = false;
               description = ''
-                Future opt-in for a realm-local privileged broker. It is
-                deliberately false and unused in this schema-only scope.
+                Opt-in for a realm-local privileged broker. A host-local realm
+                materialises broker units only when both this and
+                `hostMutation` are true.
               '';
             };
 
@@ -392,8 +411,8 @@ in
               default = false;
               description = ''
                 Whether this realm is intended to request host-mutation leases
-                from the future local-root allocator. No allocator exists in
-                this scope.
+                from the local-root allocator. Host-local broker units are
+                materialised only when this is true and broker.enable is true.
               '';
             };
           };

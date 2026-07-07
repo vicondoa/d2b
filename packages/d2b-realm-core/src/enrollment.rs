@@ -1,4 +1,4 @@
-//! Enrollment and key-lifecycle metadata for ADR 0043 realms.
+//! Enrollment and key-lifecycle metadata for realms.
 //!
 //! These DTOs carry only fingerprints, ids, timestamps, and status metadata.
 //! They never carry private keys, public key bytes, provider credentials, or

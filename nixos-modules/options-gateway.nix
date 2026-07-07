@@ -1,4 +1,4 @@
-# ADR 0043 legacy gateway tombstone declarations.
+# Realm-native legacy gateway tombstone declarations.
 #
 # Keep the old schema in place long enough for the top-level assertion in
 # assertions.nix to emit a migration error instead of a generic
@@ -36,7 +36,7 @@ in
 
   options.d2b.gateways = lib.mkOption {
     description = ''
-      Removed ADR 0043 gateway/ACA compatibility surface.
+      Removed gateway/ACA compatibility surface.
 
       This option remains as an eval-time tombstone so configurations that
       still declare `d2b.gateways.<name>` or nested old ACA sandbox fields get

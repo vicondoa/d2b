@@ -135,6 +135,43 @@ let
       })
       realm.providers);
 
+  realmControllerMeta = realm:
+    let
+      realmHash = builtins.substring 0 16 (builtins.hashString "sha256" realm.path);
+      principal = "d2br-${realmHash}";
+      accessGroup = "d2bra-${realmHash}";
+      unitPrefix = "d2b-realm-${realmHash}";
+      localHostRealm = realm.enable && realm.placement == "host-local";
+      brokerMaterialized = localHostRealm && realm.broker.enable && realm.broker.hostMutation;
+    in
+    {
+      controllerId = "realm-${realmHash}";
+      runtimeState = "metadata-only";
+      daemon = {
+        user = principal;
+        group = principal;
+        publicSocketGroup = accessGroup;
+        serviceName = "${unitPrefix}-daemon.service";
+        configPath = "/etc/d2b/realms/${realm.id}/daemon-config.json";
+        stateLockPath = "${realm.paths.runDir}/daemon.lock";
+        locksDir = "${realm.paths.runDir}/locks";
+        socketActivated = false;
+        materializedService = localHostRealm;
+      };
+      broker = {
+        enabled = realm.broker.enable;
+        hostMutation = realm.broker.hostMutation;
+        user = "root";
+        group = principal;
+        socketPath = realm.paths.brokerSocket;
+        socketUnitName = "${unitPrefix}-priv-broker.socket";
+        serviceUnitName = "${unitPrefix}-priv-broker.service";
+        auditDir = realm.paths.auditDir;
+        materializedSocket = brokerMaterialized;
+        materializedService = brokerMaterialized;
+      };
+    };
+
   realmRow = realmName: realm:
     let
       envNames = realmEnvNames realm;
@@ -157,6 +194,7 @@ let
       placementProvider = realm.placementProvider;
       providerSpecificPlacement = realm.providerSpecificPlacement;
       allowedUsers = sortNames (lib.unique realm.allowedUsers);
+      allowedGroups = sortNames (lib.unique realm.allowedGroups);
       defaultWorkloadNamespace = realm.defaultWorkloadNamespace;
       network = {
         env = realm.env;
@@ -179,6 +217,7 @@ let
       keys = realm.keys;
       paths = realm.paths;
       broker = realm.broker;
+      controller = realmControllerMeta realm;
     };
 
   realmRows = sortedMapAttrsToList realmRow declaredRealms;

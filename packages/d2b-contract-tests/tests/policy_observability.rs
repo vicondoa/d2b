@@ -33,6 +33,49 @@ const OBS_HOST: &str = "nixos-modules/components/observability/host.nix";
 const OBS_STACK: &str = "nixos-modules/components/observability/stack.nix";
 const OBS_GUEST: &str = "nixos-modules/components/observability/guest.nix";
 
+#[test]
+fn startup_tracing_avoids_host_path_fields() {
+    let d2bd = read_repo_file("packages/d2bd/src/lib.rs");
+    let broker = read_repo_file("packages/d2b-priv-broker/src/runtime.rs");
+
+    for (rel, content, forbidden) in [
+        (
+            "packages/d2bd/src/lib.rs",
+            d2bd.as_str(),
+            [
+                "path = %config.realm_controllers_config_path.display()",
+                "report_path = %report_path.display()",
+                "socket = %state.config.public_socket_path.display()",
+            ]
+            .as_slice(),
+        ),
+        (
+            "packages/d2b-priv-broker/src/runtime.rs",
+            broker.as_str(),
+            ["path = %config.realm_controllers_path.display()"].as_slice(),
+        ),
+    ] {
+        for snippet in forbidden {
+            assert!(
+                !content.contains(snippet),
+                "startup/config tracing in {rel} must not log host path field: {snippet}"
+            );
+        }
+    }
+
+    for (rel, content) in [
+        ("packages/d2bd/src/lib.rs", d2bd.as_str()),
+        ("packages/d2b-priv-broker/src/runtime.rs", broker.as_str()),
+    ] {
+        assert!(
+            content.contains(r#"config_source = "realm-controllers""#)
+                && content.contains("config_present = true")
+                && content.contains("config_present = false"),
+            "startup/config tracing in {rel} should use source enum and presence boolean"
+        );
+    }
+}
+
 // ===========================================================================
 // Migrated from tests/loki-label-cardinality-eval.sh.
 //

@@ -9,6 +9,7 @@ use d2b_core::{
     allocator_config::{AllocatorJson, AllocatorRuntimeState},
     bundle::Bundle,
     processes::ProcessesJson,
+    realm_controller_config::{RealmControllerRuntimeState, RealmControllersJson},
     storage::{SensitivityClass, StorageJson, StoragePathKind},
     sync::{LockKind, SyncJson},
 };
@@ -79,6 +80,42 @@ fn allocator_artifact_is_wired_into_private_bundle() {
 }
 
 #[test]
+fn realm_controller_artifact_is_wired_into_private_bundle() {
+    let default_nix = read_repo_file("nixos-modules/default.nix");
+    assert!(
+        default_nix.contains("./realm-controller-config-json.nix"),
+        "default.nix must import realm-controller-config-json.nix"
+    );
+
+    let bundle_artifacts = read_repo_file("nixos-modules/bundle-artifacts.nix");
+    assert!(
+        bundle_artifacts.contains("realmControllersJson"),
+        "bundle-artifacts.nix must declare realmControllersJson metadata"
+    );
+
+    let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
+    for needle in [
+        "realmControllersPath = \"/etc/d2b/realm-controllers.json\";",
+        "key = \"/etc/d2b/realm-controllers.json\";",
+    ] {
+        assert!(
+            bundle_nix.contains(needle),
+            "bundle.nix missing realm-controller wiring: {needle}"
+        );
+    }
+
+    let controller_nix = read_repo_file("nixos-modules/realm-controller-config-json.nix");
+    let index_nix = read_repo_file("nixos-modules/index.nix");
+    assert!(controller_nix.contains("installFileName = \"realm-controllers.json\";"));
+    assert!(controller_nix.contains("classification = \"contractPrivateNonSecret\";"));
+    assert!(controller_nix.contains("sensitivity = \"nonSecret\";"));
+    assert!(controller_nix.contains("runtimeState = \"metadata-only\";"));
+    assert!(controller_nix.contains("preservesDirectUnixSocketSemantics = true;"));
+    assert!(index_nix.contains("materializedService = localHostRealm;"));
+    assert!(index_nix.contains("materializedSocket = brokerMaterialized;"));
+}
+
+#[test]
 fn rendered_allocator_contract_shape_and_private_bundle_path_when_fixture_available() {
     let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) else {
         eprintln!("  (skipping rendered allocator contract check; D2B_FIXTURES unset)");
@@ -137,14 +174,73 @@ fn rendered_allocator_contract_shape_and_private_bundle_path_when_fixture_availa
 }
 
 #[test]
+fn rendered_realm_controller_contract_shape_when_fixture_available() {
+    let Some(dir) = env::var_os("D2B_FIXTURES").map(PathBuf::from) else {
+        eprintln!("  (skipping rendered realm-controller contract check; D2B_FIXTURES unset)");
+        return;
+    };
+
+    let controllers: RealmControllersJson = read_json(&dir, "realm-controllers.json");
+    let bundle: Bundle = read_json(&dir, "bundle.json");
+    let storage: StorageJson = read_json(&dir, "storage.json");
+
+    assert_eq!(controllers.schema_version, "v2");
+    assert_eq!(
+        controllers.runtime_state,
+        RealmControllerRuntimeState::MetadataOnly
+    );
+    assert!(controllers.invariants.metadata_only);
+    assert!(controllers.invariants.no_systemd_units_materialized);
+    assert!(controllers.invariants.preserves_global_daemon_behavior);
+    assert!(
+        controllers
+            .invariants
+            .preserves_direct_unix_socket_semantics
+    );
+    for controller in &controllers.controllers {
+        assert!(
+            controller.daemon.user.as_str().starts_with("d2br-"),
+            "realm daemon principal must be deterministic and realm-scoped"
+        );
+        assert!(!controller.daemon.materialized_service);
+        assert!(!controller.broker.materialized_service);
+        assert!(!controller.broker.materialized_socket);
+        assert_eq!(
+            controller.allocator.config_path.as_str(),
+            "/etc/d2b/allocator.json"
+        );
+        assert_eq!(
+            controller.allocator.root_socket.as_str(),
+            "/run/d2b/allocator/local-root.sock"
+        );
+    }
+
+    assert_eq!(
+        bundle.realm_controllers_path.as_deref(),
+        Some("/etc/d2b/realm-controllers.json")
+    );
+    let controller_path = storage
+        .paths
+        .iter()
+        .find(|path| path.path_template.as_str() == "/etc/d2b/realm-controllers.json")
+        .expect("storage.json covers realm-controllers.json as a private bundle artifact");
+    assert_eq!(controller_path.kind, StoragePathKind::RegularFile);
+    assert_eq!(controller_path.sensitivity, SensitivityClass::Private);
+    assert_eq!(controller_path.mode, "0640");
+}
+
+#[test]
 fn storage_and_sync_schemas_are_committed_and_closed() {
     let storage_schema = read_repo_file("docs/reference/schemas/v2/storage.json");
     let sync_schema = read_repo_file("docs/reference/schemas/v2/sync.json");
     let allocator_schema = read_repo_file("docs/reference/schemas/v2/allocator.json");
+    let realm_controller_schema =
+        read_repo_file("docs/reference/schemas/v2/realm-controllers.json");
     for (name, schema) in [
         ("storage.json", storage_schema.as_str()),
         ("sync.json", sync_schema.as_str()),
         ("allocator.json", allocator_schema.as_str()),
+        ("realm-controllers.json", realm_controller_schema.as_str()),
     ] {
         assert!(
             schema.contains("\"additionalProperties\": false"),
@@ -158,6 +254,8 @@ fn storage_and_sync_schemas_are_committed_and_closed() {
     assert!(sync_schema.contains("\"explicit-fd-mapping\""));
     assert!(allocator_schema.contains("\"metadata-only\""));
     assert!(allocator_schema.contains("\"namespace-boundary\""));
+    assert!(realm_controller_schema.contains("\"local-root-metadata\""));
+    assert!(realm_controller_schema.contains("\"preservesDirectUnixSocketSemantics\""));
 }
 
 #[test]

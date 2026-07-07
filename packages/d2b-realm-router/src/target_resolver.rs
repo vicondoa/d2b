@@ -1,4 +1,4 @@
-//! Realm entrypoint table + target resolution (ADR 0043 `RealmTargetResolver`).
+//! Realm entrypoint table + target resolution (`RealmTargetResolver`).
 //!
 //! Resolution is **policy, not address decoding**: the
 //! [`d2b_realm_core::RealmTarget`] grammar never encodes whether a realm is
@@ -14,7 +14,7 @@
 //! matching entry returns [`ResolveError::NoEntrypoint`] rather than
 //! defaulting to local dispatch.
 //!
-//! This module owns no provider or transport code (ADR 0043): it reasons
+//! This module owns no provider or transport code: it reasons
 //! only over the codec-neutral core target/realm types.
 
 use std::collections::HashMap;
@@ -178,7 +178,7 @@ mod tests {
         RealmTarget::parse(raw).unwrap()
     }
 
-    /// The ADR 0043 example table.
+    /// The realm-native example table.
     fn example_table() -> RealmEntrypointTable {
         let mut t = RealmEntrypointTable::with_local_default();
         t.host_resident(realm(&["personal"]));
