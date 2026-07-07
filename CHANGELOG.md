@@ -26,6 +26,9 @@ deprecations ship one minor release before removal.
   references, and the transitional env/network bridge.
 - Added normalized internal realm index metadata plus eval-time assertions for
   realm identity, parent graph, and derived path uniqueness.
+- Added Layer-1 nix-unit coverage for the ADR 0043 realm option schema,
+  normalized realm index, parent/path collision assertions, legacy gateway/ACA
+  migration guidance, and minimal/multi-env eval compatibility.
 - Added the ADR 0043 `RealmTarget` parser with canonical realm-qualified
   rendering, bare-alias ambiguity diagnostics, and old node-qualified target
   migration errors.

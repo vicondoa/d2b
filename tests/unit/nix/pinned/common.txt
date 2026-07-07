@@ -1,3 +1,5 @@
+# nix-unit case-presence pins (common — present on every system).
+# Regenerate with: make nix-unit-pin
 activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
 activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation
 activation-runtime-tmpfiles/audio-lock-in-locks-dir
@@ -57,6 +59,8 @@ assertions/platform-gate-audio-aarch64
 assertions/platform-gate-graphics-aarch64
 assertions/principal-uid-collision
 assertions/private-key-in-authorized-keys
+assertions/security-key-qemu-media-conflict
+assertions/security-key-yubikey-conflict
 assertions/state-dir-override-rejected
 assertions/static-ip-and-env-mutually-exclusive
 assertions/store-state-dir-override-rejected
@@ -297,12 +301,14 @@ gateway-vm/host-realm-entrypoints-exclude-realm-provider-material
 gateway-vm/host-realm-entrypoint-table-defaults-local-and-gateway
 gateway-vm/host-realm-relay-egress-policy-is-redacted-and-gateway-scoped
 gateway-vm/host-system-packages-exclude-realm-provider-material
+gateway-vm/leaves-current-envs-valid-when-legacy-gateway-unset
 gateway-vm/local-fast-path-auth-socket-does-not-require-gateway-relay
 gateway-vm/realm-entrypoint-table-uses-custom-gateway-vm-name
 gateway-vm/rejects-credential-path-outside-gateway-state
 gateway-vm/rejects-duplicate-gateway-realm-entrypoints
 gateway-vm/rejects-gateway-entrypoint-for-local-realm
 gateway-vm/rejects-gateway-realms-sharing-env-l2
+gateway-vm/rejects-legacy-gateway-surface-with-realm-migration-error
 gateway-vm/rejects-parent-traversal-in-state-paths
 gateway-vm/rejects-per-vm-state-root-for-gateway-secrets
 gateway-vm/rejects-retired-host-relay-credential-escape-hatch
@@ -367,6 +373,7 @@ index/allow-east-west-metadata
 index/component-and-usbip-subsets
 index/computed-net-vms-remain-reachable
 index/env-meta-compat-alias
+index/guest-journal-bounded
 index/home-lan-metadata
 index/observability-and-shell-subsets
 index/qemu-media-and-runtime-subsets
@@ -485,7 +492,6 @@ net-vm-network/work-nft-safe-uplink-drop-before-egress-accept
 net-vm-network/work-nft-safe-uplink-drop-present
 net-vm-network/work-uplink-address
 net-vm-network/work-uplink-mtu
-# nix-unit case-presence pins (common — present on every system).
 observability/obs-alerting-surface
 observability/obs-audit-surface
 observability/obs-cid-cross-env-noncollision
@@ -581,7 +587,14 @@ readiness-waves/has-p6
 readiness-waves/has-p7
 readiness-waves/p0-implemented-default
 readiness-waves/p0-validated-default
-# Regenerate with: make nix-unit-pin
+realms/examples-minimal-and-multi-env-still-eval
+realms/index-normalizes-enabled-disabled-and-derived-paths
+realms/rejects-duplicate-id-and-path
+realms/rejects-duplicate-runtime-paths
+realms/rejects-legacy-gateway-aca-surface-with-migration-guidance
+realms/rejects-missing-parent
+realms/rejects-parent-cycle
+realms/valid-home-dev-work-keeps-env-substrate-active
 requested-vm-config/boot-selector-and-hotplug-source-coexist
 requested-vm-config/dark-env-declared
 requested-vm-config/dark-live-manual-qemu-media
@@ -606,6 +619,15 @@ restart-policy/otel-relay-template
 restart-policy/snd
 restart-policy/swtpm
 restart-policy/video
+security-key-gating/default-dag-node-absent
+security-key-gating/default-manifest-false
+security-key-gating/enabled-dag-node-present
+security-key-gating/enabled-dag-node-role
+security-key-gating/enabled-manifest-true
+security-key-gating/guest-declares-plugdev-group
+security-key-gating/guest-udev-uses-plugdev
+security-key-gating/qemu-media-conflict-fires
+security-key-gating/yubikey-conflict-fires
 store-overlay-emit/disabled-no-planops
 store-overlay-emit/first-op-if-absent
 store-overlay-emit/first-op-kind
