@@ -13,9 +13,9 @@ This page documents the committed adapter model for gateway-managed
 remote d2b hosts: registration, heartbeat/liveness, capability
 gating, operation routing, remote-side deduplication and idempotency,
 disconnect/reconnect, authentication/principal binding, audit shape, and
-the non-tunneling boundary. For the constellation core model (frame
+the non-tunneling boundary. For the realm core model (frame
 schema, operation kinds, idempotency, stream authz) see
-[constellation core](./constellation-core.md). For the transport layer
+[realm core](./realm-core.md). For the transport layer
 (loopback, local TCP, Azure Relay) see the
 [transport conformance matrix](./transport-conformance-matrix.md) and the
 [transport support policy](./transport-support-policy.md). For host
@@ -178,7 +178,7 @@ intermediary, not an execution proxy.
 ## Remote-side deduplication and idempotency
 
 Mutating operation kinds carry a required `IdempotencyKey` (see
-[constellation core — operation authorization and idempotency](./constellation-core.md#operation-authorization-and-idempotency)).
+[realm core — operation authorization and idempotency](./realm-core.md#operation-authorization-and-idempotency)).
 The gateway deduplicates at-least-once delivery before forwarding. The
 remote node performs a second deduplication layer against its own
 in-memory idempotency store:
@@ -226,7 +226,7 @@ before they can reach the new generation.
 
 The gateway authenticates the transport peer session using the
 peer-session handshake mechanism described in
-[constellation core — peer protocol handshake](./constellation-core.md#peer-protocol-handshake).
+[realm core — peer protocol handshake](./realm-core.md#peer-protocol-handshake).
 For the preview adapter, the authenticated principal is obtained from the
 `PeerContext` established during handshake, or from an injected test
 equivalent in hermetic test environments.
@@ -298,7 +298,7 @@ Audit records never include:
 
 The `AuditChainRecord` / `AuditChainLink` tamper-evident chain covers
 both the gateway and remote-node audit streams (see
-[constellation core — audit and error redaction](./constellation-core.md#audit-and-error-redaction)).
+[realm core — audit and error redaction](./realm-core.md#audit-and-error-redaction)).
 
 ---
 

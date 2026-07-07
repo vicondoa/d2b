@@ -37,7 +37,7 @@ use d2b_realm_core::{
     MigrationErrorEnvelope, MigrationLegacyId, MigrationReasonCode, NodeId, NodeSummary,
     OperationId, OperationKind, OperationRequest, OperationResponse, PrincipalId, ProviderId,
     ProviderRegistryEntry, RealmAccessBinding, RealmControllerPlacement, RealmId, RealmKeyRole,
-    RealmPath, RealmTransportBinding, RealmTreeEdge, RevocationId, RevocationRecord,
+    RealmPath, RealmTarget, RealmTransportBinding, RealmTreeEdge, RevocationId, RevocationRecord,
     RevocationStatus, RevocationTarget, RouteAdvertisement, RouteId, RouteSignature, ShellAttachId,
     ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest, ShellEventBatch,
     ShellEventSummary, ShellGeneration, ShellKillRequest, ShellListRequest, ShellListResponse,
@@ -63,6 +63,7 @@ const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 enum D2bRealmCoreSchema {
     RealmId(RealmId),
     RealmPath(RealmPath),
+    RealmTarget(RealmTarget),
     NodeId(NodeId),
     WorkloadId(WorkloadId),
     ProviderId(ProviderId),

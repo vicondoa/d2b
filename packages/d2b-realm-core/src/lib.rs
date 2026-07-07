@@ -1,8 +1,11 @@
-//! `d2b-realm-core` is the pure, codec-neutral v2
-//! constellation model (ADR 0032). It defines identifiers, the realm
-//! model, the capability model, node/workload/execution/stream DTOs, the
-//! persistent-shell contract, the audit envelope, the semantic `ConstellationFrame`, a bounded
-//! `TraceContext`, and the typed error surface.
+//! `d2b-realm-core` is the pure, codec-neutral v2 realm model. ADR 0043
+//! supersedes ADR 0032's host-centric entrypoint model while preserving the
+//! semantic operation, stream, capability, idempotency, relay-as-reachability,
+//! and bounded-audit invariants. The crate defines identifiers, realm targets,
+//! realm-controller DTOs, provider/workload placement summaries, routing and
+//! enrollment metadata, the persistent-shell contract, the audit envelope, the
+//! semantic `ConstellationFrame`, a bounded `TraceContext`, and the typed error
+//! surface.
 //!
 //! Invariants:
 //!

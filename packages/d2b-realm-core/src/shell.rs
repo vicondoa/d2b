@@ -1,4 +1,4 @@
-//! Persistent-shell DTOs for the constellation semantic operation family
+//! Persistent-shell DTOs for the realm semantic operation family
 //! (ADR 0039). These types carry bounded shell metadata only: terminal bytes,
 //! argv, environment, cwd, provider endpoints, and credentials stay in opaque
 //! operation/stream payloads owned by higher layers and never appear here.
@@ -389,7 +389,7 @@ impl<'de> Deserialize<'de> for ShellListResponse {
     }
 }
 
-/// Bounded constellation-safe shell lifecycle event metadata. It never carries
+/// Bounded realm-safe shell lifecycle event metadata. It never carries
 /// terminal bytes, argv, environment, cwd, provider endpoints, or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -1,7 +1,7 @@
-//! The semantic `ConstellationFrame` (ADR 0032). This is the codec-neutral
-//! frame API: protocol codecs map bytes to/from these types, and the
-//! operation/routing layer depends only on this module — never on a wire
-//! encoding (`prost`, protobuf-generated types, etc.).
+//! The semantic `ConstellationFrame` preserved by the ADR 0043 realm model.
+//! This is the codec-neutral frame API: protocol codecs map bytes to/from these
+//! types, and the operation/routing layer depends only on this module — never
+//! on a wire encoding (`prost`, protobuf-generated types, etc.).
 
 use crate::audit::AdmissionAuditRecord;
 use crate::capability::{Capability, CapabilityNegotiation};
@@ -83,7 +83,7 @@ pub struct HandshakeRejected {
     pub reason: HandshakeRejectedReason,
 }
 
-/// The kind of an operation (ADR 0032 examples). Closed enum; unknown
+/// The kind of a realm operation. Closed enum; unknown
 /// kinds are rejected at decode (fail-closed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -461,7 +461,7 @@ pub struct StreamResume {
     pub cursor: StreamCursor,
 }
 
-/// The semantic frame exchanged over a constellation peer session. The
+/// The semantic frame exchanged over a realm peer session. The
 /// codec layer maps bytes to/from this enum; the operation layer never
 /// depends on the encoding. Every variant wraps a `deny_unknown_fields`
 /// struct so a peer cannot smuggle extra fields past the decoder.

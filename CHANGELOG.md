@@ -212,6 +212,9 @@ deprecations ship one minor release before removal.
   `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
   establishing realm-native package/import names for follow-up parser and DTO
   work.
+- Aligned current realm-core reference pages and generated schema companions
+  with `d2b-realm-core` naming and the ADR 0043 realm-qualified target
+  grammar, without claiming later runtime/Nix cutover work is implemented.
 
 ### Fixed
 

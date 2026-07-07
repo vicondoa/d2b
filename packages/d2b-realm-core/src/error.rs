@@ -1,11 +1,11 @@
-//! Typed error surface for the constellation model (ADR 0032, ADR 0010
+//! Typed error surface for the realm model (ADR 0043, ADR 0010
 //! strict wire discipline). Errors are closed-enum and carry no secrets,
 //! command output, store paths, or stream payload.
 
 use crate::capability::Capability;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Stable, closed-enum classification of a constellation failure. Codecs
+/// Stable, closed-enum classification of a realm operation failure. Codecs
 /// map this to/from typed error frames; it never carries payload bytes.
 #[derive(
     Debug,
@@ -97,7 +97,7 @@ pub const MAX_MESSAGE_LEN: usize = 256;
 /// Maximum length of a bounded capability-negotiation fingerprint.
 pub const MAX_FINGERPRINT_LEN: usize = 64;
 
-/// A typed constellation error: a [`ErrorKind`], an optional structured
+/// A typed realm error: a [`ErrorKind`], an optional structured
 /// missing capability (for `CapabilityDenied`), plus a bounded,
 /// operator-safe message. The message MUST NOT contain secrets, command
 /// output, store paths, argv, or stream payload, and is bounded at decode

@@ -12,6 +12,9 @@
       }
     },
     {
+      "$ref": "#/definitions/RealmTarget"
+    },
+    {
       "$ref": "#/definitions/NodeId"
     },
     {
@@ -1052,7 +1055,7 @@
       "uniqueItems": true
     },
     "ConstellationError": {
-      "description": "A typed constellation error: a [`ErrorKind`], an optional structured missing capability (for `CapabilityDenied`), plus a bounded, operator-safe message. The message MUST NOT contain secrets, command output, store paths, argv, or stream payload, and is bounded at decode so it can never be an unbounded side channel.",
+      "description": "A typed realm error: a [`ErrorKind`], an optional structured missing capability (for `CapabilityDenied`), plus a bounded, operator-safe message. The message MUST NOT contain secrets, command output, store paths, argv, or stream payload, and is bounded at decode so it can never be an unbounded side channel.",
       "type": "object",
       "required": [
         "kind",
@@ -1095,7 +1098,7 @@
       "additionalProperties": false
     },
     "ConstellationFrame": {
-      "description": "The semantic frame exchanged over a constellation peer session. The codec layer maps bytes to/from this enum; the operation layer never depends on the encoding. Every variant wraps a `deny_unknown_fields` struct so a peer cannot smuggle extra fields past the decoder.",
+      "description": "The semantic frame exchanged over a realm peer session. The codec layer maps bytes to/from this enum; the operation layer never depends on the encoding. Every variant wraps a `deny_unknown_fields` struct so a peer cannot smuggle extra fields past the decoder.",
       "oneOf": [
         {
           "description": "Session handshake (version + codec negotiation).",
@@ -1857,7 +1860,7 @@
       ]
     },
     "ErrorKind": {
-      "description": "Stable, closed-enum classification of a constellation failure. Codecs map this to/from typed error frames; it never carries payload bytes.",
+      "description": "Stable, closed-enum classification of a realm operation failure. Codecs map this to/from typed error frames; it never carries payload bytes.",
       "oneOf": [
         {
           "description": "A required capability was not advertised; fail closed (no fallback).",
@@ -2650,7 +2653,7 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "OperationKind": {
-      "description": "The kind of an operation (ADR 0032 examples). Closed enum; unknown kinds are rejected at decode (fail-closed).",
+      "description": "The kind of a realm operation. Closed enum; unknown kinds are rejected at decode (fail-closed).",
       "type": "string",
       "enum": [
         "node-register",
@@ -3125,6 +3128,12 @@
           ]
         }
       ]
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
     },
     "RealmTransportBinding": {
       "description": "Transport binding for reaching a realm controller.",
@@ -3715,7 +3724,7 @@
       "additionalProperties": false
     },
     "ShellEventSummary": {
-      "description": "Bounded constellation-safe shell lifecycle event metadata. It never carries terminal bytes, argv, environment, cwd, provider endpoints, or credentials.",
+      "description": "Bounded realm-safe shell lifecycle event metadata. It never carries terminal bytes, argv, environment, cwd, provider endpoints, or credentials.",
       "type": "object",
       "required": [
         "cause",
