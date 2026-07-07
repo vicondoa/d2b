@@ -586,7 +586,10 @@ mod tests {
         let response = resolve_local_root_realm_access(Some(&loaded), &req, None)
             .expect("empty required capabilities need no advertisement");
 
-        assert_eq!(response.capability_preflight.required, CapabilitySet::empty());
+        assert_eq!(
+            response.capability_preflight.required,
+            CapabilitySet::empty()
+        );
         assert_eq!(
             response.capability_preflight.advertised,
             CapabilitySet::from_caps([Capability::Lifecycle, Capability::Exec])
