@@ -10,8 +10,7 @@ fn allocator_realm_path_bounds_are_enforced() {
     assert!(AllocatorRealmPath::parse("Work").is_err());
     assert!(AllocatorRealmPath::parse("work..payments").is_err());
 
-    let too_many = std::iter::repeat("a")
-        .take(MAX_ALLOCATOR_REALM_PATH_LABELS + 1)
+    let too_many = std::iter::repeat_n("a", MAX_ALLOCATOR_REALM_PATH_LABELS + 1)
         .collect::<Vec<_>>()
         .join(".");
     assert!(AllocatorRealmPath::parse(too_many).is_err());
