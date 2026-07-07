@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Aligned realm gateway target routing and generated entrypoints with ADR 0043's
+  canonical `<workload>.<realm>.d2b` form so the Rust CI gate no longer hangs
+  on stale node-qualified gateway tests.
 - Updated the `crossbeam-epoch` lockfile entry to a non-vulnerable release for
   the RustSec advisory check.
 

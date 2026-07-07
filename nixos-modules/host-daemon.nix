@@ -218,7 +218,7 @@ EOF
           name = gateway.gw.realm;
           value = {
             mode = "gateway-backed";
-            gateway = "${gateway.gw.vmName}.d2b";
+            gateway = "${gateway.gw.vmName}.local.d2b";
           };
         })
         enabledGateways;

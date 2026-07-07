@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn target_resolver_resolves_local_target_host_resident() {
         let resolver = TargetResolver::local_only();
-        let target = TargetName::parse("demo.d2b").unwrap();
+        let target = TargetName::parse("demo.local.d2b").unwrap();
         assert!(matches!(
             resolver.resolve(&target),
             Ok(DispatchTarget::HostResident { .. })
@@ -494,7 +494,7 @@ mod tests {
         // The local-only table has no entry for a named realm: resolution
         // must fail closed rather than silently default to local dispatch.
         let resolver = TargetResolver::local_only();
-        let target = TargetName::parse("demo.aca.work.d2b").unwrap();
+        let target = TargetName::parse("demo.work.d2b").unwrap();
         assert!(matches!(
             resolver.resolve(&target),
             Err(ResolveError::NoEntrypoint(_))
@@ -611,7 +611,7 @@ mod tests {
             CapabilitySet::empty().with(Capability::Lifecycle),
         );
         let resolver = TargetResolver::local_only();
-        let target = TargetName::parse("demo.d2b").unwrap();
+        let target = TargetName::parse("demo.local.d2b").unwrap();
         assert!(matches!(
             resolver.resolve(&target),
             Ok(DispatchTarget::HostResident { .. })

@@ -17119,7 +17119,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-invalid-waypipe".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17141,7 +17141,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17240,7 +17240,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-launcher".to_owned(),
                     principal: "uid-9999".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17278,7 +17278,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "not valid".to_owned(),
                     principal: "uid-1001".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17304,7 +17304,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-owner".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17325,7 +17325,7 @@ mod public_status_tests {
             &other_peer,
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://other.gw.work.d2b".to_owned(),
+                    target: "other.work.d2b".to_owned(),
                     operation_id: "gw-exec-other".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17415,7 +17415,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-terminal".to_owned(),
                     principal: "ignored".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17467,7 +17467,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 41,
@@ -17493,7 +17493,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Stop(
                 public_wire::GatewayDisplayStopArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-stop-1".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 42,
@@ -17519,7 +17519,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-unconfigured".to_owned(),
                     principal: "uid-1000".to_owned(),
                     request_hash: 41,
@@ -17536,7 +17536,7 @@ mod public_status_tests {
         let request = || {
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-replay".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17573,7 +17573,7 @@ mod public_status_tests {
             &admin_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Open(
                 public_wire::GatewayDisplayOpenArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-exec-gc".to_owned(),
                     principal: "uid-1000".to_owned(),
                     app_argv: vec!["foot".to_owned()],
@@ -17621,7 +17621,7 @@ mod public_status_tests {
             &launcher_peer(),
             wire::Request::GatewayDisplay(public_wire::GatewayDisplayOp::Start(
                 public_wire::GatewayDisplayStartArgs {
-                    target: "d2b://demo.gw.work.d2b".to_owned(),
+                    target: "demo.work.d2b".to_owned(),
                     operation_id: "gw-start-launcher".to_owned(),
                     principal: "uid-1001".to_owned(),
                     request_hash: 1,
