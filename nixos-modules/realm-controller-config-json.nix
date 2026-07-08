@@ -52,29 +52,56 @@ let
       (lib.filter (request: request.realmPath == realm.path)
         allocatorData.resourceRequests));
 
+  # Build a local runtime workload entry for a given vmName.
+  mkLocalWorkloadEntry = workloadId: vmName:
+    let
+      vm = enabledVms.${vmName};
+      runtime = runtimeRows.${vmName}.metadata;
+    in {
+      inherit workloadId vmName;
+      env = if vm.env != null then vm.env else "none";
+      inherit runtime;
+      paths = {
+        stateDir = cfg.manifest.${vmName}.stateDir;
+        runDir = "/run/d2b/vms/${vmName}";
+        storeView = "${toString cfg.store.stateDir}/${vmName}/store-view";
+        guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
+      };
+    };
+
   localRuntimeWorkloadsFor = realm:
-    if realm.placement != "host-local" || realm.network.env == null then [ ]
-    else
-      sortedMapAttrsToList
-        (vmName: vm:
-          if vm.env == realm.network.env then
-            let
-              runtime = runtimeRows.${vmName}.metadata;
-            in
-            {
-              workloadId = vmName;
-              inherit vmName;
-              env = vm.env;
-              inherit runtime;
-              paths = {
-                stateDir = cfg.manifest.${vmName}.stateDir;
-                runDir = "/run/d2b/vms/${vmName}";
-                storeView = "${toString cfg.store.stateDir}/${vmName}/store-view";
-                guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
-              };
-            }
-          else null)
-        enabledVms;
+    let
+      # Explicit workload rows from realm.workloads that reference an enabled VM.
+      explicitRows = lib.filter
+        (row:
+          row.enable
+          && row.realmName == realm.realmName
+          && row.vmRef != null
+          && builtins.hasAttr row.vmRef enabledVms)
+        cfg._index.realms.workloads.enabled;
+      explicitVmNames = map (row: row.vmRef) explicitRows;
+
+      explicitEntries = map
+        (row: mkLocalWorkloadEntry row.workloadName row.vmRef)
+        explicitRows;
+
+      # Transitional env-based workloads: VMs in realm.network.env that are
+      # not already covered by an explicit workload declaration. Preserved for
+      # backward compat when realm.workloads is empty or does not cover all
+      # env-member VMs.
+      envBasedEntries =
+        if realm.placement != "host-local" || realm.network.env == null
+        then [ ]
+        else
+          lib.filter (entry: entry != null)
+            (sortedMapAttrsToList
+              (vmName: vm:
+                if vm.env == realm.network.env && !(builtins.elem vmName explicitVmNames)
+                then mkLocalWorkloadEntry vmName vmName
+                else null)
+              enabledVms);
+    in
+    lib.sortOn (w: w.workloadId) (explicitEntries ++ envBasedEntries);
 
   compact = values: lib.filter (value: value != null) values;
 
@@ -86,7 +113,7 @@ let
 
   localRuntimeFor = realm:
     let
-      workloads = compact (localRuntimeWorkloadsFor realm);
+      workloads = localRuntimeWorkloadsFor realm;
       providerIds = sortNames (lib.unique (map (workload: workload.runtime.provider.id) workloads));
     in
     if workloads == [ ] then null

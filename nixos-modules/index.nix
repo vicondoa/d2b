@@ -116,6 +116,81 @@ let
       ++ realm.network.envs
     ));
 
+  # Compute a single workload index row from a declared realm workload.
+  # Does NOT reference cfg.manifest to avoid circular deps with manifest.nix;
+  # vsockCid derivation lives in realm-workloads-launcher-json.nix.
+  realmWorkloadRow = realmName: realm: workloadName: workload:
+    let
+      vmRef = workload.vmRef;
+      hasVm = vmRef != null && builtins.hasAttr vmRef enabledVms;
+      runtimeKind =
+        if hasVm
+        then d2bLib.vmRuntimeKind enabledVms.${vmRef}
+        else null;
+      runtimeProviderId =
+        if runtimeKind != null
+        then (d2bLib.runtimeProviderCatalog.${runtimeKind}).provider.id
+        else null;
+    in {
+      inherit realmName workloadName;
+      realmId = realm.id;
+      realmPath = realm.path;
+      # Canonical target address for realm-native tooling: <workload>.<realmPath>.d2b
+      targetAddress = "${workloadName}.${realm.path}.d2b";
+      inherit (workload) enable actionId label icon;
+      capabilityRefs = sortNames (lib.unique workload.capabilityRefs);
+      preflightRefs = sortNames (lib.unique workload.preflightRefs);
+      inherit vmRef;
+      # substrateId: stable reference to the local VM substrate, if any.
+      substrateId = vmRef;
+      inherit runtimeKind runtimeProviderId;
+    };
+
+  realmWorkloadRows = realmName: realm:
+    sortedMapAttrsToList
+      (workloadName: workload:
+        realmWorkloadRow realmName realm workloadName workload)
+      realm.workloads;
+
+  # Cross-realm external network attachment conflict detection.
+  # Yields a list of conflict records where more than one realm's associated
+  # envs share the same external-network attachment interface.
+  crossRealmExternalNetworkConflicts =
+    let
+      realmEnvPairs = lib.flatten (map
+        (row:
+          map
+            (envName: {
+              realmName = row.realmName;
+              realmPath = row.path;
+              inherit envName;
+            })
+            row.network.enabledEnvNames)
+        enabledRealmRows);
+      pairsWithAttachment = lib.filter
+        (pair:
+          builtins.hasAttr pair.envName enabledEnvs
+          && (enabledEnvs.${pair.envName}).externalNetwork.attachment.enable)
+        realmEnvPairs;
+      byInterface = lib.groupBy
+        (pair:
+          let iface = (enabledEnvs.${pair.envName}).externalNetwork.attachment.interface;
+          in if iface != null then iface else "_unspecified")
+        pairsWithAttachment;
+      conflicting = lib.filterAttrs
+        (_: pairs:
+          lib.length (lib.unique (map (p: p.realmName) pairs)) > 1)
+        byInterface;
+    in
+    lib.mapAttrsToList
+      (interface: pairs: {
+        inherit interface;
+        realmNames = sortNames (lib.unique (map (p: p.realmName) pairs));
+        realmPaths = sortNames (lib.unique (map (p: p.realmPath) pairs));
+        envNames = sortNames (lib.unique (map (p: p.envName) pairs));
+      })
+      conflicting;
+
   realmProviderRows = realmName: realm:
     lib.listToAttrs (sortedMapAttrsToList
       (providerName: provider: {
@@ -177,6 +252,7 @@ let
       envNames = realmEnvNames realm;
       providerRows = realmProviderRows realmName realm;
       enabledProviderRows = lib.filterAttrs (_: provider: provider.enabled) providerRows;
+      workloadRowList = realmWorkloadRows realmName realm;
     in
     {
       inherit realmName;
@@ -218,6 +294,10 @@ let
       paths = realm.paths;
       broker = realm.broker;
       controller = realmControllerMeta realm;
+      # Workload rows derived from realm.workloads declarations.
+      workloads = workloadRowList;
+      workloadNames = map (w: w.workloadName) workloadRowList;
+      enabledWorkloadNames = map (w: w.workloadName) (lib.filter (w: w.enable) workloadRowList);
     };
 
   realmRows = sortedMapAttrsToList realmRow declaredRealms;
@@ -241,6 +321,26 @@ let
         };
       })
       (sortedAttrNames cfg.envs));
+
+  # Flat list of all workload rows across all realms (declared, including disabled).
+  allRealmWorkloadRows = lib.flatten (map (row: row.workloads) realmRows);
+
+  # Flat list of workload rows for enabled realms whose workload.enable = true.
+  enabledRealmWorkloadRows = lib.filter (w: w.enable)
+    (lib.flatten (map (row: row.workloads) enabledRealmRows));
+
+  # Map from vmRef -> list of enabled realm workload rows that reference that VM.
+  realmWorkloadsByVm =
+    lib.foldl
+      (acc: row:
+        if row.vmRef == null then acc
+        else
+          let existing = acc.${row.vmRef} or [ ];
+          in acc // { ${row.vmRef} = existing ++ [ row ]; })
+      { }
+      enabledRealmWorkloadRows;
+
+
 
   subset = pred: sortedAttrs (lib.filterAttrs pred enabledVms);
   subsetNames = pred: sortedAttrNames (subset pred);
@@ -482,6 +582,19 @@ let
       enabledById = realmAttrsBy "id" enabledRealmRows;
       enabledByPath = realmAttrsBy "path" enabledRealmRows;
       byEnv = realmNamesByEnv enabledRealmRows;
+      # Realm-owned workload index.
+      workloads = {
+        # All workload rows across all declared realms (includes disabled).
+        all = allRealmWorkloadRows;
+        # Workload rows for enabled realms with workload.enable = true.
+        enabled = enabledRealmWorkloadRows;
+        # Map from vmRef -> list of enabled realm workload rows.
+        byVm = realmWorkloadsByVm;
+      };
+      # Cross-realm external network attachment conflict data.
+      # A non-empty list indicates realms sharing an attachment interface;
+      # this is advisory metadata — hard assertions live in assertions.nix.
+      externalNetworkConflicts = crossRealmExternalNetworkConflicts;
     };
   };
 in

@@ -63,6 +63,7 @@
     ./allocator-json.nix
     ./realm-controller-config-json.nix
     ./realm-identity-config-json.nix
+    ./realm-workloads-launcher-json.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix

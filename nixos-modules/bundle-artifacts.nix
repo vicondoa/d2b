@@ -139,6 +139,7 @@ let
     "allocatorJson"
     "realmControllersJson"
     "realmIdentityJson"
+    "realmWorkloadsLauncherJson"
   ];
 
   shouldInstall = artifact:
@@ -230,6 +231,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed realm-identity.json artifact metadata.";
+    };
+
+    realmWorkloadsLauncherJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed realm-workloads-launcher.json artifact metadata for desktop launcher consumers.";
     };
 
     extraArtifacts = lib.mkOption {

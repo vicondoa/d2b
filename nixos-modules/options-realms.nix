@@ -261,6 +261,89 @@ in
             '';
           };
 
+          workloads = lib.mkOption {
+            type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+              options = {
+                enable = lib.mkOption {
+                  type = lib.types.bool;
+                  default = true;
+                  description = "Whether this realm workload declaration is active.";
+                };
+
+                vmRef = lib.mkOption {
+                  type = lib.types.nullOr (lib.types.strMatching label);
+                  default = null;
+                  example = "work-main";
+                  description = ''
+                    Transitional reference to an existing `d2b.vms.<vm>` name.
+                    Grounds runtime kind, provider id, and substrate id derivation
+                    for this workload. Null means the workload is provider-managed
+                    with no current local VM substrate.
+                  '';
+                };
+
+                label = lib.mkOption {
+                  type = lib.types.str;
+                  default = name;
+                  description = ''
+                    Human-readable display label for desktop launcher metadata.
+                    Must not contain secrets or sensitive identifiers.
+                  '';
+                };
+
+                icon = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  example = "work-browser";
+                  description = ''
+                    Non-secret icon descriptor for desktop launcher metadata.
+                    Use a freedesktop icon name or an opaque icon ref; no
+                    filesystem paths or sensitive identifiers.
+                  '';
+                };
+
+                actionId = lib.mkOption {
+                  type = lib.types.strMatching label;
+                  default = name;
+                  description = ''
+                    Stable action identifier used by desktop launcher consumers
+                    (Waybar, wlcontrol, wlterm, clip-picker). Defaults to the
+                    workload attribute name. Must match `^[a-z][a-z0-9-]*$`.
+                  '';
+                };
+
+                capabilityRefs = lib.mkOption {
+                  type = lib.types.listOf lib.types.str;
+                  default = [ ];
+                  description = ''
+                    Opaque references to workload capability requirements for
+                    preflight checks by desktop launcher consumers. No secrets
+                    or sensitive command payloads.
+                  '';
+                };
+
+                preflightRefs = lib.mkOption {
+                  type = lib.types.listOf lib.types.str;
+                  default = [ ];
+                  description = ''
+                    Opaque references to preflight requirement checks to run
+                    before workload launch. Consumed by desktop launcher
+                    metadata; no credentials or command payloads.
+                  '';
+                };
+              };
+            }));
+            default = { };
+            description = ''
+              Workload declarations owned by this realm. Each workload may
+              optionally reference an existing `d2b.vms.<vm>` substrate via
+              `vmRef` for runtime kind and provider id derivation. Desktop
+              launcher metadata is generated from this table.
+
+              Workload names must match `^[a-z][a-z0-9-]*$`.
+            '';
+          };
+
           relay = {
             enable = lib.mkEnableOption "realm relay reachability metadata";
 

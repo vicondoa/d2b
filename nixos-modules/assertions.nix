@@ -154,6 +154,53 @@ let
     "cloud-full-host"
   ];
 
+  # Realm workload assertions.
+  #
+  # Cross-realm vsock CID collision: two workloads in DIFFERENT realms
+  # referencing DIFFERENT local NixOS VMs whose derived vsock CIDs collide.
+  # (Same-VM references across realms share a CID by design and are not
+  # flagged here; the global vmVsockCidCollisions check covers per-VM uniqueness.)
+  realmWorkloadRows = realmIndex.workloads.enabled;
+  nixosWorkloadRows =
+    lib.filter
+      (row:
+        row.vmRef != null
+        && row.runtimeKind == "nixos"
+        && builtins.hasAttr row.vmRef (d2bLib.normalNixosVms cfg.vms))
+      realmWorkloadRows;
+  nixosWorkloadCidPairs =
+    map
+      (row: {
+        realmName = row.realmName;
+        workloadName = row.workloadName;
+        vmRef = row.vmRef;
+        cid = config.d2b.manifest.${row.vmRef}.observability.vsockCid;
+      })
+      nixosWorkloadRows;
+  nixosWorkloadCidGroups = lib.groupBy (p: "${toString p.cid}") nixosWorkloadCidPairs;
+  crossRealmWorkloadCidCollisions =
+    lib.flatten (lib.mapAttrsToList
+      (_: pairs:
+        let
+          # Only flag when the collision involves more than one distinct realm
+          realms = lib.unique (map (p: p.realmName) pairs);
+          # And more than one distinct VM (same-VM cross-realm shares a CID intentionally)
+          vms = lib.unique (map (p: p.vmRef) pairs);
+        in
+        lib.optional (lib.length realms > 1 && lib.length vms > 1) {
+          cid = (builtins.head pairs).cid;
+          pairs = map (p: { inherit (p) realmName workloadName vmRef; }) pairs;
+        })
+      nixosWorkloadCidGroups);
+
+  # Cross-realm external network attachment conflict: two or more realms
+  # whose network envs share the same attachment interface. Advisory only
+  # in metadata-only runtime state; the index exposes the same data via
+  # cfg._index.realms.externalNetworkConflicts.
+  crossRealmExtNetConflicts = cfg._index.realms.externalNetworkConflicts;
+
+
+
   missingRealmParents = lib.filter
     (realm:
       realm.enabled
@@ -302,7 +349,48 @@ let
           }.
         '';
       })
-    realmPathCollisionFields;
+    realmPathCollisionFields
+  # Cross-realm workload vsock CID collision assertion.
+  # Fires when two workloads in different realms reference different NixOS VMs
+  # whose derived vsock CIDs collide. Same-realm or same-VM cross-realm
+  # references are not flagged here; the global vmVsockCidCollisions gate
+  # covers all per-VM CID uniqueness.
+  ++ map
+    (collision: {
+      assertion = false;
+      message = ''
+        Cross-realm vsock CID collision: workloads in different realms reference
+        different VMs that both compute to CID ${toString collision.cid}.
+        Adjust d2b.vms.<vm>.index in the affected env or rename one VM.
+        Affected pairs: ${
+          lib.concatStringsSep "; " (map
+            (p: "${p.realmName}/${p.workloadName} -> ${p.vmRef}")
+            collision.pairs)
+        }.
+      '';
+    })
+    crossRealmWorkloadCidCollisions
+  # Cross-realm external network attachment conflict assertion.
+  # Fires when two or more realms have associated envs sharing the same
+  # attachment interface while runtime state is metadata-only.
+  # This is advisory until realm-native networking is active.
+  ++ map
+    (conflict: {
+      # Not a hard assertion in metadata-only runtime state: demoted to a
+      # warning-like record. Flip to `assertion = false` when realm-native
+      # networking advances beyond metadata-only.
+      assertion = true;
+      message = ''
+        Advisory: d2b.realms ${
+          lib.concatStringsSep ", " conflict.realmNames
+        } associate with envs (${
+          lib.concatStringsSep ", " conflict.envNames
+        }) that share externalNetwork.attachment.interface "${conflict.interface}".
+        This may conflict when realm-native networking is activated. Review
+        externalNetwork.attachment settings across these realms.
+      '';
+    })
+    crossRealmExtNetConflicts;
 
   autoSysVmNames =
     (lib.mapAttrsToList
