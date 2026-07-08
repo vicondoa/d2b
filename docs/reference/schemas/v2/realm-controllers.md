@@ -4,9 +4,9 @@ Schema: [`realm-controllers.json`](./realm-controllers.json)
 
 `realm-controllers.json` is private realm controller configuration. It records
 deterministic per-realm daemon, broker, socket, state, audit, allocator,
-provider-placement, and access metadata rooted in `d2b.realms`; host-local
-realms use the same rows to materialise users, groups, systemd services, and
-sockets.
+provider-placement, local-runtime, and access metadata rooted in `d2b.realms`;
+host-local realms use the same rows to materialise users, groups, systemd
+services, and sockets.
 
 ## Top-level fields
 
@@ -35,6 +35,9 @@ sockets.
   references.
 - `access` — declared direct-access users/groups plus inherited host admin
   users for socket ACL planning.
+- `localRuntime` — metadata-only local runtime providers, VM workload rows,
+  preserved VM paths, and runtime operation capability summaries for host-local
+  realms.
 - `providers` — provider declarations copied from the realm index.
 
 ## Contract notes
@@ -47,3 +50,6 @@ sockets.
   rather than proxying authority through an unrelated transport.
 - Principal names are deterministic metadata derived from the realm path; the
   NixOS host module creates them for host-local realms.
+- `localRuntime` does not move VM state during activation. Its invariants require
+  existing global VM paths to remain the source of truth until realm-local
+  lifecycle code consumes the provider contract.

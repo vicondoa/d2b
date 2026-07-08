@@ -720,7 +720,25 @@ in
             hasPublicSocketRef = builtins.elem "realm-home-public-socket" homeResourceRefs;
             hasBrokerSocketRef = builtins.elem "realm-home-broker-socket" homeResourceRefs;
           };
+          localRuntime = {
+            runtimeState = home.localRuntime.runtimeState;
+            providerIds = map (provider: provider.provider.id) home.localRuntime.providers;
+            workloads = map
+              (workload: {
+                inherit (workload) workloadId vmName env paths;
+                runtimeKind = workload.runtime.kind;
+                providerId = workload.runtime.provider.id;
+                driver = workload.runtime.provider.driver;
+                lifecycleStart = workload.runtime.operationCapabilities.lifecycle.start;
+                guestExec = workload.runtime.operationCapabilities.guest.exec;
+                storageStoreSync = workload.runtime.operationCapabilities.storage.storeSync;
+                serviceIds = map (service: service.id) workload.runtime.services;
+              })
+              home.localRuntime.workloads;
+            inherit (home.localRuntime) invariants;
+          };
         };
+        workLocalRuntime = work.localRuntime;
         workProviderCount = lib.length work.providers;
         workProvider = builtins.head work.providers;
         providerPlacement = validProviderController.providerPlacement;
@@ -851,7 +869,49 @@ in
           hasPublicSocketRef = true;
           hasBrokerSocketRef = true;
         };
+        localRuntime = {
+          runtimeState = "metadata-only";
+          providerIds = [ "local-cloud-hypervisor" ];
+          workloads = [
+            {
+              workloadId = "homebox";
+              vmName = "homebox";
+              env = "home";
+              paths = {
+                stateDir = "/var/lib/d2b/vms/homebox";
+                runDir = "/run/d2b/vms/homebox";
+                storeView = "/var/lib/d2b/vms/homebox/store-view";
+                guestControlDir = "/run/d2b/vms/homebox/guest-control";
+              };
+              runtimeKind = "nixos";
+              providerId = "local-cloud-hypervisor";
+              driver = "cloud-hypervisor";
+              lifecycleStart = true;
+              guestExec = true;
+              storageStoreSync = true;
+              serviceIds = [
+                "host-reconcile"
+                "store-virtiofs-preflight"
+                "virtiofsd"
+                "cloud-hypervisor"
+                "guest-control-health"
+                "swtpm"
+                "gpu"
+                "audio"
+                "video"
+                "usbip"
+              ];
+            }
+          ];
+          invariants = {
+            metadataOnly = true;
+            existingGlobalVmPathsPreserved = true;
+            noStateMigrationDuringActivation = true;
+            brokerEffectsRemainRealmDelegated = true;
+          };
+        };
       };
+      workLocalRuntime = null;
       workProviderCount = 1;
       workProvider = {
         providerName = "aca";

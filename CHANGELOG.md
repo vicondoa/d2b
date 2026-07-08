@@ -76,6 +76,10 @@ deprecations ship one minor release before removal.
 - Added private `realm-controllers.json` bundle metadata rooted in `d2b.realms`,
   covering deterministic per-realm daemon, broker, socket, state, audit,
   allocator binding, provider placement, and direct-access metadata.
+- Added metadata-only local runtime provider/workload rows to
+  `realm-controllers.json`, binding host-local realms to existing VM runtime
+  providers, preserved VM state/run/store-view paths, and explicit runtime
+  operation capability summaries without moving state during activation.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
