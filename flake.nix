@@ -760,6 +760,7 @@
             "index.nix"
             "multi-env-daemon-backed.nix"
             "net-vm-network.nix"
+            "realm-workloads.nix"
             "realms.nix"
             "usbip-gating.nix"
           ];
