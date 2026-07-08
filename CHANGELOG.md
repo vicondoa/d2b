@@ -67,6 +67,37 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `d2b.realms.<realm>.workloads.<workload>` option for declaring
+  realm-owned workloads. Each workload optionally references an existing
+  `d2b.vms.<vm>` substrate via `vmRef` for runtime kind and provider id
+  derivation, and carries stable launcher metadata (`label`, `icon`,
+  `actionId`, `capabilityRefs`, `preflightRefs`) for desktop consumers.
+- Extended the internal `_index.realms` with a `workloads` sub-index
+  (flat `all`/`enabled` lists and a `byVm` map) and `externalNetworkConflicts`
+  advisory data for cross-realm attachment interface collisions.
+- Added `targetAddress` (`<workload>.<realmPath>.d2b`), `substrateId`,
+  `runtimeKind`, and `runtimeProviderId` fields to each realm workload index
+  row; each realm row now exposes `workloads`, `workloadNames`, and
+  `enabledWorkloadNames`.
+- Added `realm-workloads-launcher.json` bundle artifact (installed at
+  `root:d2bd 0640`) containing stable desktop launcher metadata for all
+  enabled realm workloads. Includes `targetAddress`, `actionId`, `label`,
+  `icon`, `capabilityRefs`, `preflightRefs`, `runtimeKind`, `runtimeProviderId`,
+  advisory `vsockCid`, and explicit invariant markers confirming no secrets,
+  credentials, provider tokens, command payloads, or opaque session handles.
+- Updated `realm-controllers.json` generation to prefer explicit
+  `realm.workloads` declarations (with `vmRef`) as the primary source for
+  local runtime workload entries, falling back to env-based matching for VMs
+  not covered by explicit declarations. Backward compat is fully preserved for
+  realms without workload declarations.
+- Added cross-realm vsock CID collision assertion in `assertions.nix`: fires
+  when two workloads in different realms reference different NixOS VMs that
+  compute to the same vsock CID.
+- Added cross-realm external network attachment conflict detection: advisory
+  assertion records when realms share an attachment interface across their
+  associated envs; demoted to non-failing in metadata-only runtime state with
+  a clear upgrade note for when realm-native networking activates.
+
 - Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
   PR-only merges, panel/review evidence requirements, integrator ownership of
   CI, retarget/rebase, merge sequencing, and helper-script constraints.
