@@ -97,6 +97,12 @@ deprecations ship one minor release before removal.
   assertion records when realms share an attachment interface across their
   associated envs; demoted to non-failing in metadata-only runtime state with
   a clear upgrade note for when realm-native networking activates.
+- Added nix-unit coverage for realm-owned workload index and launcher metadata
+  contracts: workload index row fields (`targetAddress`, `substrateId`,
+  `runtimeKind`, `runtimeProviderId`, `capabilityRefs`), all/enabled/byVm index
+  accessors, `realm-workloads-launcher.json` shape and invariants, bundle
+  artifact registration, cross-realm vsock CID collision assertion,
+  cross-realm external-network conflict index, and empty-realm edge cases.
 
 - Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
   PR-only merges, panel/review evidence requirements, integrator ownership of
