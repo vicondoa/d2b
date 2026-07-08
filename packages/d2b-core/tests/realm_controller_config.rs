@@ -54,6 +54,148 @@ fn realm_controllers_fixture() -> serde_json::Value {
                     "allowedGroups": ["d2b"],
                     "inheritedAdminUsers": ["admin"]
                 },
+                "localRuntime": {
+                    "runtimeState": "metadata-only",
+                    "providers": [
+                        {
+                            "kind": "nixos",
+                            "provider": {
+                                "id": "local-cloud-hypervisor",
+                                "driver": "cloud-hypervisor",
+                                "type": "local"
+                            },
+                            "capabilities": {
+                                "lifecycle": true,
+                                "display": true,
+                                "usbHotplug": true,
+                                "guestControl": true,
+                                "exec": true,
+                                "configSync": true,
+                                "ssh": true,
+                                "storeSync": true,
+                                "keys": true,
+                                "inGuestObservability": true
+                            },
+                            "operationCapabilities": {
+                                "lifecycle": {
+                                    "start": true,
+                                    "stop": true,
+                                    "restart": true,
+                                    "switch": true,
+                                    "hostPrepare": true
+                                },
+                                "media": {
+                                    "usbHotplug": true,
+                                    "removableMedia": false,
+                                    "qemuMedia": false
+                                },
+                                "display": {
+                                    "display": true,
+                                    "graphics": true,
+                                    "video": true,
+                                    "waylandProxy": true
+                                },
+                                "guest": {
+                                    "guestControl": true,
+                                    "exec": true,
+                                    "shell": true,
+                                    "configSync": true,
+                                    "ssh": true,
+                                    "keys": true,
+                                    "inGuestObservability": true
+                                },
+                                "storage": {
+                                    "storeSync": true,
+                                    "virtiofs": true,
+                                    "volumes": true
+                                }
+                            },
+                            "autostartPolicy": "host-boot-eligible",
+                            "services": [
+                                { "id": "host-reconcile", "role": "host", "optional": false },
+                                { "id": "cloud-hypervisor", "role": "hypervisor", "optional": false }
+                            ]
+                        }
+                    ],
+                    "workloads": [
+                        {
+                            "workloadId": "corp-vm",
+                            "vmName": "corp-vm",
+                            "env": "work",
+                            "runtime": {
+                                "kind": "nixos",
+                                "provider": {
+                                    "id": "local-cloud-hypervisor",
+                                    "driver": "cloud-hypervisor",
+                                    "type": "local"
+                                },
+                                "capabilities": {
+                                    "lifecycle": true,
+                                    "display": true,
+                                    "usbHotplug": true,
+                                    "guestControl": true,
+                                    "exec": true,
+                                    "configSync": true,
+                                    "ssh": true,
+                                    "storeSync": true,
+                                    "keys": true,
+                                    "inGuestObservability": true
+                                },
+                                "operationCapabilities": {
+                                    "lifecycle": {
+                                        "start": true,
+                                        "stop": true,
+                                        "restart": true,
+                                        "switch": true,
+                                        "hostPrepare": true
+                                    },
+                                    "media": {
+                                        "usbHotplug": true,
+                                        "removableMedia": false,
+                                        "qemuMedia": false
+                                    },
+                                    "display": {
+                                        "display": true,
+                                        "graphics": true,
+                                        "video": true,
+                                        "waylandProxy": true
+                                    },
+                                    "guest": {
+                                        "guestControl": true,
+                                        "exec": true,
+                                        "shell": true,
+                                        "configSync": true,
+                                        "ssh": true,
+                                        "keys": true,
+                                        "inGuestObservability": true
+                                    },
+                                    "storage": {
+                                        "storeSync": true,
+                                        "virtiofs": true,
+                                        "volumes": true
+                                    }
+                                },
+                                "autostartPolicy": "host-boot-eligible",
+                                "services": [
+                                    { "id": "host-reconcile", "role": "host", "optional": false },
+                                    { "id": "cloud-hypervisor", "role": "hypervisor", "optional": false }
+                                ]
+                            },
+                            "paths": {
+                                "stateDir": "/var/lib/d2b/vms/corp-vm",
+                                "runDir": "/run/d2b/vms/corp-vm",
+                                "storeView": "/var/lib/d2b/vms/corp-vm/store-view",
+                                "guestControlDir": "/run/d2b/vms/corp-vm/guest-control"
+                            }
+                        }
+                    ],
+                    "invariants": {
+                        "metadataOnly": true,
+                        "existingGlobalVmPathsPreserved": true,
+                        "noStateMigrationDuringActivation": true,
+                        "brokerEffectsRemainRealmDelegated": true
+                    }
+                },
                 "providers": [
                     {
                         "providerName": "entra",
@@ -102,6 +244,24 @@ fn realm_controller_metadata_parses_and_validates_socket_path_user_group_metadat
     assert_eq!(
         controller.sockets.public_socket_path.as_str(),
         "/run/d2b/realms/work/public.sock"
+    );
+    let local_runtime = controller
+        .local_runtime
+        .as_ref()
+        .expect("local runtime metadata exists");
+    assert_eq!(local_runtime.providers.len(), 1);
+    assert_eq!(
+        local_runtime.providers[0].provider.id.as_str(),
+        "local-cloud-hypervisor"
+    );
+    assert_eq!(local_runtime.workloads.len(), 1);
+    assert_eq!(local_runtime.workloads[0].vm_name.as_str(), "corp-vm");
+    assert!(
+        local_runtime.workloads[0]
+            .runtime
+            .operation_capabilities
+            .guest
+            .exec
     );
 }
 
@@ -159,4 +319,31 @@ fn realm_controller_metadata_accepts_emitted_host_local_unit_metadata() {
     assert_eq!(summary.controller_count, 1);
     assert_eq!(summary.host_local_controller_count, 1);
     assert_eq!(summary.broker_enabled_count, 1);
+}
+
+#[test]
+fn realm_controller_metadata_rejects_invalid_local_runtime_metadata() {
+    let mut non_host_local = realm_controllers_fixture();
+    non_host_local["controllers"][0]["placement"] = json!("provider-controller");
+    let config: RealmControllersJson =
+        serde_json::from_value(non_host_local).expect("non-host-local fixture parses");
+    assert!(
+        config
+            .validate_metadata_only()
+            .expect_err("local runtime is host-local only")
+            .to_string()
+            .contains("localRuntime metadata")
+    );
+
+    let mut missing_provider = realm_controllers_fixture();
+    missing_provider["controllers"][0]["localRuntime"]["providers"] = json!([]);
+    let config: RealmControllersJson =
+        serde_json::from_value(missing_provider).expect("missing provider fixture parses");
+    assert!(
+        config
+            .validate_metadata_only()
+            .expect_err("workload runtime provider must be declared")
+            .to_string()
+            .contains("references undeclared provider")
+    );
 }

@@ -171,6 +171,16 @@
         "daemon": {
           "$ref": "#/definitions/RealmDaemonConfig"
         },
+        "localRuntime": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmControllerLocalRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "paths": {
           "$ref": "#/definitions/RealmControllerPaths"
         },
@@ -208,6 +218,66 @@
       },
       "additionalProperties": false
     },
+    "RealmControllerDisplayOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "display",
+        "graphics",
+        "video",
+        "waylandProxy"
+      ],
+      "properties": {
+        "display": {
+          "type": "boolean"
+        },
+        "graphics": {
+          "type": "boolean"
+        },
+        "video": {
+          "type": "boolean"
+        },
+        "waylandProxy": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerGuestOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "configSync",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "shell",
+        "ssh"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "shell": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "RealmControllerInvariants": {
       "type": "object",
       "required": [
@@ -227,6 +297,158 @@
           "type": "boolean"
         },
         "preservesGlobalDaemonBehavior": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerLifecycleOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "hostPrepare",
+        "restart",
+        "start",
+        "stop",
+        "switch"
+      ],
+      "properties": {
+        "hostPrepare": {
+          "type": "boolean"
+        },
+        "restart": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": "boolean"
+        },
+        "stop": {
+          "type": "boolean"
+        },
+        "switch": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerLocalRuntime": {
+      "type": "object",
+      "required": [
+        "invariants",
+        "runtimeState"
+      ],
+      "properties": {
+        "invariants": {
+          "$ref": "#/definitions/RealmControllerLocalRuntimeInvariants"
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmControllerRuntimeMetadata"
+          }
+        },
+        "runtimeState": {
+          "$ref": "#/definitions/RealmControllerRuntimeState"
+        },
+        "workloads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmControllerLocalWorkload"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerLocalRuntimeInvariants": {
+      "type": "object",
+      "required": [
+        "brokerEffectsRemainRealmDelegated",
+        "existingGlobalVmPathsPreserved",
+        "metadataOnly",
+        "noStateMigrationDuringActivation"
+      ],
+      "properties": {
+        "brokerEffectsRemainRealmDelegated": {
+          "type": "boolean"
+        },
+        "existingGlobalVmPathsPreserved": {
+          "type": "boolean"
+        },
+        "metadataOnly": {
+          "type": "boolean"
+        },
+        "noStateMigrationDuringActivation": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerLocalWorkload": {
+      "type": "object",
+      "required": [
+        "env",
+        "paths",
+        "runtime",
+        "vmName",
+        "workloadId"
+      ],
+      "properties": {
+        "env": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "paths": {
+          "$ref": "#/definitions/RealmControllerLocalWorkloadPaths"
+        },
+        "runtime": {
+          "$ref": "#/definitions/RealmControllerRuntimeMetadata"
+        },
+        "vmName": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "workloadId": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerLocalWorkloadPaths": {
+      "type": "object",
+      "required": [
+        "guestControlDir",
+        "runDir",
+        "stateDir",
+        "storeView"
+      ],
+      "properties": {
+        "guestControlDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "runDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "stateDir": {
+          "$ref": "#/definitions/PathTemplate"
+        },
+        "storeView": {
+          "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerMediaOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "qemuMedia",
+        "removableMedia",
+        "usbHotplug"
+      ],
+      "properties": {
+        "qemuMedia": {
+          "type": "boolean"
+        },
+        "removableMedia": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
           "type": "boolean"
         }
       },
@@ -355,6 +577,162 @@
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){0,15}$"
     },
+    "RealmControllerRuntimeCapabilities": {
+      "type": "object",
+      "required": [
+        "configSync",
+        "display",
+        "exec",
+        "guestControl",
+        "inGuestObservability",
+        "keys",
+        "lifecycle",
+        "ssh",
+        "storeSync",
+        "usbHotplug"
+      ],
+      "properties": {
+        "configSync": {
+          "type": "boolean"
+        },
+        "display": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "boolean"
+        },
+        "guestControl": {
+          "type": "boolean"
+        },
+        "inGuestObservability": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "type": "boolean"
+        },
+        "ssh": {
+          "type": "boolean"
+        },
+        "storeSync": {
+          "type": "boolean"
+        },
+        "usbHotplug": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerRuntimeMetadata": {
+      "type": "object",
+      "required": [
+        "autostartPolicy",
+        "capabilities",
+        "kind",
+        "operationCapabilities",
+        "provider"
+      ],
+      "properties": {
+        "autostartPolicy": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "capabilities": {
+          "$ref": "#/definitions/RealmControllerRuntimeCapabilities"
+        },
+        "kind": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "operationCapabilities": {
+          "$ref": "#/definitions/RealmControllerRuntimeOperationCapabilities"
+        },
+        "provider": {
+          "$ref": "#/definitions/RealmControllerRuntimeProviderRef"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmControllerRuntimeServiceSummary"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerRuntimeOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "display",
+        "guest",
+        "lifecycle",
+        "media",
+        "storage"
+      ],
+      "properties": {
+        "display": {
+          "$ref": "#/definitions/RealmControllerDisplayOperationCapabilities"
+        },
+        "guest": {
+          "$ref": "#/definitions/RealmControllerGuestOperationCapabilities"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/RealmControllerLifecycleOperationCapabilities"
+        },
+        "media": {
+          "$ref": "#/definitions/RealmControllerMediaOperationCapabilities"
+        },
+        "storage": {
+          "$ref": "#/definitions/RealmControllerStorageOperationCapabilities"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerRuntimeProviderRef": {
+      "type": "object",
+      "required": [
+        "driver",
+        "id",
+        "type"
+      ],
+      "properties": {
+        "driver": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "type": {
+          "$ref": "#/definitions/RealmControllerRuntimeProviderType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerRuntimeProviderType": {
+      "type": "string",
+      "enum": [
+        "local"
+      ]
+    },
+    "RealmControllerRuntimeServiceSummary": {
+      "type": "object",
+      "required": [
+        "id",
+        "role"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ContractId"
+        },
+        "optional": {
+          "default": false,
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/definitions/ContractId"
+        }
+      },
+      "additionalProperties": false
+    },
     "RealmControllerRuntimeState": {
       "type": "string",
       "enum": [
@@ -373,6 +751,26 @@
         },
         "publicSocketPath": {
           "$ref": "#/definitions/PathTemplate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmControllerStorageOperationCapabilities": {
+      "type": "object",
+      "required": [
+        "storeSync",
+        "virtiofs",
+        "volumes"
+      ],
+      "properties": {
+        "storeSync": {
+          "type": "boolean"
+        },
+        "virtiofs": {
+          "type": "boolean"
+        },
+        "volumes": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

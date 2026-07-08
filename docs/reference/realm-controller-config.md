@@ -114,6 +114,35 @@ runtime code must load identity metadata from controller state, fail closed on
 stale or revoked generations, and write bounded audit records to the realm
 audit surface described by this file.
 
+## Local runtime metadata
+
+Host-local controller rows may include a `localRuntime` block. This is still
+metadata-only: it binds the realm to existing local runtime providers and VM
+workloads so the realm daemon can later consume one typed contract instead of
+re-deriving provider ids, VM paths, and operation capabilities from host-global
+state.
+
+`localRuntime.providers[]` copies the local runtime provider catalog entries
+used by the realm's workloads, including the provider id (`local-cloud-hypervisor`
+or `local-qemu-media`), local driver, legacy capability summary, operation
+capability summary, autostart policy, and role/service summaries.
+
+`localRuntime.workloads[]` records the VM workload id, VM name, owning env,
+runtime metadata, and the preserved host paths:
+
+| Field | Meaning |
+| --- | --- |
+| `paths.stateDir` | Existing per-VM persistent state root, such as `/var/lib/d2b/vms/<vm>`. |
+| `paths.runDir` | Existing per-VM runtime directory under `/run/d2b/vms/<vm>`. |
+| `paths.storeView` | Existing per-VM store-view hardlink farm root. |
+| `paths.guestControlDir` | Existing guest-control socket directory. |
+
+The `localRuntime.invariants` block must keep `metadataOnly`,
+`existingGlobalVmPathsPreserved`, `noStateMigrationDuringActivation`, and
+`brokerEffectsRemainRealmDelegated` true. The contract therefore does not move
+large state in activation and does not authorize a realm broker to mutate host
+state outside allocator-delegated effects.
+
 ## State, locks, and audit separation
 
 Realm controller metadata keeps three storage classes distinct:
@@ -139,14 +168,16 @@ deterministic users/groups, daemon config files, tmpfiles directories and ACLs,
 realm daemon services, and broker socket/service units for host-local realms
 whose broker is enabled. The artifact is still metadata-only for access,
 routing, and identity behavior: it describes the local surfaces and allocator
-bindings but does not make the global host daemon a realm router.
+bindings plus the existing local runtime providers/workloads, but does not make
+the global host daemon a realm router.
 
 It does not implement:
 
 - host-resource allocation or mutation through the allocator binding;
 - identity enrollment, relay connectivity, route advertisement, or provider
   controller runtime;
-- migration of existing VMs from `d2b.envs` to a realm-owned network model;
+- state-path migration for existing VMs or migration from `d2b.envs` to a
+  realm-owned network model;
 - a realm-local lifecycle API that replaces the existing global public socket.
 
 Existing `d2b.envs` and `d2b.vms.<vm>.env` behavior remains the implemented

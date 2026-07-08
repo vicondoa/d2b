@@ -4,6 +4,7 @@ use schemars::{
     schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 
 use crate::contract_id::{ContractId, ContractStringError, PathTemplate};
 
@@ -198,6 +199,8 @@ pub struct RealmControllerConfig {
     pub sockets: RealmControllerSockets,
     pub allocator: RealmAllocatorBinding,
     pub access: RealmControllerAccess,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_runtime: Option<RealmControllerLocalRuntime>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<RealmControllerProvider>,
 }
@@ -240,6 +243,9 @@ impl RealmControllerConfig {
                 found: self.broker.socket_path.as_str().to_owned(),
             });
         }
+        if let Some(local_runtime) = &self.local_runtime {
+            local_runtime.validate_metadata_only(&realm, self.placement)?;
+        }
         Ok(())
     }
 }
@@ -264,6 +270,220 @@ pub struct RealmControllerProviderPlacement {
     pub kind: Option<RealmControllerProviderKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_specific_placement: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerLocalRuntime {
+    pub runtime_state: RealmControllerRuntimeState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<RealmControllerRuntimeMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workloads: Vec<RealmControllerLocalWorkload>,
+    pub invariants: RealmControllerLocalRuntimeInvariants,
+}
+
+impl RealmControllerLocalRuntime {
+    fn validate_metadata_only(
+        &self,
+        realm: &str,
+        placement: RealmControllerPlacement,
+    ) -> Result<(), RealmControllerConfigError> {
+        if placement != RealmControllerPlacement::HostLocal {
+            return Err(RealmControllerConfigError::LocalRuntimeForNonHostLocal {
+                realm: realm.to_owned(),
+                placement,
+            });
+        }
+        if self.runtime_state != RealmControllerRuntimeState::MetadataOnly {
+            return Err(RealmControllerConfigError::UnsupportedLocalRuntimeState {
+                realm: realm.to_owned(),
+            });
+        }
+        self.invariants.validate(realm)?;
+
+        let provider_ids = self
+            .providers
+            .iter()
+            .map(|provider| provider.provider.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for workload in &self.workloads {
+            if !provider_ids.contains(workload.runtime.provider.id.as_str()) {
+                return Err(RealmControllerConfigError::MissingLocalRuntimeProvider {
+                    realm: realm.to_owned(),
+                    workload: workload.workload_id.as_str().to_owned(),
+                    provider_id: workload.runtime.provider.id.as_str().to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerRuntimeMetadata {
+    pub kind: ContractId,
+    pub provider: RealmControllerRuntimeProviderRef,
+    pub capabilities: RealmControllerRuntimeCapabilities,
+    pub operation_capabilities: RealmControllerRuntimeOperationCapabilities,
+    pub autostart_policy: ContractId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<RealmControllerRuntimeServiceSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerRuntimeProviderRef {
+    pub id: ContractId,
+    pub driver: ContractId,
+    #[serde(rename = "type")]
+    pub provider_type: RealmControllerRuntimeProviderType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmControllerRuntimeProviderType {
+    Local,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerRuntimeCapabilities {
+    pub lifecycle: bool,
+    pub display: bool,
+    pub usb_hotplug: bool,
+    pub guest_control: bool,
+    pub exec: bool,
+    pub config_sync: bool,
+    pub ssh: bool,
+    pub store_sync: bool,
+    pub keys: bool,
+    pub in_guest_observability: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerRuntimeOperationCapabilities {
+    pub lifecycle: RealmControllerLifecycleOperationCapabilities,
+    pub media: RealmControllerMediaOperationCapabilities,
+    pub display: RealmControllerDisplayOperationCapabilities,
+    pub guest: RealmControllerGuestOperationCapabilities,
+    pub storage: RealmControllerStorageOperationCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerLifecycleOperationCapabilities {
+    pub start: bool,
+    pub stop: bool,
+    pub restart: bool,
+    pub switch: bool,
+    pub host_prepare: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerMediaOperationCapabilities {
+    pub usb_hotplug: bool,
+    pub removable_media: bool,
+    pub qemu_media: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerDisplayOperationCapabilities {
+    pub display: bool,
+    pub graphics: bool,
+    pub video: bool,
+    pub wayland_proxy: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerGuestOperationCapabilities {
+    pub guest_control: bool,
+    pub exec: bool,
+    pub shell: bool,
+    pub config_sync: bool,
+    pub ssh: bool,
+    pub keys: bool,
+    pub in_guest_observability: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerStorageOperationCapabilities {
+    pub store_sync: bool,
+    pub virtiofs: bool,
+    pub volumes: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerRuntimeServiceSummary {
+    pub id: ContractId,
+    pub role: ContractId,
+    #[serde(default)]
+    pub optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerLocalWorkload {
+    pub workload_id: ContractId,
+    pub vm_name: ContractId,
+    pub env: ContractId,
+    pub runtime: RealmControllerRuntimeMetadata,
+    pub paths: RealmControllerLocalWorkloadPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerLocalWorkloadPaths {
+    pub state_dir: PathTemplate,
+    pub run_dir: PathTemplate,
+    pub store_view: PathTemplate,
+    pub guest_control_dir: PathTemplate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealmControllerLocalRuntimeInvariants {
+    pub metadata_only: bool,
+    pub existing_global_vm_paths_preserved: bool,
+    pub no_state_migration_during_activation: bool,
+    pub broker_effects_remain_realm_delegated: bool,
+}
+
+impl RealmControllerLocalRuntimeInvariants {
+    fn validate(&self, realm: &str) -> Result<(), RealmControllerConfigError> {
+        if !self.metadata_only {
+            return Err(RealmControllerConfigError::LocalRuntimeInvariantDisabled {
+                realm: realm.to_owned(),
+                field: "metadataOnly",
+            });
+        }
+        if !self.existing_global_vm_paths_preserved {
+            return Err(RealmControllerConfigError::LocalRuntimeInvariantDisabled {
+                realm: realm.to_owned(),
+                field: "existingGlobalVmPathsPreserved",
+            });
+        }
+        if !self.no_state_migration_during_activation {
+            return Err(RealmControllerConfigError::LocalRuntimeInvariantDisabled {
+                realm: realm.to_owned(),
+                field: "noStateMigrationDuringActivation",
+            });
+        }
+        if !self.broker_effects_remain_realm_delegated {
+            return Err(RealmControllerConfigError::LocalRuntimeInvariantDisabled {
+                realm: realm.to_owned(),
+                field: "brokerEffectsRemainRealmDelegated",
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -406,6 +626,22 @@ pub enum RealmControllerConfigError {
         expected: String,
         found: String,
     },
+    LocalRuntimeForNonHostLocal {
+        realm: String,
+        placement: RealmControllerPlacement,
+    },
+    UnsupportedLocalRuntimeState {
+        realm: String,
+    },
+    LocalRuntimeInvariantDisabled {
+        realm: String,
+        field: &'static str,
+    },
+    MissingLocalRuntimeProvider {
+        realm: String,
+        workload: String,
+        provider_id: String,
+    },
 }
 
 impl std::fmt::Display for RealmControllerConfigError {
@@ -438,6 +674,34 @@ impl std::fmt::Display for RealmControllerConfigError {
                 write!(
                     f,
                     "realm controller {realm} field {field} is {found:?}; expected {expected:?}"
+                )
+            }
+            Self::LocalRuntimeForNonHostLocal { realm, placement } => {
+                write!(
+                    f,
+                    "realm controller {realm} has localRuntime metadata but placement is {placement:?}; expected host-local"
+                )
+            }
+            Self::UnsupportedLocalRuntimeState { realm } => {
+                write!(
+                    f,
+                    "realm controller {realm} localRuntime.runtimeState must remain metadata-only"
+                )
+            }
+            Self::LocalRuntimeInvariantDisabled { realm, field } => {
+                write!(
+                    f,
+                    "realm controller {realm} localRuntime invariant {field} must be true"
+                )
+            }
+            Self::MissingLocalRuntimeProvider {
+                realm,
+                workload,
+                provider_id,
+            } => {
+                write!(
+                    f,
+                    "realm controller {realm} localRuntime workload {workload} references undeclared provider {provider_id}"
                 )
             }
         }
