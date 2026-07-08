@@ -102,6 +102,40 @@ deprecations ship one minor release before removal.
   PR-only merges, panel/review evidence requirements, integrator ownership of
   CI, retarget/rebase, merge sequencing, and helper-script constraints.
 
+- **Realm workload and network option schema** (`d2b.realms.<realm>.workloads`
+  and `d2b.realms.<realm>.network`): the v2 public surface for workloads and
+  network declarations.
+
+  - `d2b.realms.<realm>.workloads.<workload>` supports `kind = "local-vm"`,
+    `"qemu-media"`, and `"provider-placeholder"`.  Each workload carries
+    `localVm.*` (config, memoryMiB, vcpus, networkIndex, ssh, graphics, tpm,
+    autostart), `qemuMedia.*` (source, removableSlots, resources, security),
+    and desktop-launcher metadata (`launcher.*`: label, icon id/name,
+    app.command, app.targetRealm, actions, capabilities).
+
+  - `d2b.realms.<realm>.network` is extended from the stub `network.*` block
+    with the full env-replacement shape: `lanSubnet`, `uplinkSubnet`, `mtu`,
+    `mssClamp`, `lan.allowEastWest`, `externalNetwork.*` (attachment, egress,
+    portForwards, mDNS), and `ui.accentColor`.  `network.mode` drives
+    behaviour: `none` (default/safe), `inherit-env` (delegate to existing
+    `d2b.envs`), `declared` (realm owns network), `external`.
+
+  - State path policy: `workload.stateDir` defaults to
+    `/var/lib/d2b/vms/<workload-id>` preserving 1:1 mapping with legacy
+    `d2b.vms.<vm>`.  Use `legacyVmName` to explicitly reference an existing VM
+    entry when the workload id differs.
+
+  - Tombstone/migration UX: descriptions on `d2b.envs` and `d2b.vms` updated
+    to note they are transitional surfaces pointing at the replacement
+    declarations and the v1.2-to-v2 migration guide.  Soft advisory warnings
+    (`config.warnings`) fire when a realm links to existing `d2b.envs` entries
+    but has no workloads and `network.mode = "none"`, nudging toward completion
+    of the transition without blocking activation.
+
+  - Updated `docs/how-to/migrate-d2b-v1-2-to-v2.md` with step-by-step
+    instructions for declaring realm workloads and optionally switching to the
+    realm-declared network.
+
 - Added ADR 0043: Realm-native control plane, documenting the realm-as-control
   plane architecture, per-realm daemon/broker/socket/state/audit boundaries,
   strict parent/child routing, dynamic relay discovery, realm-qualified VM

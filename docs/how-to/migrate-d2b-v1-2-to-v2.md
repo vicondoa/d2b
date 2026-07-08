@@ -70,7 +70,7 @@ that require isolation should use separate envs, gateway guests, and L2 bridges.
 
 ## Step 2: add host-local realm metadata
 
-Add a host-local realm that points at the existing env. This records realm
+Add a host-local realm that points at the existing env.  This records realm
 intent and materializes deterministic host-local realm scaffolding without
 moving VM state:
 
@@ -94,6 +94,99 @@ After `nixos-rebuild switch`, the framework emits
   `local-qemu-media`;
 - `localRuntime.workloads[]` rows preserving existing `/var/lib/d2b/vms/<vm>`,
   `/run/d2b/vms/<vm>`, store-view, and guest-control paths.
+
+> **Migration warning**: if you declare `d2b.realms.work` with
+> `network.envs = ["work"]` but leave `network.mode = "none"` (the default)
+> and no `workloads`, the framework emits a soft advisory warning during
+> `nixos-rebuild` pointing here.  This is intentional: it nudges you to
+> complete the transition without blocking activation.
+
+## Step 2a: optionally declare realm workloads (new v2 surface)
+
+`d2b.realms.<realm>.workloads.<workload>` is the v2 public surface for
+workload declarations.  It replaces `d2b.vms.<vm>`.  You can add workload
+metadata at any time during the transition; the legacy `d2b.vms` entry stays
+the active runtime substrate until you are ready to remove it.
+
+Set `legacyVmName` to preserve the existing state path without any
+activation-time migration:
+
+```nix
+d2b.realms.work = {
+  placement = "host-local";
+  env = "work";
+  network.envs = [ "work" ];
+  allowedUsers = [ "alice" ];
+
+  workloads.laptop = {
+    kind = "local-vm";
+    legacyVmName = "laptop";    # maps stateDir → /var/lib/d2b/vms/laptop
+    localVm.ssh.user = "alice";
+
+    # Optional desktop-launcher metadata for d2b-wlterm and Waybar.
+    launcher = {
+      enable = true;
+      label = "Work Laptop";
+      icon.id = "computer-laptop";
+      capabilities = [ "guest-exec" "graphics" ];
+    };
+  };
+};
+```
+
+The workload `stateDir` defaults to `/var/lib/d2b/vms/<workload-id>`.  If
+the workload id matches the legacy VM name (e.g. both are `laptop`) the
+paths are identical and no data moves.  Setting `legacyVmName` is required
+only when the realm workload id differs from the legacy VM name.
+
+`qemu-media` workloads use the same shape with `kind = "qemu-media"` and
+`qemuMedia.*` options mirroring `d2b.vms.<vm>.qemuMedia.*`:
+
+```nix
+workloads.installer = {
+  kind = "qemu-media";
+  qemuMedia.source = {
+    kind = "image-file";
+    path = "/var/lib/d2b/images/fedora.iso";
+    format = "iso";
+  };
+  launcher.enable = true;
+  launcher.label = "Fedora Installer";
+};
+```
+
+## Step 2b: optionally declare realm network (new v2 surface)
+
+`d2b.realms.<realm>.network` with `mode = "declared"` is the v2 replacement
+for `d2b.envs.<env>`.  Switching to it means d2b creates bridges + a net VM
+under realm-derived names instead of env-derived names.  **Do not switch to
+`mode = "declared"` until you are prepared for the interface and MAC address
+change documented in Step 3.**
+
+During the transition keep `mode = "none"` (default) or `mode = "inherit-env"`.
+When you are ready to switch:
+
+```nix
+d2b.realms.work = {
+  network.mode = "declared";
+  network.lanSubnet = "10.44.0.0/24";   # from d2b.envs.work.lanSubnet
+  network.uplinkSubnet = "192.0.2.0/30"; # from d2b.envs.work.uplinkSubnet
+
+  # Optional: preserve MAC so upstream DHCP bindings do not change.
+  # network.externalNetwork.attachment.macAddress = "<old-mac>";
+
+  # Optional: port-forwards if you had d2b.envs.work.externalNetwork.portForwards.
+  network.externalNetwork.portForwards = [{
+    protocol = "tcp";
+    listenPort = 2222;
+    workload = "laptop";
+    targetPort = 22;
+  }];
+};
+```
+
+Only remove `d2b.envs.work` after confirming the realm-declared network
+works correctly.
 
 ## Step 3: rebuild and restart the daemon
 
