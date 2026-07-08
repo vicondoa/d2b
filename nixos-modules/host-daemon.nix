@@ -254,6 +254,9 @@ EOF
     })
     hostLocalRealms);
   realmTmpfilesFor = realm: [
+    "a+ /etc/d2b - - - - u:${realm.controller.daemon.user}:--x"
+    "a+ /etc/d2b/realms - - - - u:${realm.controller.daemon.user}:--x"
+    "a+ /etc/d2b/realms/${realm.id} - - - - u:${realm.controller.daemon.user}:--x"
     "d ${realm.paths.stateDir} 0750 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
     "d /var/lib/d2b/audit/realms 0750 root d2bd -"
     "d ${realm.paths.auditDir} 0750 root ${realm.controller.daemon.group} -"
@@ -281,11 +284,16 @@ EOF
       description = "d2b host-local realm daemon";
       wantedBy = [ "multi-user.target" ];
       wants =
-        [ "systemd-tmpfiles-setup.service" ]
+        [
+          "systemd-tmpfiles-setup.service"
+          "d2b-priv-broker.socket"
+        ]
         ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit;
       after =
         [
           "systemd-tmpfiles-setup.service"
+          "d2b-priv-broker.socket"
+          "d2b-priv-broker.service"
           "network.target"
           "dbus.socket"
           "dbus.service"

@@ -659,6 +659,9 @@ in
         units = {
           homeDaemon = {
             wantedBy = homeDaemonUnit.wantedBy;
+            wantsRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.wants;
+            afterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
+            afterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
             wantsBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.wants;
             afterBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.after;
             afterBrokerService = builtins.elem home.broker.serviceUnitName homeDaemonUnit.after;
@@ -786,6 +789,9 @@ in
       units = {
         homeDaemon = {
           wantedBy = [ "multi-user.target" ];
+          wantsRootBrokerSocket = true;
+          afterRootBrokerSocket = true;
+          afterRootBrokerService = true;
           wantsBrokerSocket = true;
           afterBrokerSocket = true;
           afterBrokerService = true;
@@ -1070,6 +1076,18 @@ in
             builtins.elem
               "d /run/d2b/realms/home/locks 0700 ${home.daemon.user} ${home.daemon.group} -"
               tmpfiles;
+          etcD2bTraverseAcl =
+            builtins.elem
+              "a+ /etc/d2b - - - - u:${home.daemon.user}:--x"
+              tmpfiles;
+          etcRealmsTraverseAcl =
+            builtins.elem
+              "a+ /etc/d2b/realms - - - - u:${home.daemon.user}:--x"
+              tmpfiles;
+          etcRealmConfigDirTraverseAcl =
+            builtins.elem
+              "a+ /etc/d2b/realms/home - - - - u:${home.daemon.user}:--x"
+              tmpfiles;
         };
         daemonConfig = {
           inherit (homeDaemonEtc) mode user group;
@@ -1086,6 +1104,8 @@ in
         unitOrdering = {
           childAfterParent = builtins.elem home.daemon.serviceName devDaemonUnit.after;
           parentDoesNotAfterChild = !(builtins.elem dev.daemon.serviceName homeDaemonUnit.after);
+          parentAfterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
+          parentAfterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
         };
         socketAccess = {
           inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
@@ -1125,6 +1145,9 @@ in
         daemonRunAcl = true;
         stateLock = true;
         locksDir = true;
+        etcD2bTraverseAcl = true;
+        etcRealmsTraverseAcl = true;
+        etcRealmConfigDirTraverseAcl = true;
       };
       daemonConfig = {
         mode = "0640";
@@ -1149,6 +1172,8 @@ in
       unitOrdering = {
         childAfterParent = true;
         parentDoesNotAfterChild = true;
+        parentAfterRootBrokerSocket = true;
+        parentAfterRootBrokerService = true;
       };
       socketAccess = {
         ListenSequentialPacket = "/run/d2b/realms/home/broker.sock";
