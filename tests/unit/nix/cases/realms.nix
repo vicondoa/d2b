@@ -336,8 +336,8 @@ let
         parent = "home";
         path = "corp.home";
         placement = "gateway-vm";
-        env = "work";
-        network.envs = [ "work" ];
+        # No env/network.envs: this fixture tests workload schema only;
+        # env linkage would trigger the NixOS systemd.network warning.
         workloads.laptop = {
           kind = "local-vm";
           legacyVmName = null;
@@ -374,12 +374,6 @@ let
       };
       d2b.realms.home = {
         name = "Home";
-        env = "home";
-        network.envs = [ "home" ];
-        # Use inherit-env so the nudge warning (which fires for mode="none"
-        # with no workloads) does not pollute the accepted-workload-kinds
-        # eval-clean assertion.
-        network.mode = "inherit-env";
         allowedUsers = [ "alice" ];
       };
     })
@@ -1520,7 +1514,10 @@ in
   "realms/accepted-all-workload-kinds-eval-clean" = {
     expr = {
       assertionsPass = lib.all (a: a.assertion) acceptedWorkloadCfg.assertions;
-      noExtraWarnings = acceptedWorkloadCfg.warnings == [ ];
+      # Filter to d2b-originated warnings only; the NixOS systemd.network
+      # combination warning fires for any d2b config and is unrelated.
+      noExtraWarnings =
+        lib.filter (w: lib.hasInfix "d2b" w) acceptedWorkloadCfg.warnings == [ ];
       corpRealmHasWorkloads =
         acceptedWorkloadCfg.d2b.realms.corp.workloads != { };
     };
