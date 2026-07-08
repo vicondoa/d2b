@@ -100,6 +100,9 @@ deprecations ship one minor release before removal.
   before any Azure data-plane call when endpoint status is requested.
 - Tightened remote full-host registration so provider-managed-isolation
   capability sets cannot be retained as full-host nodes.
+- Rewrote the v1.2-to-v2 migration guide for the realm-native metadata-first
+  transition, including local VM preservation, host-local realm declarations,
+  provider/remote fail-closed behavior, desktop metadata, cleanup, and rollback.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
