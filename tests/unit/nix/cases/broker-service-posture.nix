@@ -49,14 +49,14 @@ in
         !(lib.hasInfix "set-environment" (svcCfg.ExecStartPre or ""));
       execStartAvoidsSetEnvironment =
         !(lib.hasInfix "set-environment" (svcCfg.ExecStart or ""));
-      usesUnitLocalEnvironmentFile = svcCfg.EnvironmentFile or "";
+      usesOptionalUnitLocalEnvironmentFile = svcCfg.EnvironmentFile or "";
       environmentFileParentNotGroupWritable =
         builtins.elem "d /run/d2b/broker 0750 root d2bd -" tmpfiles;
     };
     expected = {
       execStartPreAvoidsSetEnvironment = true;
       execStartAvoidsSetEnvironment = true;
-      usesUnitLocalEnvironmentFile = "/run/d2b/broker/priv-broker.env";
+      usesOptionalUnitLocalEnvironmentFile = "-/run/d2b/broker/priv-broker.env";
       environmentFileParentNotGroupWritable = true;
     };
   };

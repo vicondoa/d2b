@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made the privileged broker's generated UID/GID environment file optional at
+  `ExecStartPre` time so socket activation works on a fresh `/run` without a
+  pre-existing `/run/d2b/broker/priv-broker.env`.
 - Aligned realm gateway target routing and generated entrypoints with ADR 0043's
   canonical `<workload>.<realm>.d2b` form so the Rust CI gate no longer hangs
   on stale node-qualified gateway tests.
