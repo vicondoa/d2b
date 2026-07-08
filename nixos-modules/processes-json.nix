@@ -639,6 +639,7 @@ EOF
       upstreamSock = waylandHostSock;
       bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
+      realmTarget = "${vmName}.local.d2b";
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
@@ -679,6 +680,7 @@ EOF
         "--connect" upstreamSock
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
+        "--realm-target" realmTarget
         "--title-prefix" titlePrefix
       ] ++ borderArgs ++ lib.optionals config.d2b.site.clipboard.enable [
         "--clipd-bridge-socket" bridgeSock

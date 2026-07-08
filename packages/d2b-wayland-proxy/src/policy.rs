@@ -146,6 +146,8 @@ pub struct PolicyInput {
     /// Prefix prepended to `xdg_toplevel.set_app_id` values.
     /// Default: `d2b.<vm>.`
     pub app_id_prefix: Option<String>,
+    /// Canonical d2b realm target asserted by host metadata.
+    pub realm_target: Option<String>,
     /// Prefix prepended to `xdg_toplevel.set_title` values.
     /// Default: `[<vm>] `
     pub title_prefix: Option<String>,
@@ -168,6 +170,7 @@ pub struct PolicyInput {
 pub struct FilterPolicy {
     entries: HashMap<String, PolicyEntry>,
     pub app_id_prefix: String,
+    pub realm_target: Option<String>,
     pub title_prefix: String,
     pub vm_name: String,
     pub dmabuf_filters: std::sync::Arc<crate::dmabuf::DmabufFilterList>,
@@ -182,6 +185,7 @@ impl FilterPolicy {
         let vm = &input.vm_name;
 
         let app_id_prefix = input.app_id_prefix.unwrap_or_else(|| format!("d2b.{vm}."));
+        let realm_target = input.realm_target;
         let title_prefix = input.title_prefix.unwrap_or_else(|| format!("[{vm}] "));
 
         // Populate the default entries from the classified allowlist.
@@ -293,6 +297,7 @@ impl FilterPolicy {
         Self {
             entries,
             app_id_prefix,
+            realm_target,
             title_prefix,
             vm_name: vm.clone(),
             dmabuf_filters: std::sync::Arc::new(crate::dmabuf::DmabufFilterList::new(
@@ -557,6 +562,21 @@ mod tests {
             p.warnings.is_empty(),
             "secure defaults must produce zero warnings; got: {:?}",
             p.warnings
+        );
+    }
+
+    #[test]
+    fn realm_target_is_d2b_asserted_metadata_not_app_id_authority() {
+        let p = FilterPolicy::build(PolicyInput {
+            vm_name: "work".to_owned(),
+            realm_target: Some("work.local.d2b".to_owned()),
+            ..Default::default()
+        });
+
+        assert_eq!(p.realm_target.as_deref(), Some("work.local.d2b"));
+        assert_eq!(
+            p.rewrite_app_id("org.example.App"),
+            "d2b.work.org.example.App"
         );
     }
 

@@ -316,6 +316,7 @@ in
       inactive = flagValue "--border-color-inactive" proxyDefaultArgv;
       urgent = flagValue "--border-color-urgent" proxyDefaultArgv;
       label = flagValue "--border-label" proxyDefaultArgv;
+      realmTarget = flagValue "--realm-target" proxyDefaultArgv;
       legacyThickness = builtins.elem "--border-thickness" proxyDefaultArgv;
       legacyLabelPosition = builtins.elem "--border-label-position" proxyDefaultArgv;
     };
@@ -325,6 +326,7 @@ in
       inactive = proxyDefaultColors.inactive;
       urgent = proxyDefaultColors.urgent;
       label = "work";
+      realmTarget = "work.local.d2b";
       legacyThickness = false;
       legacyLabelPosition = false;
     };

@@ -683,6 +683,8 @@ mod tests {
             "corp-vm",
             "--app-id-prefix",
             "d2b.corp-vm.",
+            "--realm-target",
+            "corp-vm.local.d2b",
             "--title-prefix",
             "[corp-vm] ",
         ]
