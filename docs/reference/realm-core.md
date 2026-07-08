@@ -8,14 +8,14 @@ names, identifiers, capability checks, redacted audit metadata, typed
 errors, realm-controller metadata, route/enrollment models, realm identity
 lifecycle models, host-resource allocator models, and semantic frame schema roots. See
 [Local-root allocator contract](./local-root-allocator.md) for the
-allocator-specific invariants and current implementation boundary.
+allocator-specific invariants and contract boundary.
 
-For the current Nix option surface, see
+For the Nix option surface, see
 [Realm option schema](./realm-options.md). The `d2b.realms.<realm>`
 namespace validates realm declaration shape and materializes host-local
-control-plane scaffolding in the current release; access-layer routing,
-identity/enrollment, realm networking, and provider runtime integration
-remain future work over the schema model below.
+control-plane scaffolding. Access-layer routing, identity/enrollment, realm
+networking, and provider runtime integration are represented by the schema
+model below where their contracts are defined.
 
 The crate is intentionally codec-neutral. Protocol codecs map bytes to
 and from the semantic frame enum; routing, authorization, audit, and
@@ -39,7 +39,7 @@ Regenerate that file; do not edit generated JSON by hand.
 | `Handshake` / `HandshakeAccepted` / `HandshakeRejected` / `OperationKind` | `src/frame.rs` | Negotiation outcome roots and closed operation taxonomy roots. |
 | `AuditEnvelope` | `src/audit.rs` | Redacted post-auth audit metadata for mutating operations and stream opens. |
 | `AdmissionAuditRecord` | `src/audit.rs` | Redacted pre-auth/session-admission denial metadata; principal may be absent only in this shape. |
-| `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
+| `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for router, remote-node, and daemon audit streams. |
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
 | `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `RealmAccessResolverRequest` / `RealmAccessResolverResponse`, `RealmAccessResolverDiagnostic`, `RealmAccessClientBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement, access bindings, resolver input/output, alias/conflict diagnostics, capability preflight, and client binding models for realm access discovery. |
@@ -133,8 +133,8 @@ automatically relay-exportable.
 
 ## Realm access resolver contracts
 
-The access resolver models define the target-to-binding contract shape without
-changing today's CLI routing or daemon APIs. See
+The access resolver models define the target-to-binding contract shape for CLI
+routing and daemon access APIs. See
 [Realm access resolver contract](./realm-access-resolver.md) for the complete
 resolver behavior reference.
 
@@ -170,9 +170,9 @@ can be routed.
 
 ## Realm identity lifecycle
 
-The identity lifecycle roots are metadata-only contracts for future
-enrollment, controller-generation admission, key rotation, revocation,
-teardown, and recovery flows. See
+The identity lifecycle roots are metadata-only contracts for enrollment,
+controller-generation admission, key rotation, revocation, teardown, and
+recovery flows. See
 [Realm identity lifecycle contract](./realm-identity-lifecycle.md) for the
 field-level lifecycle reference and
 the generated schema companion for machine-readable fields.
@@ -188,24 +188,24 @@ the generated schema companion for machine-readable fields.
 - `EnrollmentRecord`, `KeyRotationPlan`, `RevocationRecord`,
   `RevocationList`, `SessionTeardownDirective`, and `RecoveryProcedure` carry
   low-cardinality lifecycle state, bounded timestamps, reason/status enums, and
-  correlation ids for future admission and audit code.
+  correlation ids for admission and audit code.
 
 These metadata models do not implement live route selection, session admission,
 revocation enforcement, process teardown, provider credential exchange, or
-relay transport in the current runtime.
+relay transport.
 
 ## Discovery and tree routing
 
-The routing roots are schema contracts only. They describe how future
-controllers can bound pre-auth discovery, verify parent/child route
-advertisements, validate namespace delegation, authorize direct shortcuts, and
+The routing roots are schema contracts only. They describe how controllers
+bound pre-auth discovery, verify parent/child route advertisements, validate
+namespace delegation, authorize direct shortcuts, and
 record route audit/telemetry without exposing relay endpoints or tunnel handles.
 See [Realm tree routing contract](./realm-routing.md) for the field-level
-reference and current implementation boundary.
+reference and contract boundary.
 
 They do not implement live relay sessions, runtime route enforcement, SSH
 fallback, VPN/overlay networking, raw tunnels, provider adapters, or migration
-from current `d2b.envs` routing.
+from `d2b.envs` routing.
 
 ## Operation authorization and idempotency
 
@@ -214,11 +214,20 @@ derived in trusted code from the operation kind; peers never provide the
 required capability as a wire field.
 
 Mutating operation kinds require an `IdempotencyKey` at decode time so
-the gateway/router can deduplicate at-least-once delivery before any side
-effect. The dedup fingerprint includes the request-identifying fields
+the router can deduplicate at-least-once delivery before any side effect.
+The dedup fingerprint includes the request-identifying fields
 (`kind`, `realm`, `node`, `workload`, `principal`, and body) and excludes
 per-attempt correlation (`operation_id`), the idempotency key itself, and
 trace metadata.
+
+The realm router supports node registration/heartbeat/capabilities,
+workload list/start/stop, guest health,
+durable exec start/attach/logs/cancel, persistent shell list/attach/detach/kill,
+and display-session open. For each operation, the router derives the
+authorization scope, required capability, idempotency posture, workload
+requirement, and any allowed stream families from the operation kind. File copy
+and port-forward operations fail closed with
+`unsupported-feature` even if a peer advertises `file-copy` or `port-forward`.
 
 ## Stream authorization and flow control
 
@@ -240,6 +249,11 @@ The pure `StreamMux` state machine enforces:
 - `StreamResume` only on resumable stream kinds;
 - idempotent cancellation retries for already-cancelled streams;
 - no data after close and no double close for non-cancel terminal states.
+
+The router accepts only control, PTY, shell PTY, stdio, logs, and
+display streams. Clipboard, audio playback/capture, HID, USB, file-copy, and
+port-forward stream kinds are rejected with `unsupported-feature` before any
+stream is registered or exposed to a provider.
 
 ## Persistent shell routing
 
@@ -304,10 +318,10 @@ without a principal. Pre-auth/session-admission failures use
 always `deny`.
 
 `AuditChainRecord` describes the tamper-evident metadata attached to
-gateway, remote-node, and daemon audit streams. The core crate validates
+router, remote-node, and daemon audit streams. The core crate validates
 hash shape (`sha256:<64 lowercase hex chars>`) and verifies a link against
 trusted recomputed previous, payload, and record hashes; hash computation
-is owned by the concrete daemon/gateway/provider crate so the core model
+is owned by the concrete daemon/router/provider crate so the core model
 stays codec- and host-neutral. `AuditSinkHealth` and
 `AuditRetentionFloorStatus` report bounded degraded/unavailable states and
 never carry paths, credential material, argv, stdio, or raw provider

@@ -81,6 +81,9 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/realm-policy.md`](./reference/realm-policy.md) —
   host-resident vs gateway-backed realm policy, default-deny cross-realm
   behavior, authorization, audit, and network isolation boundaries.
+- [`reference/realm-core.md`](./reference/realm-core.md) —
+  codec-neutral realm target, identifier, capability, audit, frame, routing,
+  identity, and allocator schema roots.
 - [`reference/realm-identity-lifecycle.md`](./reference/realm-identity-lifecycle.md) —
   metadata-only realm identity, enrollment, controller-generation, rotation,
   revocation, teardown, recovery, and future enforcement boundary contract.

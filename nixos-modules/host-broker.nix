@@ -81,7 +81,7 @@ EOF
   realmBrokerService = realm: {
     description = "d2b host-local realm privileged broker";
     documentation = [
-      "https://github.com/vicondoa/d2b/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
+      "https://github.com/vicondoa/d2b/blob/main/docs/adr/0002-non-root-daemon-and-privileged-broker.md"
       "https://github.com/vicondoa/d2b/blob/main/docs/reference/privileges.md"
     ];
     requires = [
@@ -249,7 +249,7 @@ in
       d2b-priv-broker = {
       description = "d2b privileged broker (uid 0 host-mutation surface)";
       documentation = [
-        "https://github.com/vicondoa/d2b/blob/main/docs/adr/0001-broker-privilege-quarantine.md"
+        "https://github.com/vicondoa/d2b/blob/main/docs/adr/0002-non-root-daemon-and-privileged-broker.md"
         "https://github.com/vicondoa/d2b/blob/main/docs/reference/privileges.md"
       ];
       # Socket-activated; service activation comes from the socket unit.

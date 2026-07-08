@@ -2,10 +2,9 @@
 //!
 //! `d2b vm <verb> <target>` accepts either a **local** VM name (the v1 fast
 //! path, preserved exactly) or a realm-native target in the
-//! `<workload>.<realm-path>.d2b` form. This module builds the
-//! Wave-5 `RealmAccessResolver*` contract shape, then maps it back to the
-//! current local/gateway CLI dispatch paths until the daemon-side access API
-//! exists.
+//! `<workload>.<realm-path>.d2b` / `d2b://…` form. This module builds the
+//! `RealmAccessResolver*` contract shape, then maps it to the local CLI
+//! dispatch paths exposed by the realm-native control plane.
 //!
 //! Invariants:
 //! - A bare workload name with no configured default realm or alias table routes
@@ -40,8 +39,8 @@ pub enum Route {
     /// Dispatch through the existing host-daemon local fast path. Carries the
     /// workload name the local path expects.
     Local { vm: String },
-    /// A realm target fronted by a gateway guest. The host cannot dispatch into
-    /// the realm; the realm's gateway-mode `d2bd` owns it.
+    /// A realm target fronted by a realm controller. The host cannot dispatch
+    /// directly into the realm; that realm's `d2bd` owns it.
     Gateway { gateway: String, target: String },
 }
 
@@ -58,11 +57,11 @@ pub enum RouteError {
     /// `target` is a realm target but no entrypoint is configured for its realm
     /// on this daemon. Never defaults to local.
     NoRealmEntrypoint { target: String, realm: String },
-    /// A gateway-backed realm whose table entry is missing its gateway target
+    /// A realm controller table entry is missing its dispatch target
     /// (malformed table).
     MissingGateway { target: String, realm: String },
-    /// The conventional local gateway VM name for a realm cannot be represented
-    /// as a target address.
+    /// The conventional local realm-controller VM name for a realm cannot be
+    /// represented as a target address.
     InvalidGatewayTarget {
         realm: String,
         gateway: String,

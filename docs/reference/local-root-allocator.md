@@ -4,13 +4,12 @@
 
 This page documents the committed `d2b-realm-core` contract for
 arbitrating host resources that are shared by local realm controllers. It
-is a contract and schema foundation only: the current implementation does
-not yet provide a runtime allocator service, live host mutation, or
-realm-broker dispatch for these DTOs.
+is a contract and schema foundation only: it does not provide a runtime
+allocator service, live host mutation, or realm-broker dispatch for these DTOs.
 
 ## Purpose
 
-The local-root allocator is the future local authority for host resources
+The local-root allocator is the local authority for host resources
 that cannot safely be created independently by each realm broker. Realm
 brokers request typed leases from the allocator instead of inventing
 interface names, writing host files, creating their own lock files, or
@@ -28,7 +27,7 @@ runtime allocator exists.
 
 | Term | Meaning |
 | --- | --- |
-| Local-root allocator | The planned local authority that owns host-resource allocation decisions and the persisted allocation ledger. |
+| Local-root allocator | The local authority that owns host-resource allocation decisions and the persisted allocation ledger. |
 | Typed lease | A `LeaseAllocationRequest` / `LeaseAllocationResponse` pair for closed `HostResourceKind` values rather than free-form shell or path mutations. |
 | Resource id | An opaque `HostResourceId` used for matching, conflict reporting, and delegation. It is not a raw interface name, filesystem path, nftables expression, cgroup path, or credential. |
 | Lease owner | The realm path, controller generation, and optional node identity that requested and owns a lease. |
@@ -98,8 +97,8 @@ brokers must not create ad-hoc ownership markers, take independent lock
 files, chmod/chown paths, or mutate host files outside a granted
 partition.
 
-This boundary keeps host-file mutation auditable and reconciliable. If a
-future allocator cannot prove that a partition is owned by the expected
+This boundary keeps host-file mutation auditable and reconciliable. If an
+allocator cannot prove that a partition is owned by the expected
 lease, it must deny, quarantine, or report a storage-contract violation
 instead of repairing by guesswork.
 
@@ -118,24 +117,23 @@ and `deny`. Non-reconciled decisions require a closed reason code.
 Quarantine, reclaim, and deny are fail-closed decisions: they prevent
 reuse until a later, explicit owner resolves or retires the resource.
 
-The current crate defines these reports and bounds them to keep audit and
-metric metadata small. It does not yet observe the live kernel, mutate
+The crate defines these reports and bounds them to keep audit and metric
+metadata small. It does not observe the live kernel, mutate
 nftables, create cgroups, or repair host files.
 
 `/etc/d2b/realm-controllers.json` may reference allocator resource ids for a
 realm, but those references remain metadata until a runtime allocator exists.
 They do not grant host mutation authority by themselves.
 
-Future operator repair should be explicit and evidence-driven rather than
-automatic cleanup. A future CLI or daemon repair path for states such as
+Operator repair should be explicit and evidence-driven rather than
+automatic cleanup. A CLI or daemon repair path for states such as
 `DriftDetected`, `ReconcileMismatch`, or quarantine should inspect the
 bounded `correlation_id`, `operation_id`, `resource_id`, and `lease_id`
 metadata from allocator events and reconciliation reports, compare the
 ledger entry with the observed host resource, then either reconcile the
 lease, retire the stale record, or clear a quarantine only when ownership is
-unambiguous. This document does not define a live repair command yet; until
-such a command exists, these fail-closed states are contract signals for
-future operator tooling, not permission for realm brokers to guess, delete,
+unambiguous. These fail-closed states are contract signals for operator
+tooling, not permission for realm brokers to guess, delete,
 or recreate host resources directly.
 
 ## No realm-broker ad-hoc locks
@@ -168,5 +166,4 @@ and generated schema coverage in `d2b-realm-core`. It does not install a
 local-root allocator daemon, expose a public or broker socket operation,
 or change the live behavior of existing `d2b.envs` networking, cgroup,
 nftables, host-file, or namespace management. Runtime allocation, live
-mutation, and migration from today's local host-resource paths are future
-implementation work.
+mutation, and migration from local host-resource paths are contract boundaries.

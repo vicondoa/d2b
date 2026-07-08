@@ -54,8 +54,8 @@ pub struct DiscoveryQueueDecision {
     pub event: RouteEngineEvent,
 }
 
-/// Snapshot row used for deterministic route-table inspection in tests and
-/// future callers. Rows are emitted in `BTreeMap` order by descendant path.
+/// Snapshot row used for deterministic route-table inspection. Rows are emitted
+/// in `BTreeMap` order by descendant path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteInventoryEntry {
     pub descendant: RealmPath,
