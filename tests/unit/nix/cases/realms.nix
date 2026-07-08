@@ -263,6 +263,123 @@ let
 
   minimalCfg = (mkEval [ (import (flakeRoot + "/examples/minimal/configuration.nix")) ]).config;
   multiEnvCfg = (mkEval [ (import (flakeRoot + "/examples/multi-env/configuration.nix")) ]).config;
+
+  # ── tombstone / migration warning fixtures ──────────────────────────────────
+
+  # Realm linking to d2b.envs but with network.mode="none" and no workloads
+  # should emit an advisory "inheritEnvNudge" warning pointing at the
+  # v1.2→v2 migration guide.
+  inheritEnvNudgeWarnings = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.nudge-me = {
+        env = "home";
+        network.envs = [ "home" ];
+        network.mode = "none";
+        # no workloads declared
+      };
+    })
+  ]).config.warnings;
+
+  # Realm workload with legacyVmName pointing to a VM that does not exist in
+  # d2b.vms should emit an advisory warning.
+  orphanLegacyVmWarnings = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.migrating = {
+        env = "home";
+        network.envs = [ "home" ];
+        workloads.laptop = {
+          legacyVmName = "old-laptop-vm";
+          kind = "local-vm";
+        };
+      };
+    })
+  ]).config.warnings;
+
+  # Realm with matching legacyVmName that DOES exist in d2b.vms should NOT
+  # emit the orphan warning.
+  legacyVmPresentWarnings = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.migrating = {
+        env = "home";
+        network.envs = [ "home" ];
+        workloads.laptop = {
+          legacyVmName = "homebox";
+          kind = "local-vm";
+        };
+      };
+    })
+  ]).config.warnings;
+
+  # Realm with workloads declared (even without env) does NOT emit the
+  # inheritEnvNudge warning.
+  withWorkloadsNoNudgeWarnings = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.with-workloads = {
+        env = "home";
+        network.envs = [ "home" ];
+        network.mode = "none";
+        workloads.main = {
+          kind = "local-vm";
+        };
+      };
+    })
+  ]).config.warnings;
+
+  # ── accepted workload options shape ─────────────────────────────────────────
+
+  # Verify the full workload options submodule evaluates without assertion
+  # failures for each supported kind (local-vm, qemu-media, provider-placeholder)
+  # and that per-workload defaults are correctly materialized.
+  acceptedWorkloadCfg = (mkEval [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.corp = {
+        parent = "home";
+        path = "corp.home";
+        placement = "gateway-vm";
+        env = "work";
+        network.envs = [ "work" ];
+        workloads.laptop = {
+          kind = "local-vm";
+          legacyVmName = null;
+          localVm = {
+            ssh.user = "alice";
+            memoryMiB = 4096;
+            vcpus = 2;
+            graphics.enable = false;
+            tpm.enable = false;
+            autostart = false;
+          };
+          launcher = {
+            enable = true;
+            label = "Corp Laptop";
+            icon.id = "computer-laptop";
+            icon.name = "laptop";
+            capabilities = [ "guest-exec" ];
+          };
+        };
+        workloads.installer = {
+          kind = "qemu-media";
+          qemuMedia.source = {
+            kind = "physical-usb";
+            ref = "installer-usb";
+            readOnly = true;
+          };
+          launcher.enable = true;
+          launcher.label = "Live Installer";
+        };
+        workloads.cloud-service = {
+          kind = "provider-placeholder";
+          launcher.enable = false;
+        };
+      };
+      d2b.realms.home = {
+        name = "Home";
+        env = "home";
+        network.envs = [ "home" ];
+        allowedUsers = [ "alice" ];
+      };
+    })
+  ]).config;
 in
 {
   "realms/valid-home-dev-work-keeps-env-substrate-active" = {
@@ -1331,6 +1448,150 @@ in
     expected = {
       minimal = true;
       multiEnv = true;
+    };
+  };
+
+  # ── tombstone / migration advisory warnings ──────────────────────────────────
+
+  # Realm linking to d2b.envs with mode=none and no workloads → nudge warning.
+  "realms/tombstone-inherit-env-nudge-warning-fires" = {
+    expr = {
+      hasWarning = lib.any
+        (w: lib.hasInfix "nudge-me" w && lib.hasInfix "migrate-d2b-v1-2-to-v2" w)
+        inheritEnvNudgeWarnings;
+      pointsAtEnvRef = lib.any
+        (w: lib.hasInfix "d2b.envs.home" w)
+        inheritEnvNudgeWarnings;
+      mentionsWorkloadSurface = lib.any
+        (w: lib.hasInfix "d2b.realms.nudge-me.workloads" w)
+        inheritEnvNudgeWarnings;
+    };
+    expected = {
+      hasWarning = true;
+      pointsAtEnvRef = true;
+      mentionsWorkloadSurface = true;
+    };
+  };
+
+  # Realm with workloads declared — inherit-env nudge must NOT fire.
+  "realms/tombstone-no-nudge-when-workloads-declared" = {
+    expr = lib.any
+      (w: lib.hasInfix "migrate-d2b-v1-2-to-v2" w)
+      withWorkloadsNoNudgeWarnings;
+    expected = false;
+  };
+
+  # Workload with legacyVmName pointing to a missing VM → orphan warning.
+  "realms/tombstone-orphan-legacy-vm-warning-fires" = {
+    expr = {
+      hasWarning = lib.any
+        (w: lib.hasInfix "old-laptop-vm" w)
+        orphanLegacyVmWarnings;
+      mentionsWorkload = lib.any
+        (w: lib.hasInfix "migrating" w && lib.hasInfix "laptop" w)
+        orphanLegacyVmWarnings;
+      suggestsDeclaringVm = lib.any
+        (w: lib.hasInfix "d2b.vms.old-laptop-vm" w)
+        orphanLegacyVmWarnings;
+    };
+    expected = {
+      hasWarning = true;
+      mentionsWorkload = true;
+      suggestsDeclaringVm = true;
+    };
+  };
+
+  # Workload with legacyVmName pointing to an EXISTING VM → no orphan warning.
+  "realms/tombstone-no-orphan-warning-when-vm-exists" = {
+    expr = lib.any
+      (w: lib.hasInfix "homebox" w && lib.hasInfix "d2b.vms" w)
+      legacyVmPresentWarnings;
+    expected = false;
+  };
+
+  # ── accepted workload option shapes ─────────────────────────────────────────
+
+  # Full workload options tree evaluates without assertion failures for all three
+  # supported kinds (local-vm, qemu-media, provider-placeholder).
+  "realms/accepted-all-workload-kinds-eval-clean" = {
+    expr = {
+      assertionsPass = lib.all (a: a.assertion) acceptedWorkloadCfg.assertions;
+      noExtraWarnings = acceptedWorkloadCfg.warnings == [ ];
+      corpRealmHasWorkloads =
+        acceptedWorkloadCfg.d2b.realms.corp.workloads != { };
+    };
+    expected = {
+      assertionsPass = true;
+      noExtraWarnings = true;
+      corpRealmHasWorkloads = true;
+    };
+  };
+
+  # local-vm workload fields default and materialize correctly.
+  "realms/accepted-local-vm-workload-fields" = {
+    expr =
+      let
+        laptop = acceptedWorkloadCfg.d2b.realms.corp.workloads.laptop;
+      in {
+        kind = laptop.kind;
+        legacyVmName = laptop.legacyVmName;
+        launcherEnable = laptop.launcher.enable;
+        launcherLabel = laptop.launcher.label;
+        launcherIconId = laptop.launcher.icon.id;
+        launcherIconName = laptop.launcher.icon.name;
+        memoryMiB = laptop.localVm.memoryMiB;
+        vcpus = laptop.localVm.vcpus;
+        # stateDir defaults to /var/lib/d2b/vms/<workload-id>
+        stateDirMatchesId = lib.hasSuffix "/laptop" laptop.stateDir;
+      };
+    expected = {
+      kind = "local-vm";
+      legacyVmName = null;
+      launcherEnable = true;
+      launcherLabel = "Corp Laptop";
+      launcherIconId = "computer-laptop";
+      launcherIconName = "laptop";
+      memoryMiB = 4096;
+      vcpus = 2;
+      stateDirMatchesId = true;
+    };
+  };
+
+  # qemu-media workload fields materialize correctly.
+  "realms/accepted-qemu-media-workload-fields" = {
+    expr =
+      let
+        installer = acceptedWorkloadCfg.d2b.realms.corp.workloads.installer;
+      in {
+        kind = installer.kind;
+        sourceKind = installer.qemuMedia.source.kind;
+        sourceRef = installer.qemuMedia.source.ref;
+        sourceReadOnly = installer.qemuMedia.source.readOnly;
+        launcherEnable = installer.launcher.enable;
+        launcherLabel = installer.launcher.label;
+      };
+    expected = {
+      kind = "qemu-media";
+      sourceKind = "physical-usb";
+      sourceRef = "installer-usb";
+      sourceReadOnly = true;
+      launcherEnable = true;
+      launcherLabel = "Live Installer";
+    };
+  };
+
+  # provider-placeholder workload evaluates with launcher disabled.
+  "realms/accepted-provider-placeholder-workload-fields" = {
+    expr =
+      let
+        svc = acceptedWorkloadCfg.d2b.realms.corp.workloads.cloud-service;
+      in {
+        kind = svc.kind;
+        launcherEnable = svc.launcher.enable;
+      };
+    expected = {
+      kind = "provider-placeholder";
+      launcherEnable = false;
     };
   };
 }
