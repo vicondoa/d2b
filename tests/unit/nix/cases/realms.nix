@@ -1054,15 +1054,15 @@ in
               tmpfiles;
           runDir =
             builtins.elem
-              "d /run/d2b/realms/home 0710 root ${home.daemon.publicSocketGroup} -"
+              "d /run/d2b/realms/home 1770 root ${home.daemon.publicSocketGroup} -"
               tmpfiles;
           runDirReset =
             builtins.elem
-              "z /run/d2b/realms/home 0710 root ${home.daemon.publicSocketGroup} -"
+              "z /run/d2b/realms/home 1770 root ${home.daemon.publicSocketGroup} -"
               tmpfiles;
-          runDirGroupTraverseAcl =
+          runDirGroupAccessAcl =
             builtins.elem
-              "a+ /run/d2b/realms/home - - - - g::--x"
+              "a+ /run/d2b/realms/home - - - - g::rwx"
               tmpfiles;
           daemonRunAcl =
             builtins.elem
@@ -1087,6 +1087,14 @@ in
           etcRealmConfigDirTraverseAcl =
             builtins.elem
               "a+ /etc/d2b/realms/home - - - - u:${home.daemon.user}:--x"
+              tmpfiles;
+          runD2bTraverseAcl =
+            builtins.elem
+              "a+ /run/d2b - - - - u:${home.daemon.user}:--x"
+              tmpfiles;
+          runRealmsTraverseAcl =
+            builtins.elem
+              "a+ /run/d2b/realms - - - - u:${home.daemon.user}:--x"
               tmpfiles;
         };
         daemonConfig = {
@@ -1141,13 +1149,15 @@ in
         auditParentDir = true;
         runDir = true;
         runDirReset = true;
-        runDirGroupTraverseAcl = true;
+        runDirGroupAccessAcl = true;
         daemonRunAcl = true;
         stateLock = true;
         locksDir = true;
         etcD2bTraverseAcl = true;
         etcRealmsTraverseAcl = true;
         etcRealmConfigDirTraverseAcl = true;
+        runD2bTraverseAcl = true;
+        runRealmsTraverseAcl = true;
       };
       daemonConfig = {
         mode = "0640";
