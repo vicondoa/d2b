@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Ordered generated host-local realm daemon units after the root privileged
+  broker socket/service so switch-time activation does not race broker
+  socket-activation startup.
 - Made the privileged broker's generated UID/GID environment file optional at
   `ExecStartPre` time so socket activation works on a fresh `/run` without a
   pre-existing `/run/d2b/broker/priv-broker.env`.
