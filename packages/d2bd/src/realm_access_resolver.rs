@@ -97,14 +97,63 @@ pub fn host_local_capability_preflight_placeholder(
 pub fn advertised_capabilities_from_controller(
     controller: &RealmControllerConfig,
 ) -> CapabilitySet {
-    CapabilitySet::from_tokens(
+    let provider_refs = CapabilitySet::from_tokens(
         controller
             .providers
             .iter()
             .filter(|provider| provider.enabled)
             .flat_map(|provider| provider.capability_refs.iter())
             .filter_map(|capability_ref| ProtocolToken::parse(capability_ref.clone()).ok()),
-    )
+    );
+    let mut advertised = provider_refs;
+    for capability in local_runtime_capabilities_from_controller(controller).iter() {
+        advertised = advertised.with(capability);
+    }
+    advertised
+}
+
+fn local_runtime_capabilities_from_controller(controller: &RealmControllerConfig) -> CapabilitySet {
+    let Some(local_runtime) = &controller.local_runtime else {
+        return CapabilitySet::empty();
+    };
+
+    let mut advertised = CapabilitySet::empty();
+    for workload in &local_runtime.workloads {
+        let ops = &workload.runtime.operation_capabilities;
+        if ops.lifecycle.start
+            || ops.lifecycle.stop
+            || ops.lifecycle.restart
+            || ops.lifecycle.switch
+            || ops.lifecycle.host_prepare
+        {
+            advertised = advertised.with(Capability::Lifecycle);
+        }
+        if ops.guest.exec {
+            advertised = advertised.with(Capability::Exec);
+        }
+        if ops.guest.shell {
+            advertised = advertised.with(Capability::PersistentShell);
+        }
+        if ops.guest.guest_control {
+            advertised = advertised.with(Capability::Vsock);
+        }
+        if ops.display.display || ops.display.wayland_proxy {
+            advertised = advertised.with(Capability::WindowForwarding);
+        }
+        if ops.display.graphics {
+            advertised = advertised.with(Capability::GpuAccel);
+        }
+        if ops.media.usb_hotplug {
+            advertised = advertised.with(Capability::Usb).with(Capability::Hotplug);
+        }
+        if ops.media.removable_media || ops.media.qemu_media {
+            advertised = advertised.with(Capability::Hotplug);
+        }
+        if ops.storage.store_sync || ops.storage.virtiofs {
+            advertised = advertised.with(Capability::Virtiofs);
+        }
+    }
+    advertised
 }
 
 pub fn host_local_capability_preflight(
@@ -321,6 +370,7 @@ mod tests {
             placement,
             public_socket_path,
             ["lifecycle"],
+            "",
         )
     }
 
@@ -335,6 +385,7 @@ mod tests {
             "host-local",
             "/run/d2b/realms/work/public.sock",
             capability_refs,
+            "",
         )
     }
 
@@ -342,6 +393,7 @@ mod tests {
         placement: &str,
         public_socket_path: &str,
         capability_refs: I,
+        local_runtime_json: &str,
     ) -> LoadedRealmControllersConfig
     where
         I: IntoIterator<Item = S>,
@@ -405,6 +457,7 @@ mod tests {
                     "allowedGroups": ["d2b"],
                     "inheritedAdminUsers": ["admin"]
                   }},
+                  {local_runtime_json}
                   "providers": [
                     {{
                       "providerName": "local",
@@ -430,6 +483,150 @@ mod tests {
         let summary: RealmControllerMetadataSummary =
             config.validate_metadata_only().expect("metadata validates");
         LoadedRealmControllersConfig { config, summary }
+    }
+
+    fn loaded_controller_with_local_runtime() -> LoadedRealmControllersConfig {
+        loaded_controller_with_placement_and_capability_refs(
+            "host-local",
+            "/run/d2b/realms/work/public.sock",
+            Vec::<String>::new(),
+            r#""localRuntime": {
+                    "runtimeState": "metadata-only",
+                    "providers": [
+                      {
+                        "kind": "nixos",
+                        "provider": {
+                          "id": "local-cloud-hypervisor",
+                          "driver": "cloud-hypervisor",
+                          "type": "local"
+                        },
+                        "capabilities": {
+                          "lifecycle": true,
+                          "display": true,
+                          "usbHotplug": true,
+                          "guestControl": true,
+                          "exec": true,
+                          "configSync": true,
+                          "ssh": true,
+                          "storeSync": true,
+                          "keys": true,
+                          "inGuestObservability": true
+                        },
+                        "operationCapabilities": {
+                          "lifecycle": {
+                            "start": true,
+                            "stop": true,
+                            "restart": true,
+                            "switch": true,
+                            "hostPrepare": true
+                          },
+                          "media": {
+                            "usbHotplug": true,
+                            "removableMedia": false,
+                            "qemuMedia": false
+                          },
+                          "display": {
+                            "display": true,
+                            "graphics": true,
+                            "video": true,
+                            "waylandProxy": true
+                          },
+                          "guest": {
+                            "guestControl": true,
+                            "exec": true,
+                            "shell": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                          },
+                          "storage": {
+                            "storeSync": true,
+                            "virtiofs": true,
+                            "volumes": true
+                          }
+                        },
+                        "autostartPolicy": "host-boot-eligible",
+                        "services": []
+                      }
+                    ],
+                    "workloads": [
+                      {
+                        "workloadId": "builder",
+                        "vmName": "builder",
+                        "env": "work",
+                        "runtime": {
+                          "kind": "nixos",
+                          "provider": {
+                            "id": "local-cloud-hypervisor",
+                            "driver": "cloud-hypervisor",
+                            "type": "local"
+                          },
+                          "capabilities": {
+                            "lifecycle": true,
+                            "display": true,
+                            "usbHotplug": true,
+                            "guestControl": true,
+                            "exec": true,
+                            "configSync": true,
+                            "ssh": true,
+                            "storeSync": true,
+                            "keys": true,
+                            "inGuestObservability": true
+                          },
+                          "operationCapabilities": {
+                            "lifecycle": {
+                              "start": true,
+                              "stop": true,
+                              "restart": true,
+                              "switch": true,
+                              "hostPrepare": true
+                            },
+                            "media": {
+                              "usbHotplug": true,
+                              "removableMedia": false,
+                              "qemuMedia": false
+                            },
+                            "display": {
+                              "display": true,
+                              "graphics": true,
+                              "video": true,
+                              "waylandProxy": true
+                            },
+                            "guest": {
+                              "guestControl": true,
+                              "exec": true,
+                              "shell": true,
+                              "configSync": true,
+                              "ssh": true,
+                              "keys": true,
+                              "inGuestObservability": true
+                            },
+                            "storage": {
+                              "storeSync": true,
+                              "virtiofs": true,
+                              "volumes": true
+                            }
+                          },
+                          "autostartPolicy": "host-boot-eligible",
+                          "services": []
+                        },
+                        "paths": {
+                          "stateDir": "/var/lib/d2b/vms/builder",
+                          "runDir": "/run/d2b/vms/builder",
+                          "storeView": "/var/lib/d2b/vms/builder/store-view",
+                          "guestControlDir": "/run/d2b/vms/builder/guest-control"
+                        }
+                      }
+                    ],
+                    "invariants": {
+                      "metadataOnly": true,
+                      "existingGlobalVmPathsPreserved": true,
+                      "noStateMigrationDuringActivation": true,
+                      "brokerEffectsRemainRealmDelegated": true
+                    }
+                  },"#,
+        )
     }
 
     fn request(target: &str) -> RealmAccessResolverRequest {
@@ -574,6 +771,89 @@ mod tests {
                 reason: CapabilityPreflightDenialReason::MissingCapability,
                 missing: vec![Capability::Exec, Capability::Logs],
             }
+        );
+    }
+
+    #[test]
+    fn local_runtime_metadata_contributes_to_host_local_capability_preflight() {
+        let loaded = loaded_controller_with_local_runtime();
+        let mut req = request("builder.work.d2b");
+        req.required_capabilities = CapabilitySet::from_caps([
+            Capability::Lifecycle,
+            Capability::Exec,
+            Capability::PersistentShell,
+            Capability::Vsock,
+            Capability::WindowForwarding,
+            Capability::GpuAccel,
+            Capability::Usb,
+            Capability::Hotplug,
+            Capability::Virtiofs,
+        ]);
+
+        let response = resolve_local_root_realm_access(Some(&loaded), &req, None)
+            .expect("local runtime metadata advertises required capabilities");
+
+        assert_eq!(
+            response.capability_preflight.required,
+            req.required_capabilities
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Lifecycle)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Exec)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::PersistentShell)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Vsock)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::WindowForwarding)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::GpuAccel)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Usb)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Hotplug)
+        );
+        assert!(
+            response
+                .capability_preflight
+                .advertised
+                .has(Capability::Virtiofs)
+        );
+        assert_eq!(
+            response.capability_preflight.status,
+            CapabilityPreflightStatus::Satisfied
         );
     }
 

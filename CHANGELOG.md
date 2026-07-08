@@ -83,6 +83,9 @@ deprecations ship one minor release before removal.
 - Added a host-provider qemu-media runtime adapter that validates the typed
   qemu-media argv scaffold, redacts argv/path inputs from debug output, and
   fails closed for lifecycle calls until daemon runtime control is wired.
+- Extended the realm access resolver so host-local `localRuntime` metadata
+  contributes bounded operation capabilities to capability preflight, while
+  preserving typed denials for missing capabilities.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
