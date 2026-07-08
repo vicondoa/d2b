@@ -309,6 +309,13 @@ impl RemoteNodeRegistry {
         if registration.summary.kind != NodeKind::FullHost {
             return Err(RemoteNodeError::new(RemoteNodeErrorKind::NotFullHost));
         }
+        if registration
+            .summary
+            .capabilities
+            .has(Capability::ProviderManagedIsolation)
+        {
+            return Err(RemoteNodeError::new(RemoteNodeErrorKind::NotFullHost));
+        }
         if registration.summary.realm != self.managed_realm {
             return Err(RemoteNodeError::new(RemoteNodeErrorKind::WrongRealm));
         }
@@ -984,6 +991,25 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::NotFullHost);
         assert_eq!(err.code(), "not-full-host");
+    }
+
+    #[test]
+    fn provider_managed_isolation_capability_cannot_register_as_full_host() {
+        let reg = registration(
+            "gen-1",
+            CapabilitySet::empty()
+                .with(Capability::Lifecycle)
+                .with(Capability::ProviderManagedIsolation),
+        );
+        let mut registry = RemoteNodeRegistry::new();
+
+        let err = registry.register(reg, instant(0)).unwrap_err();
+
+        assert_eq!(err.kind, RemoteNodeErrorKind::NotFullHost);
+        assert!(
+            registry.is_empty(),
+            "provider-managed isolation fingerprints must not be retained as full-host nodes"
+        );
     }
 
     #[test]

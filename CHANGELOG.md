@@ -98,6 +98,8 @@ deprecations ship one minor release before removal.
 - Added an explicit ACA guestd endpoint provider seam that advertises no
   guestd/persistent-shell capability for execute-only sandboxes and fails closed
   before any Azure data-plane call when endpoint status is requested.
+- Tightened remote full-host registration so provider-managed-isolation
+  capability sets cannot be retained as full-host nodes.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
