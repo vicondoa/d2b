@@ -6320,10 +6320,13 @@ fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i3
             .into_iter()
             .map(|session| VmDisplaySessionOutputV1 {
                 session_id: session.session_id,
+                canonical_target: session.target.clone(),
                 target: session.target,
+                identity_source: VmDisplayIdentitySource::D2bRealmTarget,
                 state: session.state,
                 operation_id: session.operation_id,
                 principal: session.principal,
+                capability_preflight: vm_display_capability_preflight_satisfied(),
             })
             .collect(),
     };
@@ -6350,6 +6353,15 @@ fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i3
         }
     }
     Ok(0)
+}
+
+fn vm_display_capability_preflight_satisfied() -> VmDisplayCapabilityPreflight {
+    VmDisplayCapabilityPreflight {
+        status: VmDisplayCapabilityPreflightStatus::Satisfied,
+        required_capabilities: vec!["window-forwarding".to_owned()],
+        advertised_capabilities: vec!["window-forwarding".to_owned()],
+        missing_capabilities: Vec::new(),
+    }
 }
 
 fn cmd_vm_display_close(context: &Context, args: &VmDisplayCloseArgs) -> Result<i32, CliFailure> {

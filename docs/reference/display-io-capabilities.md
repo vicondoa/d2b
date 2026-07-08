@@ -55,6 +55,13 @@ It never exposes session secrets, app argv, Wayland socket paths, relay
 endpoints, file descriptors, pidfds, cgroup paths, namespace identifiers, or
 process output. Closed and failed sessions are removed from active listings.
 
+`d2b vm display list --json` includes `canonicalTarget`,
+`identitySource`, and `capabilityPreflight` for each active session. The
+canonical target is d2b-provided realm metadata, not a guest title or app id;
+desktop helpers should prefer it when displaying or correlating trusted VM
+identity. `capabilityPreflight` is bounded metadata over display capabilities
+only and does not grant clipboard, audio, USB, HID, GPU, or video access.
+
 The current gateway orchestrator already owns open and close sequencing:
 it mints a one-shot display credential, arms the listener before the sandbox
 sender connects, spawns the provider agent, waits for the verified handshake,
