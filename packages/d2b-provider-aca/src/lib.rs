@@ -1216,7 +1216,7 @@ impl WorkloadProvider for AcaWorkloadProvider {
                     realm,
                     node: self.node.clone(),
                     state: sandbox_state(&sandbox),
-                    capabilities: self.capabilities().caps,
+                    capabilities: WorkloadProvider::capabilities(self).caps,
                 })
             })
             .collect())
@@ -1303,6 +1303,30 @@ impl WorkloadProvider for AcaWorkloadProvider {
                 "failed to mint Azure Container Apps execution id",
             )
         })
+    }
+}
+
+#[async_trait]
+impl d2b_realm_provider::provider::GuestControlEndpointProvider for AcaWorkloadProvider {
+    fn provider_id(&self) -> ProviderId {
+        self.provider_id.clone()
+    }
+
+    fn node_id(&self) -> NodeId {
+        self.node.clone()
+    }
+
+    fn capabilities(&self) -> WorkloadCapabilitySet {
+        self.guestd_bootstrap_contract().advertised_capabilities()
+    }
+
+    async fn endpoint_status(
+        &self,
+        _workload: WorkloadId,
+    ) -> ProviderResult<d2b_realm_provider::types::GuestControlEndpointStatus> {
+        Err(ProviderError::capability_denied(
+            Capability::PersistentShell,
+        ))
     }
 }
 
@@ -2021,7 +2045,7 @@ mod tests {
     #[test]
     fn capabilities_are_honest_exec_only() {
         let (p, _) = provider_seq(vec![]);
-        let caps = p.capabilities();
+        let caps = WorkloadProvider::capabilities(&p);
         assert!(caps.caps.has(Capability::Exec));
         assert!(caps.caps.has(Capability::ProviderManagedIsolation));
         assert!(!caps.caps.has(Capability::Lifecycle));
@@ -2045,7 +2069,7 @@ mod tests {
         }
 
         let (p, _) = lifecycle_provider_seq(vec![]);
-        let caps = p.capabilities();
+        let caps = WorkloadProvider::capabilities(&p);
         assert!(caps.caps.has(Capability::Exec));
         assert!(caps.caps.has(Capability::Lifecycle));
         assert!(caps.caps.has(Capability::ProviderManagedIsolation));
@@ -2061,7 +2085,31 @@ mod tests {
                 .advertised_capabilities()
                 .has(Capability::PersistentShell)
         );
-        assert!(!p.capabilities().has(Capability::PersistentShell));
+        assert!(!WorkloadProvider::capabilities(&p).has(Capability::PersistentShell));
+        assert!(
+            !d2b_realm_provider::provider::GuestControlEndpointProvider::capabilities(&p)
+                .has(Capability::PersistentShell)
+        );
+    }
+
+    #[tokio::test]
+    async fn guest_control_endpoint_status_fails_closed_without_provider_agent() {
+        let (p, http) = provider_seq(vec![]);
+
+        let err = d2b_realm_provider::provider::GuestControlEndpointProvider::endpoint_status(
+            &p,
+            WorkloadId::parse("sandbox-a").unwrap(),
+        )
+        .await
+        .expect_err("execute-only ACA provider has no guestd endpoint");
+
+        assert_eq!(err.kind(), ErrorKind::CapabilityDenied);
+        assert_eq!(err.missing_capability(), Some(Capability::PersistentShell));
+        assert_eq!(
+            http.calls.lock().unwrap().len(),
+            0,
+            "endpoint discovery denial must happen before ACA data-plane calls"
+        );
     }
 
     #[test]
