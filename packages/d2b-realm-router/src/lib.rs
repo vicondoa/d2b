@@ -702,6 +702,25 @@ mod tests {
         }
     }
 
+    fn workload_req(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+    ) -> OperationRequest {
+        with_workload(req(kind, key, body, p), "work")
+    }
+
+    fn workload_req_with_op(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+        op_id: &str,
+    ) -> OperationRequest {
+        with_workload(req_with_op(kind, key, body, p, op_id), "work")
+    }
+
     fn with_workload(mut req: OperationRequest, workload: &str) -> OperationRequest {
         req.workload = Some(d2b_realm_core::WorkloadId::parse(workload).unwrap());
         req
@@ -1105,14 +1124,14 @@ mod tests {
     #[test]
     fn mutating_without_key_is_rejected() {
         let mut r = OperationRouter::new().with_max_dedup_records(0);
-        let missing_key = req(OperationKind::WorkloadStart, None, b"x", "alice");
+        let missing_key = workload_req(OperationKind::WorkloadStart, None, b"x", "alice");
         assert_eq!(
             route(&mut r, &missing_key, &principal("alice")),
             RouteDecision::MissingIdempotencyKey
         );
         assert_eq!(r.tracked(), 0);
 
-        let keyed = req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
+        let keyed = workload_req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
         assert_eq!(
             route(&mut r, &keyed, &principal("alice")),
             RouteDecision::DedupCapacityExceeded
@@ -1122,7 +1141,7 @@ mod tests {
     #[test]
     fn accept_then_in_progress_then_replay_carries_original_op_and_result() {
         let mut r = OperationRouter::new();
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         let p = principal("alice");
         assert!(matches!(
             route(&mut r, &req, &p),
@@ -1150,7 +1169,7 @@ mod tests {
     fn lost_reply_retry_replays_recorded_result_without_new_accept() {
         let mut shared_router = OperationRouter::new();
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("lost-reply-key"),
             b"start-once",
@@ -1163,7 +1182,7 @@ mod tests {
         ));
         assert!(shared_router.mark_completed(&first, result(b"started")));
 
-        let retry_after_disconnect = req_with_op(
+        let retry_after_disconnect = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("lost-reply-key"),
             b"start-once",
@@ -1184,13 +1203,13 @@ mod tests {
     fn same_key_different_request_conflicts() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let a = req(
+        let a = workload_req(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-A",
             "alice",
         );
-        let b = req(
+        let b = workload_req(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-B",
@@ -1208,8 +1227,8 @@ mod tests {
         // The same opaque idempotency key under a different principal must NOT
         // collide (ADR 0032 keys dedup by realm+principal+node+kind+key).
         let mut r = OperationRouter::new();
-        let alice = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        let bob = req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
+        let alice = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let bob = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
         assert!(matches!(
             route(&mut r, &alice, &principal("alice")),
             RouteDecision::Accept { .. }
@@ -1230,14 +1249,14 @@ mod tests {
         // request (Replay after completion), never a conflict.
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",
             "alice",
             "op-1",
         );
-        let retry = req_with_op(
+        let retry = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",
@@ -1267,7 +1286,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1287,7 +1306,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1304,14 +1323,14 @@ mod tests {
     fn capacity_exhaustion_fails_closed_for_new_keys() {
         let mut r = OperationRouter::new().with_max_dedup_records(1);
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-one",
             "alice",
             "op-1",
         );
-        let second = req_with_op(
+        let second = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k2"),
             b"start-two",
@@ -1347,14 +1366,14 @@ mod tests {
             .with_no_reuse_horizon(Duration::from_secs(10))
             .with_max_dedup_records(1);
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-one",
             "alice",
             "op-1",
         );
-        let second = req_with_op(
+        let second = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k2"),
             b"start-two",
@@ -1391,7 +1410,7 @@ mod tests {
             .with_retention(Duration::from_secs(60))
             .with_no_reuse_horizon(Duration::from_secs(600));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1427,7 +1446,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1442,7 +1461,7 @@ mod tests {
     fn mark_failed_allows_a_fresh_retry() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1462,8 +1481,9 @@ mod tests {
         // accepted operation's record (which would corrupt replay/dedup).
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let accepted = req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
-        let conflicting = req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
+        let accepted = workload_req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
+        let conflicting =
+            workload_req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
         assert!(matches!(
             route(&mut r, &accepted, &p),
             RouteDecision::Accept { .. }
@@ -1498,7 +1518,7 @@ mod tests {
         let clock = ManualClock::new();
         let mut r = OperationRouter::with_clock(clock.clone());
         let p = "alice";
-        let op = req_with_op(
+        let op = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",
