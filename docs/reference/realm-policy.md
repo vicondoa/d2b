@@ -63,8 +63,16 @@ operation or stream kind, decision, and reason labels. They must not contain
 payload bytes, argv, stdout/stderr, credentials, tokens, provider headers, full
 endpoints, host paths, or PII.
 
+Identity lifecycle metadata for enrollment, controller generations, rotation,
+revocation, teardown directives, and recovery is documented in
+[Realm identity lifecycle contract](./realm-identity-lifecycle.md). Those DTOs
+are designed for future policy/session enforcement, but the current runtime
+does not yet enforce live revocation or route sessions through per-realm
+controllers.
+
 ## Related references
 
 - [Realm option schema](./realm-options.md)
 - [Realm controller configuration](./realm-controller-config.md)
+- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Realm core model reference](./realm-core.md)

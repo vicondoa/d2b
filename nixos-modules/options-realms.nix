@@ -14,6 +14,7 @@ let
   realmPath = "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$";
   providerKind = "^[a-z][a-z0-9-]*$";
   absolutePath = "^/.*$";
+  fingerprint = "^sha256:[0-9a-f]{64}$";
 
   placementKinds = [
     "host-local"
@@ -326,10 +327,36 @@ in
           };
 
           keys = {
+            realmIdentityRef = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                Opaque reference to this realm's identity key metadata. This is
+                only a locator; private or public key material does not belong
+                in Nix.
+              '';
+            };
+
+            realmIdentityFingerprint = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching fingerprint);
+              default = null;
+              description = "SHA-256 fingerprint for the realm identity key metadata, never key material.";
+            };
+
             controllerKeyRef = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
-              description = "Opaque reference to this realm controller's signing/encryption key material.";
+              description = ''
+                Opaque reference to this realm controller's signing/encryption
+                credential metadata. This is a locator only; signing or
+                encryption key material does not belong in Nix.
+              '';
+            };
+
+            controllerCredentialFingerprint = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching fingerprint);
+              default = null;
+              description = "SHA-256 fingerprint for the controller-generation credential metadata, never credential material.";
             };
 
             trustBundleRef = lib.mkOption {

@@ -27,6 +27,8 @@ pub mod enrollment;
 pub mod error;
 pub mod execution;
 pub mod frame;
+pub mod identity_config;
+pub mod identity_store;
 pub mod ids;
 pub mod migration;
 pub mod mux;
@@ -70,8 +72,14 @@ pub use allocator_engine::{
 pub use audit::{AdmissionAuditRecord, AuditEnvelope, AuthorizationScope, AuthzDecision};
 pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
 pub use enrollment::{
-    EnrollmentRecord, EnrollmentStatus, KeyFingerprint, KeyPin, RealmKeyRole, RevocationRecord,
-    RevocationStatus, RevocationTarget,
+    ChildKeyPin, ControllerGenerationMetadata, ControllerGenerationStatus, EnrollmentReason,
+    EnrollmentRecord, EnrollmentStatus, IdentityAuditEventKind, IdentityAuditEventMetadata,
+    KeyFingerprint, KeyPin, KeyRotationEvent, KeyRotationEventKind, KeyRotationPlan,
+    KeyRotationReason, KeyRotationStatus, KeyRotationSubject, KeyRotationSubjectKind,
+    ParentTrustAnchor, RealmIdentityFingerprint, RealmIdentityMetadata, RealmIdentityStatus,
+    RealmKeyRole, RecoveryProcedure, RecoveryReason, RecoveryStatus, RevocationList,
+    RevocationListStatus, RevocationReason, RevocationRecord, RevocationStatus, RevocationTarget,
+    SessionTeardownDirective, SessionTeardownReason,
 };
 pub use error::{ConstellationError, ErrorKind};
 pub use execution::{
@@ -83,10 +91,20 @@ pub use frame::{
     OperationKind, OperationRequest, OperationResponse, PeerContext, StreamClose, StreamData,
     StreamFlow, StreamOpen, StreamResume,
 };
+pub use identity_config::{
+    REALM_IDENTITY_CONFIG_SCHEMA_VERSION, RealmIdentityConfigEntry, RealmIdentityConfigError,
+    RealmIdentityConfigInvariants, RealmIdentityConfigJson, RealmIdentityConfigRuntimeState,
+    RealmIdentityConfigSummary,
+};
+pub use identity_store::{
+    IdentityStoreChange, IdentityStoreError, IdentityStoreResult, MAX_IDENTITY_STORE_AUDIT_EVENTS,
+    MAX_IDENTITY_STORE_TEARDOWNS, RealmIdentityStore,
+};
 pub use ids::{
-    AllocatorLeaseId, ControllerGenerationId, CorrelationId, EnrollmentId, ExecutionId, GatewayId,
-    HostResourceId, IdempotencyKey, NodeId, OperationId, PrincipalId, ProviderId, RealmId,
-    RevocationId, RouteId, StreamCursor, StreamId, WorkloadId,
+    AllocatorLeaseId, ControllerGenerationCredentialRef, ControllerGenerationId, CorrelationId,
+    EnrollmentId, ExecutionId, GatewayId, HostResourceId, IdempotencyKey, KeyRotationId, NodeId,
+    OperationId, PrincipalId, ProviderId, RealmId, RealmIdentityRef, RecoveryProcedureId,
+    RevocationId, RevocationListId, RouteId, StreamCursor, StreamId, WorkloadId,
 };
 pub use migration::{
     LegacySurface, MigrationErrorEnvelope, MigrationLegacyId, MigrationReasonCode,

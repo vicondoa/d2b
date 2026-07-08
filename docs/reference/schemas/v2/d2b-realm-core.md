@@ -24,6 +24,8 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
 - `ExecutionId`, `StreamId`, `StreamCursor`, `PrincipalId`,
   `OperationId`, `IdempotencyKey`;
 - `RouteId`, `CorrelationId`, `ControllerGenerationId`,
+  `RealmIdentityRef`, `ControllerGenerationCredentialRef`,
+  `KeyRotationId`, `RevocationListId`, `RecoveryProcedureId`,
   `AllocatorLeaseId`, `HostResourceId`, `EnrollmentId`, `RevocationId`;
 - `Capability`, `CapabilitySet`, `CapabilityNegotiation`;
 - `RealmControllerPlacement`, `UnixSocketPath`, `AccessBindingRef`,
@@ -40,9 +42,18 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `RealmAccessResolverRequest`, `RealmAccessResolverResponse`;
 - `ProviderRegistryEntry`, `WorkloadPlacement`,
   `WorkloadPlacementSummary`;
-- `KeyFingerprint`, `RealmKeyRole`, `KeyPin`, `EnrollmentStatus`,
-  `EnrollmentRecord`, `RevocationTarget`, `RevocationStatus`,
-  `RevocationRecord`;
+- `KeyFingerprint`, `RealmIdentityFingerprint`, `RealmIdentityStatus`,
+  `RealmIdentityMetadata`, `ControllerGenerationStatus`,
+  `ControllerGenerationMetadata`, `RealmKeyRole`, `KeyPin`,
+  `ParentTrustAnchor`, `ChildKeyPin`, `EnrollmentStatus`,
+  `EnrollmentReason`, `EnrollmentRecord`, `KeyRotationSubjectKind`,
+  `KeyRotationSubject`, `KeyRotationReason`, `KeyRotationStatus`,
+  `KeyRotationPlan`, `KeyRotationEventKind`, `KeyRotationEvent`,
+  `RevocationTarget`, `RevocationReason`, `RevocationStatus`,
+  `RevocationRecord`, `RevocationListStatus`, `RevocationList`,
+  `SessionTeardownReason`, `SessionTeardownDirective`, `RecoveryReason`,
+  `RecoveryStatus`, `RecoveryProcedure`, `IdentityAuditEventKind`,
+  `IdentityAuditEventMetadata`;
 - `SignatureRef`, `RealmTreeEdge`, `DescendantRoute`, `RouteSignature`,
   `RouteAdvertisement`;
 - `LegacySurface`, `MigrationLegacyId`, `MigrationReasonCode`,
@@ -94,6 +105,11 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `no-byte-proxy`.
 - `CapabilityNegotiation` carries a schema version and deterministic
   bounded fingerprint for audit correlation.
+- Realm identity, controller-generation, enrollment, rotation, revocation,
+  teardown, recovery, and identity audit roots are metadata-only. They carry
+  opaque refs, ids, fingerprints, low-cardinality reason/status enums, and
+  timestamps; secret/key material, signatures, provider credentials, relay
+  credentials, endpoints, and session payloads are not schema fields.
 - Mutating operation requests require an idempotency key at decode.
 - Durable execution roots carry bounded metadata only. Reconnects are
   generation-bound, retained log requests require a non-zero byte bound,

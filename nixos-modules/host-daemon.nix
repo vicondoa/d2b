@@ -204,6 +204,7 @@ EOF
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
     gatewayConfigPath = "/etc/d2b/gateway.json";
     realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
+    realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
     autostartParallelism = cfg.daemon.autostart.parallelism;
     gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
@@ -229,6 +230,7 @@ EOF
     acceptedClientVersionRange = ">=0.4.0, <0.5.0";
     gatewayConfigPath = "/etc/d2b/gateway.json";
     realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
+    realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
     autostartParallelism = cfg.daemon.autostart.parallelism;
     gracefulShutdownTimeoutSeconds = cfg.daemon.lifecycle.gracefulShutdown.timeoutSeconds;
     liveActivationTimeoutSeconds = cfg.daemon.lifecycle.liveActivation.timeoutSeconds;

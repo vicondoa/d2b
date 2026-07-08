@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RealmIdentityConfigJson",
+  "type": "object",
+  "required": [
+    "invariants",
+    "runtimeState",
+    "schemaVersion"
+  ],
+  "properties": {
+    "invariants": {
+      "$ref": "#/definitions/RealmIdentityConfigInvariants"
+    },
+    "realms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RealmIdentityConfigEntry"
+      }
+    },
+    "runtimeState": {
+      "$ref": "#/definitions/RealmIdentityConfigRuntimeState"
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ControllerGenerationCredentialRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "KeyFingerprint": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmIdentityConfigEntry": {
+      "type": "object",
+      "required": [
+        "realm"
+      ],
+      "properties": {
+        "controllerCredentialFingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "controllerCredentialRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ControllerGenerationCredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enrollmentRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "realmIdentityFingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmIdentityFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmIdentityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RealmIdentityRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotationPolicyRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trustBundleRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityConfigInvariants": {
+      "type": "object",
+      "required": [
+        "metadataOnly",
+        "noSecretMaterial",
+        "preservesRuntimeBehavior"
+      ],
+      "properties": {
+        "metadataOnly": {
+          "type": "boolean"
+        },
+        "noSecretMaterial": {
+          "type": "boolean"
+        },
+        "preservesRuntimeBehavior": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RealmIdentityConfigRuntimeState": {
+      "type": "string",
+      "enum": [
+        "metadata-only"
+      ]
+    },
+    "RealmIdentityFingerprint": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "RealmIdentityRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    }
+  }
+}

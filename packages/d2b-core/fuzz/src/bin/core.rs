@@ -319,6 +319,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         sync_path: None,
         allocator_path: None,
         realm_controllers_path: None,
+        realm_identity_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),

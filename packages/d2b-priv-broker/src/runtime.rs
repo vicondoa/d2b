@@ -61,6 +61,7 @@ use d2b_contracts::broker_wire::{
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
+use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
 
 /// Default socket path.  When `LISTEN_FDS=1` (socket activation) this path
 /// is informational only; the broker adopts fd 3 from systemd and MUST NOT
@@ -80,6 +81,7 @@ const DEFAULT_AUDIT_DIR: &str = "/var/lib/d2b/audit";
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
 const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
+const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
 const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
@@ -102,6 +104,9 @@ pub struct ServerConfig {
     /// validation/logging only; the broker still uses direct
     /// SO_PEERCRED/SCM_RIGHTS Unix-socket semantics for every request.
     pub realm_controllers_path: PathBuf,
+    /// Optional metadata-only realm identity artifact. It carries refs and
+    /// fingerprints only; loading it does not enable trust sessions.
+    pub realm_identity_path: PathBuf,
     pub state_dir: PathBuf,
     pub d2bd_uid: u32,
     pub d2bd_gid: u32,
@@ -332,6 +337,7 @@ where
             let mut audit_retention_days = DEFAULT_AUDIT_RETENTION_DAYS;
             let mut bundle_path = PathBuf::from(DEFAULT_BUNDLE_PATH);
             let mut realm_controllers_path = PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH);
+            let mut realm_identity_path = PathBuf::from(DEFAULT_REALM_IDENTITY_PATH);
             let mut state_dir = PathBuf::from(DEFAULT_STATE_DIR);
             let mut store_sync_export_dir =
                 PathBuf::from(crate::ops::store_sync_export::DEFAULT_STORE_SYNC_EXPORT_DIR);
@@ -373,6 +379,11 @@ where
                         index += 1;
                         realm_controllers_path =
                             PathBuf::from(expect_arg(&rest, index, "--realm-controllers-path")?);
+                    }
+                    "--realm-identity-path" => {
+                        index += 1;
+                        realm_identity_path =
+                            PathBuf::from(expect_arg(&rest, index, "--realm-identity-path")?);
                     }
                     "--state-dir" => {
                         index += 1;
@@ -443,6 +454,7 @@ where
                 audit_retention_days,
                 bundle_path,
                 realm_controllers_path,
+                realm_identity_path,
                 state_dir,
                 d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
                 d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
@@ -644,10 +656,31 @@ pub fn load_realm_controllers_config(
     let bytes = fs::read(path).map_err(RunError::Io)?;
     let config: RealmControllersJson = serde_json::from_slice(&bytes)
         .map_err(|err| RunError::Protocol(format!("invalid realm controller config: {err}")))?;
-    let summary = config.validate_metadata_only().map_err(|err| {
-        RunError::Protocol(format!("invalid realm controller config: {err}"))
-    })?;
+    let summary = config
+        .validate_metadata_only()
+        .map_err(|err| RunError::Protocol(format!("invalid realm controller config: {err}")))?;
     Ok(Some(LoadedRealmControllersConfig { config, summary }))
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedRealmIdentityConfig {
+    pub config: RealmIdentityConfigJson,
+    pub summary: RealmIdentityConfigSummary,
+}
+
+pub fn load_realm_identity_config(
+    path: &Path,
+) -> Result<Option<LoadedRealmIdentityConfig>, RunError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(RunError::Io)?;
+    let config: RealmIdentityConfigJson = serde_json::from_slice(&bytes)
+        .map_err(|err| RunError::Protocol(format!("invalid realm identity config: {err}")))?;
+    let summary = config
+        .validate_metadata_only()
+        .map_err(|err| RunError::Protocol(format!("invalid realm identity config: {err}")))?;
+    Ok(Some(LoadedRealmIdentityConfig { config, summary }))
 }
 
 fn run_server(config: ServerConfig) -> Result<(), RunError> {
@@ -666,6 +699,23 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
             config_source = "realm-controllers",
             config_present = false,
             "realm-controller metadata not present; broker keeps single-root config defaults",
+        );
+    }
+    if let Some(realm_identity) = load_realm_identity_config(&config.realm_identity_path)? {
+        tracing::info!(
+            config_source = "realm-identity",
+            config_present = true,
+            realm_count = realm_identity.summary.realm_count,
+            identity_ref_count = realm_identity.summary.identity_ref_count,
+            controller_credential_ref_count =
+                realm_identity.summary.controller_credential_ref_count,
+            "realm identity metadata loaded; broker trust enforcement remains inert",
+        );
+    } else {
+        tracing::debug!(
+            config_source = "realm-identity",
+            config_present = false,
+            "realm identity metadata not present; broker trust enforcement remains inert",
         );
     }
 
@@ -9556,12 +9606,38 @@ mod tests {
         }"#
     }
 
+    fn realm_identity_json() -> &'static str {
+        r#"{
+          "schemaVersion": "v2",
+          "runtimeState": "metadata-only",
+          "realms": [
+            {
+              "realm": ["work"],
+              "realmIdentityRef": "idref-work",
+              "realmIdentityFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "controllerCredentialRef": "cgref-work",
+              "controllerCredentialFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "trustBundleRef": "trust-work",
+              "enrollmentRef": "enroll-work",
+              "rotationPolicyRef": "rotate-work"
+            }
+          ],
+          "invariants": {
+            "metadataOnly": true,
+            "noSecretMaterial": true,
+            "preservesRuntimeBehavior": true
+          }
+        }"#
+    }
+
     #[test]
     fn parse_command_accepts_realm_controllers_path_without_changing_socket_defaults() {
         let mode = parse_command([
             "serve".to_owned(),
             "--realm-controllers-path".to_owned(),
             "/etc/d2b/custom-realm-controllers.json".to_owned(),
+            "--realm-identity-path".to_owned(),
+            "/etc/d2b/custom-realm-identity.json".to_owned(),
             "--test-mode".to_owned(),
         ])
         .expect("serve command parses");
@@ -9575,11 +9651,15 @@ mod tests {
             config.realm_controllers_path,
             PathBuf::from("/etc/d2b/custom-realm-controllers.json")
         );
+        assert_eq!(
+            config.realm_identity_path,
+            PathBuf::from("/etc/d2b/custom-realm-identity.json")
+        );
         assert_eq!(config.socket_path, PathBuf::from(DEFAULT_SOCKET_PATH));
     }
 
     #[test]
-    fn parse_command_defaults_realm_controllers_path() {
+    fn parse_command_defaults_realm_metadata_paths() {
         let mode = parse_command(["serve".to_owned(), "--test-mode".to_owned()])
             .expect("serve command parses with defaults");
 
@@ -9591,6 +9671,10 @@ mod tests {
         assert_eq!(
             config.realm_controllers_path,
             PathBuf::from(DEFAULT_REALM_CONTROLLERS_PATH)
+        );
+        assert_eq!(
+            config.realm_identity_path,
+            PathBuf::from(DEFAULT_REALM_IDENTITY_PATH)
         );
     }
 
@@ -9649,6 +9733,66 @@ mod tests {
             .expect("materialized host-local unit metadata remains loadable")
             .expect("realm controllers present");
         assert_eq!(materialized_loaded.summary.host_local_controller_count, 1);
+    }
+
+    #[test]
+    fn broker_realm_identity_loader_handles_missing_and_strict_metadata_only() {
+        let root = test_audit_dir("realm-identity-loader");
+        fs::create_dir_all(&root).expect("create realm identity test root");
+        let missing_path = root.join("missing-realm-identity.json");
+        assert!(
+            load_realm_identity_config(&missing_path)
+                .expect("missing realm identity is optional")
+                .is_none()
+        );
+
+        let config_path = root.join("realm-identity.json");
+        fs::write(&config_path, realm_identity_json()).expect("write realm identity");
+        let loaded = load_realm_identity_config(&config_path)
+            .expect("realm identity parses")
+            .expect("realm identity present");
+        assert_eq!(loaded.summary.realm_count, 1);
+        assert_eq!(loaded.summary.identity_ref_count, 1);
+        assert_eq!(loaded.summary.controller_credential_ref_count, 1);
+
+        let secret_path = root.join("secret-realm-identity.json");
+        fs::write(
+            &secret_path,
+            realm_identity_json().replace(
+                r#""rotationPolicyRef": "rotate-work""#,
+                r#""rotationPolicyRef": "rotate-work", "privateKey": "nope""#,
+            ),
+        )
+        .expect("write invalid realm identity");
+        let err = load_realm_identity_config(&secret_path)
+            .expect_err("secret material field is rejected");
+        let err_text = format!("{err:?}");
+        assert!(
+            !err_text.contains(secret_path.to_string_lossy().as_ref()),
+            "identity parse errors must not log config paths: {err_text}"
+        );
+
+        let secret_ref_path = root.join("secret-ref-realm-identity.json");
+        fs::write(
+            &secret_ref_path,
+            realm_identity_json().replace("idref-work", "secret-identity"),
+        )
+        .expect("write invalid realm identity ref");
+        let err = load_realm_identity_config(&secret_ref_path)
+            .expect_err("secret-shaped identity refs are rejected");
+        let err_text = format!("{err:?}");
+        assert!(
+            !err_text.contains(secret_ref_path.to_string_lossy().as_ref()),
+            "identity ref parse errors must not log config paths: {err_text}"
+        );
+
+        let invariant_path = root.join("bad-realm-identity.json");
+        fs::write(
+            &invariant_path,
+            realm_identity_json().replace(r#""metadataOnly": true"#, r#""metadataOnly": false"#),
+        )
+        .expect("write invalid realm identity invariant");
+        assert!(load_realm_identity_config(&invariant_path).is_err());
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -9962,6 +10106,7 @@ mod tests {
             sync_path: None,
             allocator_path: None,
             realm_controllers_path: None,
+            realm_identity_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),
@@ -10173,6 +10318,7 @@ mod tests {
             audit_retention_days: 14,
             bundle_path: manifest_path.to_path_buf(),
             realm_controllers_path: root.join("realm-controllers.json"),
+            realm_identity_path: root.join("realm-identity.json"),
             state_dir: root.join("state"),
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),

@@ -829,10 +829,10 @@ name = "d2b"
 version = "0.0.0-bootstrap"
 dependencies = [
  "clap",
- "d2b-realm-core",
- "d2b-realm-router",
  "d2b-contracts",
  "d2b-core",
+ "d2b-realm-core",
+ "d2b-realm-router",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -863,67 +863,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-realm-codec-protobuf"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-contracts",
- "prost 0.13.5",
- "serde_json",
-]
-
-[[package]]
-name = "d2b-realm-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-realm-router"
-version = "0.0.0-bootstrap"
-dependencies = [
- "chacha20poly1305",
- "d2b-realm-codec-protobuf",
- "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-realm-transport",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-realm-transport"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
- "tokio",
-]
-
-[[package]]
 name = "d2b-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -951,6 +890,7 @@ name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
+ "d2b-realm-core",
  "regex",
  "rustix 0.38.44",
  "schemars",
@@ -966,9 +906,9 @@ name = "d2b-daemon-access"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts",
  "d2b-realm-core",
  "d2b-realm-provider",
- "d2b-contracts",
  "nix 0.29.0",
  "serde",
  "serde_json",
@@ -1003,11 +943,11 @@ dependencies = [
  "azure_core",
  "base64",
  "chacha20poly1305",
- "d2b-realm-core",
- "d2b-realm-provider",
  "d2b-gateway",
  "d2b-provider-aca",
  "d2b-provider-relay",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "getrandom 0.2.17",
  "libc",
  "serde",
@@ -1024,9 +964,9 @@ name = "d2b-guestd"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-realm-core",
  "d2b-contracts",
  "d2b-exec-runner",
+ "d2b-realm-core",
  "futures",
  "hmac",
  "protobuf",
@@ -1042,10 +982,10 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
  "d2b-contracts",
  "d2b-core",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -1071,10 +1011,10 @@ name = "d2b-host-providers"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
  "d2b-core",
  "d2b-host",
+ "d2b-realm-core",
+ "d2b-realm-provider",
  "serde_json",
  "tokio",
 ]
@@ -1130,6 +1070,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-realm-codec-protobuf"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "prost 0.13.5",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-realm-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-realm-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-realm-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-realm-router"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "chacha20poly1305",
+ "d2b-realm-codec-protobuf",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "d2b-realm-transport",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "d2b-realm-transport"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-sk-frontend"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1169,9 +1170,6 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
- "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-realm-router",
  "d2b-contracts",
  "d2b-core",
  "d2b-gateway",
@@ -1179,6 +1177,9 @@ dependencies = [
  "d2b-host",
  "d2b-provider-aca",
  "d2b-provider-relay",
+ "d2b-realm-core",
+ "d2b-realm-provider",
+ "d2b-realm-router",
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
@@ -4812,9 +4813,9 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "d2b",
- "d2b-realm-core",
  "d2b-contracts",
  "d2b-core",
+ "d2b-realm-core",
  "protobuf-codegen",
  "schemars",
  "serde",

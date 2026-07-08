@@ -40,7 +40,9 @@ const SECRET_MARKERS: &[&str] = &[
     "passwd",
     "bearer",
     "credential",
+    "private",
     "apikey",
+    "token",
     "privatekey",
     "accesstoken",
     "refreshtoken",
@@ -305,6 +307,43 @@ id_newtype!(
     IdDebug::Redacted
 );
 id_newtype!(
+    /// Opaque reference to a realm identity key. This is a locator only; it is
+    /// never public/private key material and remains redacted in Debug.
+    RealmIdentityRef,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque reference to a controller-generation credential. This is a
+    /// metadata handle only; credential bytes/signatures are not represented.
+    ControllerGenerationCredentialRef,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque key-rotation plan/event id.
+    KeyRotationId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque revocation-list id.
+    RevocationListId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
+    /// Opaque recovery procedure id.
+    RecoveryProcedureId,
+    is_opaque_token,
+    OPAQUE_PATTERN,
+    IdDebug::Redacted
+);
+id_newtype!(
     /// Opaque local-root allocator lease id. The token is stable metadata only:
     /// it is not a PID, file descriptor, path, interface name, or credential.
     AllocatorLeaseId,
@@ -368,6 +407,14 @@ mod tests {
             PrincipalId::parse("x".repeat(MAX_ID_LEN + 1)),
             Err(IdError::TooLong)
         );
+        assert_eq!(
+            ControllerGenerationCredentialRef::parse("credential-ref-1"),
+            Err(IdError::BadShape)
+        );
+        assert_eq!(
+            RealmIdentityRef::parse("private-key-ref"),
+            Err(IdError::BadShape)
+        );
     }
 
     #[test]
@@ -412,5 +459,14 @@ mod tests {
 
         let node = NodeId::parse("gateway").unwrap();
         assert_eq!(format!("{node:?}"), "NodeId(\"gateway\")");
+
+        let identity_ref = RealmIdentityRef::parse("idref-1").unwrap();
+        assert_eq!(format!("{identity_ref:?}"), "RealmIdentityRef(<7 bytes>)");
+
+        let credential_ref = ControllerGenerationCredentialRef::parse("cgref-1").unwrap();
+        assert_eq!(
+            format!("{credential_ref:?}"),
+            "ControllerGenerationCredentialRef(<7 bytes>)"
+        );
     }
 }

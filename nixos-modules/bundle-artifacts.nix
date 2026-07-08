@@ -138,6 +138,7 @@ let
     "syncJson"
     "allocatorJson"
     "realmControllersJson"
+    "realmIdentityJson"
   ];
 
   shouldInstall = artifact:
@@ -221,6 +222,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed realm-controllers.json artifact metadata.";
+    };
+
+    realmIdentityJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed realm-identity.json artifact metadata.";
     };
 
     extraArtifacts = lib.mkOption {

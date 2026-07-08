@@ -86,6 +86,15 @@ let
         capabilityRefs = [ "relay" "aca" "relay" ];
         configRef = "work-aca-non-secret";
       };
+      keys = {
+        realmIdentityRef = "idref-work";
+        realmIdentityFingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        controllerKeyRef = "cgref-work";
+        controllerCredentialFingerprint = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        trustBundleRef = "trust-work";
+        enrollmentRef = "enroll-work";
+        rotationPolicyRef = "rotate-work";
+      };
       relay = {
         enable = true;
         mode = "static";
@@ -93,7 +102,6 @@ let
         credentialRef = "work-relay-credential";
       };
       policy.bundleRef = "work-policy";
-      keys.enrollmentRef = "work-enrollment";
     };
 
     d2b.realms.archive = {
@@ -215,6 +223,18 @@ let
     (lib.recursiveUpdate hostBase {
       d2b.realms.home = {
         allowedUsers = [ "missing-user" ];
+      };
+    })
+  ];
+
+  secretIdentityRefMessages = failureMessages [
+    (lib.recursiveUpdate hostBase {
+      d2b.realms.work.keys = {
+        realmIdentityRef = "secret-identity";
+        controllerKeyRef = "-----BEGIN PRIVATE KEY-----";
+        trustBundleRef = "SharedAccessKey=must-not-live-in-nix";
+        enrollmentRef = "bearer-enrollment-token";
+        rotationPolicyRef = "private-key-policy";
       };
     })
   ];
@@ -592,8 +612,20 @@ in
         user = cfg.d2b._bundle.realmControllersJson.user;
         group = cfg.d2b._bundle.realmControllersJson.group;
         bundleRealmControllersPath = cfg.d2b._bundle.bundle.data.realmControllersPath;
+        bundleRealmIdentityPath = cfg.d2b._bundle.bundle.data.realmIdentityPath;
+        realmIdentityArtifact = {
+          installFileName = cfg.d2b._bundle.realmIdentityJson.installFileName;
+          classification = cfg.d2b._bundle.realmIdentityJson.classification;
+          sensitivity = cfg.d2b._bundle.realmIdentityJson.sensitivity;
+          mode = cfg.d2b._bundle.realmIdentityJson.mode;
+          user = cfg.d2b._bundle.realmIdentityJson.user;
+          group = cfg.d2b._bundle.realmIdentityJson.group;
+        };
         storageCoversRealmControllers =
           lib.any (path: path.pathTemplate == "/etc/d2b/realm-controllers.json")
+            cfg.d2b._bundle.storageJson.data.paths;
+        storageCoversRealmIdentity =
+          lib.any (path: path.pathTemplate == "/etc/d2b/realm-identity.json")
             cfg.d2b._bundle.storageJson.data.paths;
         realmSystemdUnits = {
           serviceCount = lib.length realmServiceNames;
@@ -702,7 +734,17 @@ in
       user = "root";
       group = "d2bd";
       bundleRealmControllersPath = "/etc/d2b/realm-controllers.json";
+      bundleRealmIdentityPath = "/etc/d2b/realm-identity.json";
+      realmIdentityArtifact = {
+        installFileName = "realm-identity.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+        mode = "0640";
+        user = "root";
+        group = "d2bd";
+      };
       storageCoversRealmControllers = true;
+      storageCoversRealmIdentity = true;
       realmSystemdUnits = {
         serviceCount = 3;
         socketCount = 1;
@@ -835,6 +877,56 @@ in
     };
   };
 
+  "realms/identity-config-artifact-is-metadata-only" = {
+    expr =
+      let
+        data = cfg.d2b._bundle.realmIdentityJson.data;
+        work = builtins.head data.realms;
+      in
+      {
+        runtimeState = data.runtimeState;
+        realmCount = lib.length data.realms;
+        work = work;
+        invariants = data.invariants;
+        renderedTextHasNoMaterial =
+          !(lib.hasInfix "privateKey" cfg.d2b._bundle.realmIdentityJson.jsonText)
+          && !(lib.hasInfix "publicKeyPem" cfg.d2b._bundle.realmIdentityJson.jsonText)
+          && !(lib.hasInfix "credentialMaterial" cfg.d2b._bundle.realmIdentityJson.jsonText);
+      };
+    expected = {
+      runtimeState = "metadata-only";
+      realmCount = 1;
+      work = {
+        realm = [ "work" "home" ];
+        realmIdentityRef = "idref-work";
+        realmIdentityFingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        controllerCredentialRef = "cgref-work";
+        controllerCredentialFingerprint = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        trustBundleRef = "trust-work";
+        enrollmentRef = "enroll-work";
+        rotationPolicyRef = "rotate-work";
+      };
+      invariants = {
+        metadataOnly = true;
+        noSecretMaterial = true;
+        preservesRuntimeBehavior = true;
+      };
+      renderedTextHasNoMaterial = true;
+    };
+  };
+
+  "realms/rejects-secret-shaped-identity-key-refs" = {
+    expr = hasMessage [
+      "identity key refs must be opaque, non-secret locators"
+      "work.realmIdentityRef"
+      "work.controllerKeyRef"
+      "work.trustBundleRef"
+      "work.enrollmentRef"
+      "work.rotationPolicyRef"
+    ] secretIdentityRefMessages;
+    expected = true;
+  };
+
   "realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units" = {
     expr =
       let
@@ -928,6 +1020,7 @@ in
           publicSocketGroup = homeDaemonConfig.publicSocketGroup;
           launcherUsers = homeDaemonConfig.launcherUsers;
           realmControllersConfigPath = homeDaemonConfig.realmControllersConfigPath;
+          realmIdentityConfigPath = homeDaemonConfig.realmIdentityConfigPath;
           artifacts = homeDaemonConfig.artifacts;
         };
         unitOrdering = {
@@ -984,6 +1077,7 @@ in
         publicSocketGroup = "d2bra-${realmHash "home"}";
         launcherUsers = [ "alice" ];
         realmControllersConfigPath = "/etc/d2b/realm-controllers.json";
+        realmIdentityConfigPath = "/etc/d2b/realm-identity.json";
         artifacts = {
           publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
           bundlePath = "/etc/d2b/bundle.json";

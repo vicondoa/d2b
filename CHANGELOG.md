@@ -20,6 +20,18 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added a pure `d2b-realm-core` in-memory realm identity metadata store for
+  enrollment pins, controller-generation rotation, revocation-list merge,
+  recovery state transitions, teardown directives, and redacted lifecycle audit
+  metadata.
+- Added `d2b-realm-core` metadata-only realm identity lifecycle DTOs for
+  identity refs/fingerprints, controller-generation credentials, enrollment
+  trust anchors/key pins, key rotation, revocation-list propagation, session
+  teardown directives, recovery procedures, and redacted audit metadata.
+- Documented the realm identity lifecycle contract for refs/fingerprints versus
+  key material, parent trust anchors, child key pins, controller-generation
+  rotation, revocation lists, teardown directives, recovery metadata, and the
+  future live-enforcement boundary.
 - Documented the realm access resolver contract for canonical realm target
   grammar, alias/default-realm resolution, direct host-local access bindings,
   capability preflight, typed resolver diagnostics, and current non-routing
@@ -49,6 +61,12 @@ deprecations ship one minor release before removal.
 - Added Rust daemon, broker, and bundle-resolver loading for
   `realm-controllers.json` artifacts, including strict parsing and validation
   while keeping runtime realm routing inert.
+- Added private `realm-identity.json` bundle metadata and strict daemon,
+  broker, and bundle-resolver loading for realm identity refs/fingerprints only,
+  without loading secret material or enabling live trust sessions.
+- Added Layer-1 realm identity coverage for strict DTO/store behavior, rendered
+  `realm-identity.json` bundle/storage contracts, loader redaction, schema drift,
+  and eval-time rejection of secret-shaped identity refs.
 - Added realm access resolver contract DTOs for canonical target resolution,
   direct host-local bindings that preserve `SO_PEERCRED`, alias/default-realm
   diagnostics, conflict candidates, capability preflight, and stale/missing

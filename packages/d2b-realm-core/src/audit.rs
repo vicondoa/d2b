@@ -367,9 +367,9 @@ pub enum AuthzDecision {
 }
 
 /// What an audited operation was authorized against. Workload operations
-/// require a [`Capability`]; node-control, enrollment, and read-only health
-/// operations are authorized by node enrollment / session identity, so they
-/// have their own scope rather than a synthetic capability.
+/// require a [`Capability`]; node-control, identity lifecycle, and read-only
+/// health operations are authorized by node enrollment / session identity, so
+/// they have their own scope rather than a synthetic capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "scope", rename_all = "kebab-case")]
 pub enum AuthorizationScope {
@@ -382,6 +382,12 @@ pub enum AuthorizationScope {
     NodeControl,
     /// Realm/node enrollment.
     Enrollment,
+    /// Realm identity or controller-generation key rotation.
+    KeyRotation,
+    /// Revocation issuance/list propagation/session teardown.
+    Revocation,
+    /// Child controller-generation recovery.
+    Recovery,
     /// Read-only health probe.
     Health,
 }
@@ -404,6 +410,9 @@ impl<'de> Deserialize<'de> for AuthorizationScope {
             Capability,
             NodeControl,
             Enrollment,
+            KeyRotation,
+            Revocation,
+            Recovery,
             Health,
         }
 
@@ -428,6 +437,15 @@ impl<'de> Deserialize<'de> for AuthorizationScope {
             }
             ScopeTag::Enrollment => {
                 reject_scope_capability(raw.capability, AuthorizationScope::Enrollment)
+            }
+            ScopeTag::KeyRotation => {
+                reject_scope_capability(raw.capability, AuthorizationScope::KeyRotation)
+            }
+            ScopeTag::Revocation => {
+                reject_scope_capability(raw.capability, AuthorizationScope::Revocation)
+            }
+            ScopeTag::Recovery => {
+                reject_scope_capability(raw.capability, AuthorizationScope::Recovery)
             }
             ScopeTag::Health => reject_scope_capability(raw.capability, AuthorizationScope::Health),
         }

@@ -280,7 +280,10 @@ struct ProtoAuditEnvelope {
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct ProtoAuthorizationScope {
-    #[prost(oneof = "proto_authorization_scope::Scope", tags = "1, 2, 3, 4")]
+    #[prost(
+        oneof = "proto_authorization_scope::Scope",
+        tags = "1, 2, 3, 4, 5, 6, 7"
+    )]
     scope: Option<proto_authorization_scope::Scope>,
 }
 
@@ -295,6 +298,12 @@ mod proto_authorization_scope {
         Enrollment(super::ProtoUnit),
         #[prost(message, tag = "4")]
         Health(super::ProtoUnit),
+        #[prost(message, tag = "5")]
+        KeyRotation(super::ProtoUnit),
+        #[prost(message, tag = "6")]
+        Revocation(super::ProtoUnit),
+        #[prost(message, tag = "7")]
+        Recovery(super::ProtoUnit),
     }
 }
 
@@ -887,6 +896,13 @@ fn encode_authorization_scope(
             proto_authorization_scope::Scope::Enrollment(ProtoUnit {})
         }
         AuthorizationScope::Health => proto_authorization_scope::Scope::Health(ProtoUnit {}),
+        AuthorizationScope::KeyRotation => {
+            proto_authorization_scope::Scope::KeyRotation(ProtoUnit {})
+        }
+        AuthorizationScope::Revocation => {
+            proto_authorization_scope::Scope::Revocation(ProtoUnit {})
+        }
+        AuthorizationScope::Recovery => proto_authorization_scope::Scope::Recovery(ProtoUnit {}),
     };
     Ok(ProtoAuthorizationScope { scope: Some(scope) })
 }
@@ -904,6 +920,9 @@ fn decode_authorization_scope(
         proto_authorization_scope::Scope::NodeControl(_) => Ok(AuthorizationScope::NodeControl),
         proto_authorization_scope::Scope::Enrollment(_) => Ok(AuthorizationScope::Enrollment),
         proto_authorization_scope::Scope::Health(_) => Ok(AuthorizationScope::Health),
+        proto_authorization_scope::Scope::KeyRotation(_) => Ok(AuthorizationScope::KeyRotation),
+        proto_authorization_scope::Scope::Revocation(_) => Ok(AuthorizationScope::Revocation),
+        proto_authorization_scope::Scope::Recovery(_) => Ok(AuthorizationScope::Recovery),
     }
 }
 

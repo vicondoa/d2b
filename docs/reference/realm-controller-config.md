@@ -96,6 +96,24 @@ request typed host-resource leases from the local-root allocator and receive
 opaque grants. They must not pass raw host paths, nftables snippets, interface
 names, or command bytes through the host daemon to get work done.
 
+## Identity lifecycle boundary
+
+Realm controller rows reserve the host-local state and audit locations where a
+future controller can persist identity lifecycle state. The identity contract
+itself lives in
+[`d2b-realm-core`](./realm-identity-lifecycle.md) and the generated
+[`d2b-realm-core` schema companion](./schemas/v2/d2b-realm-core.md): identity
+references, fingerprints, controller generations, enrollment records, rotation
+plans, revocation lists, teardown directives, recovery procedures, and redacted
+identity audit metadata.
+
+`realm-controllers.json` does not contain private keys, public key bytes,
+provider credentials, relay credentials, session secrets, or signed credential
+material. It also does not enforce revocation or session teardown. Future
+runtime code must load identity metadata from controller state, fail closed on
+stale or revoked generations, and write bounded audit records to the realm
+audit surface described by this file.
+
 ## State, locks, and audit separation
 
 Realm controller metadata keeps three storage classes distinct:
@@ -138,6 +156,7 @@ runtime substrate until those later runtime surfaces land.
 
 - [Realm option schema](./realm-options.md)
 - [Realm access resolver contract](./realm-access-resolver.md)
+- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Local-root allocator contract](./local-root-allocator.md)
 - [Realm policy](./realm-policy.md)
 - [Realm core model reference](./realm-core.md)

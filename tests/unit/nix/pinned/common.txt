@@ -591,6 +591,7 @@ realms/allocator-artifact-roots-enabled-realm-index
 realms/controller-config-artifact-materializes-host-local-units
 realms/examples-minimal-and-multi-env-still-eval
 realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units
+realms/identity-config-artifact-is-metadata-only
 realms/index-normalizes-enabled-disabled-and-derived-paths
 realms/rejects-duplicate-id-and-path
 realms/rejects-duplicate-runtime-paths
@@ -599,6 +600,7 @@ realms/rejects-missing-host-local-allowed-user
 realms/rejects-missing-parent
 realms/rejects-overlong-unix-socket-paths
 realms/rejects-parent-cycle
+realms/rejects-secret-shaped-identity-key-refs
 realms/requires-provider-for-provider-backed-placement
 realms/valid-home-dev-work-keeps-env-substrate-active
 requested-vm-config/boot-selector-and-hotplug-source-coexist

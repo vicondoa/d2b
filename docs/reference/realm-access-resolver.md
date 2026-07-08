@@ -91,6 +91,13 @@ This preflight is not authorization by itself. Future runtime paths still need
 realm identity, policy checks, idempotency, and bounded audit before mutating or
 streaming operations execute.
 
+Resolver stale/missing-controller diagnostics are intended to compose with the
+metadata-only identity lifecycle records documented in
+[Realm identity lifecycle contract](./realm-identity-lifecycle.md). A future
+runtime can use controller-generation ids, revocation lists, and teardown
+directives to fail closed before admitting operations or streams; the current
+resolver contract does not perform that live enforcement.
+
 ## Typed diagnostics
 
 Resolver failures use bounded, client-safe diagnostics rather than free-form
@@ -129,6 +136,7 @@ VM lifecycle operations onto per-realm routing.
 ## Related references
 
 - [Realm core model reference](./realm-core.md)
+- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm option schema](./realm-options.md)
 - [CLI contract](./cli-contract.md)

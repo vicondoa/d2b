@@ -638,6 +638,7 @@ mod tests {
             sync_path: Some("sync.json".to_owned()),
             allocator_path: None,
             realm_controllers_path: None,
+            realm_identity_path: None,
             closures: Vec::new(),
             minijail_profiles: Vec::new(),
             managed_keys: Default::default(),
@@ -658,6 +659,7 @@ mod tests {
             },
             Some(storage_contract),
             Some(sync_contract),
+            None,
             None,
             manifest(),
         )
