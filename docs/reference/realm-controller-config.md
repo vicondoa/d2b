@@ -156,6 +156,7 @@ runtime substrate until those later runtime surfaces land.
 
 - [Realm option schema](./realm-options.md)
 - [Realm access resolver contract](./realm-access-resolver.md)
+- [Realm tree routing contract](./realm-routing.md)
 - [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Local-root allocator contract](./local-root-allocator.md)
 - [Realm policy](./realm-policy.md)

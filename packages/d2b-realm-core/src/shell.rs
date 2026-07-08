@@ -1,4 +1,4 @@
-//! Persistent-shell DTOs for the realm semantic operation family
+//! Persistent-shell data models for the realm semantic operation family
 //! (ADR 0039). These types carry bounded shell metadata only: terminal bytes,
 //! argv, environment, cwd, provider endpoints, and credentials stay in opaque
 //! operation/stream payloads owned by higher layers and never appear here.
@@ -446,7 +446,7 @@ impl<'de> Deserialize<'de> for ShellEventBatch {
 }
 
 /// Successful `ShellAttach` metadata. The terminal stream itself is opened as
-/// `StreamKind::ShellPty`, so raw terminal bytes stay out of this DTO.
+/// `StreamKind::ShellPty`, so raw terminal bytes stay out of this metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShellAttachSummary {

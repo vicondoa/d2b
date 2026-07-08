@@ -1,7 +1,7 @@
 //! Execution model (ADR 0032). A durable execution is referenced by an
 //! [`crate::ids::ExecutionId`] so a retried request can rediscover it.
 //! Arguments, environment, cwd, stdio, and log bytes are payload and never
-//! appear in these metadata DTOs.
+//! appear in these metadata models.
 
 use crate::ids::{ExecutionId, StreamCursor, WorkloadId};
 use crate::token::ProtocolToken;
@@ -54,7 +54,7 @@ pub enum ExecAttachMode {
 }
 
 /// Durable execution start request metadata. Command details live in the
-/// opaque operation body and are never logged by this DTO.
+/// opaque operation body and are never logged by this metadata model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecStartRequest {

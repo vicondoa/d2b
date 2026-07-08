@@ -20,11 +20,29 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Added a pure `d2b-realm-core` in-memory realm identity metadata store for
+- Added tree route admission and decision support for signed-expiring route
+  advertisements, strict descendant namespaces, replay/expiry checks,
+  loop/multiparent refusal, nearest-common-ancestor path decisions, bounded
+  discovery queue decisions, direct shortcut metadata, and low-cardinality route
+  audit/telemetry events without enabling live transport.
+- Added topology validation coverage for bounded discovery queues,
+  unauthenticated-peer drop-new/rate-limit behavior, route-advertisement
+  expiry/replay rejection, capability denials, direct-shortcut policy denials,
+  no-raw-tunnel route decisions, generated schema/docs exposure, and
+  ancestor-mediated tree route decisions.
+- Documented the metadata-only realm discovery and strict tree routing contract,
+  including parent/child route advertisements, namespace validation,
+  queue/rate/replay bounds, direct shortcut constraints, correlation/audit
+  chaining, and the explicit no VPN/overlay/SSH/raw-tunnel runtime boundary.
+- Added tree routing/discovery data models for bounded
+  discovery queues, unverified-peer/session admission, replay windows, signed
+  route advertisements, namespace allocations, route decisions, direct shortcut
+  metadata, audit labels, and low-cardinality telemetry counters.
+- Added an in-memory realm identity metadata store for
   enrollment pins, controller-generation rotation, revocation-list merge,
   recovery state transitions, teardown directives, and redacted lifecycle audit
   metadata.
-- Added `d2b-realm-core` metadata-only realm identity lifecycle DTOs for
+- Added metadata-only realm identity lifecycle models for
   identity refs/fingerprints, controller-generation credentials, enrollment
   trust anchors/key pins, key rotation, revocation-list propagation, session
   teardown directives, recovery procedures, and redacted audit metadata.
@@ -40,10 +58,10 @@ deprecations ship one minor release before removal.
   leases, opaque resource ids, deterministic acquisition order, reconciliation,
   quarantine/reclaim, immutable host-file boundaries, and the current
   contract-only implementation status.
-- Added `d2b-realm-core` local-root allocator DTOs for realm host-resource
+- Added local-root allocator data models for realm host-resource
   leases, opaque resource ids, allocation/reconciliation responses, bounded
   allocator audit/metric metadata, and generated JSON schema coverage.
-- Added a pure `d2b-realm-core` local-root allocator engine over fake ledger,
+- Added a pure local-root allocator engine over fake ledger,
   observation, and liveness backends for deterministic lease allocation,
   idempotency replay, reconciliation decisions, and bounded low-cardinality
   audit/metric metadata.
@@ -64,10 +82,10 @@ deprecations ship one minor release before removal.
 - Added private `realm-identity.json` bundle metadata and strict daemon,
   broker, and bundle-resolver loading for realm identity refs/fingerprints only,
   without loading secret material or enabling live trust sessions.
-- Added Layer-1 realm identity coverage for strict DTO/store behavior, rendered
+- Added Layer-1 realm identity coverage for strict data-model/store behavior, rendered
   `realm-identity.json` bundle/storage contracts, loader redaction, schema drift,
   and eval-time rejection of secret-shaped identity refs.
-- Added realm access resolver contract DTOs for canonical target resolution,
+- Added realm access resolver contract models for canonical target resolution,
   direct host-local bindings that preserve `SO_PEERCRED`, alias/default-realm
   diagnostics, conflict candidates, capability preflight, and stale/missing
   realm-controller refusals without changing runtime routing.
@@ -80,6 +98,21 @@ deprecations ship one minor release before removal.
 - Added Layer-1 coverage for host-local realm controller units, sockets,
   principals, tmpfiles paths, disabled-realm omissions, bundle classification,
   daemon/broker loading defaults, and bundle-resolver loading.
+
+### Fixed
+
+- Hardened route refresh handling so stale/equal advertisements cannot downgrade
+  topology or capabilities, expired entries are treated absent without hot-path
+  full sweeps, admissions remain atomic without full map cloning, and normal
+  proactive refresh sequences do not exhaust replay capacity.
+- Added fixed in-memory capacities to the pure realm route engine so valid
+  unexpired parent, route, and replay advertisement state rejects new entries
+  fail-closed instead of growing without bound.
+- Bounded the pure realm route engine's replay/route expiry state, refreshed
+  existing route capabilities and ids on newer advertisements, and made
+  local-root route capability decisions explicit.
+- Aligned protobuf authorization-scope encoding with identity lifecycle scopes
+  and current route contracts.
 - Documented the private `realm-controllers.json` contract for deterministic
   host-local realm controller unit/socket naming, direct realm socket
   authorization, local-root allocator resolution, state/audit separation, and
@@ -106,7 +139,7 @@ deprecations ship one minor release before removal.
   audit boundaries; first-class `home`, `dev`, and `work` realms to replace
   the current grouping model; and a clean cutover from old realm/ACA sandbox
   surfaces into `d2b.realms`.
-- Added core realm DTOs in `d2b-realm-core` for controller placement,
+- Added core realm data models for controller placement,
   access bindings, provider/workload placement summaries, tree route
   advertisements, enrollment/key lifecycle metadata, and migration-error
   envelopes.
@@ -114,7 +147,7 @@ deprecations ship one minor release before removal.
   so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
   `ShellOp::List` without scraping human CLI output or leaking terminal state.
 - Added typed deserialization support for public daemon response envelopes so
-  downstream clients can parse `PublicResponse` DTOs without falling back to
+  downstream clients can parse `PublicResponse` data without falling back to
   untyped JSON.
 - Exported `packages.<system>.d2b-wayland-proxy` and added a supported
   `--host-terminal` launch path for VM-bound host terminals. The launcher creates

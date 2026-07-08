@@ -1,6 +1,6 @@
 //! Hermetic local-root allocator engine over fake host observations.
 //!
-//! The engine is deliberately pure: it reconciles typed allocator DTOs against
+//! The engine is deliberately pure: it reconciles typed allocator data models against
 //! in-memory fake ledger/liveness/observation backends and emits decisions,
 //! audit metadata, and low-cardinality metric samples. It performs no netlink,
 //! nftables, filesystem, systemd, broker, or other live host mutation.

@@ -123,6 +123,9 @@ to consume alongside:
 
 - [Realm access resolver contract](./realm-access-resolver.md), which returns
   controller bindings and stale/missing controller diagnostics;
+- [Realm tree routing contract](./realm-routing.md), which records strict
+  parent/child route advertisements, namespace delegation, replay bounds,
+  shortcut authorization, and route audit/telemetry metadata;
 - [Realm controller configuration](./realm-controller-config.md), which
   reserves host-local daemon, broker, socket, state, audit, and allocator
   metadata;
@@ -148,5 +151,6 @@ records bounded and redacted.
 - [Realm core model reference](./realm-core.md)
 - [Generated realm-core schema companion](./schemas/v2/d2b-realm-core.md)
 - [Realm access resolver contract](./realm-access-resolver.md)
+- [Realm tree routing contract](./realm-routing.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm policy](./realm-policy.md)

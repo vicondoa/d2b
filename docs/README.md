@@ -100,6 +100,14 @@ The contracts. Stable interfaces a consumer can depend on.
   canonical realm target grammar, alias/default-realm resolution, direct
   host-local access bindings, capability preflight, and typed resolver
   diagnostics.
+- [`reference/realm-routing.md`](./reference/realm-routing.md) —
+  metadata-only discovery, strict parent/child tree routing, signed route
+  advertisements, namespace validation, direct shortcut constraints, and
+  bounded route audit/telemetry contracts.
+- [`explanation/realm-tree-routing.md`](./explanation/realm-tree-routing.md) —
+  conceptual boundaries for route discovery, namespace delegation, shortcuts,
+  and why the contract does not imply live relay, VPN, overlay, SSH, or raw
+  tunnel routing.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.

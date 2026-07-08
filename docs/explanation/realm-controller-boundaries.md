@@ -69,5 +69,8 @@ creates deterministic control-plane units, broker sockets, principals, tmpfiles
 paths, and ACL entries for the realm daemon/broker scaffold. It still does not
 enroll identities, start relays, advertise routes, place provider controllers,
 allocate host resources through the allocator, or migrate workloads out of
-`d2b.envs`. Those runtime surfaces still require reviewed implementation before
-operators can depend on them.
+`d2b.envs`. The discovery and strict tree routing contract is described in
+[realm tree routing boundaries](./realm-tree-routing.md), but that contract is
+metadata-only until reviewed runtime implementation lands. Operators should not
+treat it as live relay routing, VPN/overlay networking, SSH fallback, or any raw
+tunnel facility.

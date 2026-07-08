@@ -315,7 +315,7 @@ pub struct RealmAccessClientContract {
     pub require_direct_local_so_peercred: bool,
 }
 
-/// Input DTO for realm access resolution. Runtime routing can continue using
+/// Input model for realm access resolution. Runtime routing can continue using
 /// existing paths while callers and tests exchange this contract shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

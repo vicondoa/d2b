@@ -17,3 +17,8 @@ streams; peer-session and stream-mux layers own those contracts.
 Transport selection must be explicit. If the requested transport cannot
 connect, listen, or authenticate at its own layer, callers receive a typed
 transport error; d2b does not silently downgrade to another transport.
+
+Tree route metadata does not create a transport by itself. The route contract
+forbids treating discovery or direct shortcut metadata as a VPN, overlay, SSH
+fallback, raw relay tunnel, raw TCP proxy, or file-descriptor tunnel; see
+[realm tree routing](./realm-routing.md).
