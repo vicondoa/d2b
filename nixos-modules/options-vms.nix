@@ -121,7 +121,21 @@ let
 in
 {
   options.d2b.vms = lib.mkOption {
-    description = "MicroVMs to declare via the d2b framework.";
+    description = ''
+      MicroVMs to declare via the d2b framework.
+
+      **Transitional surface.** In the v2 realm-native model the
+      public replacement for `d2b.vms.<vm>` is
+      `d2b.realms.<realm>.workloads.<workload>` with
+      `workload.kind = "local-vm"` (or `"qemu-media"` for external-media
+      runners).  Existing `d2b.vms` declarations remain the active
+      runtime substrate during the metadata-first transition; do not
+      remove them until you have completed the steps in
+      `docs/how-to/migrate-d2b-v1-2-to-v2.md`.  To ease the
+      transition, set `workload.legacyVmName = "<vm>"` to preserve the
+      existing `/var/lib/d2b/vms/<vm>` state path without any
+      activation-time migration.
+    '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }: {
       # options-vms-removed.nix's mkRemovedOptionModule shim

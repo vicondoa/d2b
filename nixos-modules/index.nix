@@ -121,28 +121,43 @@ let
   # vsockCid derivation lives in realm-workloads-launcher-json.nix.
   realmWorkloadRow = realmName: realm: workloadName: workload:
     let
-      vmRef = workload.vmRef;
-      hasVm = vmRef != null && builtins.hasAttr vmRef enabledVms;
+      # legacyVmName references an existing d2b.vms entry for vsockCid
+      # derivation and substrate identification.  Replaces the placeholder
+      # vmRef field that was on the old schema.
+      legacyVmName = workload.legacyVmName;
+      # runtimeKind is declared directly via workload.kind; no VM lookup needed.
       runtimeKind =
-        if hasVm
-        then d2bLib.vmRuntimeKind enabledVms.${vmRef}
-        else null;
+        if workload.kind == "local-vm" then "nixos"
+        else if workload.kind == "qemu-media" then "qemu-media"
+        else null;  # provider-placeholder has no local runtime
       runtimeProviderId =
         if runtimeKind != null
         then (d2bLib.runtimeProviderCatalog.${runtimeKind}).provider.id
         else null;
+      # Display label: launcher.label when set, otherwise workload id.
+      label =
+        if workload.launcher.label != null
+        then workload.launcher.label
+        else workloadName;
+      # XDG icon: launcher.icon.id when set, else launcher.icon.name.
+      icon =
+        if workload.launcher.icon.id != null then workload.launcher.icon.id
+        else workload.launcher.icon.name;
     in {
       inherit realmName workloadName;
       realmId = realm.id;
       realmPath = realm.path;
       # Canonical target address for realm-native tooling: <workload>.<realmPath>.d2b
       targetAddress = "${workloadName}.${realm.path}.d2b";
-      inherit (workload) enable actionId label icon;
-      capabilityRefs = sortNames (lib.unique workload.capabilityRefs);
-      preflightRefs = sortNames (lib.unique workload.preflightRefs);
-      inherit vmRef;
-      # substrateId: stable reference to the local VM substrate, if any.
-      substrateId = vmRef;
+      enable = workload.enable;
+      kind = workload.kind;
+      # actionId: stable launcher action identifier; defaults to workload id.
+      actionId = workloadName;
+      inherit label icon;
+      capabilityRefs = sortNames (lib.unique workload.launcher.capabilities);
+      inherit legacyVmName;
+      # substrateId: stable substrate reference for downstream consumers.
+      substrateId = legacyVmName;
       inherit runtimeKind runtimeProviderId;
     };
 
@@ -329,14 +344,15 @@ let
   enabledRealmWorkloadRows = lib.filter (w: w.enable)
     (lib.flatten (map (row: row.workloads) enabledRealmRows));
 
-  # Map from vmRef -> list of enabled realm workload rows that reference that VM.
+  # Map from legacyVmName -> list of enabled realm workload rows that reference
+  # that VM.  Used for cross-realm vsockCid collision detection.
   realmWorkloadsByVm =
     lib.foldl
       (acc: row:
-        if row.vmRef == null then acc
+        if row.legacyVmName == null then acc
         else
-          let existing = acc.${row.vmRef} or [ ];
-          in acc // { ${row.vmRef} = existing ++ [ row ]; })
+          let existing = acc.${row.legacyVmName} or [ ];
+          in acc // { ${row.legacyVmName} = existing ++ [ row ]; })
       { }
       enabledRealmWorkloadRows;
 
@@ -588,7 +604,7 @@ let
         all = allRealmWorkloadRows;
         # Workload rows for enabled realms with workload.enable = true.
         enabled = enabledRealmWorkloadRows;
-        # Map from vmRef -> list of enabled realm workload rows.
+        # Map from legacyVmName -> list of enabled realm workload rows.
         byVm = realmWorkloadsByVm;
       };
       # Cross-realm external network attachment conflict data.

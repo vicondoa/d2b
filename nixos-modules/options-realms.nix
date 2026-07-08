@@ -1,10 +1,21 @@
 # d2b.realms.<realm>.* — realm-native control-plane option foundation.
 #
-# This file declares the public realm-native Nix schema without
-# materialising networks, allocators, or VM/env migrations. Host-local realms
-# do materialise their control-plane users, groups, sockets, and unit
-# definitions; existing `d2b.envs` and `d2b.vms.<vm>.env` behaviour remains the
-# runtime source of truth.
+# This file declares the public realm-native Nix schema.  Extended
+# sub-option groups live in focused companion files:
+#
+#   options-realms-network.nix    — d2b.realms.<realm>.network.*
+#                                   Full env-replacement shape:
+#                                   bridge/subnet/uplink/externalNetwork/
+#                                   mDNS/port-forward.
+#   options-realms-workloads.nix  — d2b.realms.<realm>.workloads.*
+#                                   Per-workload declarations with kind
+#                                   support for local-vm and qemu-media,
+#                                   plus desktop-launcher metadata.
+#
+# Host-local realms materialise control-plane users, groups, sockets, and
+# unit definitions.  Existing `d2b.envs` and `d2b.vms.<vm>.env` remain the
+# active runtime substrate during the metadata-first migration; see
+# docs/how-to/migrate-d2b-v1-2-to-v2.md for the transition guide.
 { lib, config, ... }:
 
 let
@@ -80,13 +91,21 @@ in
 {
   options.d2b.realms = lib.mkOption {
     description = ''
-      Realm-native control-plane declarations. A realm is the future unit of
+      Realm-native control-plane declarations.  A realm is the unit of
       daemon, broker, state, audit, provider, relay, policy, and workload
-      namespace ownership selected by the realm-native model.
+      namespace ownership in the v2 model.
+
+      Each realm may declare:
+        - `network.*`   — env-replacement network shape (bridges, subnets,
+                          external network, mDNS, port-forwards).
+        - `workloads.*` — per-workload declarations (kind = local-vm or
+                          qemu-media) with desktop-launcher metadata.
 
       Host-local realms materialise deterministic control-plane units and
-      access principals. Declaring a realm does not allocate network resources
-      or alter current `d2b.envs` / `d2b.vms.<vm>.env` behaviour.
+      access principals.  The v2 migration is metadata-first: `d2b.envs` and
+      `d2b.vms` remain the active runtime substrate until an operator
+      completes the transition.  See
+      docs/how-to/migrate-d2b-v1-2-to-v2.md for the step-by-step guide.
     '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }:
@@ -97,6 +116,10 @@ in
         realmRunDir = "/run/d2b/realms/${realmConfig.id}";
       in
       {
+        imports = [
+          ./options-realms-network.nix
+          ./options-realms-workloads.nix
+        ];
         freeformType = null;
         options = {
           enable = lib.mkOption {
@@ -238,9 +261,22 @@ in
               type = lib.types.enum [ "none" "inherit-env" "declared" "external" ];
               default = "none";
               description = ''
-                Placeholder for the future realm network model. `none` is the
-                behaviour-safe default: no network resources are claimed by
-                declaring a realm.
+                Realm network model.
+
+                `none`         — no bridges, net VM, or host network
+                                 resources are claimed.  Safe default for
+                                 metadata-only realm declarations.
+                `inherit-env`  — delegates network to an existing
+                                 `d2b.envs.<env>` entry in `network.envs`.
+                                 Bridge lifecycle remains controlled by the
+                                 env.
+                `declared`     — the realm owns the network declaration.
+                                 `network.lanSubnet` and
+                                 `network.uplinkSubnet` must be set.
+                                 d2b materialises bridges + net VM under a
+                                 realm-derived name.
+                `external`     — externally managed network; no d2b
+                                 bridges are created.
               '';
             };
 
@@ -258,89 +294,6 @@ in
               Provider declarations owned by this realm. Entries are inert
               configuration records in this scope; provider daemons/adapters are
               not started from them yet.
-            '';
-          };
-
-          workloads = lib.mkOption {
-            type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
-              options = {
-                enable = lib.mkOption {
-                  type = lib.types.bool;
-                  default = true;
-                  description = "Whether this realm workload declaration is active.";
-                };
-
-                vmRef = lib.mkOption {
-                  type = lib.types.nullOr (lib.types.strMatching label);
-                  default = null;
-                  example = "work-main";
-                  description = ''
-                    Transitional reference to an existing `d2b.vms.<vm>` name.
-                    Grounds runtime kind, provider id, and substrate id derivation
-                    for this workload. Null means the workload is provider-managed
-                    with no current local VM substrate.
-                  '';
-                };
-
-                label = lib.mkOption {
-                  type = lib.types.str;
-                  default = name;
-                  description = ''
-                    Human-readable display label for desktop launcher metadata.
-                    Must not contain secrets or sensitive identifiers.
-                  '';
-                };
-
-                icon = lib.mkOption {
-                  type = lib.types.nullOr lib.types.str;
-                  default = null;
-                  example = "work-browser";
-                  description = ''
-                    Non-secret icon descriptor for desktop launcher metadata.
-                    Use a freedesktop icon name or an opaque icon ref; no
-                    filesystem paths or sensitive identifiers.
-                  '';
-                };
-
-                actionId = lib.mkOption {
-                  type = lib.types.strMatching label;
-                  default = name;
-                  description = ''
-                    Stable action identifier used by desktop launcher consumers
-                    (Waybar, wlcontrol, wlterm, clip-picker). Defaults to the
-                    workload attribute name. Must match `^[a-z][a-z0-9-]*$`.
-                  '';
-                };
-
-                capabilityRefs = lib.mkOption {
-                  type = lib.types.listOf lib.types.str;
-                  default = [ ];
-                  description = ''
-                    Opaque references to workload capability requirements for
-                    preflight checks by desktop launcher consumers. No secrets
-                    or sensitive command payloads.
-                  '';
-                };
-
-                preflightRefs = lib.mkOption {
-                  type = lib.types.listOf lib.types.str;
-                  default = [ ];
-                  description = ''
-                    Opaque references to preflight requirement checks to run
-                    before workload launch. Consumed by desktop launcher
-                    metadata; no credentials or command payloads.
-                  '';
-                };
-              };
-            }));
-            default = { };
-            description = ''
-              Workload declarations owned by this realm. Each workload may
-              optionally reference an existing `d2b.vms.<vm>` substrate via
-              `vmRef` for runtime kind and provider id derivation. Desktop
-              launcher metadata is generated from this table.
-
-              Workload names must match `^[a-z][a-z0-9-]*$`.
             '';
           };
 

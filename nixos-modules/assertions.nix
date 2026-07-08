@@ -164,17 +164,17 @@ let
   nixosWorkloadRows =
     lib.filter
       (row:
-        row.vmRef != null
+        row.legacyVmName != null
         && row.runtimeKind == "nixos"
-        && builtins.hasAttr row.vmRef (d2bLib.normalNixosVms cfg.vms))
+        && builtins.hasAttr row.legacyVmName (d2bLib.normalNixosVms cfg.vms))
       realmWorkloadRows;
   nixosWorkloadCidPairs =
     map
       (row: {
         realmName = row.realmName;
         workloadName = row.workloadName;
-        vmRef = row.vmRef;
-        cid = config.d2b.manifest.${row.vmRef}.observability.vsockCid;
+        legacyVmName = row.legacyVmName;
+        cid = config.d2b.manifest.${row.legacyVmName}.observability.vsockCid;
       })
       nixosWorkloadRows;
   nixosWorkloadCidGroups = lib.groupBy (p: "${toString p.cid}") nixosWorkloadCidPairs;
@@ -185,11 +185,11 @@ let
           # Only flag when the collision involves more than one distinct realm
           realms = lib.unique (map (p: p.realmName) pairs);
           # And more than one distinct VM (same-VM cross-realm shares a CID intentionally)
-          vms = lib.unique (map (p: p.vmRef) pairs);
+          vms = lib.unique (map (p: p.legacyVmName) pairs);
         in
         lib.optional (lib.length realms > 1 && lib.length vms > 1) {
           cid = (builtins.head pairs).cid;
-          pairs = map (p: { inherit (p) realmName workloadName vmRef; }) pairs;
+          pairs = map (p: { inherit (p) realmName workloadName legacyVmName; }) pairs;
         })
       nixosWorkloadCidGroups);
 
@@ -199,6 +199,80 @@ let
   # cfg._index.realms.externalNetworkConflicts.
   crossRealmExtNetConflicts = cfg._index.realms.externalNetworkConflicts;
 
+  # Realm-native network port-forward assertions.
+
+  # Flat list of { realmName, pf } pairs for all declared portForwards.
+  realmPortForwardPairs = lib.flatten (lib.mapAttrsToList
+    (realmName: realm:
+      map (pf: { inherit realmName pf; }) realm.network.externalNetwork.portForwards)
+    (lib.filterAttrs (_: realm: realm.enable) cfg.realms));
+
+  # (1) Each portForward must specify exactly one of workload or targetIp.
+  portForwardBothOrNeitherRows = lib.filter
+    (entry:
+      let pf = entry.pf;
+      in (pf.workload != null && pf.targetIp != null) ||
+         (pf.workload == null && pf.targetIp == null))
+    realmPortForwardPairs;
+
+  # (2) attachment.enable is required whenever egress, portForwards, or mdns
+  # are configured (the net VM needs an external NIC to route those flows).
+  realmsMissingAttachment = lib.filter
+    (realmName:
+      let realm = cfg.realms.${realmName};
+      in realm.enable
+        && (realm.network.externalNetwork.egress.enable
+            || realm.network.externalNetwork.portForwards != []
+            || realm.network.externalNetwork.mdns.enable)
+        && !realm.network.externalNetwork.attachment.enable)
+    (builtins.attrNames cfg.realms);
+
+  # (3) A portForward that names a workload must name one declared in the same realm.
+  portForwardMissingWorkloadRows = lib.filter
+    (entry:
+      let pf = entry.pf;
+          realm = cfg.realms.${entry.realmName};
+      in pf.workload != null
+         && !(builtins.hasAttr pf.workload realm.workloads))
+    realmPortForwardPairs;
+
+  realmPortForwardAssertions =
+    map
+      (entry: {
+        assertion = false;
+        message = ''
+          d2b.realms.${entry.realmName}.network.externalNetwork.portForwards:
+          port-forward on ${entry.pf.protocol}/${toString entry.pf.listenPort}
+          must specify exactly one of `workload` or `targetIp`, not both and
+          not neither. Set `workload = "<name>"` to route to a declared
+          workload in this realm, or `targetIp = "<ip>"` for an explicit IP.
+        '';
+      })
+      portForwardBothOrNeitherRows
+    ++ map
+      (realmName: {
+        assertion = false;
+        message = ''
+          d2b.realms.${realmName}.network.externalNetwork:
+          attachment.enable must be true when egress.enable, portForwards, or
+          mdns.enable are configured. The net VM requires an external NIC
+          (attachment) to route egress, forward ports, or reflect mDNS.
+          Set d2b.realms.${realmName}.network.externalNetwork.attachment.enable = true.
+        '';
+      })
+      realmsMissingAttachment
+    ++ map
+      (entry: {
+        assertion = false;
+        message = ''
+          d2b.realms.${entry.realmName}.network.externalNetwork.portForwards:
+          workload "${entry.pf.workload}" on ${entry.pf.protocol}/${toString entry.pf.listenPort}
+          is not declared in d2b.realms.${entry.realmName}.workloads.
+          Declare the workload first, or use `targetIp` instead of `workload`
+          for an explicit IP destination.
+        '';
+      })
+      portForwardMissingWorkloadRows;
 
 
   missingRealmParents = lib.filter
@@ -364,7 +438,7 @@ let
         Adjust d2b.vms.<vm>.index in the affected env or rename one VM.
         Affected pairs: ${
           lib.concatStringsSep "; " (map
-            (p: "${p.realmName}/${p.workloadName} -> ${p.vmRef}")
+            (p: "${p.realmName}/${p.workloadName} -> ${p.legacyVmName}")
             collision.pairs)
         }.
       '';
@@ -1780,6 +1854,80 @@ let
         ''
       ])
     cfg.vms);
+
+  # Realm-to-legacy migration advisory warnings.
+  #
+  # These are informational nudges, not hard failures.  They fire
+  # when a realm declaration is present but its `network.mode` or `env`
+  # still points at a legacy `d2b.envs` bridge, or when a realm has no
+  # workloads while one or more `d2b.vms` entries list `env` membership
+  # in that realm's declared env.  The message points at the v1.2→v2
+  # migration guide without blocking any activation.
+  realmLegacyTransitionWarnings =
+    let
+      enabledRealms = lib.filterAttrs (_: r: r.enable) cfg.realms;
+
+      # Per-realm warning: realm has env/network.envs pointing at an
+      # existing d2b.envs entry but network.mode is still "none".
+      inheritEnvNudges = lib.flatten (lib.mapAttrsToList
+        (realmName: realm:
+          let
+            linkedEnvs =
+              lib.unique (
+                (lib.optional (realm.env != null) realm.env)
+                ++ realm.network.envs
+              );
+            hasMatchingEnv = lib.any (e: cfg.envs ? ${e}) linkedEnvs;
+          in
+          lib.optionals
+            (hasMatchingEnv && realm.network.mode == "none" && realm.workloads == {})
+            [
+              ''
+                d2b.realms.${realmName}: this realm links to existing d2b.envs entries
+                (${lib.concatStringsSep ", " (map (e: "d2b.envs.${e}") linkedEnvs)}) but
+                has no workloads declared and network.mode = "none".
+
+                To complete the v2 realm-native transition, migrate your env and VM
+                declarations into realm workloads and set network.mode = "declared" or
+                "inherit-env".  Until then the legacy substrate continues to work.
+
+                Migration guide: docs/how-to/migrate-d2b-v1-2-to-v2.md
+                Replacement surface:
+                  d2b.realms.${realmName}.network (replaces d2b.envs.*)
+                  d2b.realms.${realmName}.workloads (replaces d2b.vms.*)
+              ''
+            ])
+        enabledRealms);
+
+      # Per-realm warning: realm has workloads declared but some of them
+      # carry a legacyVmName whose state dir would diverge if the VM
+      # declaration is removed before checking legacyVmName.
+      orphanLegacyVmWarnings = lib.flatten (lib.mapAttrsToList
+        (realmName: realm:
+          lib.flatten (lib.mapAttrsToList
+            (wName: w:
+              let
+                lvm = w.legacyVmName;
+                vmExists = lvm != null && cfg.vms ? ${lvm};
+              in
+              lib.optionals
+                (w.enable && lvm != null && !vmExists)
+                [
+                  ''
+                    d2b.realms.${realmName}.workloads.${wName}.legacyVmName = "${lvm}" but
+                    d2b.vms.${lvm} does not exist in this configuration.
+
+                    Either declare d2b.vms.${lvm} (keeping the legacy VM entry during the
+                    transition) or remove legacyVmName once you no longer need the legacy
+                    reference.  Workload state will still be written to the default path
+                    /var/lib/d2b/vms/${wName}; mismatched legacyVmName and id can result
+                    in diverged state paths.
+                  ''
+                ])
+            realm.workloads))
+        enabledRealms);
+    in
+    inheritEnvNudges ++ orphanLegacyVmWarnings;
 in
 {
   assertions = lib.flatten (
@@ -1804,6 +1952,7 @@ in
     ++ gatewayDaemonAssertions
     ++ realmIdentitySecretRefAssertions
     ++ realmAssertions
+    ++ realmPortForwardAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
@@ -1812,5 +1961,5 @@ in
   # The daemon-only end state is now the default. Do not warn on the
   # compatibility option here: option-default definitions make
   # `options.<path>.isDefined` true even when consumers do not set it.
-  warnings = deprecatedWaylandProxyBorderWarnings;
+  warnings = deprecatedWaylandProxyBorderWarnings ++ realmLegacyTransitionWarnings;
 }
