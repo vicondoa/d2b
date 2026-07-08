@@ -107,6 +107,24 @@ deprecations ship one minor release before removal.
 - Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
   PR-only merges, panel/review evidence requirements, integrator ownership of
   CI, retarget/rebase, merge sequencing, and helper-script constraints.
+- Added `WorkloadIdentity`, `WorkloadTarget`, `WorkloadBackend`, and
+  `WorkloadRuntimeIntent` types to `d2b-core::workload_identity`. `WorkloadTarget`
+  is a type alias for `RealmTarget` that makes the bundle-artifact parse boundary
+  explicit (no ad hoc string splitting past `WorkloadTarget::parse`).
+  `WorkloadIdentity` carries the universal realm-scoped identity (workload id,
+  workload name, realm id, realm path, canonical target, optional legacy VM name,
+  runtime kind, provider id) independently of any backend runtime config.
+  `WorkloadBackend` provides the typed envelope separating the universal identity
+  from provider-specific runtime details (`LocalVm` / `LocalQemuMedia`).
+  `WorkloadRuntimeIntent` combines both for process-intent DTOs. Module-level
+  doc comment codifies the additive-vs-breaking DTO version policy.
+- Extended `RealmControllerLocalWorkload` in `d2b-core` with an additive
+  `identity: Option<WorkloadIdentity>` field. `None` for bundle artifacts emitted
+  by Nix before this change; present once the emitter is updated.
+- Added optional `workload_identity: Option<WorkloadIdentity>` to the
+  `ListEntry` and `VmStatus` public output structs in `d2b-contracts`. `None`
+  for classical `d2b.vms` VMs not yet associated with a realm; present for
+  realm-adopted workloads.
 
 - **Realm workload and network option schema** (`d2b.realms.<realm>.workloads`
   and `d2b.realms.<realm>.network`): the v2 public surface for workloads and

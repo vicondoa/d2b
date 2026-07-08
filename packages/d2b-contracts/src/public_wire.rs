@@ -5,6 +5,7 @@ use d2b_core::{
     error::Error,
     host::IfName,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
+    workload_identity::WorkloadIdentity,
 };
 use schemars::{
     JsonSchema,
@@ -2396,6 +2397,12 @@ pub struct ListEntry {
     pub unsupported_capabilities: Vec<String>,
     pub usbip: bool,
     pub vm: String,
+    /// Realm-native workload identity. Present for workloads that have been
+    /// associated with a realm; `None` for classical `d2b.vms` entries that
+    /// have not yet been adopted into a realm. Additive field — old daemons
+    /// omit it; new CLI consumers must tolerate its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_identity: Option<WorkloadIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2426,6 +2433,12 @@ pub struct VmStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb: Option<UsbipVmStatus>,
     pub vm: String,
+    /// Realm-native workload identity. Present for workloads that have been
+    /// associated with a realm; `None` for classical `d2b.vms` entries that
+    /// have not yet been adopted into a realm. Additive field — old daemons
+    /// omit it; new CLI consumers must tolerate its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_identity: Option<WorkloadIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -23,6 +23,7 @@ pub mod provider_capabilities;
 pub mod realm_controller_config;
 pub mod runtime;
 pub mod static_invariants;
+pub mod workload_identity;
 pub mod storage;
 pub mod storage_lifecycle;
 pub mod sync;
