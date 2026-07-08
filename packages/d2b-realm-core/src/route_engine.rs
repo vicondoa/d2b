@@ -90,6 +90,7 @@ pub struct DirectShortcutAuthorizationRequest {
 }
 
 /// Direct shortcut authorization result.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectShortcutAuthorizationDecision {
     Authorized {
@@ -409,6 +410,7 @@ impl RouteTreeEngine {
     }
 
     /// Decide the tree path for one semantic operation.
+    #[allow(clippy::too_many_arguments)]
     pub fn decide_route(
         &self,
         decision_id: OperationId,
@@ -433,6 +435,7 @@ impl RouteTreeEngine {
 
     /// Decide the tree path at a verifier-supplied Unix timestamp, ignoring
     /// route entries whose advertisements have expired.
+    #[allow(clippy::too_many_arguments)]
     pub fn decide_route_at(
         &self,
         current_time_unix_seconds: u64,
@@ -852,6 +855,7 @@ pub fn decide_discovery_queue(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stage_parent_edge(
     parents: &BTreeMap<RealmPath, ParentEntry>,
     parent_updates: &mut BTreeMap<RealmPath, ParentEntry>,
@@ -893,20 +897,20 @@ fn stage_parent_edge(
 
     let mut next_route_id = route_id;
     let mut next_capabilities = capabilities;
-    if let Some(existing) = parents.get(&child) {
-        if !is_expired(existing.expires_at_unix_seconds, current_time_unix_seconds) {
-            if issued_at_unix_seconds <= existing.issued_at_unix_seconds {
-                return Err(RouteFailClosedReason::Replay);
-            }
-            if existing.parent != parent {
-                return Err(RouteFailClosedReason::MultiParent);
-            }
-            if next_route_id.is_none() {
-                next_route_id = existing.route_id.clone();
-            }
-            if next_capabilities.is_none() {
-                next_capabilities = Some(existing.capabilities.clone());
-            }
+    if let Some(existing) = parents.get(&child)
+        && !is_expired(existing.expires_at_unix_seconds, current_time_unix_seconds)
+    {
+        if issued_at_unix_seconds <= existing.issued_at_unix_seconds {
+            return Err(RouteFailClosedReason::Replay);
+        }
+        if existing.parent != parent {
+            return Err(RouteFailClosedReason::MultiParent);
+        }
+        if next_route_id.is_none() {
+            next_route_id = existing.route_id.clone();
+        }
+        if next_capabilities.is_none() {
+            next_capabilities = Some(existing.capabilities.clone());
         }
     }
 
@@ -925,6 +929,7 @@ fn stage_parent_edge(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stage_route_entry(
     routes: &BTreeMap<RealmPath, RouteEntry>,
     route_updates: &mut BTreeMap<RealmPath, RouteEntry>,
@@ -946,16 +951,16 @@ fn stage_route_entry(
         return Ok(());
     }
 
-    if let Some(existing) = routes.get(&descendant) {
-        if !is_expired(existing.expires_at_unix_seconds, current_time_unix_seconds) {
-            if issued_at_unix_seconds <= existing.issued_at_unix_seconds {
-                return Err(RouteFailClosedReason::Replay);
-            }
-            if existing.advertising_realm != advertising_realm
-                || existing.next_hop_child != next_hop_child
-            {
-                return Err(RouteFailClosedReason::MultiParent);
-            }
+    if let Some(existing) = routes.get(&descendant)
+        && !is_expired(existing.expires_at_unix_seconds, current_time_unix_seconds)
+    {
+        if issued_at_unix_seconds <= existing.issued_at_unix_seconds {
+            return Err(RouteFailClosedReason::Replay);
+        }
+        if existing.advertising_realm != advertising_realm
+            || existing.next_hop_child != next_hop_child
+        {
+            return Err(RouteFailClosedReason::MultiParent);
         }
     }
 
@@ -1158,6 +1163,7 @@ fn nearest_common_ancestor(left: &RealmPath, right: &RealmPath) -> Option<RealmP
     RealmPath::new(common.into_iter().rev().collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn route_event(
     event: RouteAuditEventKind,
     counter: RouteTelemetryCounterKind,

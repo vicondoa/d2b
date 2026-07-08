@@ -359,6 +359,7 @@ pub struct UnverifiedPeerAdmissionAttemptMetadata {
 
 impl UnverifiedPeerAdmissionAttemptMetadata {
     /// Construct only when queue metadata remains within the configured bound.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         attempt_id: OperationId,
         correlation_id: CorrelationId,
@@ -1034,6 +1035,7 @@ pub struct DirectShortcutAuthorizationMetadata {
 impl DirectShortcutAuthorizationMetadata {
     /// Construct only when the shortcut metadata matches the authorized tree
     /// path and has a positive expiry interval.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         shortcut_id: ShortcutAuthorizationId,
         correlation_id: CorrelationId,
