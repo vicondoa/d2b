@@ -29,7 +29,7 @@ parallel naming rules or silently deriving different paths from the same realm.
 
 ## Direct socket access, not host byte proxying
 
-The future access model is direct realm socket authorization. A local user who
+The access model is direct realm socket authorization. A local user who
 is allowed to administer a realm should connect to that realm's public Unix
 socket, where `SO_PEERCRED` and socket ACLs can be checked against that realm's
 policy.
@@ -44,7 +44,7 @@ authorization boundary.
 
 Some resources are host-local by nature: cgroups, nftables partitions, host-file
 partitions, interface names, and namespace boundaries. Realm brokers must not
-create those resources independently. Instead, they will use the local-root
+create those resources independently. Instead, they use the local-root
 allocator contract to request typed leases and receive opaque grants.
 
 The controller artifact therefore records allocator metadata and per-realm
@@ -54,7 +54,7 @@ commands, raw paths, or nftables text.
 ## State and audit remain separate
 
 Realm controller state and realm audit records have different jobs. State is
-the future controller's repairable working memory. Audit is the append-oriented
+the controller's repairable working memory. Audit is the append-oriented
 record of decisions and refusals. Mixing them would make it unclear which data
 is operational authority and which data is evidence.
 
@@ -62,15 +62,15 @@ The metadata keeps that split visible by reserving separate state and audit
 directories for each realm, plus an ephemeral runtime directory for locks and
 sockets.
 
-## What has not changed yet
+## Runtime boundary
 
-Existing VM and env behavior remains in force. Defining a host-local realm now
+Existing VM and env behavior remains in force. Defining a host-local realm
 creates deterministic control-plane units, broker sockets, principals, tmpfiles
 paths, and ACL entries for the realm daemon/broker scaffold. It still does not
 enroll identities, start relays, advertise routes, place provider controllers,
 allocate host resources through the allocator, or migrate workloads out of
 `d2b.envs`. The discovery and strict tree routing contract is described in
 [realm tree routing boundaries](./realm-tree-routing.md), but that contract is
-metadata-only until reviewed runtime implementation lands. Operators should not
+metadata-only. Operators should not
 treat it as live relay routing, VPN/overlay networking, SSH fallback, or any raw
 tunnel facility.

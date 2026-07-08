@@ -12,7 +12,7 @@ use crate::ids::{
 };
 use crate::payload::OpaquePayload;
 use crate::realm::RealmPath;
-use crate::stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor};
+use crate::stream::{StreamAuthz, StreamChannel, StreamCloseReason, StreamDescriptor, StreamKind};
 use crate::token::ProtocolToken;
 use crate::trace_context::TraceContext;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -110,6 +110,31 @@ pub enum OperationKind {
 }
 
 impl OperationKind {
+    /// Kebab-case operation kind label used in wire JSON, logs, and operator
+    /// diagnostics.
+    pub fn code(self) -> &'static str {
+        match self {
+            OperationKind::NodeRegister => "node-register",
+            OperationKind::NodeHeartbeat => "node-heartbeat",
+            OperationKind::NodeCapabilities => "node-capabilities",
+            OperationKind::WorkloadList => "workload-list",
+            OperationKind::WorkloadStart => "workload-start",
+            OperationKind::WorkloadStop => "workload-stop",
+            OperationKind::GuestHealth => "guest-health",
+            OperationKind::ExecStart => "exec-start",
+            OperationKind::ExecAttach => "exec-attach",
+            OperationKind::ExecLogs => "exec-logs",
+            OperationKind::ExecCancel => "exec-cancel",
+            OperationKind::ShellList => "shell-list",
+            OperationKind::ShellAttach => "shell-attach",
+            OperationKind::ShellDetach => "shell-detach",
+            OperationKind::ShellKill => "shell-kill",
+            OperationKind::FileCopyStart => "file-copy-start",
+            OperationKind::PortForwardOpen => "port-forward-open",
+            OperationKind::DisplaySessionOpen => "display-session-open",
+        }
+    }
+
     /// Whether this operation kind mutates state and therefore requires an
     /// idempotency key + bounded dedup for at-least-once delivery.
     pub fn is_mutating(self) -> bool {
@@ -118,6 +143,7 @@ impl OperationKind {
             OperationKind::WorkloadStart
                 | OperationKind::WorkloadStop
                 | OperationKind::ExecStart
+                | OperationKind::ExecAttach
                 | OperationKind::ExecCancel
                 | OperationKind::ShellAttach
                 | OperationKind::ShellDetach
@@ -173,6 +199,42 @@ impl OperationKind {
                 Some(cap) => AuthorizationScope::capability(cap),
                 None => AuthorizationScope::NodeControl,
             },
+        }
+    }
+
+    /// Whether this operation must address a workload before dispatch.
+    pub fn requires_workload(self) -> bool {
+        !matches!(
+            self,
+            OperationKind::NodeRegister
+                | OperationKind::NodeHeartbeat
+                | OperationKind::NodeCapabilities
+                | OperationKind::WorkloadList
+        )
+    }
+
+    /// Stream families this operation kind may authorize.
+    pub fn allowed_stream_kinds(self) -> &'static [StreamKind] {
+        match self {
+            OperationKind::ExecStart | OperationKind::ExecAttach => {
+                &[StreamKind::Stdio, StreamKind::Pty]
+            }
+            OperationKind::ExecLogs => &[StreamKind::Logs],
+            OperationKind::ShellAttach => &[StreamKind::ShellPty],
+            OperationKind::FileCopyStart => &[StreamKind::FileCopy],
+            OperationKind::PortForwardOpen => &[StreamKind::PortForward],
+            OperationKind::DisplaySessionOpen => &[StreamKind::Display],
+            OperationKind::NodeRegister
+            | OperationKind::NodeHeartbeat
+            | OperationKind::NodeCapabilities
+            | OperationKind::WorkloadList
+            | OperationKind::WorkloadStart
+            | OperationKind::WorkloadStop
+            | OperationKind::GuestHealth
+            | OperationKind::ExecCancel
+            | OperationKind::ShellList
+            | OperationKind::ShellDetach
+            | OperationKind::ShellKill => &[],
         }
     }
 }
@@ -574,6 +636,7 @@ mod tests {
     fn mutating_kinds_are_flagged() {
         assert!(OperationKind::WorkloadStart.is_mutating());
         assert!(OperationKind::ExecStart.is_mutating());
+        assert!(OperationKind::ExecAttach.is_mutating());
         assert!(OperationKind::ShellAttach.is_mutating());
         assert!(OperationKind::ShellDetach.is_mutating());
         assert!(OperationKind::ShellKill.is_mutating());

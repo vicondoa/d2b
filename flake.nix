@@ -113,6 +113,7 @@
           serde.workspace = true
           serde_json.workspace = true
           schemars.workspace = true
+          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
           semver = "1"
           rustix = { workspace = true }
           sha2 = { workspace = true }
@@ -451,6 +452,8 @@
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.allocatorJson.path} $out/allocator.json
+          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
+          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
@@ -536,6 +539,8 @@
           cp ${bundle.storageJson.path} $out/storage.json
           cp ${bundle.syncJson.path} $out/sync.json
           cp ${bundle.allocatorJson.path} $out/allocator.json
+          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
+          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
@@ -611,6 +616,7 @@
           serde.workspace = true
           serde_json.workspace = true
           schemars.workspace = true
+          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
           semver = "1"
           rustix = { workspace = true }
           sha2 = { workspace = true }

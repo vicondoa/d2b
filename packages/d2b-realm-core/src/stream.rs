@@ -54,6 +54,26 @@ pub enum StreamKind {
 }
 
 impl StreamKind {
+    /// Kebab-case stream kind label used in wire JSON, logs, and operator
+    /// diagnostics.
+    pub fn code(self) -> &'static str {
+        match self {
+            StreamKind::Control => "control",
+            StreamKind::Pty => "pty",
+            StreamKind::ShellPty => "shell-pty",
+            StreamKind::Stdio => "stdio",
+            StreamKind::Logs => "logs",
+            StreamKind::FileCopy => "file-copy",
+            StreamKind::PortForward => "port-forward",
+            StreamKind::Display => "display",
+            StreamKind::Clipboard => "clipboard",
+            StreamKind::AudioPlayback => "audio-playback",
+            StreamKind::AudioCapture => "audio-capture",
+            StreamKind::DeviceHid => "device-hid",
+            StreamKind::DeviceUsb => "device-usb",
+        }
+    }
+
     /// The capability a peer must advertise to open this stream kind.
     /// Shell attach uses `ShellPty`, not generic `Pty`, so shell terminal
     /// streams require `PersistentShell` exactly. `Display` requires
@@ -132,6 +152,20 @@ pub enum StreamCloseReason {
     Errored,
     /// The remote end of the stream went away (process/relay/gateway gone).
     PeerGone,
+}
+
+impl StreamCloseReason {
+    /// Kebab-case close reason label used in wire JSON, logs, and operator
+    /// diagnostics.
+    pub fn code(self) -> &'static str {
+        match self {
+            StreamCloseReason::Completed => "completed",
+            StreamCloseReason::Cancelled => "cancelled",
+            StreamCloseReason::TimedOut => "timed-out",
+            StreamCloseReason::Errored => "errored",
+            StreamCloseReason::PeerGone => "peer-gone",
+        }
+    }
 }
 
 /// The authorization context evaluated before a stream is opened. The
@@ -213,5 +247,14 @@ mod tests {
         let authz = StreamAuthz::for_kind(p, realm, StreamKind::Display);
         assert!(authz.matches_kind(StreamKind::Display));
         assert!(!authz.matches_kind(StreamKind::Clipboard));
+    }
+
+    #[test]
+    fn stream_close_reason_codes_are_stable() {
+        assert_eq!(StreamCloseReason::Completed.code(), "completed");
+        assert_eq!(StreamCloseReason::Cancelled.code(), "cancelled");
+        assert_eq!(StreamCloseReason::TimedOut.code(), "timed-out");
+        assert_eq!(StreamCloseReason::Errored.code(), "errored");
+        assert_eq!(StreamCloseReason::PeerGone.code(), "peer-gone");
     }
 }

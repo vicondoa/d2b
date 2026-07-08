@@ -10,7 +10,7 @@
 //! The canonical rendered form is DNS-shaped and has no scheme, for example
 //! `builder.dev.d2b` or `api.payments.work.d2b`. Bare workload names are not
 //! self-contained targets; they require an explicit default realm or alias table
-//! supplied by the caller. Old ADR 0032 node-qualified forms are retained only
+//! supplied by the caller. Old node-qualified forms are retained only
 //! as typed migration diagnostics.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// The reserved target-name suffix.
 pub const TARGET_SUFFIX: &str = "d2b";
 
-/// Legacy ADR 0032 CLI alias for the current host's local node.
+/// Legacy CLI alias for the current host's local node.
 ///
 /// Realm-native targets do not encode node labels. This constant remains only
 /// for migration diagnostics and older callers while they move to
@@ -121,7 +121,7 @@ impl JsonSchema for RealmTarget {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetName {
     target: RealmTarget,
-    /// Compatibility field for ADR 0032 callers. Realm-native targets never encode
+    /// Compatibility field for old callers. Realm-native targets never encode
     /// a node, so parsed targets carry the unresolved `this` alias until callers
     /// explicitly resolve it for legacy-local behavior.
     pub node: NodeId,
@@ -237,7 +237,7 @@ fn target_string_schema() -> Schema {
     })
 }
 
-/// A parsed old ADR 0032 node-qualified target.
+/// A parsed old node-qualified target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyNodeQualifiedTarget {
     /// The named workload.
@@ -250,7 +250,7 @@ pub struct LegacyNodeQualifiedTarget {
 }
 
 impl LegacyNodeQualifiedTarget {
-    /// Parse an old ADR 0032 node-qualified target for migration diagnostics.
+    /// Parse an old node-qualified target for migration diagnostics.
     /// This helper must not be used for normal routing.
     pub fn parse(raw: &str) -> Result<Self, RealmTargetParseError> {
         parse_legacy_node_qualified(raw)
@@ -302,7 +302,7 @@ pub enum RealmTargetParseError {
         alias: WorkloadId,
         candidates: Vec<RealmTarget>,
     },
-    /// The address matches an old ADR 0032 node-qualified shape for a known
+    /// The address matches an old node-qualified shape for a known
     /// legacy node label. It is reported as a migration diagnostic, not accepted
     /// as a normal realm route.
     LegacyNodeQualified {
@@ -356,7 +356,7 @@ impl core::fmt::Display for RealmTargetParseError {
             }
             RealmTargetParseError::LegacyNodeQualified { legacy, suggested } => write!(
                 f,
-                "target `{}` uses the old ADR 0032 node-qualified grammar; remove node label `{}` and use `{}`",
+                "target `{}` uses the old node-qualified address format; remove node label `{}` and use `{}`",
                 legacy.diagnostic_form(),
                 legacy.node,
                 suggested.to_canonical()
@@ -394,7 +394,7 @@ impl RealmTargetParser {
         self
     }
 
-    /// Mark a legacy ADR 0032 node label. A target whose second label matches
+    /// Mark a legacy node label. A target whose second label matches
     /// this set is returned as a migration diagnostic when a realm path follows.
     pub fn with_legacy_node_label(mut self, node: NodeId) -> Self {
         self.legacy_node_labels.insert(node);

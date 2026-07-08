@@ -496,6 +496,7 @@ dependencies = [
 name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-realm-core",
  "rustix 0.38.44",
  "schemars",
  "semver",

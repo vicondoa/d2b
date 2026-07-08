@@ -156,11 +156,11 @@ impl RemoteNodeError {
         }
     }
 
-    fn capability_denied(capability: Capability, fingerprint: String) -> Self {
+    fn capability_denied(capability: Capability, fingerprint: Option<String>) -> Self {
         Self {
             kind: RemoteNodeErrorKind::CapabilityDenied,
             missing_capability: Some(capability),
-            capability_fingerprint: Some(fingerprint),
+            capability_fingerprint: fingerprint,
             correlation_id: None,
         }
     }
@@ -483,14 +483,7 @@ impl RemoteNodeRegistry {
         if let Some(capability) = required_capability
             && !entry.summary.capabilities.has(capability)
         {
-            return Err(RemoteNodeError::capability_denied(
-                capability,
-                entry.capability_fingerprint.clone(),
-            )
-            .with_correlation_id(req.correlation_id.clone()));
-        }
-        if req.workload.is_none() && remote_operation_requires_workload(req.kind) {
-            return Err(RemoteNodeError::new(RemoteNodeErrorKind::MissingWorkload)
+            return Err(RemoteNodeError::capability_denied(capability, None)
                 .with_correlation_id(req.correlation_id.clone()));
         }
         Ok(RemoteRoute {
@@ -539,7 +532,10 @@ pub struct RemoteRoute {
 }
 
 impl RemoteRoute {
-    /// Bounded labels safe for audit, traces, and tests.
+    /// Bounded fields safe for structured audit/tracing and tests.
+    ///
+    /// This carries high-cardinality request metadata and is not a metrics label
+    /// set.
     pub fn audit_labels(&self, outcome: &'static str) -> RemoteNodeAuditLabels<'_> {
         RemoteNodeAuditLabels {
             realm: self.realm.target_form(),
@@ -555,7 +551,7 @@ impl RemoteRoute {
     }
 }
 
-/// Low-cardinality route labels suitable for audit/telemetry.
+/// High-cardinality route metadata suitable for structured audit/tracing only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteNodeAuditLabels<'a> {
     pub realm: String,
@@ -696,15 +692,23 @@ where
         generation: &ProtocolToken,
         client: &mut dyn RemotePeerClient,
     ) -> Result<RemoteDispatchOutcome, RemoteNodeError> {
-        let route = self
+        let route = match self
             .registry
-            .prepare_route(req, generation, &self.gateway_principal)?;
+            .prepare_route(req, generation, &self.gateway_principal)
+        {
+            Ok(route) => route,
+            Err(err) => {
+                trace_remote_route_denial(req, &self.gateway_principal, &err);
+                return Err(err);
+            }
+        };
         let labels = route.audit_labels("preflight-ok");
         tracing::info!(
             event = "remote-node-dispatch",
             realm = %labels.realm,
             node = %labels.node,
-            operation_kind = ?labels.operation,
+            operation_id = %req.operation_id.as_str(),
+            operation_kind = %labels.operation.code(),
             correlation_id = %labels.correlation_id,
             principal = %labels.principal,
             capability_fingerprint = %labels.capability_fingerprint,
@@ -725,6 +729,7 @@ where
                         if req.kind.is_mutating() {
                             self.router.mark_failed(req);
                         }
+
                         return Err(err);
                     }
                 };
@@ -733,7 +738,8 @@ where
                     event = "remote-node-dispatch",
                     realm = %labels.realm,
                     node = %labels.node,
-                    operation_kind = ?labels.operation,
+                    operation_id = %req.operation_id.as_str(),
+                    operation_kind = %labels.operation.code(),
                     correlation_id = %labels.correlation_id,
                     principal = %labels.principal,
                     capability_fingerprint = %labels.capability_fingerprint,
@@ -768,7 +774,8 @@ where
                             event = "remote-node-dispatch",
                             realm = %labels.realm,
                             node = %labels.node,
-                            operation_kind = ?labels.operation,
+                            operation_id = %req.operation_id.as_str(),
+                            operation_kind = %labels.operation.code(),
                             correlation_id = %labels.correlation_id,
                             principal = %labels.principal,
                             capability_fingerprint = %labels.capability_fingerprint,
@@ -795,6 +802,29 @@ where
     }
 }
 
+fn trace_remote_route_denial(
+    req: &OperationRequest,
+    gateway_principal: &PrincipalId,
+    err: &RemoteNodeError,
+) {
+    tracing::warn!(
+        event = "remote-node-dispatch",
+        realm = %req.realm.target_form(),
+        node = %req.node.as_str(),
+        operation_id = %req.operation_id.as_str(),
+        operation_kind = %req.kind.code(),
+        correlation_id = %req.correlation_id.as_str(),
+        principal = %gateway_principal.as_str(),
+        capability_fingerprint = err.capability_fingerprint.as_deref(),
+        missing_capability = ?err.missing_capability,
+        trace_id = req.trace.as_ref().map(TraceContext::trace_id),
+        span_id = req.trace.as_ref().map(TraceContext::span_id),
+        reason = %err.code(),
+        outcome = "denied",
+        "remote full-host operation dispatch preflight denied"
+    );
+}
+
 fn remote_error_from_route_decision(
     req: &OperationRequest,
     decision: super::RouteDecision,
@@ -803,12 +833,14 @@ fn remote_error_from_route_decision(
         super::RouteDecision::PrincipalMismatch => {
             RemoteNodeError::new(RemoteNodeErrorKind::UnauthorizedGateway)
         }
-        super::RouteDecision::CapabilityDenied {
-            capability,
-            negotiated_fingerprint,
-        } => RemoteNodeError::capability_denied(capability, negotiated_fingerprint),
+        super::RouteDecision::CapabilityDenied { capability } => {
+            RemoteNodeError::capability_denied(capability, None)
+        }
         super::RouteDecision::MissingIdempotencyKey => {
             RemoteNodeError::new(RemoteNodeErrorKind::MissingIdempotencyKey)
+        }
+        super::RouteDecision::MissingWorkload => {
+            RemoteNodeError::new(RemoteNodeErrorKind::MissingWorkload)
         }
         super::RouteDecision::IdempotencyKeyConflict => {
             RemoteNodeError::new(RemoteNodeErrorKind::IdempotencyConflict)
@@ -819,54 +851,22 @@ fn remote_error_from_route_decision(
         super::RouteDecision::DedupCapacityExceeded => {
             RemoteNodeError::new(RemoteNodeErrorKind::DedupCapacityExceeded)
         }
+        super::RouteDecision::UnsupportedOperation { .. } => {
+            RemoteNodeError::new(RemoteNodeErrorKind::UnsupportedOperation)
+        }
         super::RouteDecision::InProgress { .. }
         | super::RouteDecision::Replay { .. }
         | super::RouteDecision::Accept { .. } => {
-            RemoteNodeError::new(RemoteNodeErrorKind::UnsupportedOperation)
+            unreachable!("success decisions cannot be translated to errors")
         }
     };
     err.with_correlation_id(req.correlation_id.clone())
 }
 
 fn required_remote_capability(kind: OperationKind) -> Result<Option<Capability>, RemoteNodeError> {
-    match kind {
-        OperationKind::NodeRegister
-        | OperationKind::NodeHeartbeat
-        | OperationKind::NodeCapabilities
-        | OperationKind::WorkloadList
-        | OperationKind::WorkloadStart
-        | OperationKind::WorkloadStop
-        | OperationKind::ExecStart
-        | OperationKind::ExecAttach
-        | OperationKind::ExecLogs
-        | OperationKind::ExecCancel
-        | OperationKind::ShellList
-        | OperationKind::ShellAttach
-        | OperationKind::ShellDetach
-        | OperationKind::ShellKill
-        | OperationKind::GuestHealth => Ok(kind.required_capability()),
-        OperationKind::FileCopyStart
-        | OperationKind::PortForwardOpen
-        | OperationKind::DisplaySessionOpen => Err(RemoteNodeError::new(
-            RemoteNodeErrorKind::UnsupportedOperation,
-        )),
-    }
-}
-
-fn remote_operation_requires_workload(kind: OperationKind) -> bool {
-    matches!(
-        kind,
-        OperationKind::WorkloadStart
-            | OperationKind::WorkloadStop
-            | OperationKind::ExecStart
-            | OperationKind::ExecAttach
-            | OperationKind::ExecLogs
-            | OperationKind::ExecCancel
-            | OperationKind::ShellList
-            | OperationKind::ShellAttach
-            | OperationKind::ShellDetach
-            | OperationKind::ShellKill
-    )
+    super::operation_route_plan(kind)
+        .map(|plan| plan.required_capability)
+        .ok_or_else(|| RemoteNodeError::new(RemoteNodeErrorKind::UnsupportedOperation))
 }
 
 /// Validate remote execution generation before opening a stream.
@@ -1149,7 +1149,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind, RemoteNodeErrorKind::CapabilityDenied);
         assert_eq!(err.missing_capability, Some(Capability::Lifecycle));
-        assert!(err.capability_fingerprint.is_some());
+        assert!(err.capability_fingerprint.is_none());
         assert_eq!(
             err.correlation_id.as_ref().map(CorrelationId::as_str),
             Some("corr-1")
@@ -1162,7 +1162,8 @@ mod tests {
         let caps = CapabilitySet::empty()
             .with(Capability::Lifecycle)
             .with(Capability::Exec)
-            .with(Capability::Logs);
+            .with(Capability::Logs)
+            .with(Capability::WindowForwarding);
         registry
             .register(registration("gen-1", caps.clone()), instant(0))
             .unwrap();
@@ -1174,6 +1175,10 @@ mod tests {
             (OperationKind::ExecAttach, Some(Capability::Exec)),
             (OperationKind::ExecCancel, Some(Capability::Exec)),
             (OperationKind::ExecLogs, Some(Capability::Logs)),
+            (
+                OperationKind::DisplaySessionOpen,
+                Some(Capability::WindowForwarding),
+            ),
         ] {
             let request = req(kind, cap.unwrap_or(Capability::Lifecycle), Some("idem-1"));
             let route = registry
@@ -1243,32 +1248,28 @@ mod tests {
     }
 
     #[test]
-    fn remote_shell_operations_require_workload_targets() {
-        let mut registry = RemoteNodeRegistry::new();
-        registry
-            .register(
-                registration(
-                    "gen-1",
-                    CapabilitySet::empty().with(Capability::PersistentShell),
-                ),
-                instant(0),
-            )
-            .unwrap();
+    fn remote_router_rejects_workload_operations_without_workload_targets() {
+        let caps = CapabilitySet::empty()
+            .with(Capability::PersistentShell)
+            .with(Capability::WindowForwarding);
+        let mut adapter = adapter(caps);
         for (kind, key) in [
             (OperationKind::ShellList, None),
             (OperationKind::ShellAttach, Some("shell-attach-1")),
             (OperationKind::ShellDetach, Some("shell-detach-1")),
             (OperationKind::ShellKill, Some("shell-kill-1")),
+            (OperationKind::DisplaySessionOpen, Some("display-open-1")),
         ] {
-            let request = req_without_workload(kind, Capability::PersistentShell, key);
-            let err = registry
-                .prepare_route(
-                    &request,
-                    &ProtocolToken::parse("gen-1").unwrap(),
-                    &principal(),
-                )
+            let required = kind
+                .required_capability()
+                .unwrap_or(Capability::PersistentShell);
+            let request = req_without_workload(kind, required, key);
+            let mut peer = FakePeer::default();
+            let err = adapter
+                .dispatch(&request, &ProtocolToken::parse("gen-1").unwrap(), &mut peer)
                 .unwrap_err();
             assert_eq!(err.kind, RemoteNodeErrorKind::MissingWorkload);
+            assert_eq!(peer.sends, 0);
         }
     }
 

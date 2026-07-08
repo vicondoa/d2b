@@ -366,7 +366,7 @@ mod tests {
             idempotency_key: Some(IdempotencyKey::parse(key).unwrap()),
             realm: RealmPath::local(),
             node: NodeId::parse("gw").unwrap(),
-            workload: None,
+            workload: Some(WorkloadId::parse("vm-a").unwrap()),
             principal: principal.clone(),
             kind: OperationKind::WorkloadStart,
             trace: None,

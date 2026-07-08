@@ -3460,7 +3460,9 @@ fn dispatch_gateway_display(
             let correlation_id =
                 d2b_realm_core::CorrelationId::parse(args.operation_id).map_err(|err| {
                     TypedError::WireInvalidFrame {
-                        detail: format!("gatewayDisplay correlation_id invalid: {err}"),
+                        detail: format!(
+                            "gatewayDisplay operation_id cannot be used as correlation_id: {err}"
+                        ),
                     }
                 })?;
             let principal = gateway_display_peer_principal(peer);
@@ -17702,7 +17704,12 @@ mod public_status_tests {
             )),
         )
         .expect_err("invalid operation id is rejected before ledger insert");
-        assert!(matches!(err, TypedError::WireInvalidFrame { .. }));
+        match err {
+            TypedError::WireInvalidFrame { detail } => {
+                assert!(detail.starts_with("gatewayDisplay operation_id invalid:"));
+            }
+            other => panic!("expected WireInvalidFrame, got {other:?}"),
+        }
         assert!(state.gateway_display.sessions.lock().unwrap().is_empty());
     }
 

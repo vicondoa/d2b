@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 use d2b_realm_core::{
     AuthorizationScope, Capability, CapabilitySet, ConstellationError, ErrorKind, IdempotencyKey,
     NodeId, OpaquePayload, OperationId, OperationKind, OperationRequest, PrincipalId, RealmPath,
+    StreamKind,
 };
 
 pub mod display_transport;
@@ -120,18 +121,116 @@ pub enum RouteDecision {
     IdempotencyKeyExpired,
     /// A mutating operation arrived without the required idempotency key.
     MissingIdempotencyKey,
+    /// The operation kind requires an addressed workload but none was supplied.
+    MissingWorkload,
     /// The request principal does not match the authenticated session.
     PrincipalMismatch,
     /// The target did not advertise a required capability.
     CapabilityDenied {
         /// Capability missing from the negotiated set.
         capability: Capability,
-        /// Fingerprint of the negotiated set used for the denial.
-        negotiated_fingerprint: String,
+    },
+    /// The operation kind is not supported.
+    UnsupportedOperation {
+        /// Unsupported operation kind.
+        kind: OperationKind,
     },
     /// The router cannot retain another dedup record in this scope; refusing
     /// avoids executing a mutating operation without a durable dedup lease.
     DedupCapacityExceeded,
+}
+
+/// Whether this router build implements a semantic operation kind.
+///
+/// The first routed ADR 0043 surface is intentionally narrow: lifecycle, exec,
+/// retained logs, persistent shells, node/session health, and Wayland/display.
+/// Other operation families stay fail-closed.
+pub fn supported_operation_kind(kind: OperationKind) -> bool {
+    operation_route_plan(kind).is_some()
+}
+
+/// Whether this router build implements a semantic stream kind.
+///
+/// Capability advertisement alone is not enough to enable a stream family.
+/// Unsupported stream kinds get a typed `UnsupportedFeature` refusal even when a
+/// peer advertises the matching capability, so there is no accidental fallback
+/// to generic network, clipboard, audio, or device byte paths.
+pub fn supported_stream_kind(kind: StreamKind) -> bool {
+    matches!(
+        kind,
+        StreamKind::Control
+            | StreamKind::Pty
+            | StreamKind::ShellPty
+            | StreamKind::Stdio
+            | StreamKind::Logs
+            | StreamKind::Display
+    )
+}
+
+/// Pure semantic routing plan for one operation kind.
+///
+/// This is not a provider invocation API. It is the router-owned contract that
+/// tells callers which provider family and stream families a successfully
+/// authorized operation may use. Unsupported operations return `None` so callers
+/// cannot accidentally translate them to SSH, provider-native shells, generic
+/// sockets, or raw byte tunnels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OperationRoutePlan {
+    /// Operation being planned.
+    pub kind: OperationKind,
+    /// Trusted authorization scope derived from `kind`.
+    pub authorization_scope: AuthorizationScope,
+    /// Required capability derived from `kind`, if any.
+    pub required_capability: Option<Capability>,
+    /// Whether this operation mutates state and therefore needs idempotency.
+    pub mutating: bool,
+    /// Whether callers must address a workload before dispatch.
+    pub requires_workload: bool,
+    /// Stream families the operation is allowed to open.
+    pub stream_kinds: &'static [StreamKind],
+}
+
+impl OperationRoutePlan {
+    fn new(kind: OperationKind) -> Self {
+        Self {
+            kind,
+            authorization_scope: kind.authorization_scope(),
+            required_capability: kind.required_capability(),
+            mutating: kind.is_mutating(),
+            requires_workload: kind.requires_workload(),
+            stream_kinds: kind.allowed_stream_kinds(),
+        }
+    }
+
+    /// True iff every stream kind in the plan is implemented by this router.
+    pub fn streams_supported(self) -> bool {
+        self.stream_kinds.iter().copied().all(supported_stream_kind)
+    }
+}
+
+/// Return the current semantic route plan for a supported operation kind.
+pub fn operation_route_plan(kind: OperationKind) -> Option<OperationRoutePlan> {
+    let plan = match kind {
+        OperationKind::NodeRegister
+        | OperationKind::NodeHeartbeat
+        | OperationKind::NodeCapabilities
+        | OperationKind::GuestHealth
+        | OperationKind::WorkloadList
+        | OperationKind::WorkloadStart
+        | OperationKind::WorkloadStop
+        | OperationKind::ExecStart
+        | OperationKind::ExecAttach
+        | OperationKind::ExecLogs
+        | OperationKind::ExecCancel
+        | OperationKind::ShellList
+        | OperationKind::ShellAttach
+        | OperationKind::ShellDetach
+        | OperationKind::ShellKill
+        | OperationKind::DisplaySessionOpen => OperationRoutePlan::new(kind),
+        OperationKind::FileCopyStart | OperationKind::PortForwardOpen => return None,
+    };
+    plan.streams_supported().then_some(plan)
 }
 
 /// A monotonic clock, injectable so dedup expiry is deterministically
@@ -278,18 +377,22 @@ impl<C: Clock> OperationRouter<C> {
             return RouteDecision::PrincipalMismatch;
         }
 
-        let scope = req.kind.authorization_scope();
-        if let Some(capability) = req.required_capability()
+        let Some(plan) = operation_route_plan(req.kind) else {
+            return RouteDecision::UnsupportedOperation { kind: req.kind };
+        };
+
+        let scope = plan.authorization_scope;
+        if plan.requires_workload && req.workload.is_none() {
+            return RouteDecision::MissingWorkload;
+        }
+        if let Some(capability) = plan.required_capability
             && !capabilities.has(capability)
         {
-            return RouteDecision::CapabilityDenied {
-                capability,
-                negotiated_fingerprint: capabilities.stable_fingerprint(),
-            };
+            return RouteDecision::CapabilityDenied { capability };
         }
 
         // 2. Non-mutating operations need no dedup.
-        if !req.kind.is_mutating() {
+        if !plan.mutating {
             return RouteDecision::Accept { scope };
         }
 
@@ -491,13 +594,9 @@ pub fn route_decision_error(
         RouteDecision::PrincipalMismatch => {
             ConstellationError::new(ErrorKind::Unauthorized, "principal binding mismatch")
         }
-        RouteDecision::CapabilityDenied {
-            capability,
-            negotiated_fingerprint,
-        } => ConstellationError::capability_denied_with_fingerprint(
-            *capability,
-            Some(negotiated_fingerprint.clone()),
-        ),
+        RouteDecision::CapabilityDenied { capability } => {
+            ConstellationError::capability_denied(*capability)
+        }
         RouteDecision::MissingIdempotencyKey => ConstellationError::new(
             ErrorKind::MalformedFrame,
             "mutating operation requires an idempotency key",
@@ -513,6 +612,17 @@ pub fn route_decision_error(
         RouteDecision::DedupCapacityExceeded => {
             ConstellationError::new(ErrorKind::Backpressure, "deduplication capacity exceeded")
         }
+        RouteDecision::MissingWorkload => ConstellationError::new(
+            ErrorKind::InvalidTarget,
+            format!(
+                "operation kind '{}' requires a workload target",
+                req.kind.code()
+            ),
+        ),
+        RouteDecision::UnsupportedOperation { kind } => ConstellationError::new(
+            ErrorKind::UnsupportedFeature,
+            format!("operation kind '{}' is not supported", kind.code()),
+        ),
         RouteDecision::Accept { .. }
         | RouteDecision::Replay { .. }
         | RouteDecision::InProgress { .. } => return None,
@@ -592,6 +702,44 @@ mod tests {
         }
     }
 
+    fn workload_req(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+    ) -> OperationRequest {
+        with_workload(req(kind, key, body, p), "work")
+    }
+
+    fn workload_req_with_op(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+        op_id: &str,
+    ) -> OperationRequest {
+        with_workload(req_with_op(kind, key, body, p, op_id), "work")
+    }
+
+    fn with_workload(mut req: OperationRequest, workload: &str) -> OperationRequest {
+        req.workload = Some(d2b_realm_core::WorkloadId::parse(workload).unwrap());
+        req
+    }
+
+    fn req_for_kind(
+        kind: OperationKind,
+        key: Option<&str>,
+        body: &[u8],
+        p: &str,
+        op_id: &str,
+    ) -> OperationRequest {
+        let req = req_with_op(kind, key, body, p, op_id);
+        match operation_route_plan(kind) {
+            Some(plan) if plan.requires_workload => with_workload(req, "work"),
+            _ => req,
+        }
+    }
+
     fn result(bytes: &[u8]) -> OpaquePayload {
         OpaquePayload::new(bytes.to_vec()).unwrap()
     }
@@ -614,7 +762,10 @@ mod tests {
     #[test]
     fn principal_mismatch_is_rejected() {
         let mut r = OperationRouter::new();
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = with_workload(
+            req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice"),
+            "work",
+        );
         assert_eq!(
             route(&mut r, &req, &principal("bob")),
             RouteDecision::PrincipalMismatch
@@ -630,18 +781,21 @@ mod tests {
     fn missing_capability_is_denied_before_dedup_state() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = with_workload(
+            req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice"),
+            "work",
+        );
         let decision = r.route_with_capabilities(&req, &p, &CapabilitySet::empty());
         assert_eq!(
             decision,
             RouteDecision::CapabilityDenied {
                 capability: Capability::Lifecycle,
-                negotiated_fingerprint: CapabilitySet::empty().stable_fingerprint(),
             }
         );
         let error = route_decision_error(&req, &decision).unwrap();
         assert_eq!(error.kind(), ErrorKind::CapabilityDenied);
         assert_eq!(error.missing_capability(), Some(Capability::Lifecycle));
+        assert_eq!(error.negotiated_capability_fingerprint(), None);
         assert_eq!(
             error.correlation_id().map(CorrelationId::as_str),
             Some("corr-1")
@@ -726,14 +880,24 @@ mod tests {
                 AuthorizationScope::capability(Capability::Logs),
             ),
             (
-                OperationKind::FileCopyStart,
-                Some(Capability::FileCopy),
-                AuthorizationScope::capability(Capability::FileCopy),
+                OperationKind::ShellList,
+                Some(Capability::PersistentShell),
+                AuthorizationScope::capability(Capability::PersistentShell),
             ),
             (
-                OperationKind::PortForwardOpen,
-                Some(Capability::PortForward),
-                AuthorizationScope::capability(Capability::PortForward),
+                OperationKind::ShellAttach,
+                Some(Capability::PersistentShell),
+                AuthorizationScope::capability(Capability::PersistentShell),
+            ),
+            (
+                OperationKind::ShellDetach,
+                Some(Capability::PersistentShell),
+                AuthorizationScope::capability(Capability::PersistentShell),
+            ),
+            (
+                OperationKind::ShellKill,
+                Some(Capability::PersistentShell),
+                AuthorizationScope::capability(Capability::PersistentShell),
             ),
             (
                 OperationKind::DisplaySessionOpen,
@@ -745,7 +909,7 @@ mod tests {
         for (idx, (kind, expected_capability, expected_scope)) in cases.into_iter().enumerate() {
             let key = format!("scope-key-{idx}");
             let op_id = format!("op-{idx}");
-            let req = req_with_op(
+            let req = req_for_kind(
                 kind,
                 kind.is_mutating().then_some(key.as_str()),
                 b"scope",
@@ -761,16 +925,213 @@ mod tests {
     }
 
     #[test]
+    fn workload_required_operations_fail_before_capability_or_dedup() {
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        let req = req_with_op(
+            OperationKind::DisplaySessionOpen,
+            Some("display-key"),
+            b"display",
+            "alice",
+            "op-display",
+        );
+        let decision = r.route_with_capabilities(
+            &req,
+            &p,
+            &CapabilitySet::empty().with(Capability::WindowForwarding),
+        );
+        assert_eq!(decision, RouteDecision::MissingWorkload);
+        let err = route_decision_error(&req, &decision).unwrap();
+        assert_eq!(err.kind(), ErrorKind::InvalidTarget);
+        assert!(err.message().contains("display-session-open"));
+        assert_eq!(r.tracked(), 0);
+    }
+
+    #[test]
+    fn unsupported_operation_families_deny_before_capability_or_dedup() {
+        let mut r = OperationRouter::new();
+        let p = principal("alice");
+        for kind in [OperationKind::FileCopyStart, OperationKind::PortForwardOpen] {
+            let req = req_with_op(kind, Some("unsupported-key"), b"opaque", "alice", "op-1");
+            assert_eq!(
+                r.route_with_capabilities(&req, &p, &caps_for(&req)),
+                RouteDecision::UnsupportedOperation { kind }
+            );
+            let err =
+                route_decision_error(&req, &RouteDecision::UnsupportedOperation { kind }).unwrap();
+            assert_eq!(err.kind(), ErrorKind::UnsupportedFeature);
+            assert_eq!(
+                err.correlation_id().map(CorrelationId::as_str),
+                Some("corr-1")
+            );
+            assert!(err.message().contains(kind.code()));
+            assert_eq!(r.tracked(), 0);
+        }
+    }
+
+    #[test]
+    fn operation_support_policy_is_explicit() {
+        let supported = [
+            OperationKind::NodeRegister,
+            OperationKind::NodeHeartbeat,
+            OperationKind::NodeCapabilities,
+            OperationKind::WorkloadList,
+            OperationKind::WorkloadStart,
+            OperationKind::WorkloadStop,
+            OperationKind::GuestHealth,
+            OperationKind::ExecStart,
+            OperationKind::ExecAttach,
+            OperationKind::ExecLogs,
+            OperationKind::ExecCancel,
+            OperationKind::ShellList,
+            OperationKind::ShellAttach,
+            OperationKind::ShellDetach,
+            OperationKind::ShellKill,
+            OperationKind::DisplaySessionOpen,
+        ];
+        for kind in supported {
+            assert!(supported_operation_kind(kind), "{kind:?} should route");
+        }
+        for kind in [OperationKind::FileCopyStart, OperationKind::PortForwardOpen] {
+            assert!(
+                !supported_operation_kind(kind),
+                "{kind:?} should fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn stream_support_policy_is_explicit() {
+        let supported = [
+            StreamKind::Control,
+            StreamKind::Pty,
+            StreamKind::ShellPty,
+            StreamKind::Stdio,
+            StreamKind::Logs,
+            StreamKind::Display,
+        ];
+        for kind in supported {
+            assert!(supported_stream_kind(kind), "{kind:?} should route");
+        }
+        let unsupported = [
+            StreamKind::FileCopy,
+            StreamKind::PortForward,
+            StreamKind::Clipboard,
+            StreamKind::AudioPlayback,
+            StreamKind::AudioCapture,
+            StreamKind::DeviceHid,
+            StreamKind::DeviceUsb,
+        ];
+        for kind in unsupported {
+            assert!(!supported_stream_kind(kind), "{kind:?} should fail closed");
+        }
+    }
+
+    #[test]
+    fn operation_route_plan_maps_supported_operation_families() {
+        let cases: &[(OperationKind, Option<Capability>, bool, &[StreamKind])] = &[
+            (OperationKind::NodeRegister, None, false, &[]),
+            (OperationKind::NodeHeartbeat, None, false, &[]),
+            (OperationKind::NodeCapabilities, None, false, &[]),
+            (
+                OperationKind::WorkloadList,
+                Some(Capability::Lifecycle),
+                false,
+                &[],
+            ),
+            (
+                OperationKind::WorkloadStart,
+                Some(Capability::Lifecycle),
+                true,
+                &[],
+            ),
+            (
+                OperationKind::WorkloadStop,
+                Some(Capability::Lifecycle),
+                true,
+                &[],
+            ),
+            (OperationKind::GuestHealth, None, true, &[]),
+            (
+                OperationKind::ExecStart,
+                Some(Capability::Exec),
+                true,
+                &[StreamKind::Stdio, StreamKind::Pty],
+            ),
+            (
+                OperationKind::ExecAttach,
+                Some(Capability::Exec),
+                true,
+                &[StreamKind::Stdio, StreamKind::Pty],
+            ),
+            (
+                OperationKind::ExecLogs,
+                Some(Capability::Logs),
+                true,
+                &[StreamKind::Logs],
+            ),
+            (OperationKind::ExecCancel, Some(Capability::Exec), true, &[]),
+            (
+                OperationKind::ShellList,
+                Some(Capability::PersistentShell),
+                true,
+                &[],
+            ),
+            (
+                OperationKind::ShellAttach,
+                Some(Capability::PersistentShell),
+                true,
+                &[StreamKind::ShellPty],
+            ),
+            (
+                OperationKind::ShellDetach,
+                Some(Capability::PersistentShell),
+                true,
+                &[],
+            ),
+            (
+                OperationKind::ShellKill,
+                Some(Capability::PersistentShell),
+                true,
+                &[],
+            ),
+            (
+                OperationKind::DisplaySessionOpen,
+                Some(Capability::WindowForwarding),
+                true,
+                &[StreamKind::Display],
+            ),
+        ];
+        for (kind, required_capability, requires_workload, stream_kinds) in cases {
+            let plan = operation_route_plan(*kind).unwrap();
+            assert_eq!(plan.kind, *kind);
+            assert_eq!(plan.authorization_scope, kind.authorization_scope());
+            assert_eq!(plan.required_capability, *required_capability);
+            assert_eq!(plan.mutating, kind.is_mutating());
+            assert_eq!(plan.requires_workload, *requires_workload);
+            assert_eq!(plan.stream_kinds, *stream_kinds);
+            assert!(plan.streams_supported());
+        }
+    }
+
+    #[test]
+    fn operation_route_plan_refuses_future_operation_families() {
+        for kind in [OperationKind::FileCopyStart, OperationKind::PortForwardOpen] {
+            assert_eq!(operation_route_plan(kind), None);
+        }
+    }
+
+    #[test]
     fn mutating_without_key_is_rejected() {
         let mut r = OperationRouter::new().with_max_dedup_records(0);
-        let missing_key = req(OperationKind::WorkloadStart, None, b"x", "alice");
+        let missing_key = workload_req(OperationKind::WorkloadStart, None, b"x", "alice");
         assert_eq!(
             route(&mut r, &missing_key, &principal("alice")),
             RouteDecision::MissingIdempotencyKey
         );
         assert_eq!(r.tracked(), 0);
 
-        let keyed = req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
+        let keyed = workload_req(OperationKind::WorkloadStart, Some("k1"), b"x", "alice");
         assert_eq!(
             route(&mut r, &keyed, &principal("alice")),
             RouteDecision::DedupCapacityExceeded
@@ -780,7 +1141,7 @@ mod tests {
     #[test]
     fn accept_then_in_progress_then_replay_carries_original_op_and_result() {
         let mut r = OperationRouter::new();
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         let p = principal("alice");
         assert!(matches!(
             route(&mut r, &req, &p),
@@ -808,7 +1169,7 @@ mod tests {
     fn lost_reply_retry_replays_recorded_result_without_new_accept() {
         let mut shared_router = OperationRouter::new();
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("lost-reply-key"),
             b"start-once",
@@ -821,7 +1182,7 @@ mod tests {
         ));
         assert!(shared_router.mark_completed(&first, result(b"started")));
 
-        let retry_after_disconnect = req_with_op(
+        let retry_after_disconnect = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("lost-reply-key"),
             b"start-once",
@@ -842,13 +1203,13 @@ mod tests {
     fn same_key_different_request_conflicts() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let a = req(
+        let a = workload_req(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-A",
             "alice",
         );
-        let b = req(
+        let b = workload_req(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-B",
@@ -866,8 +1227,8 @@ mod tests {
         // The same opaque idempotency key under a different principal must NOT
         // collide (ADR 0032 keys dedup by realm+principal+node+kind+key).
         let mut r = OperationRouter::new();
-        let alice = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
-        let bob = req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
+        let alice = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let bob = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "bob");
         assert!(matches!(
             route(&mut r, &alice, &principal("alice")),
             RouteDecision::Accept { .. }
@@ -888,14 +1249,14 @@ mod tests {
         // request (Replay after completion), never a conflict.
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",
             "alice",
             "op-1",
         );
-        let retry = req_with_op(
+        let retry = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",
@@ -925,7 +1286,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -945,7 +1306,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -962,14 +1323,14 @@ mod tests {
     fn capacity_exhaustion_fails_closed_for_new_keys() {
         let mut r = OperationRouter::new().with_max_dedup_records(1);
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-one",
             "alice",
             "op-1",
         );
-        let second = req_with_op(
+        let second = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k2"),
             b"start-two",
@@ -1005,14 +1366,14 @@ mod tests {
             .with_no_reuse_horizon(Duration::from_secs(10))
             .with_max_dedup_records(1);
         let p = principal("alice");
-        let first = req_with_op(
+        let first = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start-one",
             "alice",
             "op-1",
         );
-        let second = req_with_op(
+        let second = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k2"),
             b"start-two",
@@ -1049,7 +1410,7 @@ mod tests {
             .with_retention(Duration::from_secs(60))
             .with_no_reuse_horizon(Duration::from_secs(600));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1085,7 +1446,7 @@ mod tests {
         let mut r =
             OperationRouter::with_clock(clock.clone()).with_retention(Duration::from_secs(60));
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1100,7 +1461,7 @@ mod tests {
     fn mark_failed_allows_a_fresh_retry() {
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let req = req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
+        let req = workload_req(OperationKind::WorkloadStart, Some("k1"), b"start", "alice");
         assert!(matches!(
             route(&mut r, &req, &p),
             RouteDecision::Accept { .. }
@@ -1120,8 +1481,9 @@ mod tests {
         // accepted operation's record (which would corrupt replay/dedup).
         let mut r = OperationRouter::new();
         let p = principal("alice");
-        let accepted = req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
-        let conflicting = req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
+        let accepted = workload_req(OperationKind::WorkloadStart, Some("k1"), b"real", "alice");
+        let conflicting =
+            workload_req(OperationKind::WorkloadStart, Some("k1"), b"forged", "alice");
         assert!(matches!(
             route(&mut r, &accepted, &p),
             RouteDecision::Accept { .. }
@@ -1156,7 +1518,7 @@ mod tests {
         let clock = ManualClock::new();
         let mut r = OperationRouter::with_clock(clock.clone());
         let p = "alice";
-        let op = req_with_op(
+        let op = workload_req_with_op(
             OperationKind::WorkloadStart,
             Some("k1"),
             b"start",

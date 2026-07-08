@@ -20,11 +20,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added ADR 0043: Realm-native control plane, documenting the realm-as-control
+  plane architecture, per-realm daemon/broker/socket/state/audit boundaries,
+  strict parent/child routing, dynamic relay discovery, realm-qualified VM
+  addresses, and migration from legacy local grouping into first-class realms.
 - Added tree route admission and decision support for signed-expiring route
   advertisements, strict descendant namespaces, replay/expiry checks,
   loop/multiparent refusal, nearest-common-ancestor path decisions, bounded
   discovery queue decisions, direct shortcut metadata, and low-cardinality route
   audit/telemetry events without enabling live transport.
+
 - Added topology validation coverage for bounded discovery queues,
   unauthenticated-peer drop-new/rate-limit behavior, route-advertisement
   expiry/replay rejection, capability denials, direct-shortcut policy denials,
@@ -49,15 +54,14 @@ deprecations ship one minor release before removal.
 - Documented the realm identity lifecycle contract for refs/fingerprints versus
   key material, parent trust anchors, child key pins, controller-generation
   rotation, revocation lists, teardown directives, recovery metadata, and the
-  future live-enforcement boundary.
+  live-enforcement boundary.
 - Documented the realm access resolver contract for canonical realm target
   grammar, alias/default-realm resolution, direct host-local access bindings,
-  capability preflight, typed resolver diagnostics, and current non-routing
-  implementation boundaries.
+  capability preflight, typed resolver diagnostics, and contract-only routing
+  boundaries.
 - Documented the local-root allocator contract for typed host-resource
   leases, opaque resource ids, deterministic acquisition order, reconciliation,
-  quarantine/reclaim, immutable host-file boundaries, and the current
-  contract-only implementation status.
+  quarantine/reclaim, immutable host-file boundaries, and contract-only status.
 - Added local-root allocator data models for realm host-resource
   leases, opaque resource ids, allocation/reconciliation responses, bounded
   allocator audit/metric metadata, and generated JSON schema coverage.
@@ -99,458 +103,6 @@ deprecations ship one minor release before removal.
   principals, tmpfiles paths, disabled-realm omissions, bundle classification,
   daemon/broker loading defaults, and bundle-resolver loading.
 
-### Fixed
-
-- Hardened route refresh handling so stale/equal advertisements cannot downgrade
-  topology or capabilities, expired entries are treated absent without hot-path
-  full sweeps, admissions remain atomic without full map cloning, and normal
-  proactive refresh sequences do not exhaust replay capacity.
-- Added fixed in-memory capacities to the pure realm route engine so valid
-  unexpired parent, route, and replay advertisement state rejects new entries
-  fail-closed instead of growing without bound.
-- Bounded the pure realm route engine's replay/route expiry state, refreshed
-  existing route capabilities and ids on newer advertisements, and made
-  local-root route capability decisions explicit.
-- Aligned protobuf authorization-scope encoding with identity lifecycle scopes
-  and current route contracts.
-- Documented the private `realm-controllers.json` contract for deterministic
-  host-local realm controller unit/socket naming, direct realm socket
-  authorization, local-root allocator resolution, state/audit separation, and
-  the access-layer/routing boundary.
-- Added Layer-1 allocator coverage for rendered `allocator.json` bundle wiring,
-  realm allocator metadata, fake-engine conflict/replay/reconcile paths, and
-  bounded reconciliation reports.
-- Added the public `d2b.realms.<realm>` Nix option schema foundation for
-  the realm-native control plane without changing existing `d2b.envs`
-  runtime behavior, with normalized internal realm index metadata, eval-time
-  assertions for realm identity/parent/path uniqueness, and reference
-  documentation for placement, user access, provider/relay/policy/key
-  references, and the transitional env/network bridge.
-- Added Layer-1 nix-unit coverage for the realm option schema,
-  normalized realm index, parent/path collision assertions, legacy gateway/ACA
-  migration guidance, and minimal/multi-env eval compatibility.
-- Added realm `placementProvider` metadata and AF_UNIX socket path length
-  assertions for realm public and broker socket declarations.
-- Added the `RealmTarget` parser with canonical realm-qualified
-  rendering, bare-alias ambiguity diagnostics, and old node-qualified target
-  migration errors.
-- Added an accepted realm-native control-plane decision record, superseding the
-  host-centric constellation model with per-realm daemon, broker, state, and
-  audit boundaries; first-class `home`, `dev`, and `work` realms to replace
-  the current grouping model; and a clean cutover from old realm/ACA sandbox
-  surfaces into `d2b.realms`.
-- Added core realm data models for controller placement,
-  access bindings, provider/workload placement summaries, tree route
-  advertisements, enrollment/key lifecycle metadata, and migration-error
-  envelopes.
-- Documented the stable public-socket discovery contract for persistent shells
-  so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
-  `ShellOp::List` without scraping human CLI output or leaking terminal state.
-- Added typed deserialization support for public daemon response envelopes so
-  downstream clients can parse `PublicResponse` data without falling back to
-  untyped JSON.
-- Exported `packages.<system>.d2b-wayland-proxy` and added a supported
-  `--host-terminal` launch path for VM-bound host terminals. The launcher creates
-  randomized single-use Wayland and WezTerm mux sockets under a private
-  `$XDG_RUNTIME_DIR` directory, waits for proxy readiness before launching the
-  foreground child, preserves d2b clipboard mediation, and keeps privileged
-  Wayland globals hidden.
-- Documented the optional desktop terminal integration stack (`d2b-toolkit`,
-  `d2b-wlterm`, and WeezTerm) with exact flake-input follow boilerplate,
-  Home Manager wiring, Waybar setup, and validation commands.
-- Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
-  `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
-  CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
-  or equivalent) over AF_VSOCK, without USB device ownership transfer. Each
-  opted-in VM receives a daemon-supervised virtual FIDO2 HID device
-  (`/dev/hidraw*`) via Linux `/dev/uhid`; browsers and `libfido2` treat it as
-  a normal local security key.
-- Added `d2b usb security-key status|sessions|cancel|test` subcommands for
-  lease inspection, session history, stuck-request cancellation, and
-  per-VM smoke checks.
-- Added structured notification/event emission for security-key lifecycle
-  events (ceremony start, user-presence wait, contention, failure, lease
-  revocation) through the d2b notification subsystem, with durable
-  `/run/d2b/usb-sk/events.jsonl` and a machine-readable
-  `/run/d2b/usb-sk/lease.json` state file.
-- Notification actions (`Cancel active request`, `Open status`) include
-  single-use, high-entropy nonces bound to session/action/expiry; `d2bd`
-  rejects missing, expired, reused, or mismatched action tokens.
-- Added eval-time assertions: `usb.securityKey.enable = true` and
-  `usbip.yubikey = true` are mutually exclusive for the same VM; per-VM
-  security-key opt-in requires the host `usb.securityKey.enable = true`;
-  per-VM opt-in requires `guest.control.enable = true`.
-- Added Diataxis documentation:
-  - How-to: [`docs/how-to/use-usb-security-key.md`](docs/how-to/use-usb-security-key.md)
-  - Migration: [`docs/how-to/migrate-usbip-yubikey-to-security-key.md`](docs/how-to/migrate-usbip-yubikey-to-security-key.md)
-  - Reference (options, CLI, event/notification JSON): [`docs/reference/components-usb-security-key.md`](docs/reference/components-usb-security-key.md), [`docs/reference/usb-security-key-events.md`](docs/reference/usb-security-key-events.md)
-  - Explanation (CTAP proxy architecture, why not USB sharing, comparison with USBIP and Qubes): [`docs/explanation/usb-security-key-architecture.md`](docs/explanation/usb-security-key-architecture.md)
-- Added the `d2b-notify` crate: a reusable notification/event mechanism for
-  d2b desktop UX, including:
-  - Typed `SecurityKeyEvent` enum covering all CTAP/WebAuthn ceremony
-    lifecycle phases: `Started`, `TouchNeeded`, `Busy`, `Queued`, `Blocked`,
-    `TimedOut`, `Failed`, `Canceled`, `Completed`.
-  - `ActionNonceStore`: single-use CSPRNG nonces (32 bytes, 64-char hex)
-    bound to `session_id`/`action_key`/expiry, with fail-closed validation
-    that prevents notification-action replay by hostile desktop clients.
-  - `SkNotifyState`: durable JSON state format (schema version 1) written by
-    the host runtime to `/run/d2b/notify/sk-state.json`; read by the Waybar
-    helper and `d2b-wlcontrol`.
-  - `WaybarBlock` + `waybar_block_from_state`: Waybar JSON-protocol block
-    derived from the current ceremony state, with per-state CSS classes
-    (`d2b-sk-idle`, `d2b-sk-touch`, `d2b-sk-busy`, `d2b-sk-active`).
-  - `WlcontrolSkStatus`: data contract for the `d2b-wlcontrol` status/action
-    surface, with pluggable per-ceremony action builder for nonce-backed
-    buttons.
-  - `d2b-sk-waybar-helper` binary: reads the durable state file and emits
-    one Waybar JSON line to stdout; suitable as a `custom/d2b-sk` `exec`
-    target.
-  - Pluggable `Notifier` trait + `RecordingNotifier` for hermetic tests;
-    per-event builders for all user-visible ceremony transitions.
-- Added `nixos-modules/notifications.nix`: NixOS module with options
-  `d2b.notifications.enable`, `d2b.notifications.statusHelper.{enable,
-  package,executablePath}`, `d2b.notifications.integrations.waybar.enable`,
-  `d2b.notifications.securityKey.{enable,staleEntryTtlSecs}`, and
-  `d2b.notifications.runtime.stateDir`; creates the
-  `/run/d2b/notify` tmpfiles directory on activation.
-- Added `d2b usb security-key` subcommand family exposing four operator surfaces
-  for the CTAP/WebAuthn security-key proxy feature:
-  - `d2b usb security-key status [--json|--human]` — show proxy health,
-    configured physical keys, per-VM virtual-device health, and current lease.
-  - `d2b usb security-key sessions [--json|--human]` — list recent and active
-    security-key request sessions, VM, RP ID, outcome, and timeout.
-  - `d2b usb security-key cancel {<session-id>|--current} [--dry-run|--apply]
-    [--json|--human]` — cancel a stuck security-key request session; `--dry-run`
-    shows the planned `SecurityKeyProxyCancelSession` broker op.
-  - `d2b usb security-key test <vm> [--dry-run] [--json|--human]` — smoke-check
-    that the guest virtual HID device and the host broker's physical-key
-    visibility are healthy; `--dry-run` shows the two planned checks.
-- Added USB security-key wire contract types in `d2b-contracts::public_wire`:
-  `UsbSecurityKeyStatusRequest/Response`, `UsbSecurityKeySessionsRequest/Response`,
-  `UsbSecurityKeyCancelRequest/Response`, `UsbSecurityKeyTestRequest/Response`,
-  and supporting DTOs (`UsbSkPhysicalKeyStatus`, `UsbSkVirtualDeviceStatus`,
-  `UsbSkLeaseStatus`, `UsbSkLeaseState`, `UsbSkSession`, `UsbSkSessionOutcome`,
-  `UsbSkTestCheck`).
-- Added CLI output types in `d2b-contracts::cli_output`:
-  `UsbSkStatusOutputV1`, `UsbSkSessionsOutputV1`, `UsbSkCancelDryRunOutputV1`,
-  `UsbSkTestDryRunOutputV1`.
-- Added CLI golden tests under `packages/d2b/tests/usb_sk_contract.rs` covering:
-  `usb security-key --help`, `cancel --current --dry-run`, `test <vm> --dry-run`,
-  and `not-yet-implemented` exit-78 envelope for all live paths.
-- Extended `packages/d2b/tests/cli_json_output_contract.rs` with
-  `usb_security_key_dry_run_outputs_match_goldens`,
-  `usb_security_key_status_not_yet_implemented`, and
-  `usb_security_key_sessions_not_yet_implemented` tests.
-- The use of "security key" as the user-facing term for CTAP/WebAuthn
-  authenticators is now established in CLI help, JSON envelopes, and docs.
-  The FIDO/CTAP terminology is reserved for diagnostic output and technical docs.
-
-  The live paths (`status`, `sessions`, `cancel --apply`, `test <vm>` without
-  `--dry-run`) emit exit 78 with a `not-yet-implemented` envelope until the
-  daemon broker handler lands in a later workstream.
-- Added `d2b.host.usb.securityKey.enable` and `d2b.host.usb.securityKey.devices`
-  (stable FIDO device selector submodule with `vendorId`, `productId`, `serial`,
-  and `label` fields) to declare the host USB security-key proxy.
-- Added `d2b.vms.<name>.usb.securityKey.enable` per-VM opt-in for CTAP/HID
-  relay to a host-proxied FIDO security key, guarded behind the new host option.
-- Eval-time assertions: VM `usb.securityKey.enable` requires the host proxy to
-  be enabled; `usb.securityKey.enable` and `usbip.yubikey` are mutually
-  exclusive for the same VM (phase-1 constraint); device `vendorId` values must
-  be within the FIDO-class allowlist; device labels must be unique.
-- Rust DTO module `d2b_contracts::security_key` with typed wire contracts:
-  `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`,
-  `SecurityKeyCancelRequest/Response`, `SecurityKeyEvent` (7 variants),
-  `SecurityKeyOpenDeviceRequest`, `SecurityKeyApplyUdevRulesRequest`, and
-  opaque-ID newtypes `SecurityKeySessionId` / `SecurityKeyDeviceLabel`.
-- `PublicRequest` / `PublicResponse` variants for `UsbSecurityKeyStatus`,
-  `UsbSecurityKeySessions`, and `UsbSecurityKeyCancel`.
-- `BrokerRequest` variants `SecurityKeyOpenDevice` and
-  `SecurityKeyApplyUdevRules` with `op_name()` dispatch arms.
-- `W3BrokerOperation::SecurityKeyOpenDevice` and
-  `W3BrokerOperation::SecurityKeyApplyUdevRules` with wire tags, flags, and
-  capability advertisement.
-- Privilege matrix rows for `usb security-key` (public) and the two new broker
-  operations; dispositions doc stubs for both broker ops.
-- `usb security-key status`, `usb security-key sessions`, and
-  `usb security-key cancel` CLI contract stubs in
-  `docs/reference/cli-contract.md` (daemon not yet wired, phase 1).
-- Nix-unit eval cases (`tests/unit/nix/cases/usb-security-key.nix`) and
-  assertion rejection cases for all new eval-time constraints.
-- Contract + policy tests in `packages/d2b-contract-tests/tests/usb_sk_contract.rs`
-  (20 tests).
-- Added `d2b.vms.<name>.usb.securityKey.enable` option. When `true`, the guest
-  VM gets a virtual FIDO2 HID device via a CTAPHID UHID frontend relay
-  (`d2b-sk-frontend`). The guest-side binary opens `/dev/uhid`, creates a
-  virtual HID device, and relays 64-byte CTAPHID reports over an AF_VSOCK
-  connection to the host broker (VSOCK port 14320). Firefox and libfido2
-  discover the virtual `/dev/hidraw*` device via the `fido` group; no root
-  or physical USB access is required inside the guest.
-- `d2b-sk-frontend` static guest binary: fully static (musl) binary for the
-  guest CTAPHID UHID relay frontend. Implements exponential backoff VSOCK
-  reconnect (1 s–60 s), clean UHID device recreation across reconnects, and a
-  simple 4-byte length-prefix framing protocol. Uses VSOCK port 14320.
-- Host DAG node `sk-frontend` (role `security-key-frontend`): a no-runner
-  tracking node whose readiness predicate fires when the host broker's vsock
-  socket (`<stateDir>/vsock.sock_14320`) appears. Edge: `cloud-hypervisor →
-  sk-frontend`.
-- Mutual exclusion assertion: `d2b.vms.<name>.usbip.yubikey` and
-  `d2b.vms.<name>.usb.securityKey.enable` cannot both be `true` for the same VM
-  (both claim the FIDO2 device endpoint).
-- `qemu-media` runtime incompatibility assertion for `usb.securityKey.enable`
-  (the CTAPHID proxy requires the Cloud Hypervisor / nixos runtime).
-- `securityKeyVsockPort = 14320` constant added to `d2b` lib for use by host
-  broker and guest component modules.
-- Nix eval tests (`security-key-gating.nix`): manifest `securityKey` field
-  gating, DAG node presence/absence, assertion firing for the yubikey and
-  qemu-media conflicts.
-- Contract tests (`minijail_sk_frontend.rs`): source-grep assertions for the
-  sk-frontend minijail profile block in `minijail-profiles.nix`, including role,
-  seccompPolicyRef presence, and empty capability set; compile-time
-  `ProcessRole::SecurityKeyFrontend` variant and serde round-trip check.
-- Added `OpenHidrawSecurityKey` broker op: resolves a configured FIDO security-key
-  stable selector, opens the physical `hidraw` node, and passes the fd to `d2bd` via
-  `SCM_RIGHTS`. Includes the privilege-matrix row, audit fields, and dispatch wiring.
-- Added `d2bd::security_key` session management module: CTAPHID relay with CID
-  isolation/translation, a one-active-ceremony-per-key lease state machine (default
-  120s ceremony timeout, 15s queue-wait timeout), length-prefixed 64-byte report
-  framing, and a `SO_PEERCRED`-based per-VM socket peer authentication check. Raw CTAP
-  payloads, PINs, and credential material are never logged.
-
-- Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
-  surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
-  policy.
-- Net VMs can opt into external network mDNS reflection and an optional `.local`
-  dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
-- Nix-unit coverage and minimal eval wiring for opt-in per-env external network net VM
-  interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
-  forwarding.
-
-### Changed
-
-- Routed CLI VM target resolution through the realm access contract DTOs while
-  preserving the existing local VM fast path and manifest-backed gateway
-  behavior until the daemon access API is implemented.
-- Renamed the Rust realm foundation crates from
-  `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
-  establishing realm-native package/import names for follow-up parser and DTO
-  work.
-- Added eval-time migration errors for legacy `d2b.gateways` and
-  nested gateway/ACA sandbox configuration, pointing operators to
-  `d2b.realms` while preserving current `d2b.envs` behavior when no legacy
-  gateway surface is declared.
-- Aligned current realm-core reference pages and generated schema companions
-  with `d2b-realm-core` naming and the realm-qualified target
-  grammar.
-- Kept realm operator-troubleshooting identifiers visible in Rust `Debug`
-  output while preserving redaction for credential-, key-, and principal-like
-  identifiers.
-- Tightened `allocator.json` config typing so realm paths, provider kinds,
-  and transitional env-bridge modes carry bounded schema/runtime validation.
-
-### Fixed
-
-- Explicit `d2b://` CLI targets that omit the reserved `.d2b` suffix now fail
-  with a target grammar diagnostic instead of falling back to local VM routing.
-- Host-local realm daemons now emit only strict `DaemonConfig` fields
-  and use realm-scoped daemon state directories, with realm brokers explicitly
-  loading the shared `realm-controllers.json` contract.
-- Allocator metric bounding now aggregates repeated low-cardinality
-  label sets before applying the event cap, preserving counts instead of
-  dropping later samples.
-- Allocator metadata now emits one namespace-boundary resource
-  request per networked realm, avoiding duplicate resource ids for realms
-  spanning multiple enabled environments.
-- Realm audit, operation, and typed-error envelopes now carry the
-  cross-realm correlation id needed to reconstruct rejected routes.
-- Operation responses now carry the same required correlation id as
-  requests so response-frame return paths can emit correlated audit and trace
-  records.
-- `realm-controllers.json` validation now accepts host-local materialized
-  unit/socket metadata when the artifact declares that systemd units are
-  materialized, while still rejecting drift when it claims none are emitted.
-- Hardened host-local realm materialization by making realm runtime
-  directories non-group-writable, moving default per-realm audit directories out
-  of daemon-owned realm state, avoiding global systemd manager environment
-  mutation for broker uid/gid discovery, and removing host paths from new
-  startup/config tracing fields.
-- Host-local realm allowed users who are also `d2b.site.launcherUsers` now keep
-  both the canonical `d2b` lifecycle group and their deterministic realm
-  socket-access groups.
-- Realm Unix socket access-binding DTOs now reject paths longer than the Linux
-  `sockaddr_un.sun_path` limit before bind/connect.
-- Realm capability-negotiation JSON now rejects unknown outer envelope fields
-  while still preserving unknown future capability tokens inside the
-  capability set.
-- Host-local realm access preflight now derives advertised capabilities from
-  enabled provider refs and denies missing required capabilities instead of
-  echoing every request as satisfied.
-- Aligned realm-core schema generation and identifier validation:
-  `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
-  tokens reject leading punctuation consistently with their JSON schemas.
-- Aligned allocator reference docs with the generated realm-core
-  schema roots and documented the future repair-path shape for fail-closed
-  allocator reconciliation states.
-- `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
-  toplevel has acked its initial configure before attaching the VM identity rail,
-  preventing Wayland compositors from rejecting proxied WeezTerm windows during
-  startup.
-- Guest VMs now cap persistent systemd journals by default so `/var/log/journal`
-  cannot fill small per-VM `/var` images and corrupt NixOS activation state.
-- Security-key host relay now drives the physical hidraw fd through
-  cancellation-safe `AsyncFd` I/O so guest disconnects cannot leave orphaned
-  reader threads racing future sessions.
-- Security-key guest frontend now strips the kernel-supplied zero report-ID byte
-  from UHID output reports before forwarding CTAPHID frames to the host broker.
-- Security-key guest udev rules now match the virtual UHID FIDO device by its
-  HID parent identity and grant the standard `plugdev` browser/FIDO access group
-  so Firefox and libfido2 can open the guest `/dev/hidraw*` node without root.
-- Security-key guest frontend now drives `/dev/uhid` through nonblocking
-  `AsyncFd` I/O instead of `tokio::fs::File`, avoiding `ESPIPE` failures on
-  character devices during CTAPHID response injection.
-- Security-key proxy broker now accepts descriptor-verified FIDO hidraw devices
-  even when the host udev group is not one of the fallback FIDO groups. The
-  group allowlist remains required only for the descriptor-unreadable fallback
-  path.
-- Security-key accept loops now run on a daemon-owned runtime thread so the
-  per-VM VSOCK socket remains listening after the VM-start readiness transaction
-  returns.
-- Security-key accept-loop listener initialization now happens inside the
-  daemon-owned Tokio runtime context instead of before the runtime is entered.
-- Security-key guest frontend now emits the correct UHID_CREATE2 layout
-  (`bus` is a 16-bit field), allowing the virtual FIDO HID device to register
-  with the guest kernel.
-- Security-key host listener sockets now use mode `0770` so inherited per-VM
-  ACLs can grant Cloud Hypervisor write/connect access without making the
-  listener world-accessible.
-- Security-key guest frontend now writes the full UHID_CREATE2 payload,
-  including `dev_flags` and padding fields required by current Linux kernels.
-- Security-key guest frontend now uses the correct Linux UHID event type
-  numbers (`CREATE2 = 11`, `INPUT2 = 12`) so the virtual FIDO HID device is
-  actually created rather than sending an input report to no device.
-- Security-key guest frontend now zero-extends short UHID events from the kernel
-  instead of treating lifecycle events shorter than the maximum union size as
-  fatal.
-- Security-key host relay now prefixes physical hidraw writes with a zero report
-  ID byte, matching Linux hidraw/libfido2 behavior for unnumbered FIDO reports.
-- Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
-  leaves before writing `next-generation`, without recursively creating or
-  changing the `/run/d2b` parent posture.
-
-### Changed
-
-- `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
-  `graphics.waylandProxy.border.label.position`, `--border-thickness`, and
-  `--border-label-position` as deprecated legacy shape knobs; generated d2b
-  proxy runners use the fixed-width left wrapper rail and vertical label.
-- Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
-  `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
-  point `console` and `audio` surfaces at the provider capability
-  matrix.
-- The host-side `d2b-wayland-proxy` proxy is source-built from the checked-out
-  workspace even when other host tools use release prebuilts, so local eval
-  gates do not depend on a matching release tarball for this policy binary.
-- The `with-entra-id` eval workflow now overrides GitHub inputs to the
-  committed lock revisions and authenticates Nix fetches with the Actions token
-  to avoid transient unauthenticated API rate limits.
-- Host activation grants `d2bd` narrow access to the Wayland user's
-  PipeWire/Pulse sockets so daemon-owned audio policy enforcement does not
-  depend on host-local ACL overrides.
-- Console drainers now spawn on a daemon-owned Tokio runtime even when console
-  attach requests are handled by synchronous public-socket worker threads.
-- Clipboard documentation now follows Diataxis placement more closely: the
-  architecture overview is indexed as Explanation, while `d2b-clip-debug`
-  diagnostic command examples live in the clipboard picker how-to.
-- Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
-  change. Commands, packages, services, sockets, Nix options, runtime paths,
-  schemas, telemetry identifiers, and generated artifacts now use only `d2b`
-  naming; old names are unsupported and no compatibility aliases are provided.
-
-### Fixed
-
-- `d2b-wayland-proxy` now tears down proxy-owned wrapper toplevels when guests
-  destroy the XDG role or disconnect abruptly, preventing dead VM identity rails
-  from outliving the guest window.
-- `d2b-wayland-proxy` now translates pointer focus and motion from wrapper
-  content coordinates into guest-surface coordinates while suppressing only the
-  trusted rail, preventing clicks in wrapped guest windows from crashing clients.
-- `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
-  proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
-  the VM rail and guest content together without copying guest buffers.
-- `d2b-wayland-proxy --host-terminal` now launches child terminals with a
-  private runtime directory and relative `WAYLAND_DISPLAY`, while accepting
-  ACL-protected user runtime directories, so host terminals connect to the
-  intended single-use proxy socket.
-- `d2b-wayland-proxy` treats `ENOTCONN` during nonblocking clipboard bridge
-  handoff as retryable backpressure, preserving pending FDs until the bridge
-  socket finishes connecting.
-- Added host-integration coverage for the live `d2b-wayland-proxy`
-  AF_UNIX client-to-upstream relay path.
-- Updated the Windows notification transitive dependency to remove the runtime
-  `quick-xml` advisory path, and documented a temporary build-time
-  `wayland-scanner` advisory exception until that code generator publishes a
-  fixed `quick-xml` release.
-- Default proxy-drawn VM-name labels render in the wrapper rail so the VM
-  identity remains visible without overlaying guest buffers.
-- `d2b-wayland-proxy` now preserves the last committed surface size after a
-  guest destroys the current buffer object, while still clearing decorations on
-  committed `attach(NULL)`.
-- USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
-  spawn failures as retryable instead of reporting the helper as missing.
-- `d2b-wayland-proxy` now advertises its virtual clipboard manager even when
-  the host compositor omits `wl_data_device_manager`, and denies unstable
-  text-input v3 forwarding by default to avoid guest app crashes on invalid
-  seat-bound requests. Clipboard-boundary allow overrides now remain denied
-  and emit stable `W-*` diagnostics.
-- Clipboard paste selection offers no longer send drag-and-drop action events
-  for normal selections, fixing GTK/Firefox startup through the proxy; `d2b-clipd`
-  now requests the exact pending paste MIME from the picker and installs bridge
-  sockets with deterministic peer-connect permissions.
-- `d2b-clipd` now clears stale host-selection state when it observes its own
-  bridge-published VM selection, matches bridge send requests by source id
-  instead of MIME alone, and fulfills all queued Wayland paste FDs after one
-  picker selection so VM-to-host and VM-to-VM pastes cannot resolve to EOF after
-  the picker selects an item.
-- Clipboard picker selection now publishes the selected entry as a fresh
-  d2b-owned host selection and triggers paste replay, while VM destination paste
-  requests open the picker first and serve the replayed transfer immediately
-  from the published selection instead of holding a Wayland transfer FD across
-  picker interaction.
-- Clipboard bridge hardening now binds per-VM bridge sockets under a temporary
-  umask before starting background helper threads, uses anonymous memfds for
-  virtual-keyboard keymaps, closes bridge streams after partial refresh writes,
-  backs off failed nonblocking bridge connects, queues bridge handoffs across
-  transient send backpressure, bounds guest-controlled proxy diagnostic label
-  cardinality, and prunes stale host-backed virtual offers.
-- VM clipboard history now aggregates all MIME variants for the same exact VM
-  source under an injective bridge entry id, and the bridge-published selection
-  echo guard no longer depends on a time window.
-- `d2b-clip-debug` and picker Wayland polling now process readable events
-  before hangup/error handling so final Wayland events are not dropped on
-  disconnect.
-- The flake's `d2b-clipd` package now installs only the daemon binary, keeping
-  diagnostic probe binaries out of the daemon package closure.
-- `d2b-clipd` now emits an accurate user-visible reason when virtual-keyboard
-  paste replay fails, avoids high-cardinality `key=value` fields in routine
-  bridge logs, and sends bridge refreshes with fail-closed backpressure handling
-  on newly accepted proxy streams.
-- Clipboard audit and metric queues now flush metadata-only events instead of
-  silently discarding them, and the clipboard user service escapes systemd
-  specifiers while rejecting dot-segment bridge roots.
-- Clipboard replay now records d2b-owned data-control source ids before
-  flushing Wayland events, so VM-origin copies are not misclassified as unknown
-  host paste requests, and suppresses source-VM selection echoes so copying
-  inside a VM does not open a spurious picker or create empty host entries.
-- VM-origin copies now stay inside d2b's bridge/history state until an explicit
-  host or VM paste request opens the picker, so copy operations no longer publish
-  a host data-control discovery source that applications can probe.
-- Clipboard discovery sources now suppress their own compositor selection echoes
-  for every focused destination, preventing copy-time host entries and ensuring
-  the picker opens only from the later paste request.
-- Clipboard paste requests into a VM now direct-serve only the one-shot
-  user-selected replay publication, so later VM-destination pastes open the
-  picker instead of silently reusing stale published selection state.
-
-### Added
 
 - Env net VMs can now opt into external network plumbing with a macvtap-backed
   `external0` NIC, separate workload-to-home egress NAT, and explicit
@@ -700,141 +252,273 @@ deprecations ship one minor release before removal.
   bundle closure metadata is available, giving host-side scanners a public
   VM-to-guest-closure mapping for `sbomnix` without private path conventions.
 
-### Fixed
 
-- The console drain path is now treated as a long-lived daemon-internal tokio
-  task rather than a broker-spawned runner or one-shot readiness probe.
-- `d2b console` dispatch: launcher peers can no longer access another user's VM
-  console session. The per-session owner UID is now tracked at `Attach` time;
-  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
-  peers whose UID does not match the session owner (`AuthzNotAdmin`).
-- QEMU console chardev now uses `-chardev socket,id=con0,fd=N` instead of the
-  generic `-chardev fd` backend for correct socketpair semantics.
-- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
-  chunk are now forwarded to the VM before closing. Stdin buffer increased from
-  256 to 4096 bytes.
-- `d2b console` prints an operator hint when connected to a qemu-media VM
-  noting that the serial console may appear blank until the guest writes to
-  `/dev/ttyS0`.
-- `d2bd` audio dispatch now calls guestd `AudioSet` RPCs for Cloud Hypervisor
-  NixOS VMs instead of statically defaulting to `HostOnly`. `combined_audio_applied`
-  returns `HostAndGuest` when both host and guest succeed, `HostOnly` when only
-  host applies, `GuestOnly` for ACA sandboxes, and `Unsupported` on full failure.
-  qemu-media VMs never call guestd; ACA VMs fail closed when guestd is
-  unreachable.
-- `wpctl` subprocesses in guestd now drop to `workload_uid` before exec and set
-  both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` to `/run/user/<uid>`, so
-  WirePlumber locates the correct per-user socket. In d2bd the host PipeWire uid
-  is derived from `metadata(pipewire_runtime_dir).uid()` and passed via
-  `CommandExt::uid()` without shell string construction.
-- `wpctl` subprocess failures in guestd now capture bounded sanitized stderr for
-  operator diagnostics; d2bd host-side failures log only static messages so
-  PipeWire node identifiers, paths, and volume values do not leak.
-- OFD lock unlock now uses `F_OFD_SETLK` (non-blocking release) instead of the
-  incorrect `F_OFD_SETLKW` (blocking wait), which is semantically wrong for a lock
-  release path.
-- Audio lock file opens now use `OpenOptions::create(true).write(true)` instead of
-  `custom_flags(libc::O_CREAT)`, which previously required undocumented write
-  permission to function correctly.
-- `d2b audio` CLI is fully implemented: `status`, `mic on|off`, `speaker on|off`,
-  and `off` subcommands send typed `AudioOp` requests to the daemon public socket
-  and render results as human text or `--json`. `d2b audio status --json` emits
-  `AudioStatusResult` JSON for d2b-wlcontrol consumers.
-- Static USBIP declarations now reconcile on strict VM start after a host reboot
-  even when volatile `/run/d2b/locks/usbip/*` claim files are gone. The
-  daemon replays declared per-VM bind intents through the existing broker policy
-  and OFD-lock path, while VM stop cleanup still touches only same-owner
-  persisted claims. No-wait/autostarted VMs schedule a bounded background
-  reconciliation worker that aborts if the VM runner is no longer supervised.
-- `d2b host shutdown-hook --apply` no longer fails with `authz-not-admin`
-  on every VM: the new `HostShutdown` role permits `vmStop` from the guarded
-  `ExecStop` path (uid=0) while preserving the daemon-restart continuation
-  contract (`KillMode=process` + `Restart=on-failure`).
-- Wayland-proxy VM start no longer fails with `runner-exited:wayland-proxy`
-  after a fresh login when `/run/user/<uid>` is `0700`: the broker now grants
-  a traverse ACL on the runtime directory immediately before proxy spawn.
-- Daemon startup no longer emits spurious `kernel-module-check: fatal misses`
-  for built-in virtio modules on hosts with `=y` kernel config; the
-  `D2B_SKIP_KERNEL_MODULE_CHECK` workaround is no longer needed for these
-  hosts.
-- qemu-media host activation now repairs the `/run` ACL mask for the
-  qemu-media runner UID, so a switched host cannot leave
-  `/run/d2b/vms/<vm>` with `mask::r-x` and prevent QEMU from creating its QMP
-  socket before boot-media auto-enrollment runs.
+- VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
+  `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
+  public wire serialization that omits `force = false`.
+- Broker QMP lifecycle operations for qemu-media now expose typed
+  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
+  parsing and audit-safe lifecycle fields.
+- VM shutdowns now attempt provider-aware graceful guest shutdown for supported
+  Cloud Hypervisor/qemu-media VMs before forced pidfd cleanup, with bounded
+  daemon audit and metrics outcomes.
+- Persistent shell CLI: added top-level `d2b shell <vm>` attach and
+  management forms for persistent named guest shell sessions.
 
-- Live guest activation timeouts are now configurable globally via
-  `d2b.daemon.lifecycle.liveActivation.timeoutSeconds` and per VM via
-  `d2b.vms.<vm>.lifecycle.liveActivation.timeoutSeconds`, allowing
-  identity-bound guests to wait longer for operator-mediated user-session flows
-  such as Entra/Himmelblau hello/PIN.
-- `d2bd` now publishes a daemon-side public status read model for unfiltered
-  list/status requests, including read-model generation and source-fingerprint
-  metadata for wlcontrol and other fast-refresh clients.
-- **USB explicit attach** (`d2b usb attach <vm> <present-busid> --apply`):
-  `d2b usb attach` now supports attaching any physically-present USB device
-  to a USB-capable VM without requiring static busid/vendor allowlists in the
-  NixOS bundle configuration. The new explicit path performs three fail-closed
-  pre-flight checks before any broker or firewall mutation: sysfs presence
-  (`/sys/bus/usb/devices/<busid>/idVendor`), USB-capable gate
-  (`RuntimeCapabilityGate::UsbHotplug`), and active claim exclusivity (OFD lock
-  under `/run/d2b/locks/usbip/<busid>`). When a static bundle intent exists
-  for the busid, the declared path is used (existing behavior preserved). When no
-  declared intent is found, the explicit path dispatches two new broker ops —
-  `UsbipExplicitBind` and `UsbipExplicitFirewallRule` — which perform per-device
-  backend ACL grant (without allowlist validation), scoped nftables carveout
-  install preserving all active declared and explicit carveouts, and compensating
-  rollback on any failure. New typed errors `UsbipBusidNotPresent` (exit 67) and
-  `UsbipExplicitClaimConflict` (exit 67) surface actionable operator guidance for
-  pre-flight rejections.
-- `UsbipClaimSource` enum in `d2b-contracts` models whether an active daemon
-  USB claim originates from a static bundle declaration (`Declared { firewall_ref,
-  bind_ref }`) or an explicit present-busid attach (`Explicit`).
-- `UsbipDaemonClaimRecord` DTO in `d2b-contracts` captures the in-process
-  daemon representation of an active busid claim including VM, env, proxy port,
-  source, and the OFD lock path.
-- `build_usbip_explicit_plan` in the daemon USB state machine builds a per-busid
-  bring-up plan without requiring a bundle resolver or pre-declared intents.
-- `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker wire ops carry raw
-  busid, vm, env, and per-env uplink IPs for the per-device backend model;
-  validated by the same busid shape validator as the declared path.
-- 38 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, 15
-  contract tests in `usbip_explicit_attach_contract` covering explicit plan
-  shape, claim source enum, lock path derivation, broker op round-trips,
-  deny-unknown-fields, per-device backend model policy, firewall env scope, sysfs
-  presence pre-flight, and codebase policy gates; 2 audit roundtrip tests in the
-  broker for the new `UsbipExplicitBind` and `UsbipExplicitFirewallRule`
-  `OperationFields` variants; 2 JSON-schema contract tests in
-  `usb_json_contract`; and 3 network-scoping contract tests in
-  `usb_network_scoping`.
+- UI colors: added a compositor-agnostic d2b color contract under
+  `d2b.site.ui`, `d2b.envs.<env>.ui`, and
+  `d2b.vms.<vm>.ui`, with resolved JSON and GTK-compatible CSS
+  artifacts at
+  `/etc/d2b/ui-colors.{json,css}` and a niri backend that renders
+  active/inactive/urgent VM borders from the shared model. The CSS artifact
+  uses GTK-compatible `@define-color` declarations with underscore names.
 
-- `d2b switch` now threads the configured live activation timeout into
-  guest-control and includes identity-flow recovery guidance when guest
-  activation times out.
-- Successful activation commits now publish split store-view `state/current` and
-  `meta/current` pointers in addition to the legacy activation marker, keeping
-  daemon StoreSync metadata aligned after live switches.
-- Public status/list read-model snapshots now invalidate when runner pidfd state
-  changes, preventing cached lifecycle state from surviving VM start/stop
-  transitions.
-- USBIP bind now uses the same bounded isolated driver helper path as unbind, so
-  a slow or stuck kernel driver bind cannot pin the broker control path
-  indefinitely.
-- `d2b usb detach <vm> <busid> --apply` now reaches the broker
-  `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
-  refusal, so stale USBIP host claims can be released and subsequent attaches can
-  recover without raw `usbip` commands.
-- `d2bd.service` now relies on declarative tmpfiles ACLs for `/run/d2b`
-  instead of an imperative root `ExecStartPre`; the tmpfiles rules keep the ACL
-  mask writable for the daemon while the `d2b` operator group remains
-  narrowed to traversal by the explicit group ACL.
-- Host activation now preserves the `/run/d2b` ACL mask as `rwx` when
-  reasserting runtime directory posture, preventing switch-time activation from
-  clipping the `d2bd` daemon's write access to `r-x`.
-- USB probe/status no longer marks a declared USBIP device `degraded` with
-  `probe-incomplete` after guest-control confirms that the busid is already
-  imported in the guest.
+- Constellation observability: added `d2b op inspect` for bounded current
+  operation and realm-state inspection, with optional TraceContext fields,
+  degraded partial results, generated CLI schema coverage, and reference docs
+  for redaction/cardinality constraints.
+
+- Realm policy: added `d2b realm list` and `d2b realm inspect` to make
+  host-resident vs gateway-backed realms discoverable, documented the
+  default-deny cross-realm policy, and added migration guidance for explicit
+  realm gateways.
+
+- Display and virtual I/O: added explicit display capability helpers and a
+  `d2b vm display list|close` gateway display-session surface that returns
+  only bounded non-secret session metadata, including the authorizing
+  operation id and principal. Added reference documentation that keeps
+  display, clipboard, audio, USB/HID, GPU, video, and provider display
+  streaming as separate opt-in capabilities.
+
+- Runtime providers: added the host-side Cloud Hypervisor runtime provider
+  adapter and explicit provider-selection policy. `local-cloud-hypervisor`
+  remains the default VM runtime, plans carry only bounded provider/workload
+  metadata, and crosvm, QEMU, Firecracker, and qemu-media ids fail closed
+  rather than silently falling back. Firecracker-shaped selections refuse
+  desktop, guest-control, virtiofs/store, graphics, audio, and USB workloads
+  before side effects. Added reference documentation for runtime provider
+  selection and cross-links from component/runtime docs.
+
+- Constellation: added a preview remote full-host node adapter. A gateway
+  guest can now register a remote d2b host as a named node in a realm,
+  route typed lifecycle and exec/logs operations to it, and receive typed
+  responses through the remote host's own `d2bd`/broker/guest-control
+  stack. The adapter validates registration (node id, realm path, schema
+  shape, capability set, authenticated gateway principal), tracks heartbeat/liveness,
+  gates every routed operation against the node's declared capabilities, and
+  enforces the non-tunneling boundary (no raw broker frames, no guest-control
+  frame forwarding, no fd/pidfd transfer, no host path or credential
+  exposure across the transport session). Remote-side idempotency deduplication
+  is layered on top of the gateway-level dedup so reconnect recovery queries
+  remote state before retrying side effects. Peer disconnect marks the node
+  unavailable immediately, and new-generation re-registration makes
+  old-generation operations fail stale. Relay identity remains reachability only
+  and is never mapped to a local or realm principal. This adapter is
+  **experimental/preview**: it is validated with mock and loopback peer clients
+  only. Production transports (Azure Relay over a live WAN, QUIC, SSH),
+  remote host install, remote host prepare, and network mutation are not yet
+  supported. See `docs/reference/remote-full-host-nodes.md` for the full
+  reference.
+
+- Bundle: the private manifest bundle now emits `storage.json` and
+  `sync.json` contracts for managed paths, process restart/adoption
+  policies, degraded-state taxonomy, and lock/lease synchronization
+  policy.
+
+- Broker: added bundle-resolved `ReconcileStorageScope` and
+  `ValidateLockSpec` operations so storage and synchronization contracts
+  can be inspected and, for static directory specs, reconciled without
+  daemon-supplied raw paths.
+- Daemon: startup now performs a read-only storage/restart/sync contract
+  check and persists `storage-lifecycle-report.json` for degraded-state
+  adoption work and future doctor/status UX.
+- CLI: `d2b host doctor --read-only` now surfaces
+  `storage-lifecycle-report.json` with bounded issue kinds and inline
+  remediation for storage/restart/sync contract drift.
+- CLI: `d2b host doctor --read-only` now treats the private broker
+  socket, optional metrics endpoint absence, and current swtpm namespace
+  posture as healthy when those surfaces match the deployed policy.
+- CLI: added `d2b host migrate-storage --dry-run`, which emits a
+  checkpoint ID, exact rollback command, preserved-data inventory,
+  cutover-only cleanup candidates, and fail-closed hazards for the
+  planned storage layout migration.
+- Tests: added storage lifecycle report schema and serialization
+  regression coverage so doctor/status consumers see the same camelCase
+  contract that the daemon writes.
+- Documentation: ADR 0034 and the storage lifecycle explanation now
+  define the planned generated contracts for managed paths, process
+  restart/adoption, synchronization, lock ownership, degraded-state
+  reporting, and the one-time storage cutover.
+- ADR 0032 gateway lifecycle: gateway-mode `d2b vm
+  start/stop/restart <aca target>` now routes through lifecycle
+  operations backed by the ACA preview REST data plane. Gateway config
+  can declare non-secret ACA subscription/resource-group/sandbox-group/
+  region/image coordinates, and the provider creates/reuses disk images
+  and sandboxes by d2b workload labels instead of shelling out to the
+  preview `aca` CLI.
+- ADR 0032 ACA display: gateway config can now carry the non-secret ACA
+  managed-identity client id used by local validation probes, while the
+  live display sender receives a gateway-minted short-lived Relay Send
+  bearer instead of the long-lived Relay rule key.
+- NixOS: added `d2b.site.usePrebuiltHostTools` so development hosts
+  can validate source-built `d2b`, `d2bd`, and activation helper
+  binaries before matching release prebuilts exist.
+- CI: merging `main` after cutting a new dated changelog section now
+  auto-tags the release and publishes pre-built `x86_64-linux` host
+  binary tarballs for `d2bd`, `d2b`, `d2b-priv-broker`,
+  `d2b-wayland-filter`, and `d2b-activation-helper`, alongside
+  `SHA256SUMS`, on the matching GitHub Release.
+- CI: after publishing a GitHub Release, the release workflow now
+  computes Nix SRI hashes for each tarball, writes `nix/prebuilt.json`,
+  and auto-commits the manifest back to `main` so consuming flakes can
+  fetch the published host binaries by hash without manual updates.
+- `d2b.vms.<vm>.qemuMedia.window.niriBorderColor` lets
+  qemu-media host QEMU windows use a VM-specific niri border color.
+  qemu-media windows now route through the d2b Wayland filter proxy
+  so the generated niri include can match the VM-prefixed app-id
+  `d2b.<vm>.*`.
+- `qemuMedia` image-file sources can now be declared directly with an
+  absolute `path` and `format = "raw"`; physical USB sources continue to
+  use opaque refs plus config/probe-driven runtime selection.
+- `d2b.vms.<vm>.qemuMedia.bootDrive.slot` adds boot-drive selector
+  metadata for future qemu-media runtime planning without changing the
+  current QEMU argv shape.
+- ADR 0032 realm entrypoints now publish a host-visible
+  `realm-entrypoints.json` table, allow separate gateway guests for
+  separate realm/env segments, and add `d2b realm enter/run` plus
+  manifest-backed realm target routing for gateway-backed VM verbs.
+- ADR 0032 auth/audit foundations now define redacted daemon-access
+  principal mapping records, tamper-evident audit-chain DTOs, daemon
+  audit hash chaining, explicit audit-sink health reports, and
+  host-boundary tests proving gateway relay/provider material stays out
+  of host daemon artifacts.
+- ADR 0032 peer protocol foundations now expose explicit
+  handshake-accepted/rejected frames, bind codec schema fingerprints into
+  plain and secure peer handshakes, and document the length-delimited
+  semantic frame skeleton for future gateway transports.
+- Named stream plumbing now supports resumable log cursors,
+  deterministic stream draining, and retry-safe cancellation for future
+  remote execution and display sessions.
+- Remote execution groundwork now supports reliable reconnects, bounded
+  retained-log reads, and safe repeated cancellation for future durable
+  remote exec sessions.
+- Documentation: ADR 0036 records the current qemu-media runtime contract,
+  and ADR 0037 defines the shared local hypervisor runtime/service seam for
+  qemu-media and Cloud Hypervisor/crosvm workloads.
+- Capability negotiation now rejects operations and streams when a
+  session lacks the required capability, with typed missing-capability
+  errors.
+- Gateway credentials can now be enrolled and rotated inside the gateway
+  guest as a sealed runtime envelope, while host-side gateway credential
+  reads and Relay Send bearer minting are rejected.
+- Transport conformance now covers loopback session capacity, byte-exact
+  concurrent sessions, shutdown, frame-cap rejection, truncated frames,
+  capability intersection, stream backpressure, and retry-safe stream
+  cancellation.
+- Azure Relay now has a constellation `TransportProvider` adapter that
+  wraps Relay WebSocket rendezvous into bounded transport sessions for
+  gateway-owned listeners and sandbox senders.
+- Local TCP test transport support now proves the transport interface is
+  not Azure-specific, with loopback-only binds, explicit URI targets, and
+  redacted typed errors for negative network cases.
+- Host substrate provider adapters now wrap the existing host-check report
+  for NixOS and generic Linux/Ubuntu capability discovery, returning typed
+  remediation when prerequisites fail.
+- Host-to-realm isolation is now documented and checked with a redacted
+  host egress policy artifact, so host daemon/broker/CLI surfaces remain
+  free of realm relay credentials and sessions.
+- Provider-managed sandboxes: the Azure Container Apps adapter now handles
+  provider-layer 429/rate-limit responses with `Retry-After`-aware
+  backoff metadata and a shared circuit breaker. When the circuit is open,
+  `Backpressure` errors include the remaining open duration. Probe attempts
+  have a bounded timeout, stale probes reopen the circuit, and repeated
+  transient failures use bounded exponential backoff with jitter. Concurrent
+  429 responses from the same request batch can extend an already-open circuit.
+  Circuit state is shared across provider instances targeting the same Azure Container Apps
+  endpoint, subscription, resource group, and sandbox group so sibling
+  instances cannot bypass the breaker for the same upstream. Retry hint
+  metadata remains internal to the provider layer; no change to the public
+  `ConstellationError` schema.
+- Provider-managed sandboxes: Azure Container Apps adapter authentication now
+  enforces workload identity first, then managed identity, in production.
+  Ambient developer credential chains (Azure CLI tokens, environment
+  variable secrets, developer-toolchain fallbacks) are not present in the
+  production resolution order. Non-production local-validation contexts
+  inject test credentials explicitly and are not a runtime fallback.
+- Provider-managed sandboxes: Azure REST error diagnostics are
+  now gated by an allowlist. Only case-stable allowlisted `error.code`
+  values (or `unknown`), a length-bounded sanitized `error.message`, the
+  HTTP status code, and the opaque `x-ms-correlation-request-id` header
+  appear in provider errors, structured log spans, and audit records.
+  Full response bodies, endpoint URLs, subscription IDs, internal diagnostic
+  details, resource IDs, tokens, payload content, and workload output are never
+  forwarded.
+- Documentation: added `docs/reference/provider-managed-sandboxes.md`
+  covering the Azure Container Apps adapter capability matrix, absent capabilities,
+  rate-limit/backoff/circuit behavior, credential boundary, diagnostics
+  redaction rules, error shapes, `provider-managed-isolation`, and scope
+  limitations including the absence of guestd, systemd, broker, KVM, vsock,
+  cgroup, namespace, SSH, and full-host lifecycle. Cross-referenced from
+  `docs/reference/remote-full-host-nodes.md`.
 
 ### Changed
+
+- **BREAKING:** Unsupported operations and streams (file-copy, port-forward,
+  clipboard, audio, and device streams) are explicitly rejected with an
+  unsupported error instead of falling back to generic byte streams. Older
+  clients that relied on fallback byte streams must route only supported
+  operations: lifecycle, exec, logs, persistent shell, node health, and display.
+- **BREAKING:** Legacy `d2b.gateways` and nested gateway/ACA sandbox
+  configuration now fail evaluation with migration errors that point operators
+  to `d2b.realms`; configs using those legacy surfaces must migrate before
+  evaluation succeeds.
+- **BREAKING:** Explicit `d2b://` CLI targets that omit the reserved `.d2b`
+  suffix now fail with a target grammar diagnostic instead of falling back to
+  local VM routing.
+- Routed CLI VM target resolution through the realm access contract DTOs while
+  preserving the existing local VM fast path and manifest-backed gateway
+  behavior until the daemon access API is implemented.
+- Renamed the Rust realm foundation crates from
+  `d2b-constellation-*` to `d2b-realm-*` without changing runtime behavior,
+  establishing realm-native package/import names for follow-up parser and DTO
+  work.
+- Aligned realm-core reference pages and generated schema companions
+  with `d2b-realm-core` naming and the realm-qualified target
+  grammar.
+- Kept realm operator-troubleshooting identifiers visible in Rust `Debug`
+  output while preserving redaction for credential-, key-, and principal-like
+  identifiers.
+- Tightened `allocator.json` config typing so realm paths, provider kinds,
+  and transitional env-bridge modes carry bounded schema/runtime validation.
+
+
+- `d2b-wayland-proxy` now treats `graphics.waylandProxy.border.thickness`,
+  `graphics.waylandProxy.border.label.position`, `--border-thickness`, and
+  `--border-label-position` as deprecated legacy shape knobs; generated d2b
+  proxy runners use the fixed-width left wrapper rail and vertical label.
+- Reference docs (`cli-contract.md`, `daemon-api.md`, `display-io-capabilities.md`,
+  `runtime-provider-selection.md`, `components-audio.md`, `error-codes.md`) now
+  point `console` and `audio` surfaces at the provider capability
+  matrix.
+- The host-side `d2b-wayland-proxy` proxy is source-built from the checked-out
+  workspace even when other host tools use release prebuilts, so local eval
+  gates do not depend on a matching release tarball for this policy binary.
+- The `with-entra-id` eval workflow now overrides GitHub inputs to the
+  committed lock revisions and authenticates Nix fetches with the Actions token
+  to avoid transient unauthenticated API rate limits.
+- Host activation grants `d2bd` narrow access to the Wayland user's
+  PipeWire/Pulse sockets so daemon-owned audio policy enforcement does not
+  depend on host-local ACL overrides.
+- Console drainers now spawn on a daemon-owned Tokio runtime even when console
+  attach requests are handled by synchronous public-socket worker threads.
+- Clipboard documentation now follows Diataxis placement more closely: the
+  architecture overview is indexed as Explanation, while `d2b-clip-debug`
+  diagnostic command examples live in the clipboard picker how-to.
+- Renamed the project to **d2b: Double Dutch Bus** as an intentional breaking
+  change. Commands, packages, services, sockets, Nix options, runtime paths,
+  schemas, telemetry identifiers, and generated artifacts now use only `d2b`
+  naming; old names are unsupported and no compatibility aliases are provided.
+
 
 - Public daemon list/status handling now uses a request-scoped artifact snapshot
   so manifest, process, host, and bundle resolver reads are shared within one
@@ -1062,321 +746,6 @@ deprecations ship one minor release before removal.
   net-VM `var.img` creation/posture remains broker `DiskInit`-owned instead of
   being repaired by host activation.
 
-### Internal
-
-- Extended generated `sync.json` coverage for daemon lock roots, per-VM
-  lifecycle locks, store-view sync locks, and USBIP lock claims without
-  changing live lock implementations.
-- Added contract-test policy coverage for host-mutable path/lock surfaces,
-  requiring storage/sync contract rows, opaque broker IPC inputs, and a single
-  repair owner for new mutable host state.
-- ADR 0035 Wave 5 added a contract-test policy that classifies every
-  `ProcessRole` and requires runner roles to carry Rust argv-builder plus
-  runner matrix/contract coverage before new roles land.
-- ADR 0035 Wave 4 decomposed CLI read-model/rendering helpers and daemon
-  admission helpers into focused Rust modules while preserving output and
-  authorization contracts.
-- ADR 0035 Wave 3 moved stable CLI JSON output DTOs into the shared IPC contract
-  crate, keeping CLI presentation and schema generation on the same strict
-  deserialization contract.
-- ADR 0035 Wave 2 normalized internal NixOS VM/env indexing for network and host
-  consumers, preserving network isolation semantics while making per-env USBIP
-  backend ports an explicit generated host contract.
-- ADR 0035 Wave 1 consolidated internal NixOS bundle artifact definitions behind
-  a typed central model while preserving generated artifact bytes and private
-  install metadata.
-- ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
-  `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
-  compatibility aliases, and dropped stale retired bash-CLI option comments.
-- USBIP architecture notes/tests now pin the per-env proxy as a generic L4
-  forwarder, preserving backend/proxy sidecars during single-busid teardown and
-  encoding optimistic backend/export refresh, firewall-before-flow-kill
-  revocation ordering, TCP-vs-UDP targeted cleanup rules, fail-closed
-  revocation when a selected busid stream cannot be isolated, and explicit
-  bounded-drain/exclusive rebind requirements before any same-env stream bounce.
-- USBIP restart reconciliation now has a daemon-internal physical topology
-  identity model that compares allowed VID/PID with sysfs bus/port topology
-  instead of trusting serial-like descriptors, while keeping raw topology out of
-  public/status projections.
-- USB reconciliation now has closed degraded-reason/status primitives with
-  redacted public/event projections, bounded telemetry labels, remediation
-  mapping, bounded reconcile correlation IDs, dedupe/rate-limit buckets
-  partitioned only by closed event type and bounded source projection, strict
-  `other` fallback for capped buckets/static metric labels, and suppressed-event
-  summaries with exact dropped counts and windows for later observability
-  wiring.
-- VM start/stop USB reconciliation now threads the same bounded reconcile
-  correlation ID through USB broker requests as broker audit trace context
-  without adding it to metric labels.
-- USB broker audit records now keep a privileged forensics projection for
-  USBIP binds with normalized vendor/product IDs, serial-presence only by
-  default, HMAC-SHA256 serial correlation backed by broker-owned root-only key
-  material, current/previous-key correlation during rotation windows, and a
-  scrubbed rotation-window log/audit shape for observability.
-- Guest-control now exposes authenticated, side-effect-free USBIP status/list
-  observation backed by the configured guest `usbip` path with closed timeout and
-  parser error mapping.
-- Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
-  `kill` management forms through the configured realm gateway over the typed
-  guest-control exec path, while interactive gateway attach fails closed until
-  semantic ADR 0039 attach support lands.
-- Constellation persistent shell routing: extended remote full-host routing and
-  provider trait seams so ADR 0039 `Shell*` operations require
-  `persistent-shell`, target workloads explicitly, preserve mutating
-  idempotency semantics, round-trip through the protobuf codec, and stay
-  separate from provider exec/durable execution.
-- Constellation persistent shell runtime alignment: guestd now gates shell
-  capability advertisement on the usable exec/workload-user/helper/shpool
-  runtime, reports configured shell limits, uses opaque shell ids, exposes
-  core DTO adapters for shell summaries/events, and documents the fail-closed
-  provider guestd bootstrap contract.
-- Constellation persistent shell contracts: promoted ADR 0039's reserved
-  `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
-  stream kind, and bounded shell DTOs into the generated core schema contract.
-- Constellation persistent shell routing: added ADR 0039 and reference stubs
-  reserving the provider/remote contract for ADR 0038 shells, including the
-  guestd-compatible provider-agent requirement and the rule that
-  `executeShellCommand` is not a persistent-shell channel.
-- Persistent shell daemon: started d2bd-side shell control-plane routing with
-  admin-gated management operations, guest-control capability checks, shell
-  response framing, and attached-owner terminal proxying scaffolding.
-- Persistent shell runtime: started guestd-side shell session runtime scaffolding
-  with staged Nix/PAM/service wiring, in-memory admission/idempotency tests, and
-  fail-closed guest-control shell capability handling.
-- Persistent shell contracts: added staged default-off shell option, manifest,
-  public/guest-control wire, and authz contract scaffolding for later runtime
-  wiring.
-- Test orchestration: added a central Layer-1 job manifest that drives local
-  `make check`, renders the PR workflow, and adds a stable `check` CI rollup so
-  branch protection can require one context while generated job names remain
-  implementation details.
-- Guest-control internals: started extracting the shared terminal substrate used
-  by interactive exec, with compatibility DTO conversions and redaction tests for
-  future interactive-terminal reuse.
-- Test and contract hygiene: synced the existing operation-inspection
-  authorization/golden contracts and shortened Unix-socket paths in CLI,
-  daemon-access, broker QMP, and broker integration tests so long worktree paths
-  do not exceed platform socket limits.
-- Developer tooling: added a standalone static guest shell helper workspace,
-  libshpool pin, initial validation/management-output scaffolding, and explicit
-  Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
-
-### Added
-
-- VM lifecycle CLI: added explicit `--force` / `-f` stop intent for
-  `vm stop`, `down`, `vm restart`, and `restart`, with backward-compatible
-  public wire serialization that omits `force = false`.
-- Broker QMP lifecycle operations for qemu-media now expose typed
-  `system_powerdown`, `query-status`, and `quit` requests, with bounded QMP
-  parsing and audit-safe lifecycle fields.
-- VM shutdowns now attempt provider-aware graceful guest shutdown for supported
-  Cloud Hypervisor/qemu-media VMs before forced pidfd cleanup, with bounded
-  daemon audit and metrics outcomes.
-- Persistent shell CLI: added top-level `d2b shell <vm>` attach and
-  management forms for persistent named guest shell sessions.
-
-- UI colors: added a compositor-agnostic d2b color contract under
-  `d2b.site.ui`, `d2b.envs.<env>.ui`, and
-  `d2b.vms.<vm>.ui`, with resolved JSON and GTK-compatible CSS
-  artifacts at
-  `/etc/d2b/ui-colors.{json,css}` and a niri backend that renders
-  active/inactive/urgent VM borders from the shared model. The CSS artifact
-  uses GTK-compatible `@define-color` declarations with underscore names.
-
-- Constellation observability: added `d2b op inspect` for bounded current
-  operation and realm-state inspection, with optional TraceContext fields,
-  degraded partial results, generated CLI schema coverage, and reference docs
-  for redaction/cardinality constraints.
-
-- Realm policy: added `d2b realm list` and `d2b realm inspect` to make
-  host-resident vs gateway-backed realms discoverable, documented the
-  default-deny cross-realm policy, and added migration guidance for explicit
-  realm gateways.
-
-- Display and virtual I/O: added explicit display capability helpers and a
-  `d2b vm display list|close` gateway display-session surface that returns
-  only bounded non-secret session metadata, including the authorizing
-  operation id and principal. Added reference documentation that keeps
-  display, clipboard, audio, USB/HID, GPU, video, and provider display
-  streaming as separate opt-in capabilities.
-
-- Runtime providers: added the host-side Cloud Hypervisor runtime provider
-  adapter and explicit provider-selection policy. `local-cloud-hypervisor`
-  remains the default VM runtime, plans carry only bounded provider/workload
-  metadata, and crosvm, QEMU, Firecracker, and qemu-media ids fail closed
-  rather than silently falling back. Firecracker-shaped selections refuse
-  desktop, guest-control, virtiofs/store, graphics, audio, and USB workloads
-  before side effects. Added reference documentation for runtime provider
-  selection and cross-links from component/runtime docs.
-
-- Constellation: added a preview remote full-host node adapter. A gateway
-  guest can now register a remote d2b host as a named node in a realm,
-  route typed lifecycle and exec/logs operations to it, and receive typed
-  responses through the remote host's own `d2bd`/broker/guest-control
-  stack. The adapter validates registration (node id, realm path, schema
-  shape, capability set, authenticated gateway principal), tracks heartbeat/liveness,
-  gates every routed operation against the node's declared capabilities, and
-  enforces the non-tunneling boundary (no raw broker frames, no guest-control
-  frame forwarding, no fd/pidfd transfer, no host path or credential
-  exposure across the transport session). Remote-side idempotency deduplication
-  is layered on top of the gateway-level dedup so reconnect recovery queries
-  remote state before retrying side effects. Peer disconnect marks the node
-  unavailable immediately, and new-generation re-registration makes
-  old-generation operations fail stale. Relay identity remains reachability only
-  and is never mapped to a local or realm principal. This adapter is
-  **experimental/preview**: it is validated with mock and loopback peer clients
-  only. Production transports (Azure Relay over a live WAN, QUIC, SSH),
-  remote host install, remote host prepare, and network mutation are not yet
-  supported. See `docs/reference/remote-full-host-nodes.md` for the full
-  reference.
-
-- Bundle: the private manifest bundle now emits `storage.json` and
-  `sync.json` contracts for managed paths, process restart/adoption
-  policies, degraded-state taxonomy, and lock/lease synchronization
-  policy.
-
-- Broker: added bundle-resolved `ReconcileStorageScope` and
-  `ValidateLockSpec` operations so storage and synchronization contracts
-  can be inspected and, for static directory specs, reconciled without
-  daemon-supplied raw paths.
-- Daemon: startup now performs a read-only storage/restart/sync contract
-  check and persists `storage-lifecycle-report.json` for degraded-state
-  adoption work and future doctor/status UX.
-- CLI: `d2b host doctor --read-only` now surfaces
-  `storage-lifecycle-report.json` with bounded issue kinds and inline
-  remediation for storage/restart/sync contract drift.
-- CLI: `d2b host doctor --read-only` now treats the private broker
-  socket, optional metrics endpoint absence, and current swtpm namespace
-  posture as healthy when those surfaces match the deployed policy.
-- CLI: added `d2b host migrate-storage --dry-run`, which emits a
-  checkpoint ID, exact rollback command, preserved-data inventory,
-  cutover-only cleanup candidates, and fail-closed hazards for the
-  planned storage layout migration.
-- Tests: added storage lifecycle report schema and serialization
-  regression coverage so doctor/status consumers see the same camelCase
-  contract that the daemon writes.
-- Documentation: ADR 0034 and the storage lifecycle explanation now
-  define the planned generated contracts for managed paths, process
-  restart/adoption, synchronization, lock ownership, degraded-state
-  reporting, and the one-time storage cutover.
-- ADR 0032 gateway lifecycle: gateway-mode `d2b vm
-  start/stop/restart <aca target>` now routes through lifecycle
-  operations backed by the ACA preview REST data plane. Gateway config
-  can declare non-secret ACA subscription/resource-group/sandbox-group/
-  region/image coordinates, and the provider creates/reuses disk images
-  and sandboxes by d2b workload labels instead of shelling out to the
-  preview `aca` CLI.
-- ADR 0032 ACA display: gateway config can now carry the non-secret ACA
-  managed-identity client id used by local validation probes, while the
-  live display sender receives a gateway-minted short-lived Relay Send
-  bearer instead of the long-lived Relay rule key.
-- NixOS: added `d2b.site.usePrebuiltHostTools` so development hosts
-  can validate source-built `d2b`, `d2bd`, and activation helper
-  binaries before matching release prebuilts exist.
-- CI: merging `main` after cutting a new dated changelog section now
-  auto-tags the release and publishes pre-built `x86_64-linux` host
-  binary tarballs for `d2bd`, `d2b`, `d2b-priv-broker`,
-  `d2b-wayland-filter`, and `d2b-activation-helper`, alongside
-  `SHA256SUMS`, on the matching GitHub Release.
-- CI: after publishing a GitHub Release, the release workflow now
-  computes Nix SRI hashes for each tarball, writes `nix/prebuilt.json`,
-  and auto-commits the manifest back to `main` so consuming flakes can
-  fetch the published host binaries by hash without manual updates.
-- `d2b.vms.<vm>.qemuMedia.window.niriBorderColor` lets
-  qemu-media host QEMU windows use a VM-specific niri border color.
-  qemu-media windows now route through the d2b Wayland filter proxy
-  so the generated niri include can match the VM-prefixed app-id
-  `d2b.<vm>.*`.
-- `qemuMedia` image-file sources can now be declared directly with an
-  absolute `path` and `format = "raw"`; physical USB sources continue to
-  use opaque refs plus config/probe-driven runtime selection.
-- `d2b.vms.<vm>.qemuMedia.bootDrive.slot` adds boot-drive selector
-  metadata for future qemu-media runtime planning without changing the
-  current QEMU argv shape.
-- ADR 0032 realm entrypoints now publish a host-visible
-  `realm-entrypoints.json` table, allow separate gateway guests for
-  separate realm/env segments, and add `d2b realm enter/run` plus
-  manifest-backed realm target routing for gateway-backed VM verbs.
-- ADR 0032 auth/audit foundations now define redacted daemon-access
-  principal mapping records, tamper-evident audit-chain DTOs, daemon
-  audit hash chaining, explicit audit-sink health reports, and
-  host-boundary tests proving gateway relay/provider material stays out
-  of host daemon artifacts.
-- ADR 0032 peer protocol foundations now expose explicit
-  handshake-accepted/rejected frames, bind codec schema fingerprints into
-  plain and secure peer handshakes, and document the length-delimited
-  semantic frame skeleton for future gateway transports.
-- Named stream plumbing now supports resumable log cursors,
-  deterministic stream draining, and retry-safe cancellation for future
-  remote execution and display sessions.
-- Remote execution groundwork now supports reliable reconnects, bounded
-  retained-log reads, and safe repeated cancellation for future durable
-  remote exec sessions.
-- Documentation: ADR 0036 records the current qemu-media runtime contract,
-  and ADR 0037 defines the shared local hypervisor runtime/service seam for
-  qemu-media and Cloud Hypervisor/crosvm workloads.
-- Capability negotiation now rejects operations and streams when a
-  session lacks the required capability, with typed missing-capability
-  errors.
-- Gateway credentials can now be enrolled and rotated inside the gateway
-  guest as a sealed runtime envelope, while host-side gateway credential
-  reads and Relay Send bearer minting are rejected.
-- Transport conformance now covers loopback session capacity, byte-exact
-  concurrent sessions, shutdown, frame-cap rejection, truncated frames,
-  capability intersection, stream backpressure, and retry-safe stream
-  cancellation.
-- Azure Relay now has a constellation `TransportProvider` adapter that
-  wraps Relay WebSocket rendezvous into bounded transport sessions for
-  gateway-owned listeners and sandbox senders.
-- Local TCP test transport support now proves the transport interface is
-  not Azure-specific, with loopback-only binds, explicit URI targets, and
-  redacted typed errors for negative network cases.
-- Host substrate provider adapters now wrap the existing host-check report
-  for NixOS and generic Linux/Ubuntu capability discovery, returning typed
-  remediation when prerequisites fail.
-- Host-to-realm isolation is now documented and checked with a redacted
-  host egress policy artifact, so host daemon/broker/CLI surfaces remain
-  free of realm relay credentials and sessions.
-- Provider-managed sandboxes: the Azure Container Apps adapter now handles
-  provider-layer 429/rate-limit responses with `Retry-After`-aware
-  backoff metadata and a shared circuit breaker. When the circuit is open,
-  `Backpressure` errors include the remaining open duration. Probe attempts
-  have a bounded timeout, stale probes reopen the circuit, and repeated
-  transient failures use bounded exponential backoff with jitter. Concurrent
-  429 responses from the same request batch can extend an already-open circuit.
-  Circuit state is shared across provider instances targeting the same Azure Container Apps
-  endpoint, subscription, resource group, and sandbox group so sibling
-  instances cannot bypass the breaker for the same upstream. Retry hint
-  metadata remains internal to the provider layer; no change to the public
-  `ConstellationError` schema.
-- Provider-managed sandboxes: Azure Container Apps adapter authentication now
-  enforces workload identity first, then managed identity, in production.
-  Ambient developer credential chains (Azure CLI tokens, environment
-  variable secrets, developer-toolchain fallbacks) are not present in the
-  production resolution order. Non-production local-validation contexts
-  inject test credentials explicitly and are not a runtime fallback.
-- Provider-managed sandboxes: Azure REST error diagnostics are
-  now gated by an allowlist. Only case-stable allowlisted `error.code`
-  values (or `unknown`), a length-bounded sanitized `error.message`, the
-  HTTP status code, and the opaque `x-ms-correlation-request-id` header
-  appear in provider errors, structured log spans, and audit records.
-  Full response bodies, endpoint URLs, subscription IDs, internal diagnostic
-  details, resource IDs, tokens, payload content, and workload output are never
-  forwarded.
-- Documentation: added `docs/reference/provider-managed-sandboxes.md`
-  covering the Azure Container Apps adapter capability matrix, absent capabilities,
-  rate-limit/backoff/circuit behavior, credential boundary, diagnostics
-  redaction rules, error shapes, `provider-managed-isolation`, and scope
-  limitations including the absence of guestd, systemd, broker, KVM, vsock,
-  cgroup, namespace, SSH, and full-host lifecycle. Cross-referenced from
-  `docs/reference/remote-full-host-nodes.md`.
-
-### Removed
-
-- Removed obsolete references to the legacy Wayland proxy from
-  documentation and comments.
-
-### Changed
 
 - CI: nix-unit eval coverage is now split into multiple
   `nix-unit-<shard>` flake checks plus a cheap global `nix-unit`
@@ -1426,7 +795,540 @@ deprecations ship one minor release before removal.
   and `services` summaries for both Cloud Hypervisor-backed NixOS VMs and
   qemu-media VMs while keeping the legacy flat capability booleans.
 
+### Fixed
+
+- Hardened route refresh handling so stale/equal advertisements cannot downgrade
+  topology or capabilities, expired entries are treated absent without hot-path
+  full sweeps, admissions remain atomic without full map cloning, and normal
+  proactive refresh sequences do not exhaust replay capacity.
+- Added fixed in-memory capacities to the pure realm route engine so valid
+  unexpired parent, route, and replay advertisement state rejects new entries
+  fail-closed instead of growing without bound.
+- Bounded the pure realm route engine's replay/route expiry state, refreshed
+  existing route capabilities and ids on newer advertisements, and made
+  local-root route capability decisions explicit.
+- Aligned protobuf authorization-scope encoding with identity lifecycle scopes
+  and route contracts.
+- Documented the private `realm-controllers.json` contract for deterministic
+  host-local realm controller unit/socket naming, direct realm socket
+  authorization, local-root allocator resolution, state/audit separation, and
+  the access-layer/routing boundary.
+- Added Layer-1 allocator coverage for rendered `allocator.json` bundle wiring,
+  realm allocator metadata, fake-engine conflict/replay/reconcile paths, and
+  bounded reconciliation reports.
+- Added the public `d2b.realms.<realm>` Nix option schema foundation for
+  the realm-native control plane without changing existing `d2b.envs`
+  runtime behavior, with normalized realm index metadata, eval-time
+  assertions for realm identity/parent/path uniqueness, and reference
+  documentation for placement, user access, provider/relay/policy/key
+  references, and the transitional env/network bridge.
+- Added Layer-1 nix-unit coverage for the realm option schema,
+  normalized realm index, parent/path collision assertions, legacy gateway/ACA
+  migration guidance, and minimal/multi-env eval compatibility.
+- Added realm `placementProvider` metadata and AF_UNIX socket path length
+  assertions for realm public and broker socket declarations.
+- Added the `RealmTarget` parser with canonical realm-qualified
+  rendering, bare-alias ambiguity diagnostics, and old node-qualified target
+  migration errors.
+- Added an accepted realm-native control-plane decision record, superseding the
+  host-centric constellation model with per-realm daemon, broker, state, and
+  audit boundaries; first-class `home`, `dev`, and `work` realms to replace
+  the legacy grouping model; and a clean cutover from old realm/ACA sandbox
+  surfaces into `d2b.realms`.
+- Added core realm data models for controller placement,
+  access bindings, provider/workload placement summaries, tree route
+  advertisements, enrollment/key lifecycle metadata, and migration-error
+  envelopes.
+- Documented the stable public-socket discovery contract for persistent shells
+  so desktop clients such as `d2b-wlterm` can use `List`/`Status` plus
+  `ShellOp::List` without scraping human CLI output or leaking terminal state.
+- Added typed deserialization support for public daemon response envelopes so
+  downstream clients can parse `PublicResponse` data without falling back to
+  untyped JSON.
+- Exported `packages.<system>.d2b-wayland-proxy` and added a supported
+  `--host-terminal` launch path for VM-bound host terminals. The launcher creates
+  randomized single-use Wayland and WezTerm mux sockets under a private
+  `$XDG_RUNTIME_DIR` directory, waits for proxy readiness before launching the
+  foreground child, preserves d2b clipboard mediation, and keeps privileged
+  Wayland globals hidden.
+- Documented the optional desktop terminal integration stack (`d2b-toolkit`,
+  `d2b-wlterm`, and WeezTerm) with exact flake-input follow boilerplate,
+  Home Manager wiring, Waybar setup, and validation commands.
+- Added CTAP/WebAuthn security-key proxy: `d2b.host.usb.securityKey.*` and
+  `d2b.vms.<vm>.usb.securityKey.enable`. The host broker (`d2bd`) serializes
+  CTAP HID traffic from opted-in VMs to a host-attached FIDO2 device (YubiKey
+  or equivalent) over AF_VSOCK, without USB device ownership transfer. Each
+  opted-in VM receives a daemon-supervised virtual FIDO2 HID device
+  (`/dev/hidraw*`) via Linux `/dev/uhid`; browsers and `libfido2` treat it as
+  a normal local security key.
+- Added `d2b usb security-key status|sessions|cancel|test` subcommands for
+  lease inspection, session history, stuck-request cancellation, and
+  per-VM smoke checks.
+- Added structured notification/event emission for security-key lifecycle
+  events (ceremony start, user-presence wait, contention, failure, lease
+  revocation) through the d2b notification subsystem, with durable
+  `/run/d2b/usb-sk/events.jsonl` and a machine-readable
+  `/run/d2b/usb-sk/lease.json` state file.
+- Notification actions (`Cancel active request`, `Open status`) include
+  single-use, high-entropy nonces bound to session/action/expiry; `d2bd`
+  rejects missing, expired, reused, or mismatched action tokens.
+- Added eval-time assertions: `usb.securityKey.enable = true` and
+  `usbip.yubikey = true` are mutually exclusive for the same VM; per-VM
+  security-key opt-in requires the host `usb.securityKey.enable = true`;
+  per-VM opt-in requires `guest.control.enable = true`.
+- Added Diataxis documentation:
+  - How-to: [`docs/how-to/use-usb-security-key.md`](docs/how-to/use-usb-security-key.md)
+  - Migration: [`docs/how-to/migrate-usbip-yubikey-to-security-key.md`](docs/how-to/migrate-usbip-yubikey-to-security-key.md)
+  - Reference (options, CLI, event/notification JSON): [`docs/reference/components-usb-security-key.md`](docs/reference/components-usb-security-key.md), [`docs/reference/usb-security-key-events.md`](docs/reference/usb-security-key-events.md)
+  - Explanation (CTAP proxy architecture, why not USB sharing, comparison with USBIP and Qubes): [`docs/explanation/usb-security-key-architecture.md`](docs/explanation/usb-security-key-architecture.md)
+- Added the `d2b-notify` crate: a reusable notification/event mechanism for
+  d2b desktop UX, including:
+  - Typed `SecurityKeyEvent` enum covering all CTAP/WebAuthn ceremony
+    lifecycle phases: `Started`, `TouchNeeded`, `Busy`, `Queued`, `Blocked`,
+    `TimedOut`, `Failed`, `Canceled`, `Completed`.
+  - `ActionNonceStore`: single-use CSPRNG nonces (32 bytes, 64-char hex)
+    bound to `session_id`/`action_key`/expiry, with fail-closed validation
+    that prevents notification-action replay by hostile desktop clients.
+  - `SkNotifyState`: durable JSON state format (schema version 1) written by
+    the host runtime to `/run/d2b/notify/sk-state.json`; read by the Waybar
+    helper and `d2b-wlcontrol`.
+  - `WaybarBlock` + `waybar_block_from_state`: Waybar JSON-protocol block
+    derived from the current ceremony state, with per-state CSS classes
+    (`d2b-sk-idle`, `d2b-sk-touch`, `d2b-sk-busy`, `d2b-sk-active`).
+  - `WlcontrolSkStatus`: data contract for the `d2b-wlcontrol` status/action
+    surface, with pluggable per-ceremony action builder for nonce-backed
+    buttons.
+  - `d2b-sk-waybar-helper` binary: reads the durable state file and emits
+    one Waybar JSON line to stdout; suitable as a `custom/d2b-sk` `exec`
+    target.
+  - Pluggable `Notifier` trait + `RecordingNotifier` for hermetic tests;
+    per-event builders for all user-visible ceremony transitions.
+- Added `nixos-modules/notifications.nix`: NixOS module with options
+  `d2b.notifications.enable`, `d2b.notifications.statusHelper.{enable,
+  package,executablePath}`, `d2b.notifications.integrations.waybar.enable`,
+  `d2b.notifications.securityKey.{enable,staleEntryTtlSecs}`, and
+  `d2b.notifications.runtime.stateDir`; creates the
+  `/run/d2b/notify` tmpfiles directory on activation.
+- Added `d2b usb security-key` subcommand family exposing four operator surfaces
+  for the CTAP/WebAuthn security-key proxy feature:
+  - `d2b usb security-key status [--json|--human]` — show proxy health,
+    configured physical keys, per-VM virtual-device health, and current lease.
+  - `d2b usb security-key sessions [--json|--human]` — list recent and active
+    security-key request sessions, VM, RP ID, outcome, and timeout.
+  - `d2b usb security-key cancel {<session-id>|--current} [--dry-run|--apply]
+    [--json|--human]` — cancel a stuck security-key request session; `--dry-run`
+    shows the planned `SecurityKeyProxyCancelSession` broker op.
+  - `d2b usb security-key test <vm> [--dry-run] [--json|--human]` — smoke-check
+    that the guest virtual HID device and the host broker's physical-key
+    visibility are healthy; `--dry-run` shows the two planned checks.
+- Added USB security-key wire contract types in `d2b-contracts::public_wire`:
+  `UsbSecurityKeyStatusRequest/Response`, `UsbSecurityKeySessionsRequest/Response`,
+  `UsbSecurityKeyCancelRequest/Response`, `UsbSecurityKeyTestRequest/Response`,
+  and supporting DTOs (`UsbSkPhysicalKeyStatus`, `UsbSkVirtualDeviceStatus`,
+  `UsbSkLeaseStatus`, `UsbSkLeaseState`, `UsbSkSession`, `UsbSkSessionOutcome`,
+  `UsbSkTestCheck`).
+- Added CLI output types in `d2b-contracts::cli_output`:
+  `UsbSkStatusOutputV1`, `UsbSkSessionsOutputV1`, `UsbSkCancelDryRunOutputV1`,
+  `UsbSkTestDryRunOutputV1`.
+- Added CLI golden tests under `packages/d2b/tests/usb_sk_contract.rs` covering:
+  `usb security-key --help`, `cancel --current --dry-run`, `test <vm> --dry-run`,
+  and `not-yet-implemented` exit-78 envelope for all live paths.
+- Extended `packages/d2b/tests/cli_json_output_contract.rs` with
+  `usb_security_key_dry_run_outputs_match_goldens`,
+  `usb_security_key_status_not_yet_implemented`, and
+  `usb_security_key_sessions_not_yet_implemented` tests.
+- The use of "security key" as the user-facing term for CTAP/WebAuthn
+  authenticators is now established in CLI help, JSON envelopes, and docs.
+  The FIDO/CTAP terminology is reserved for diagnostic output and technical docs.
+
+  The live paths (`status`, `sessions`, `cancel --apply`, `test <vm>` without
+  `--dry-run`) emit exit 78 with a `not-yet-implemented` envelope until the
+  daemon broker handler lands in a later workstream.
+- Added `d2b.host.usb.securityKey.enable` and `d2b.host.usb.securityKey.devices`
+  (stable FIDO device selector submodule with `vendorId`, `productId`, `serial`,
+  and `label` fields) to declare the host USB security-key proxy.
+- Added `d2b.vms.<name>.usb.securityKey.enable` per-VM opt-in for CTAP/HID
+  relay to a host-proxied FIDO security key, guarded behind the new host option.
+- Eval-time assertions: VM `usb.securityKey.enable` requires the host proxy to
+  be enabled; `usb.securityKey.enable` and `usbip.yubikey` are mutually
+  exclusive for the same VM (phase-1 constraint); device `vendorId` values must
+  be within the FIDO-class allowlist; device labels must be unique.
+- Rust DTO module `d2b_contracts::security_key` with typed wire contracts:
+  `SecurityKeyStatusResponse`, `SecurityKeySessionsResponse`,
+  `SecurityKeyCancelRequest/Response`, `SecurityKeyEvent` (7 variants),
+  `SecurityKeyOpenDeviceRequest`, `SecurityKeyApplyUdevRulesRequest`, and
+  opaque-ID newtypes `SecurityKeySessionId` / `SecurityKeyDeviceLabel`.
+- `PublicRequest` / `PublicResponse` variants for `UsbSecurityKeyStatus`,
+  `UsbSecurityKeySessions`, and `UsbSecurityKeyCancel`.
+- `BrokerRequest` variants `SecurityKeyOpenDevice` and
+  `SecurityKeyApplyUdevRules` with `op_name()` dispatch arms.
+- `W3BrokerOperation::SecurityKeyOpenDevice` and
+  `W3BrokerOperation::SecurityKeyApplyUdevRules` with wire tags, flags, and
+  capability advertisement.
+- Privilege matrix rows for `usb security-key` (public) and the two new broker
+  operations; dispositions doc stubs for both broker ops.
+- `usb security-key status`, `usb security-key sessions`, and
+  `usb security-key cancel` CLI contract stubs in
+  `docs/reference/cli-contract.md` (daemon not yet wired, phase 1).
+- Nix-unit eval cases (`tests/unit/nix/cases/usb-security-key.nix`) and
+  assertion rejection cases for all new eval-time constraints.
+- Contract + policy tests in `packages/d2b-contract-tests/tests/usb_sk_contract.rs`
+  (20 tests).
+- Added `d2b.vms.<name>.usb.securityKey.enable` option. When `true`, the guest
+  VM gets a virtual FIDO2 HID device via a CTAPHID UHID frontend relay
+  (`d2b-sk-frontend`). The guest-side binary opens `/dev/uhid`, creates a
+  virtual HID device, and relays 64-byte CTAPHID reports over an AF_VSOCK
+  connection to the host broker (VSOCK port 14320). Firefox and libfido2
+  discover the virtual `/dev/hidraw*` device via the `fido` group; no root
+  or physical USB access is required inside the guest.
+- `d2b-sk-frontend` static guest binary: fully static (musl) binary for the
+  guest CTAPHID UHID relay frontend. Implements exponential backoff VSOCK
+  reconnect (1 s–60 s), clean UHID device recreation across reconnects, and a
+  simple 4-byte length-prefix framing protocol. Uses VSOCK port 14320.
+- Host DAG node `sk-frontend` (role `security-key-frontend`): a no-runner
+  tracking node whose readiness predicate fires when the host broker's vsock
+  socket (`<stateDir>/vsock.sock_14320`) appears. Edge: `cloud-hypervisor →
+  sk-frontend`.
+- Mutual exclusion assertion: `d2b.vms.<name>.usbip.yubikey` and
+  `d2b.vms.<name>.usb.securityKey.enable` cannot both be `true` for the same VM
+  (both claim the FIDO2 device endpoint).
+- `qemu-media` runtime incompatibility assertion for `usb.securityKey.enable`
+  (the CTAPHID proxy requires the Cloud Hypervisor / nixos runtime).
+- `securityKeyVsockPort = 14320` constant added to `d2b` lib for use by host
+  broker and guest component modules.
+- Nix eval tests (`security-key-gating.nix`): manifest `securityKey` field
+  gating, DAG node presence/absence, assertion firing for the yubikey and
+  qemu-media conflicts.
+- Contract tests (`minijail_sk_frontend.rs`): source-grep assertions for the
+  sk-frontend minijail profile block in `minijail-profiles.nix`, including role,
+  seccompPolicyRef presence, and empty capability set; compile-time
+  `ProcessRole::SecurityKeyFrontend` variant and serde round-trip check.
+- Added `OpenHidrawSecurityKey` broker op: resolves a configured FIDO security-key
+  stable selector, opens the physical `hidraw` node, and passes the fd to `d2bd` via
+  `SCM_RIGHTS`. Includes the privilege-matrix row, audit fields, and dispatch wiring.
+- Added `d2bd::security_key` session management module: CTAPHID relay with CID
+  isolation/translation, a one-active-ceremony-per-key lease state machine (default
+  120s ceremony timeout, 15s queue-wait timeout), length-prefixed 64-byte report
+  framing, and a `SO_PEERCRED`-based per-VM socket peer authentication check. Raw CTAP
+  payloads, PINs, and credential material are never logged.
+
+- Added the `d2b.envs.<env>.externalNetwork.*` option and normalized-index metadata
+  surface for net-VM-owned external network attachment, egress, port-forward, and mDNS
+  policy.
+- Net VMs can opt into external network mDNS reflection and an optional `.local`
+  dnsmasq bridge without running Avahi or opening UDP/5353 on the host.
+- Nix-unit coverage and minimal eval wiring for opt-in per-env external network net VM
+  interfaces, egress carve-outs, port forwards, mDNS reflection, and `.local`
+  forwarding.
+
+
+- Host-local realm daemons now emit only strict `DaemonConfig` fields
+  and use realm-scoped daemon state directories, with realm brokers explicitly
+  loading the shared `realm-controllers.json` contract.
+- Allocator metric bounding now aggregates repeated low-cardinality
+  label sets before applying the event cap, preserving counts instead of
+  dropping later samples.
+- Allocator metadata now emits one namespace-boundary resource
+  request per networked realm, avoiding duplicate resource ids for realms
+  spanning multiple enabled environments.
+- Realm audit, operation, and typed-error envelopes now carry the
+  cross-realm correlation id needed to reconstruct rejected routes.
+- Operation responses now carry the same required correlation id as
+  requests so response-frame return paths can emit correlated audit and trace
+  records.
+- `realm-controllers.json` validation now accepts host-local materialized
+  unit/socket metadata when the artifact declares that systemd units are
+  materialized, while still rejecting drift when it claims none are emitted.
+- Hardened host-local realm materialization by making realm runtime
+  directories non-group-writable, moving default per-realm audit directories out
+  of daemon-owned realm state, avoiding global systemd manager environment
+  mutation for broker uid/gid discovery, and removing host paths from new
+  startup/config tracing fields.
+- Host-local realm allowed users who are also `d2b.site.launcherUsers` now keep
+  both the canonical `d2b` lifecycle group and their deterministic realm
+  socket-access groups.
+- Realm Unix socket access-binding DTOs now reject paths longer than the Linux
+  `sockaddr_un.sun_path` limit before bind/connect.
+- Realm capability-negotiation JSON now rejects unknown outer envelope fields
+  while still preserving unknown future capability tokens inside the
+  capability set.
+- Host-local realm access preflight now derives advertised capabilities from
+  enabled provider refs and denies missing required capabilities instead of
+  echoing every request as satisfied.
+- Aligned realm-core schema generation and identifier validation:
+  `xtask gen-schemas` now emits `d2b-realm-core.json`, and realm reference
+  tokens reject leading punctuation consistently with their JSON schemas.
+- Aligned allocator reference docs with the generated realm-core
+  schema roots and documented the future repair-path shape for fail-closed
+  allocator reconciliation states.
+- `d2b-wayland-proxy --host-terminal` now waits until the proxy-owned wrapper
+  toplevel has acked its initial configure before attaching the VM identity rail,
+  preventing Wayland compositors from rejecting proxied WeezTerm windows during
+  startup.
+- Guest VMs now cap persistent systemd journals by default so `/var/log/journal`
+  cannot fill small per-VM `/var` images and corrupt NixOS activation state.
+- Security-key host relay now drives the physical hidraw fd through
+  cancellation-safe `AsyncFd` I/O so guest disconnects cannot leave orphaned
+  reader threads racing future sessions.
+- Security-key guest frontend now strips the kernel-supplied zero report-ID byte
+  from UHID output reports before forwarding CTAPHID frames to the host broker.
+- Security-key guest udev rules now match the virtual UHID FIDO device by its
+  HID parent identity and grant the standard `plugdev` browser/FIDO access group
+  so Firefox and libfido2 can open the guest `/dev/hidraw*` node without root.
+- Security-key guest frontend now drives `/dev/uhid` through nonblocking
+  `AsyncFd` I/O instead of `tokio::fs::File`, avoiding `ESPIPE` failures on
+  character devices during CTAPHID response injection.
+- Security-key proxy broker now accepts descriptor-verified FIDO hidraw devices
+  even when the host udev group is not one of the fallback FIDO groups. The
+  group allowlist remains required only for the descriptor-unreadable fallback
+  path.
+- Security-key accept loops now run on a daemon-owned runtime thread so the
+  per-VM VSOCK socket remains listening after the VM-start readiness transaction
+  returns.
+- Security-key accept-loop listener initialization now happens inside the
+  daemon-owned Tokio runtime context instead of before the runtime is entered.
+- Security-key guest frontend now emits the correct UHID_CREATE2 layout
+  (`bus` is a 16-bit field), allowing the virtual FIDO HID device to register
+  with the guest kernel.
+- Security-key host listener sockets now use mode `0770` so inherited per-VM
+  ACLs can grant Cloud Hypervisor write/connect access without making the
+  listener world-accessible.
+- Security-key guest frontend now writes the full UHID_CREATE2 payload,
+  including `dev_flags` and padding fields required by current Linux kernels.
+- Security-key guest frontend now uses the correct Linux UHID event type
+  numbers (`CREATE2 = 11`, `INPUT2 = 12`) so the virtual FIDO HID device is
+  actually created rather than sending an input report to no device.
+- Security-key guest frontend now zero-extends short UHID events from the kernel
+  instead of treating lifecycle events shorter than the maximum union size as
+  fatal.
+- Security-key host relay now prefixes physical hidraw writes with a zero report
+  ID byte, matching Linux hidraw/libfido2 behavior for unnumbered FIDO reports.
+- Store-sync activation now creates newly declared per-VM `/run/d2b/<vm>`
+  leaves before writing `next-generation`, without recursively creating or
+  changing the `/run/d2b` parent posture.
+
+
+- `d2b-wayland-proxy` now tears down proxy-owned wrapper toplevels when guests
+  destroy the XDG role or disconnect abruptly, preventing dead VM identity rails
+  from outliving the guest window.
+- `d2b-wayland-proxy` now translates pointer focus and motion from wrapper
+  content coordinates into guest-surface coordinates while suppressing only the
+  trusted rail, preventing clicks in wrapped guest windows from crashing clients.
+- `d2b-wayland-proxy` now presents proxy-drawn VM identity rails through a
+  proxy-owned wrapper toplevel, so host compositor borders and focus rings wrap
+  the VM rail and guest content together without copying guest buffers.
+- `d2b-wayland-proxy --host-terminal` now launches child terminals with a
+  private runtime directory and relative `WAYLAND_DISPLAY`, while accepting
+  ACL-protected user runtime directories, so host terminals connect to the
+  intended single-use proxy socket.
+- `d2b-wayland-proxy` treats `ENOTCONN` during nonblocking clipboard bridge
+  handoff as retryable backpressure, preserving pending FDs until the bridge
+  socket finishes connecting.
+- Added host-integration coverage for the live `d2b-wayland-proxy`
+  AF_UNIX client-to-upstream relay path.
+- Updated the Windows notification transitive dependency to remove the runtime
+  `quick-xml` advisory path, and documented a temporary build-time
+  `wayland-scanner` advisory exception until that code generator publishes a
+  fixed `quick-xml` release.
+- Default proxy-drawn VM-name labels render in the wrapper rail so the VM
+  identity remains visible without overlaying guest buffers.
+- `d2b-wayland-proxy` now preserves the last committed surface size after a
+  guest destroys the current buffer object, while still clearing decorations on
+  committed `attach(NULL)`.
+- USBIP driver helper retries now treat transient `ETXTBSY` / "text file busy"
+  spawn failures as retryable instead of reporting the helper as missing.
+- `d2b-wayland-proxy` now advertises its virtual clipboard manager even when
+  the host compositor omits `wl_data_device_manager`, and denies unstable
+  text-input v3 forwarding by default to avoid guest app crashes on invalid
+  seat-bound requests. Clipboard-boundary allow overrides now remain denied
+  and emit stable `W-*` diagnostics.
+- Clipboard paste selection offers no longer send drag-and-drop action events
+  for normal selections, fixing GTK/Firefox startup through the proxy; `d2b-clipd`
+  now requests the exact pending paste MIME from the picker and installs bridge
+  sockets with deterministic peer-connect permissions.
+- `d2b-clipd` now clears stale host-selection state when it observes its own
+  bridge-published VM selection, matches bridge send requests by source id
+  instead of MIME alone, and fulfills all queued Wayland paste FDs after one
+  picker selection so VM-to-host and VM-to-VM pastes cannot resolve to EOF after
+  the picker selects an item.
+- Clipboard picker selection now publishes the selected entry as a fresh
+  d2b-owned host selection and triggers paste replay, while VM destination paste
+  requests open the picker first and serve the replayed transfer immediately
+  from the published selection instead of holding a Wayland transfer FD across
+  picker interaction.
+- Clipboard bridge hardening now binds per-VM bridge sockets under a temporary
+  umask before starting background helper threads, uses anonymous memfds for
+  virtual-keyboard keymaps, closes bridge streams after partial refresh writes,
+  backs off failed nonblocking bridge connects, queues bridge handoffs across
+  transient send backpressure, bounds guest-controlled proxy diagnostic label
+  cardinality, and prunes stale host-backed virtual offers.
+- VM clipboard history now aggregates all MIME variants for the same exact VM
+  source under an injective bridge entry id, and the bridge-published selection
+  echo guard no longer depends on a time window.
+- `d2b-clip-debug` and picker Wayland polling now process readable events
+  before hangup/error handling so final Wayland events are not dropped on
+  disconnect.
+- The flake's `d2b-clipd` package now installs only the daemon binary, keeping
+  diagnostic probe binaries out of the daemon package closure.
+- `d2b-clipd` now emits an accurate user-visible reason when virtual-keyboard
+  paste replay fails, avoids high-cardinality `key=value` fields in routine
+  bridge logs, and sends bridge refreshes with fail-closed backpressure handling
+  on newly accepted proxy streams.
+- Clipboard audit and metric queues now flush metadata-only events instead of
+  silently discarding them, and the clipboard user service escapes systemd
+  specifiers while rejecting dot-segment bridge roots.
+- Clipboard replay now records d2b-owned data-control source ids before
+  flushing Wayland events, so VM-origin copies are not misclassified as unknown
+  host paste requests, and suppresses source-VM selection echoes so copying
+  inside a VM does not open a spurious picker or create empty host entries.
+- VM-origin copies now stay inside d2b's bridge/history state until an explicit
+  host or VM paste request opens the picker, so copy operations no longer publish
+  a host data-control discovery source that applications can probe.
+- Clipboard discovery sources now suppress their own compositor selection echoes
+  for every focused destination, preventing copy-time host entries and ensuring
+  the picker opens only from the later paste request.
+- Clipboard paste requests into a VM now direct-serve only the one-shot
+  user-selected replay publication, so later VM-destination pastes open the
+  picker instead of silently reusing stale published selection state.
+
+
+- The console drain path is now treated as a long-lived daemon-internal tokio
+  task rather than a broker-spawned runner or one-shot readiness probe.
+- `d2b console` dispatch: launcher peers can no longer access another user's VM
+  console session. The per-session owner UID is now tracked at `Attach` time;
+  `ReadOutput`, `WriteStdin`, `Resize`, `Wait`, and `Close` reject non-admin
+  peers whose UID does not match the session owner (`AuthzNotAdmin`).
+- QEMU console chardev now uses `-chardev socket,id=con0,fd=N` instead of the
+  generic `-chardev fd` backend for correct socketpair semantics.
+- `d2b console` FSM: bytes preceding the Ctrl-] detach character in a stdin
+  chunk are now forwarded to the VM before closing. Stdin buffer increased from
+  256 to 4096 bytes.
+- `d2b console` prints an operator hint when connected to a qemu-media VM
+  noting that the serial console may appear blank until the guest writes to
+  `/dev/ttyS0`.
+- `d2bd` audio dispatch now calls guestd `AudioSet` RPCs for Cloud Hypervisor
+  NixOS VMs instead of statically defaulting to `HostOnly`. `combined_audio_applied`
+  returns `HostAndGuest` when both host and guest succeed, `HostOnly` when only
+  host applies, `GuestOnly` for ACA sandboxes, and `Unsupported` on full failure.
+  qemu-media VMs never call guestd; ACA VMs fail closed when guestd is
+  unreachable.
+- `wpctl` subprocesses in guestd now drop to `workload_uid` before exec and set
+  both `PIPEWIRE_RUNTIME_DIR` and `XDG_RUNTIME_DIR` to `/run/user/<uid>`, so
+  WirePlumber locates the correct per-user socket. In d2bd the host PipeWire uid
+  is derived from `metadata(pipewire_runtime_dir).uid()` and passed via
+  `CommandExt::uid()` without shell string construction.
+- `wpctl` subprocess failures in guestd now capture bounded sanitized stderr for
+  operator diagnostics; d2bd host-side failures log only static messages so
+  PipeWire node identifiers, paths, and volume values do not leak.
+- OFD lock unlock now uses `F_OFD_SETLK` (non-blocking release) instead of the
+  incorrect `F_OFD_SETLKW` (blocking wait), which is semantically wrong for a lock
+  release path.
+- Audio lock file opens now use `OpenOptions::create(true).write(true)` instead of
+  `custom_flags(libc::O_CREAT)`, which previously required undocumented write
+  permission to function correctly.
+- `d2b audio` CLI is fully implemented: `status`, `mic on|off`, `speaker on|off`,
+  and `off` subcommands send typed `AudioOp` requests to the daemon public socket
+  and render results as human text or `--json`. `d2b audio status --json` emits
+  `AudioStatusResult` JSON for d2b-wlcontrol consumers.
+- Static USBIP declarations now reconcile on strict VM start after a host reboot
+  even when volatile `/run/d2b/locks/usbip/*` claim files are gone. The
+  daemon replays declared per-VM bind intents through the existing broker policy
+  and OFD-lock path, while VM stop cleanup still touches only same-owner
+  persisted claims. No-wait/autostarted VMs schedule a bounded background
+  reconciliation worker that aborts if the VM runner is no longer supervised.
+- `d2b host shutdown-hook --apply` no longer fails with `authz-not-admin`
+  on every VM: the new `HostShutdown` role permits `vmStop` from the guarded
+  `ExecStop` path (uid=0) while preserving the daemon-restart continuation
+  contract (`KillMode=process` + `Restart=on-failure`).
+- Wayland-proxy VM start no longer fails with `runner-exited:wayland-proxy`
+  after a fresh login when `/run/user/<uid>` is `0700`: the broker now grants
+  a traverse ACL on the runtime directory immediately before proxy spawn.
+- Daemon startup no longer emits spurious `kernel-module-check: fatal misses`
+  for built-in virtio modules on hosts with `=y` kernel config; the
+  `D2B_SKIP_KERNEL_MODULE_CHECK` workaround is no longer needed for these
+  hosts.
+- qemu-media host activation now repairs the `/run` ACL mask for the
+  qemu-media runner UID, so a switched host cannot leave
+  `/run/d2b/vms/<vm>` with `mask::r-x` and prevent QEMU from creating its QMP
+  socket before boot-media auto-enrollment runs.
+
+- Live guest activation timeouts are now configurable globally via
+  `d2b.daemon.lifecycle.liveActivation.timeoutSeconds` and per VM via
+  `d2b.vms.<vm>.lifecycle.liveActivation.timeoutSeconds`, allowing
+  identity-bound guests to wait longer for operator-mediated user-session flows
+  such as Entra/Himmelblau hello/PIN.
+- `d2bd` now publishes a daemon-side public status read model for unfiltered
+  list/status requests, including read-model generation and source-fingerprint
+  metadata for wlcontrol and other fast-refresh clients.
+- **USB explicit attach** (`d2b usb attach <vm> <present-busid> --apply`):
+  `d2b usb attach` now supports attaching any physically-present USB device
+  to a USB-capable VM without requiring static busid/vendor allowlists in the
+  NixOS bundle configuration. The new explicit path performs three fail-closed
+  pre-flight checks before any broker or firewall mutation: sysfs presence
+  (`/sys/bus/usb/devices/<busid>/idVendor`), USB-capable gate
+  (`RuntimeCapabilityGate::UsbHotplug`), and active claim exclusivity (OFD lock
+  under `/run/d2b/locks/usbip/<busid>`). When a static bundle intent exists
+  for the busid, the declared path is used (existing behavior preserved). When no
+  declared intent is found, the explicit path dispatches two new broker ops —
+  `UsbipExplicitBind` and `UsbipExplicitFirewallRule` — which perform per-device
+  backend ACL grant (without allowlist validation), scoped nftables carveout
+  install preserving all active declared and explicit carveouts, and compensating
+  rollback on any failure. New typed errors `UsbipBusidNotPresent` (exit 67) and
+  `UsbipExplicitClaimConflict` (exit 67) surface actionable operator guidance for
+  pre-flight rejections.
+- `UsbipClaimSource` enum in `d2b-contracts` models whether an active daemon
+  USB claim originates from a static bundle declaration (`Declared { firewall_ref,
+  bind_ref }`) or an explicit present-busid attach (`Explicit`).
+- `UsbipDaemonClaimRecord` DTO in `d2b-contracts` captures the in-process
+  daemon representation of an active busid claim including VM, env, proxy port,
+  source, and the OFD lock path.
+- `build_usbip_explicit_plan` in the daemon USB state machine builds a per-busid
+  bring-up plan without requiring a bundle resolver or pre-declared intents.
+- `UsbipExplicitBind` and `UsbipExplicitFirewallRule` broker wire ops carry raw
+  busid, vm, env, and per-env uplink IPs for the per-device backend model;
+  validated by the same busid shape validator as the declared path.
+- 38 new focused Rust tests: 8 focused unit tests in `usbip_state_machine`, 15
+  contract tests in `usbip_explicit_attach_contract` covering explicit plan
+  shape, claim source enum, lock path derivation, broker op round-trips,
+  deny-unknown-fields, per-device backend model policy, firewall env scope, sysfs
+  presence pre-flight, and codebase policy gates; 2 audit roundtrip tests in the
+  broker for the new `UsbipExplicitBind` and `UsbipExplicitFirewallRule`
+  `OperationFields` variants; 2 JSON-schema contract tests in
+  `usb_json_contract`; and 3 network-scoping contract tests in
+  `usb_network_scoping`.
+
+- `d2b switch` now threads the configured live activation timeout into
+  guest-control and includes identity-flow recovery guidance when guest
+  activation times out.
+- Successful activation commits now publish split store-view `state/current` and
+  `meta/current` pointers in addition to the legacy activation marker, keeping
+  daemon StoreSync metadata aligned after live switches.
+- Public status/list read-model snapshots now invalidate when runner pidfd state
+  changes, preventing cached lifecycle state from surviving VM start/stop
+  transitions.
+- USBIP bind now uses the same bounded isolated driver helper path as unbind, so
+  a slow or stuck kernel driver bind cannot pin the broker control path
+  indefinitely.
+- `d2b usb detach <vm> <busid> --apply` now reaches the broker
+  `UsbipUnbind` cleanup path instead of stopping at a hardcoded ambiguous-flow
+  refusal, so stale USBIP host claims can be released and subsequent attaches can
+  recover without raw `usbip` commands.
+- `d2bd.service` now relies on declarative tmpfiles ACLs for `/run/d2b`
+  instead of an imperative root `ExecStartPre`; the tmpfiles rules keep the ACL
+  mask writable for the daemon while the `d2b` operator group remains
+  narrowed to traversal by the explicit group ACL.
+- Host activation now preserves the `/run/d2b` ACL mask as `rwx` when
+  reasserting runtime directory posture, preventing switch-time activation from
+  clipping the `d2bd` daemon's write access to `r-x`.
+- USB probe/status no longer marks a declared USBIP device `degraded` with
+  `probe-incomplete` after guest-control confirms that the busid is already
+  imported in the guest.
+
 ### Removed
+
+- Removed obsolete references to the legacy Wayland proxy from
+  documentation and comments.
+
 
 - Removed the public `d2b usb enroll` CLI and daemon/public-wire verb.
   QEMU-media USB boot-drive remediation now points operators to
@@ -1530,6 +1432,103 @@ deprecations ship one minor release before removal.
 - Documentation: sanitized ADR 0032's ACA/Relay live-proof record so the
   architectural validation summary remains without publishing live sandbox,
   disk-image, command-output, or compositor-window identifiers.
+
+- Extended generated `sync.json` coverage for daemon lock roots, per-VM
+  lifecycle locks, store-view sync locks, and USBIP lock claims without
+  changing live lock implementations.
+- Added contract-test policy coverage for host-mutable path/lock surfaces,
+  requiring storage/sync contract rows, opaque broker IPC inputs, and a single
+  repair owner for new mutable host state.
+- ADR 0035 Wave 5 added a contract-test policy that classifies every
+  `ProcessRole` and requires runner roles to carry Rust argv-builder plus
+  runner matrix/contract coverage before new roles land.
+- ADR 0035 Wave 4 decomposed CLI read-model/rendering helpers and daemon
+  admission helpers into focused Rust modules while preserving output and
+  authorization contracts.
+- ADR 0035 Wave 3 moved stable CLI JSON output DTOs into the shared IPC contract
+  crate, keeping CLI presentation and schema generation on the same strict
+  deserialization contract.
+- ADR 0035 Wave 2 normalized internal NixOS VM/env indexing for network and host
+  consumers, preserving network isolation semantics while making per-env USBIP
+  backend ports an explicit generated host contract.
+- ADR 0035 Wave 1 consolidated internal NixOS bundle artifact definitions behind
+  a typed central model while preserving generated artifact bytes and private
+  install metadata.
+- ADR 0035 Wave 0 internal cleanup added deterministic inventory tooling and
+  `compat-ADR` bridge-key policy coverage, removed caller-free test/Make
+  compatibility aliases, and dropped stale retired bash-CLI option comments.
+- USBIP architecture notes/tests now pin the per-env proxy as a generic L4
+  forwarder, preserving backend/proxy sidecars during single-busid teardown and
+  encoding optimistic backend/export refresh, firewall-before-flow-kill
+  revocation ordering, TCP-vs-UDP targeted cleanup rules, fail-closed
+  revocation when a selected busid stream cannot be isolated, and explicit
+  bounded-drain/exclusive rebind requirements before any same-env stream bounce.
+- USBIP restart reconciliation now has a daemon-internal physical topology
+  identity model that compares allowed VID/PID with sysfs bus/port topology
+  instead of trusting serial-like descriptors, while keeping raw topology out of
+  public/status projections.
+- USB reconciliation now has closed degraded-reason/status primitives with
+  redacted public/event projections, bounded telemetry labels, remediation
+  mapping, bounded reconcile correlation IDs, dedupe/rate-limit buckets
+  partitioned only by closed event type and bounded source projection, strict
+  `other` fallback for capped buckets/static metric labels, and suppressed-event
+  summaries with exact dropped counts and windows for later observability
+  wiring.
+- VM start/stop USB reconciliation now threads the same bounded reconcile
+  correlation ID through USB broker requests as broker audit trace context
+  without adding it to metric labels.
+- USB broker audit records now keep a privileged forensics projection for
+  USBIP binds with normalized vendor/product IDs, serial-presence only by
+  default, HMAC-SHA256 serial correlation backed by broker-owned root-only key
+  material, current/previous-key correlation during rotation windows, and a
+  scrubbed rotation-window log/audit shape for observability.
+- Guest-control now exposes authenticated, side-effect-free USBIP status/list
+  observation backed by the configured guest `usbip` path with closed timeout and
+  parser error mapping.
+- Persistent shell CLI routing now sends gateway-backed `list`, `detach`, and
+  `kill` management forms through the configured realm gateway over the typed
+  guest-control exec path, while interactive gateway attach fails closed until
+  semantic ADR 0039 attach support lands.
+- Constellation persistent shell routing: extended remote full-host routing and
+  provider trait seams so ADR 0039 `Shell*` operations require
+  `persistent-shell`, target workloads explicitly, preserve mutating
+  idempotency semantics, round-trip through the protobuf codec, and stay
+  separate from provider exec/durable execution.
+- Constellation persistent shell runtime alignment: guestd now gates shell
+  capability advertisement on the usable exec/workload-user/helper/shpool
+  runtime, reports configured shell limits, uses opaque shell ids, exposes
+  core DTO adapters for shell summaries/events, and documents the fail-closed
+  provider guestd bootstrap contract.
+- Constellation persistent shell contracts: promoted ADR 0039's reserved
+  `persistent-shell` capability, `Shell*` operation kinds, shell-authorized PTY
+  stream kind, and bounded shell DTOs into the generated core schema contract.
+- Constellation persistent shell routing: added ADR 0039 and reference stubs
+  reserving the provider/remote contract for ADR 0038 shells, including the
+  guestd-compatible provider-agent requirement and the rule that
+  `executeShellCommand` is not a persistent-shell channel.
+- Persistent shell daemon: started d2bd-side shell control-plane routing with
+  admin-gated management operations, guest-control capability checks, shell
+  response framing, and attached-owner terminal proxying scaffolding.
+- Persistent shell runtime: started guestd-side shell session runtime scaffolding
+  with staged Nix/PAM/service wiring, in-memory admission/idempotency tests, and
+  fail-closed guest-control shell capability handling.
+- Persistent shell contracts: added staged default-off shell option, manifest,
+  public/guest-control wire, and authz contract scaffolding for later runtime
+  wiring.
+- Test orchestration: added a central Layer-1 job manifest that drives local
+  `make check`, renders the PR workflow, and adds a stable `check` CI rollup so
+  branch protection can require one context while generated job names remain
+  implementation details.
+- Guest-control internals: started extracting the shared terminal substrate used
+  by interactive exec, with compatibility DTO conversions and redaction tests for
+  future interactive-terminal reuse.
+- Test and contract hygiene: synced the existing operation-inspection
+  authorization/golden contracts and shortened Unix-socket paths in CLI,
+  daemon-access, broker QMP, and broker integration tests so long worktree paths
+  do not exceed platform socket limits.
+- Developer tooling: added a standalone static guest shell helper workspace,
+  libshpool pin, initial validation/management-output scaffolding, and explicit
+  Rust/static supply-chain gate wiring for upcoming guest-control terminal work.
 
 ## [1.3.1] - 2026-06-18
 

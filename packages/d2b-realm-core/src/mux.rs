@@ -143,10 +143,7 @@ impl StreamMux {
             ));
         }
         if !capabilities.has(open.authz.capability) {
-            return Err(ConstellationError::capability_denied_with_fingerprint(
-                open.authz.capability,
-                Some(capabilities.stable_fingerprint()),
-            ));
+            return Err(ConstellationError::capability_denied(open.authz.capability));
         }
         let id = &open.descriptor.id;
         if self.streams.contains_key(id) {
@@ -612,12 +609,11 @@ mod tests {
     fn stream_open_requires_negotiated_capability_before_state_mutation() {
         let mut mux = StreamMux::new();
         let open = open_frame("display", StreamKind::Display);
-        assert_eq!(
-            mux.open_with_capabilities(&open, &CapabilitySet::empty())
-                .unwrap_err()
-                .kind(),
-            ErrorKind::CapabilityDenied
-        );
+        let err = mux
+            .open_with_capabilities(&open, &CapabilitySet::empty())
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CapabilityDenied);
+        assert_eq!(err.negotiated_capability_fingerprint(), None);
         assert_eq!(mux.open_stream_count(), 0);
         mux.open_with_capabilities(
             &open,
