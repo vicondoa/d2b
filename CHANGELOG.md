@@ -95,6 +95,9 @@ deprecations ship one minor release before removal.
 - Added trusted identity source and display capability-preflight metadata to
   `d2b vm display list --json` so desktop helpers can consume bounded
   d2b-provided realm target state instead of guest window metadata.
+- Added an explicit ACA guestd endpoint provider seam that advertises no
+  guestd/persistent-shell capability for execute-only sandboxes and fails closed
+  before any Azure data-plane call when endpoint status is requested.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
