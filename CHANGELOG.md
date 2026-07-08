@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Granted host-local realm daemon users read ACLs for the shared
+  `realm-controllers.json` and `realm-identity.json` metadata files so startup
+  can load realm metadata after switching to per-realm principals.
 - Gave host-local realm daemon users traverse access to `/run/d2b` and made
   realm run directories match the daemon lock-parent contract
   (`root:<realm-access-group>` sticky `1770`) so realm daemons can validate

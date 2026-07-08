@@ -1080,6 +1080,14 @@ in
             builtins.elem
               "a+ /etc/d2b - - - - u:${home.daemon.user}:--x"
               tmpfiles;
+          realmControllersReadAcl =
+            builtins.elem
+              "a+ /etc/d2b/realm-controllers.json - - - - u:${home.daemon.user}:r--"
+              tmpfiles;
+          realmIdentityReadAcl =
+            builtins.elem
+              "a+ /etc/d2b/realm-identity.json - - - - u:${home.daemon.user}:r--"
+              tmpfiles;
           etcRealmsTraverseAcl =
             builtins.elem
               "a+ /etc/d2b/realms - - - - u:${home.daemon.user}:--x"
@@ -1154,6 +1162,8 @@ in
         stateLock = true;
         locksDir = true;
         etcD2bTraverseAcl = true;
+        realmControllersReadAcl = true;
+        realmIdentityReadAcl = true;
         etcRealmsTraverseAcl = true;
         etcRealmConfigDirTraverseAcl = true;
         runD2bTraverseAcl = true;

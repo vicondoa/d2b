@@ -255,6 +255,8 @@ EOF
     hostLocalRealms);
   realmTmpfilesFor = realm: [
     "a+ /etc/d2b - - - - u:${realm.controller.daemon.user}:--x"
+    "a+ /etc/d2b/realm-controllers.json - - - - u:${realm.controller.daemon.user}:r--"
+    "a+ /etc/d2b/realm-identity.json - - - - u:${realm.controller.daemon.user}:r--"
     "a+ /etc/d2b/realms - - - - u:${realm.controller.daemon.user}:--x"
     "a+ /etc/d2b/realms/${realm.id} - - - - u:${realm.controller.daemon.user}:--x"
     "a+ /run/d2b - - - - u:${realm.controller.daemon.user}:--x"
