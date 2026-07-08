@@ -386,8 +386,11 @@ in
         # Resolve d2bd uid/gid at start time into a unit-local
         # EnvironmentFile. This avoids mutating global systemd manager
         # environment while still supporting systems that allocated d2bd
-        # dynamically before stable numeric ids were introduced.
-        EnvironmentFile = "/run/d2b/broker/priv-broker.env";
+        # dynamically before stable numeric ids were introduced. The file
+        # must be optional for ExecStartPre: systemd loads EnvironmentFile
+        # before every command in the service, and ExecStartPre is what
+        # creates the file before ExecStart consumes it.
+        EnvironmentFile = "-/run/d2b/broker/priv-broker.env";
         ExecStartPre = "+${pkgs.writeShellScript "d2b-priv-broker-prep" ''
           set -euo pipefail
           env_file=/run/d2b/broker/priv-broker.env
