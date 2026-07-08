@@ -211,6 +211,67 @@ Concretely, the agent that owns a worktree:
 
 Only after the merge lands does the agent call `task_complete`.
 
+### Stacked PR workflow for large waves
+
+Large realm/control-plane waves that are not file-disjoint by default land
+through a private stacked-PR workflow, not by direct local merges to `main`.
+This is the default for ADR-scale work where one branch defines contracts that
+later branches consume.
+
+Use this shape:
+
+1. Open one private branch/worktree per independently reviewable slice. Branch
+   names should describe the wave and scope, for example
+   `realm-workloads-w13-adr`, `realm-workloads-w14-options`, or
+   `realm-workloads-w17-wlcontrol`.
+2. Stack only when necessary. A later branch may target an earlier PR branch
+   while it consumes new DTOs, schemas, or option contracts. Branches that do
+   not depend on each other target `main` directly.
+3. Open PRs for every slice. Do not merge locally into `main`, and do not push
+   directly to `main`. The integrator merges only through GitHub PR flow after
+   local validation, CI, and required panel/review gates pass.
+4. PR bodies must list the change, validation evidence, and any substantive
+   panel/review outcomes. Do not include AI/tool/model attribution.
+5. Review and panel agents inspect code, docs, plans, screenshots, and supplied
+   validation evidence. They must not run tests or long gates unless the
+   integrator explicitly asks that reviewer to do so.
+6. The integrator owns CI babysitting, retargeting, rebasing, conflict
+   resolution, merge order, and branch deletion. If a lower PR merges, retarget
+   or rebase dependent PRs promptly and rerun the smallest relevant validation.
+7. When a stack updates host inputs, update `/etc/nixos` only after the upstream
+   PRs are merged and validated. Then switch the host, restart `d2bd`, verify
+   runtime/desktop behavior, and commit the host lock/config change separately.
+8. If helper scripts are added for stack status, retarget/rebase, or
+   wait-and-merge behavior, they must use `gh`, avoid direct main merges, and
+   fail closed on dirty worktrees, failed checks, ambiguous merge state, or
+   missing validation evidence.
+
+For stacks that require panel gates, the first PR in the stack usually carries
+the contract/ADR/plan update. Do not dispatch implementation PRs for later
+waves until the plan/ADR panel returns unanimous signoff.
+
+### Screenshot and visual artifact hygiene
+
+Screenshots and other visual artifacts submitted as validation evidence or
+committed to the repository must be redacted before use:
+
+- Remove or black out all secrets, credentials, API keys, and tokens visible in
+  any terminal, browser, or UI window.
+- Remove or replace personally identifiable information (PII): real names, email
+  addresses, employee ids, user ids, and similar identifiers.
+- Replace or black out sensitive command output: stack traces with host paths,
+  raw error messages with internal node names or realm principals, clipboard
+  content, and any window title or app metadata that names a real person or
+  organization.
+- Use generic placeholder names (e.g., `alice`, `corp-vm`, `work`) matching the
+  conventions in the Don'ts section above.
+
+Do **not** commit unredacted screenshots to the repository. Panel and review
+agents may inspect screenshots as part of validation evidence; the same
+redaction rules apply when attaching screenshots to PR bodies or panel prompts.
+If a screenshot cannot be adequately redacted without losing the information
+being demonstrated, use a text description or a synthetic reproduction instead.
+
 ### Local host validation after updating d2b
 
 When a host configuration switches to a new d2b checkout (for

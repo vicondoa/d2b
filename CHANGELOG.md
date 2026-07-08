@@ -31,7 +31,27 @@ deprecations ship one minor release before removal.
 - Updated the `crossbeam-epoch` lockfile entry to a non-vulnerable release for
   the RustSec advisory check.
 
+### Changed
+
+- Amended ADR 0043 (realm-native control plane) to specify: hierarchical
+  cgroup layout (`d2b.slice/<realm>/<workload>/<role>`), `mkRemovedOptionModule`
+  tombstones for retired `d2b.envs` and `d2b.vms` pointing to the v1.2-to-v2
+  migration guide, `internal = true; visible = false` for generated substrate
+  options, 1:1 state-path mapping from workload id to legacy
+  `/var/lib/d2b/vms/<vm>` with no implicit activation-time state moves,
+  desktop JSON realm-to-workload association requirement, CLI transition
+  behavior for old `d2b vm`/`d2b env` commands, MAC preservation and
+  interface-rename/firewall-drift warnings for net VM renamed from
+  `sys-<env>-net` to `sys-<realm>-net`, eval-time assertion requirement for
+  cross-realm `externalNetwork` uplink conflicts, and explicit
+  workload/provider telemetry label bounding and workload-identity audit
+  redaction rules.
+
 ### Added
+
+- Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
+  PR-only merges, panel/review evidence requirements, integrator ownership of
+  CI, retarget/rebase, merge sequencing, and helper-script constraints.
 
 - Added ADR 0043: Realm-native control plane, documenting the realm-as-control
   plane architecture, per-realm daemon/broker/socket/state/audit boundaries,

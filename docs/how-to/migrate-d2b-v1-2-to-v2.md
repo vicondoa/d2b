@@ -97,6 +97,23 @@ After `nixos-rebuild switch`, the framework emits
 
 ## Step 3: rebuild and restart the daemon
 
+> **⚠ Interface and MAC address warning**: If the realm network configuration
+> changes bridge or interface names from legacy `d2b-<env>-*` forms to
+> hash-derived realm names, any nftables rules or firewall policies that
+> reference the old interface names will drift silently. Run
+> `nft list ruleset | grep d2b` before and after the switch to confirm rules
+> are correct.
+>
+> The net VM renamed from `sys-<env>-net` to `sys-<realm>-net` may also
+> present a **different MAC address** to the uplink. If your router or DHCP
+> server has a static binding for the old net VM MAC, that binding will no
+> longer match after the rename. Options:
+> - Set an explicit MAC address in your realm network declaration to preserve
+>   the legacy value.
+> - Update the upstream DHCP binding to the new MAC address.
+> - Verify with `d2b list --json | jq '.[] | select(.kind == "net-vm") | .mac'`
+>   before and after switching.
+
 ```bash
 sudo nixos-rebuild switch
 sudo systemctl restart d2bd.service
