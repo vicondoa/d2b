@@ -376,6 +376,10 @@ let
         name = "Home";
         env = "home";
         network.envs = [ "home" ];
+        # Use inherit-env so the nudge warning (which fires for mode="none"
+        # with no workloads) does not pollute the accepted-workload-kinds
+        # eval-clean assertion.
+        network.mode = "inherit-env";
         allowedUsers = [ "alice" ];
       };
     })
