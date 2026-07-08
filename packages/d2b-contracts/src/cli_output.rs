@@ -197,9 +197,35 @@ pub struct VmDisplayListOutputV1 {
 pub struct VmDisplaySessionOutputV1 {
     pub session_id: String,
     pub target: String,
+    pub canonical_target: String,
+    pub identity_source: VmDisplayIdentitySource,
     pub state: String,
     pub operation_id: String,
     pub principal: String,
+    pub capability_preflight: VmDisplayCapabilityPreflight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmDisplayIdentitySource {
+    D2bRealmTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VmDisplayCapabilityPreflight {
+    pub status: VmDisplayCapabilityPreflightStatus,
+    pub required_capabilities: Vec<String>,
+    pub advertised_capabilities: Vec<String>,
+    pub missing_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmDisplayCapabilityPreflightStatus {
+    Satisfied,
+    Denied,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -208,6 +234,44 @@ pub struct VmDisplayCloseOutputV1 {
     pub command: String,
     pub session_id: String,
     pub closed: bool,
+}
+
+#[cfg(test)]
+mod display_output_tests {
+    use super::*;
+
+    #[test]
+    fn display_session_output_carries_trusted_identity_and_preflight_metadata() {
+        let output = VmDisplayListOutputV1 {
+            command: "vm display list".to_owned(),
+            target: Some("demo.work.d2b".to_owned()),
+            sessions: vec![VmDisplaySessionOutputV1 {
+                session_id: "s0".to_owned(),
+                target: "demo.work.d2b".to_owned(),
+                canonical_target: "demo.work.d2b".to_owned(),
+                identity_source: VmDisplayIdentitySource::D2bRealmTarget,
+                state: "running".to_owned(),
+                operation_id: "op-1".to_owned(),
+                principal: "uid-1000".to_owned(),
+                capability_preflight: VmDisplayCapabilityPreflight {
+                    status: VmDisplayCapabilityPreflightStatus::Satisfied,
+                    required_capabilities: vec!["window-forwarding".to_owned()],
+                    advertised_capabilities: vec!["window-forwarding".to_owned()],
+                    missing_capabilities: Vec::new(),
+                },
+            }],
+        };
+
+        let json = serde_json::to_value(output).expect("display output serializes");
+        let session = &json["sessions"][0];
+        assert_eq!(session["canonicalTarget"], "demo.work.d2b");
+        assert_eq!(session["identitySource"], "d2b-realm-target");
+        assert_eq!(session["capabilityPreflight"]["status"], "satisfied");
+        assert_eq!(
+            session["capabilityPreflight"]["requiredCapabilities"][0],
+            "window-forwarding"
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

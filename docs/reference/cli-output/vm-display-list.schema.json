@@ -25,9 +25,59 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "VmDisplayCapabilityPreflight": {
+      "type": "object",
+      "required": [
+        "advertisedCapabilities",
+        "missingCapabilities",
+        "requiredCapabilities",
+        "status"
+      ],
+      "properties": {
+        "advertisedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missingCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/definitions/VmDisplayCapabilityPreflightStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmDisplayCapabilityPreflightStatus": {
+      "type": "string",
+      "enum": [
+        "satisfied",
+        "denied",
+        "unknown"
+      ]
+    },
+    "VmDisplayIdentitySource": {
+      "type": "string",
+      "enum": [
+        "d2b-realm-target"
+      ]
+    },
     "VmDisplaySessionOutputV1": {
       "type": "object",
       "required": [
+        "canonicalTarget",
+        "capabilityPreflight",
+        "identitySource",
         "operationId",
         "principal",
         "sessionId",
@@ -35,6 +85,15 @@
         "target"
       ],
       "properties": {
+        "canonicalTarget": {
+          "type": "string"
+        },
+        "capabilityPreflight": {
+          "$ref": "#/definitions/VmDisplayCapabilityPreflight"
+        },
+        "identitySource": {
+          "$ref": "#/definitions/VmDisplayIdentitySource"
+        },
         "operationId": {
           "type": "string"
         },

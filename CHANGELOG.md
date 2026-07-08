@@ -92,6 +92,9 @@ deprecations ship one minor release before removal.
 - Added d2b-asserted Wayland proxy `realmTarget` / `--realm-target` metadata so
   downstream desktop tools can identify proxied VM windows from host-provided
   realm metadata while preserving the existing app-id/title rewrite behavior.
+- Added trusted identity source and display capability-preflight metadata to
+  `d2b vm display list --json` so desktop helpers can consume bounded
+  d2b-provided realm target state instead of guest window metadata.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and
