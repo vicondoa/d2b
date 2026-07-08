@@ -42,8 +42,9 @@ use d2b_clipd::picker::{
 };
 use d2b_clipd::policy::{ReasonCode, is_mime_allowed};
 use d2b_clipd::protocol::{
-    AttributionQuality, Candidate, ClientHello, DaemonToPickerMessage, DestinationMetadata,
-    OpenRequest, PickerToDaemonMessage, PlacementHint, RealmKind,
+    AttributionQuality, Candidate, ClientHello, ClipboardCapabilityPreflight,
+    ClipboardCapabilityPreflightStatus, ClipboardTransferAuthority, DaemonToPickerMessage,
+    DestinationMetadata, OpenRequest, PickerToDaemonMessage, PlacementHint, RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
 use rustix::event::{PollFd, PollFlags, poll};
@@ -899,6 +900,10 @@ impl ClipboardHistory {
                     entry_id: entry.entry_id.clone(),
                     source_realm: entry.source_realm.clone(),
                     source_realm_kind: entry.source_realm_kind,
+                    source_canonical_target: canonical_target_for_realm(
+                        &entry.source_realm,
+                        entry.source_realm_kind,
+                    ),
                     source_app: entry.source_app.clone(),
                     source_app_id: entry.source_app_id.clone(),
                     source_attribution: entry.source_attribution,
@@ -910,6 +915,7 @@ impl ClipboardHistory {
                     thumbnail_png_base64: None,
                     byte_count: Some(bytes.len() as u64),
                     confirmation_required: false,
+                    capability_preflight: Some(clipboard_capability_preflight()),
                 })
             })
             .collect()
@@ -2075,6 +2081,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                     entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
                                     source_realm: current_host_entry.source_realm.clone(),
                                     source_realm_kind: current_host_entry.source_realm_kind,
+                                    source_canonical_target: canonical_target_for_realm(
+                                        &current_host_entry.source_realm,
+                                        current_host_entry.source_realm_kind,
+                                    ),
                                     source_app: current_host_entry.source_app.clone(),
                                     source_app_id: current_host_entry.source_app_id.clone(),
                                     source_attribution: current_host_entry.source_attribution,
@@ -2086,6 +2096,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                     thumbnail_png_base64: None,
                                     byte_count: Some(bytes.len() as u64),
                                     confirmation_required: false,
+                                    capability_preflight: Some(clipboard_capability_preflight()),
                                 },
                             );
                         }
@@ -2825,12 +2836,14 @@ fn picker_handshake(
         destination: DestinationMetadata {
             realm: "Host".to_owned(),
             realm_kind: RealmKind::Host,
+            canonical_target: None,
             application: dest.app_id.clone(),
             app_id: dest.app_id.clone(),
             title: dest.title.clone(),
             workspace: None,
             output: dest.output_label.clone(),
             attribution: AttributionQuality::FocusedWindowGuess,
+            capability_preflight: Some(clipboard_capability_preflight()),
         },
         requested_mime_type: requested_mime_type.to_owned(),
         expires_at_unix_ms: unix_millis().saturating_add(30_000),
@@ -2892,6 +2905,10 @@ fn picker_candidates(
                 entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
                 source_realm: entry.source_realm.clone(),
                 source_realm_kind: entry.source_realm_kind,
+                source_canonical_target: canonical_target_for_realm(
+                    &entry.source_realm,
+                    entry.source_realm_kind,
+                ),
                 source_app: entry.source_app.clone(),
                 source_app_id: entry.source_app_id.clone(),
                 source_attribution: entry.source_attribution,
@@ -2903,6 +2920,7 @@ fn picker_candidates(
                 thumbnail_png_base64: None,
                 byte_count: Some(bytes.len() as u64),
                 confirmation_required: false,
+                capability_preflight: Some(clipboard_capability_preflight()),
             },
         );
         return candidates;
@@ -2939,6 +2957,7 @@ fn insert_live_host_candidate(
             entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
             source_realm: "Host".to_owned(),
             source_realm_kind: RealmKind::Host,
+            source_canonical_target: None,
             source_app: window
                 .and_then(|window| window.title.clone())
                 .or_else(|| Some("Host clipboard".to_owned())),
@@ -2950,6 +2969,7 @@ fn insert_live_host_candidate(
             thumbnail_png_base64: None,
             byte_count: None,
             confirmation_required: false,
+            capability_preflight: Some(clipboard_capability_preflight()),
         },
     );
 }
@@ -2965,6 +2985,7 @@ fn picker_bridge_candidates(
         entry_id: CURRENT_BRIDGE_ENTRY_ID.to_owned(),
         source_realm: selection.vm_name.clone(),
         source_realm_kind: RealmKind::Vm,
+        source_canonical_target: canonical_target_for_vm(&selection.vm_name),
         source_app: Some(format!("{} VM", selection.vm_name)),
         source_app_id: Some(format!("d2b.{}", selection.vm_name)),
         source_attribution: AttributionQuality::ExactClient,
@@ -2976,6 +2997,7 @@ fn picker_bridge_candidates(
         thumbnail_png_base64: None,
         byte_count: Some(bytes.len() as u64),
         confirmation_required: false,
+        capability_preflight: Some(clipboard_capability_preflight()),
     }]
 }
 
@@ -3007,8 +3029,9 @@ fn picker_bridge_candidates_for_published(
         };
     vec![Candidate {
         entry_id,
-        source_realm,
+        source_realm: source_realm.clone(),
         source_realm_kind: RealmKind::Vm,
+        source_canonical_target: canonical_target_for_vm(&source_realm),
         source_app,
         source_app_id,
         source_attribution: AttributionQuality::ExactClient,
@@ -3020,7 +3043,39 @@ fn picker_bridge_candidates_for_published(
         thumbnail_png_base64: None,
         byte_count: Some(bytes.len() as u64),
         confirmation_required: false,
+        capability_preflight: Some(clipboard_capability_preflight()),
     }]
+}
+
+fn canonical_target_for_realm(realm: &str, kind: RealmKind) -> Option<String> {
+    match kind {
+        RealmKind::Host => None,
+        RealmKind::Vm => canonical_target_for_vm(realm),
+    }
+}
+
+fn canonical_target_for_vm(vm: &str) -> Option<String> {
+    if is_canonical_vm_label(vm) {
+        Some(format!("{vm}.local.d2b"))
+    } else {
+        None
+    }
+}
+
+fn is_canonical_vm_label(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn clipboard_capability_preflight() -> ClipboardCapabilityPreflight {
+    ClipboardCapabilityPreflight {
+        status: ClipboardCapabilityPreflightStatus::Satisfied,
+        required_capabilities: vec!["clipboard".to_owned()],
+        advertised_capabilities: vec!["clipboard".to_owned()],
+        missing_capabilities: Vec::new(),
+        authority: ClipboardTransferAuthority::PickerClipd,
+    }
 }
 
 fn summarize_candidates(candidates: &[Candidate]) -> String {
@@ -3698,6 +3753,7 @@ mod tests {
             entry_id: "history-1".to_owned(),
             source_realm: "Host".to_owned(),
             source_realm_kind: RealmKind::Host,
+            source_canonical_target: None,
             source_app: Some("old copy".to_owned()),
             source_app_id: Some("old.app".to_owned()),
             source_attribution: AttributionQuality::FocusedWindowGuess,
@@ -3707,6 +3763,7 @@ mod tests {
             thumbnail_png_base64: None,
             byte_count: Some(3),
             confirmation_required: false,
+            capability_preflight: Some(clipboard_capability_preflight()),
         }];
         let window = FocusedWindowSnapshot {
             app_id: Some("firefox".to_owned()),
@@ -3783,6 +3840,17 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].entry_id, CURRENT_BRIDGE_ENTRY_ID);
+        assert_eq!(
+            candidates[0].source_canonical_target.as_deref(),
+            Some("personal-dev.local.d2b")
+        );
+        assert_eq!(
+            candidates[0]
+                .capability_preflight
+                .as_ref()
+                .map(|preflight| preflight.status),
+            Some(ClipboardCapabilityPreflightStatus::Satisfied)
+        );
         assert_eq!(candidates[0].preview_text.as_deref(), Some("vm text"));
         assert_eq!(candidates[0].byte_count, Some(7));
     }

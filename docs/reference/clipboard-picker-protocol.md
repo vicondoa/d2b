@@ -50,12 +50,20 @@ filtered candidates. Clipboard payload bytes are not included.
   "destination": {
     "realm": "Personal",
     "realm_kind": "vm",
+    "canonical_target": "firefox.personal.local.d2b",
     "application": "Firefox",
     "app_id": "org.mozilla.firefox",
     "title": null,
     "workspace": "dev",
     "output": "DP-1",
-    "attribution": "exact_client"
+    "attribution": "exact_client",
+    "capability_preflight": {
+      "status": "satisfied",
+      "required_capabilities": ["clipboard"],
+      "advertised_capabilities": ["clipboard"],
+      "missing_capabilities": [],
+      "authority": "picker_clipd"
+    }
   },
   "requested_mime_type": "text/plain",
   "expires_at_unix_ms": 1760000000000,
@@ -65,6 +73,7 @@ filtered candidates. Clipboard payload bytes are not included.
       "entry_id": "opaque-entry",
       "source_realm": "Host",
       "source_realm_kind": "host",
+      "source_canonical_target": null,
       "source_app": "Text Editor",
       "source_app_id": "org.gnome.TextEditor",
       "source_attribution": "focused_window_guess",
@@ -73,7 +82,14 @@ filtered candidates. Clipboard payload bytes are not included.
       "timestamp_unix_ms": 1760000000000,
       "thumbnail_png_base64": null,
       "byte_count": 128,
-      "confirmation_required": false
+      "confirmation_required": false,
+      "capability_preflight": {
+        "status": "satisfied",
+        "required_capabilities": ["clipboard"],
+        "advertised_capabilities": ["clipboard"],
+        "missing_capabilities": [],
+        "authority": "picker_clipd"
+      }
     }
   ]
 }
@@ -107,6 +123,19 @@ destination output, but placement never affects policy. Fields are:
 - `overlay_width`, `overlay_height`: desired picker size.
 - `output`: optional output label, such as a Niri output name.
 
+## Realm identity and capability metadata
+
+`canonical_target` and `source_canonical_target` are optional canonical realm
+addresses in `<workload>.<realm>.d2b` form. For current local VM clipboard
+sources, `d2b-clipd` emits `<vm>.local.d2b`; host clipboard sources use `null`.
+These fields are asserted by d2b metadata, not by guest-provided titles or app
+ids.
+
+`capability_preflight` records the bounded preflight status that the picker may
+display. Clipboard transfers are still fulfilled only by d2b-clipd after picker
+selection; `authority: "picker_clipd"` means direct host/VM clipboard offers are
+discovery metadata only.
+
 ## Candidate metadata
 
 Candidates may include:
@@ -114,6 +143,7 @@ Candidates may include:
 - `entry_id`
 - `source_realm`
 - `source_realm_kind` (`host`, `vm`)
+- `source_canonical_target`
 - `source_app`
 - `source_app_id`
 - `source_attribution` (`exact_client`, `focused_window_guess`,
@@ -123,6 +153,7 @@ Candidates may include:
 - `timestamp_unix_ms`
 - optional capped PNG thumbnail metadata
 - `confirmation_required`
+- `capability_preflight`
 
 Text and HTML previews are rendered as plain text only. ANSI escapes,
 non-printable controls, rich HTML, Pango markup, and remote resources are not
