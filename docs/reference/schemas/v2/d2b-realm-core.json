@@ -288,6 +288,42 @@
       "$ref": "#/definitions/SignatureRef"
     },
     {
+      "$ref": "#/definitions/UnverifiedPeerRef"
+    },
+    {
+      "$ref": "#/definitions/RoutePolicyRuleId"
+    },
+    {
+      "$ref": "#/definitions/RouteReplayWindowId"
+    },
+    {
+      "$ref": "#/definitions/ShortcutAuthorizationId"
+    },
+    {
+      "$ref": "#/definitions/DiscoveryQueueDropPolicy"
+    },
+    {
+      "$ref": "#/definitions/DiscoveryQueuePolicy"
+    },
+    {
+      "$ref": "#/definitions/DiscoveryIngressClass"
+    },
+    {
+      "$ref": "#/definitions/PreAuthAdmissionOutcome"
+    },
+    {
+      "$ref": "#/definitions/UnverifiedPeerAdmissionAttemptMetadata"
+    },
+    {
+      "$ref": "#/definitions/ReplayWindowMetadata"
+    },
+    {
+      "$ref": "#/definitions/SessionAdmissionAttemptMetadata"
+    },
+    {
+      "$ref": "#/definitions/SessionAdmissionOutcome"
+    },
+    {
       "$ref": "#/definitions/RealmTreeEdge"
     },
     {
@@ -298,6 +334,66 @@
     },
     {
       "$ref": "#/definitions/RouteAdvertisement"
+    },
+    {
+      "$ref": "#/definitions/RouteAdvertisementEnvelope"
+    },
+    {
+      "$ref": "#/definitions/RouteNamespaceAllocation"
+    },
+    {
+      "$ref": "#/definitions/TreeRouteHopDirection"
+    },
+    {
+      "$ref": "#/definitions/TreeRouteHop"
+    },
+    {
+      "$ref": "#/definitions/TreeRoutePath"
+    },
+    {
+      "$ref": "#/definitions/RouteFailClosedReason"
+    },
+    {
+      "$ref": "#/definitions/TreeRouteDecisionOutcome"
+    },
+    {
+      "$ref": "#/definitions/TreeRouteDecision"
+    },
+    {
+      "$ref": "#/definitions/DirectShortcutState"
+    },
+    {
+      "$ref": "#/definitions/DirectShortcutAuthorizationMetadata"
+    },
+    {
+      "$ref": "#/definitions/DirectShortcutTeardownMetadata"
+    },
+    {
+      "$ref": "#/definitions/DirectShortcutTeardownReason"
+    },
+    {
+      "$ref": "#/definitions/RouteAuditEventKind"
+    },
+    {
+      "$ref": "#/definitions/RouteRealmClass"
+    },
+    {
+      "$ref": "#/definitions/RoutePlacementClass"
+    },
+    {
+      "$ref": "#/definitions/RouteAuditLabels"
+    },
+    {
+      "$ref": "#/definitions/RouteTelemetryCounterKind"
+    },
+    {
+      "$ref": "#/definitions/RouteTelemetryLabels"
+    },
+    {
+      "$ref": "#/definitions/RouteTelemetrySample"
+    },
+    {
+      "$ref": "#/definitions/RouteTelemetryBatch"
     },
     {
       "$ref": "#/definitions/LegacySurface"
@@ -2490,6 +2586,246 @@
       },
       "additionalProperties": false
     },
+    "DirectShortcutAuthorizationMetadata": {
+      "description": "Direct shortcut authorization metadata. No underlay address or tunnel endpoint is represented; the path remains the authorized tree path.",
+      "type": "object",
+      "required": [
+        "authorizedTreePath",
+        "authorizingAncestor",
+        "correlationId",
+        "expiresAtUnixSeconds",
+        "issuedAtUnixSeconds",
+        "operationKind",
+        "shortcutId",
+        "sourceRealm",
+        "state",
+        "targetRealm"
+      ],
+      "properties": {
+        "authorizedTreePath": {
+          "$ref": "#/definitions/TreeRoutePath"
+        },
+        "authorizingAncestor": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "correlationId": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "operationKind": {
+          "$ref": "#/definitions/OperationKind"
+        },
+        "policyRuleId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RoutePolicyRuleId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requiredCapability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shortcutId": {
+          "$ref": "#/definitions/ShortcutAuthorizationId"
+        },
+        "sourceRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "state": {
+          "$ref": "#/definitions/DirectShortcutState"
+        },
+        "targetRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DirectShortcutState": {
+      "description": "Shortcut authorization lifecycle state.",
+      "type": "string",
+      "enum": [
+        "authorized",
+        "established",
+        "teardown-requested",
+        "torn-down",
+        "denied"
+      ]
+    },
+    "DirectShortcutTeardownMetadata": {
+      "description": "Direct shortcut teardown metadata.",
+      "type": "object",
+      "required": [
+        "correlationId",
+        "reason",
+        "shortcutId",
+        "sourceRealm",
+        "targetRealm",
+        "tornDownAtUnixSeconds"
+      ],
+      "properties": {
+        "correlationId": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "reason": {
+          "$ref": "#/definitions/DirectShortcutTeardownReason"
+        },
+        "shortcutId": {
+          "$ref": "#/definitions/ShortcutAuthorizationId"
+        },
+        "sourceRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "targetRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "tornDownAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DirectShortcutTeardownReason": {
+      "description": "Stable shortcut teardown reason.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "expired",
+        "policy-revoked",
+        "route-revoked",
+        "transport-unavailable",
+        "peer-disconnected"
+      ]
+    },
+    "DiscoveryIngressClass": {
+      "description": "Coarse discovery ingress class. Raw relay endpoints are intentionally absent.",
+      "type": "string",
+      "enum": [
+        "local-root",
+        "parent-relay",
+        "child-relay",
+        "provider-relay",
+        "static-config",
+        "unknown"
+      ]
+    },
+    "DiscoveryQueueDropPolicy": {
+      "description": "Discovery queue overflow behavior for unauthenticated input.",
+      "oneOf": [
+        {
+          "description": "Fail closed by dropping the new unauthenticated item when full.",
+          "type": "string",
+          "enum": [
+            "drop-new"
+          ]
+        }
+      ]
+    },
+    "DiscoveryQueuePolicy": {
+      "description": "Bounded policy for the pre-auth discovery/admission queue.",
+      "type": "object",
+      "required": [
+        "dropPolicy",
+        "maxDepth",
+        "maxUnverifiedPeers",
+        "perRelayRateLimitPerMinute",
+        "perUnverifiedPeerRateLimitPerMinute"
+      ],
+      "properties": {
+        "dropPolicy": {
+          "description": "Required fail-closed overflow behavior.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DiscoveryQueueDropPolicy"
+            }
+          ]
+        },
+        "maxDepth": {
+          "description": "Maximum queued unauthenticated discovery items.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4096.0,
+          "minimum": 1.0
+        },
+        "maxUnverifiedPeers": {
+          "description": "Maximum simultaneously tracked unverified peer handles.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1024.0,
+          "minimum": 1.0
+        },
+        "perRelayRateLimitPerMinute": {
+          "description": "Per-relay-class pre-auth rate limit.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 60000.0,
+          "minimum": 1.0
+        },
+        "perUnverifiedPeerRateLimitPerMinute": {
+          "description": "Per-unverified-peer pre-auth rate limit.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 60000.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
     "EnrollmentId": {
       "type": "string",
       "maxLength": 128,
@@ -2880,7 +3216,7 @@
       "additionalProperties": false
     },
     "ExecStartRequest": {
-      "description": "Durable execution start request metadata. Command details live in the opaque operation body and are never logged by this DTO.",
+      "description": "Durable execution start request metadata. Command details live in the opaque operation body and are never logged by this metadata model.",
       "type": "object",
       "required": [
         "attach_mode",
@@ -4434,6 +4770,45 @@
       },
       "additionalProperties": false
     },
+    "PreAuthAdmissionOutcome": {
+      "description": "Pre-auth admission screening result.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "queued"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/RouteFailClosedReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "dropped"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "PrincipalId": {
       "type": "string",
       "maxLength": 128,
@@ -5018,7 +5393,7 @@
       "additionalProperties": false
     },
     "RealmAccessResolverRequest": {
-      "description": "Input DTO for realm access resolution. Runtime routing can continue using existing paths while callers and tests exchange this contract shape.",
+      "description": "Input model for realm access resolution. Runtime routing can continue using existing paths while callers and tests exchange this contract shape.",
       "type": "object",
       "required": [
         "client",
@@ -5888,6 +6263,53 @@
         "rejected"
       ]
     },
+    "ReplayWindowMetadata": {
+      "description": "Replay-window metadata for discovery/session/ad route deduplication.",
+      "type": "object",
+      "required": [
+        "currentEntries",
+        "maxEntries",
+        "observedReplayCount",
+        "openedAtUnixSeconds",
+        "replayWindowId",
+        "ttlSeconds"
+      ],
+      "properties": {
+        "currentEntries": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1000000.0,
+          "minimum": 0.0
+        },
+        "maxEntries": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1000000.0,
+          "minimum": 1.0
+        },
+        "observedReplayCount": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1000000.0,
+          "minimum": 0.0
+        },
+        "openedAtUnixSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "replayWindowId": {
+          "$ref": "#/definitions/RouteReplayWindowId"
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 86400.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
     "ResourceAcquisitionKey": {
       "description": "Deterministic total-order key for resource acquisition.",
       "type": "object",
@@ -6478,7 +6900,6 @@
       "required": [
         "advertisingRealm",
         "controllerGeneration",
-        "correlationId",
         "expiresAtUnixSeconds",
         "issuedAtUnixSeconds",
         "routes",
@@ -6501,14 +6922,6 @@
             }
           ]
         },
-        "correlationId": {
-          "description": "Bounded correlation id shared across route-decision audit records.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/CorrelationId"
-            }
-          ]
-        },
         "expiresAtUnixSeconds": {
           "description": "Expiry time as Unix seconds. Must be greater than issue time.",
           "type": "integer",
@@ -6526,7 +6939,9 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/DescendantRoute"
-          }
+          },
+          "maxItems": 64,
+          "minItems": 1
         },
         "signature": {
           "description": "Signature metadata.",
@@ -6547,11 +6962,238 @@
       },
       "additionalProperties": false
     },
+    "RouteAdvertisementEnvelope": {
+      "description": "Envelope around a signed route advertisement as seen by the receiving realm.",
+      "type": "object",
+      "required": [
+        "admission",
+        "advertisement",
+        "correlationId",
+        "receivedAtUnixSeconds",
+        "replayWindow"
+      ],
+      "properties": {
+        "admission": {
+          "description": "Bounded receipt/admission metadata, not raw relay bytes.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UnverifiedPeerAdmissionAttemptMetadata"
+            }
+          ]
+        },
+        "advertisement": {
+          "description": "Signed and expiring advertisement payload.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RouteAdvertisement"
+            }
+          ]
+        },
+        "correlationId": {
+          "description": "Bounded correlation id shared across route-decision audit records.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
+        "receivedAtUnixSeconds": {
+          "description": "Receipt time at the verifier.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "replayWindow": {
+          "description": "Replay window used to reject duplicate adverts.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReplayWindowMetadata"
+            }
+          ]
+        },
+        "trace": {
+          "description": "Optional bounded trace context carried alongside the advert.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteAuditEventKind": {
+      "description": "Route event kind for bounded audit metadata.",
+      "type": "string",
+      "enum": [
+        "discovery-queued",
+        "discovery-dropped",
+        "session-admitted",
+        "session-denied",
+        "advertisement-accepted",
+        "advertisement-denied",
+        "route-allowed",
+        "route-denied",
+        "shortcut-authorized",
+        "shortcut-denied",
+        "shortcut-torn-down"
+      ]
+    },
+    "RouteAuditLabels": {
+      "description": "Route audit labels. These may include a bounded policy id for operator audit, but never payloads, relay endpoints, peer identity strings, or raw metrics dimensions.",
+      "type": "object",
+      "required": [
+        "event",
+        "operationKind",
+        "placement",
+        "sourceRealmClass",
+        "targetRealmClass"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/RouteAuditEventKind"
+        },
+        "operationKind": {
+          "$ref": "#/definitions/OperationKind"
+        },
+        "placement": {
+          "$ref": "#/definitions/RoutePlacementClass"
+        },
+        "policyRuleId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RoutePolicyRuleId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RouteFailClosedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRealmClass": {
+          "$ref": "#/definitions/RouteRealmClass"
+        },
+        "targetRealmClass": {
+          "$ref": "#/definitions/RouteRealmClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteFailClosedReason": {
+      "description": "Closed fail-closed route/admission reason. These labels are safe for audit and low-cardinality counters.",
+      "type": "string",
+      "enum": [
+        "malformed-advert",
+        "unknown-parent",
+        "namespace-violation",
+        "sibling-or-parent-route-advert",
+        "loop",
+        "multi-parent",
+        "expired",
+        "replay",
+        "rate-limited",
+        "queue-full-drop-new",
+        "missing-capability",
+        "policy-denial"
+      ]
+    },
     "RouteId": {
       "type": "string",
       "maxLength": 128,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "RouteNamespaceAllocation": {
+      "description": "Namespace delegated by a parent to a direct child for route advertisements.",
+      "type": "object",
+      "required": [
+        "allocatedToGeneration",
+        "allowedPrefixes",
+        "capabilityCeiling",
+        "maxRoutes",
+        "treeEdge"
+      ],
+      "properties": {
+        "allocatedToGeneration": {
+          "$ref": "#/definitions/ControllerGenerationId"
+        },
+        "allowedPrefixes": {
+          "description": "Prefixes the child may advertise. Each prefix must be the child realm or a descendant under it; siblings and parents are rejected.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/RealmId"
+            }
+          },
+          "maxItems": 16,
+          "minItems": 1
+        },
+        "capabilityCeiling": {
+          "$ref": "#/definitions/CapabilitySet"
+        },
+        "maxRoutes": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 64.0,
+          "minimum": 1.0
+        },
+        "treeEdge": {
+          "$ref": "#/definitions/RealmTreeEdge"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RoutePlacementClass": {
+      "description": "Low-cardinality placement class. Provider ids and raw transport addresses stay out of telemetry labels.",
+      "type": "string",
+      "enum": [
+        "host-local",
+        "gateway-vm",
+        "cloud-full-host",
+        "provider-controller",
+        "provider-agent",
+        "provider-specific",
+        "unknown"
+      ]
+    },
+    "RoutePolicyRuleId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
+    },
+    "RouteRealmClass": {
+      "description": "Low-cardinality realm class suitable for route metrics.",
+      "type": "string",
+      "enum": [
+        "local-root",
+        "static-configured",
+        "host-local-peer",
+        "gateway-backed",
+        "cloud-full-host",
+        "provider-managed",
+        "ephemeral-discovered",
+        "unknown"
+      ]
+    },
+    "RouteReplayWindowId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
     },
     "RouteSignature": {
       "description": "Signature metadata for a route advertisement.",
@@ -6597,6 +7239,205 @@
         }
       },
       "additionalProperties": false
+    },
+    "RouteTelemetryBatch": {
+      "description": "Bounded telemetry sample batch.",
+      "type": "object",
+      "properties": {
+        "samples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RouteTelemetrySample"
+          },
+          "maxItems": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteTelemetryCounterKind": {
+      "description": "Route telemetry counter kind.",
+      "type": "string",
+      "enum": [
+        "api-latency-count",
+        "api-error-count",
+        "discovery-queue-depth",
+        "discovery-drop-new-count",
+        "pre-auth-rate-limit-hit-count",
+        "route-advertisement-accepted-count",
+        "route-advertisement-denied-count",
+        "route-decision-allowed-count",
+        "route-decision-denied-count",
+        "shortcut-authorized-count",
+        "shortcut-denied-count",
+        "revocation-teardown-count",
+        "session-teardown-count"
+      ]
+    },
+    "RouteTelemetryLabels": {
+      "description": "Low-cardinality metric labels for route telemetry. It intentionally carries no realm path, target address, raw transport address, or peer identifier.",
+      "type": "object",
+      "required": [
+        "placement",
+        "sourceRealmClass",
+        "targetRealmClass"
+      ],
+      "properties": {
+        "operationKind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OperationKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "$ref": "#/definitions/RoutePlacementClass"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RouteFailClosedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRealmClass": {
+          "$ref": "#/definitions/RouteRealmClass"
+        },
+        "targetRealmClass": {
+          "$ref": "#/definitions/RouteRealmClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RouteTelemetrySample": {
+      "description": "One bounded route telemetry counter sample.",
+      "type": "object",
+      "required": [
+        "counter",
+        "labels",
+        "value"
+      ],
+      "properties": {
+        "counter": {
+          "$ref": "#/definitions/RouteTelemetryCounterKind"
+        },
+        "labels": {
+          "$ref": "#/definitions/RouteTelemetryLabels"
+        },
+        "value": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionAdmissionAttemptMetadata": {
+      "description": "Post-auth session admission attempt metadata.",
+      "type": "object",
+      "required": [
+        "attemptId",
+        "correlationId",
+        "localRealm",
+        "operationKind",
+        "outcome",
+        "remoteRealm",
+        "replayWindow"
+      ],
+      "properties": {
+        "attemptId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "correlationId": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "localRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "operationKind": {
+          "$ref": "#/definitions/OperationKind"
+        },
+        "outcome": {
+          "$ref": "#/definitions/SessionAdmissionOutcome"
+        },
+        "remoteRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "replayWindow": {
+          "$ref": "#/definitions/ReplayWindowMetadata"
+        },
+        "requiredCapability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionAdmissionOutcome": {
+      "description": "Post-auth session admission result.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "admitted"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/RouteFailClosedReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "denied"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SessionTeardownDirective": {
       "description": "Metadata-only directive to terminate sessions depending on a revoked grant.",
@@ -6696,7 +7537,7 @@
       "additionalProperties": false
     },
     "ShellAttachSummary": {
-      "description": "Successful `ShellAttach` metadata. The terminal stream itself is opened as `StreamKind::ShellPty`, so raw terminal bytes stay out of this DTO.",
+      "description": "Successful `ShellAttach` metadata. The terminal stream itself is opened as `StreamKind::ShellPty`, so raw terminal bytes stay out of this metadata.",
       "type": "object",
       "required": [
         "attach_id",
@@ -6982,6 +7823,12 @@
         }
       },
       "additionalProperties": false
+    },
+    "ShortcutAuthorizationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
     },
     "SignatureRef": {
       "type": "string",
@@ -7274,11 +8121,299 @@
       },
       "additionalProperties": false
     },
+    "TreeRouteDecision": {
+      "description": "Pure metadata route decision. It carries no transport sockets or relay endpoints.",
+      "type": "object",
+      "required": [
+        "correlationId",
+        "decisionId",
+        "operationKind",
+        "outcome",
+        "sourceRealm",
+        "targetRealm"
+      ],
+      "properties": {
+        "correlationId": {
+          "$ref": "#/definitions/CorrelationId"
+        },
+        "decisionId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "operationKind": {
+          "$ref": "#/definitions/OperationKind"
+        },
+        "outcome": {
+          "$ref": "#/definitions/TreeRouteDecisionOutcome"
+        },
+        "policyRuleId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RoutePolicyRuleId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requiredCapability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "targetRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TreeRouteDecisionOutcome": {
+      "description": "Result of a tree route decision.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "status"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/TreeRoutePath"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "allowed"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "status"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/RouteFailClosedReason"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "denied"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TreeRouteHop": {
+      "description": "One validated parent/child hop in a tree route.",
+      "type": "object",
+      "required": [
+        "direction",
+        "edge",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "direction": {
+          "$ref": "#/definitions/TreeRouteHopDirection"
+        },
+        "edge": {
+          "$ref": "#/definitions/RealmTreeEdge"
+        },
+        "from": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "routeId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RouteId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TreeRouteHopDirection": {
+      "description": "Direction for one hop along the realm tree.",
+      "type": "string",
+      "enum": [
+        "up-to-parent",
+        "down-to-child"
+      ]
+    },
+    "TreeRoutePath": {
+      "description": "Bounded tree path used for a route decision.",
+      "type": "object",
+      "required": [
+        "hops",
+        "nearestCommonAncestor",
+        "sourceRealm",
+        "targetRealm"
+      ],
+      "properties": {
+        "hops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TreeRouteHop"
+          },
+          "maxItems": 32
+        },
+        "nearestCommonAncestor": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "sourceRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "targetRealm": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "UnixSocketPath": {
       "type": "string",
       "maxLength": 107,
       "minLength": 1,
       "pattern": "^/[^\\0]*$"
+    },
+    "UnverifiedPeerAdmissionAttemptMetadata": {
+      "description": "Metadata for an unauthenticated peer discovery/admission attempt.",
+      "type": "object",
+      "required": [
+        "attemptId",
+        "correlationId",
+        "ingressClass",
+        "outcome",
+        "queueDepth",
+        "unverifiedPeerRef"
+      ],
+      "properties": {
+        "attemptId": {
+          "description": "Per-attempt audit id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/OperationId"
+            }
+          ]
+        },
+        "claimedRealm": {
+          "description": "Claimed realm, if the pre-auth message carried a parseable realm path.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "correlationId": {
+          "description": "Cross-hop route/admission correlation id.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CorrelationId"
+            }
+          ]
+        },
+        "ingressClass": {
+          "description": "Coarse ingress class, never a raw relay endpoint.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DiscoveryIngressClass"
+            }
+          ]
+        },
+        "outcome": {
+          "description": "Outcome of queue/rate/replay pre-auth screening.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreAuthAdmissionOutcome"
+            }
+          ]
+        },
+        "queueDepth": {
+          "description": "Current queue depth after applying the admission decision.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4096.0,
+          "minimum": 0.0
+        },
+        "trace": {
+          "description": "Optional bounded trace context propagated by the caller.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unverifiedPeerRef": {
+          "description": "Redacted queue-local peer handle, never a metric label.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UnverifiedPeerRef"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UnverifiedPeerRef": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
     },
     "WorkloadId": {
       "type": "string",

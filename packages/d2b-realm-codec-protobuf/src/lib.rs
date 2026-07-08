@@ -895,7 +895,6 @@ fn encode_authorization_scope(
         AuthorizationScope::Enrollment => {
             proto_authorization_scope::Scope::Enrollment(ProtoUnit {})
         }
-        AuthorizationScope::Health => proto_authorization_scope::Scope::Health(ProtoUnit {}),
         AuthorizationScope::KeyRotation => {
             proto_authorization_scope::Scope::KeyRotation(ProtoUnit {})
         }
@@ -903,6 +902,7 @@ fn encode_authorization_scope(
             proto_authorization_scope::Scope::Revocation(ProtoUnit {})
         }
         AuthorizationScope::Recovery => proto_authorization_scope::Scope::Recovery(ProtoUnit {}),
+        AuthorizationScope::Health => proto_authorization_scope::Scope::Health(ProtoUnit {}),
     };
     Ok(ProtoAuthorizationScope { scope: Some(scope) })
 }

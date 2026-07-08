@@ -43,7 +43,8 @@ policy storage and evaluation live in the owning gateway guest.
 - Cross-realm operations and streams are denied unless a future reviewed typed
   policy explicitly allows a named operation or stream. There are no enabled
   default allow rules.
-- SSH fallback and generic tunnels are not policy escape hatches.
+- SSH fallback, VPN/overlay links, raw relay pipes, raw TCP proxies, file
+  descriptor tunnels, and generic tunnels are not policy escape hatches.
 
 ## Authorization and audit
 
@@ -75,4 +76,5 @@ controllers.
 - [Realm option schema](./realm-options.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
+- [Realm tree routing contract](./realm-routing.md)
 - [Realm core model reference](./realm-core.md)

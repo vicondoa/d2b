@@ -2,11 +2,11 @@
 
 **Diataxis category:** reference.
 
-This page documents the committed `d2b-realm-core` DTO and parser
+This page documents the committed realm core schema and parser
 contract. It is a contributor-facing reference for realm target
 names, identifiers, capability checks, redacted audit metadata, typed
-errors, realm-controller metadata, route/enrollment DTOs, realm identity
-lifecycle DTOs, host-resource allocator DTOs, and semantic frame schema roots. See
+errors, realm-controller metadata, route/enrollment models, realm identity
+lifecycle models, host-resource allocator models, and semantic frame schema roots. See
 [Local-root allocator contract](./local-root-allocator.md) for the
 allocator-specific invariants and current implementation boundary.
 
@@ -15,19 +15,19 @@ For the current Nix option surface, see
 namespace validates realm declaration shape and materializes host-local
 control-plane scaffolding in the current release; access-layer routing,
 identity/enrollment, realm networking, and provider runtime integration
-remain future work over the DTO model below.
+remain future work over the schema model below.
 
 The crate is intentionally codec-neutral. Protocol codecs map bytes to
-and from `ConstellationFrame`; routing, authorization, audit, and
+and from the semantic frame enum; routing, authorization, audit, and
 provider code reason over the Rust model below rather than over a
 specific wire encoding.
 
 ## Schema-root status
 
-The Rust DTOs derive or implement `serde` and `schemars::JsonSchema`.
-They are emitted by `cargo xtask gen-schemas` through the
+The Rust models define generated JSON schema roots. They are emitted by
+`cargo xtask gen-schemas` through the
 `D2bRealmCoreSchema` wrapper into the generated JSON companion
-[`schemas/v2/d2b-realm-core.json`](./schemas/v2/d2b-realm-core.json).
+in the schema reference directory.
 Regenerate that file; do not edit generated JSON by hand.
 
 | Root | Source | Contract |
@@ -42,10 +42,11 @@ Regenerate that file; do not edit generated JSON by hand.
 | `AuditChainRecord` / `AuditChainLink` / `AuditHash` | `src/audit.rs` | Tamper-evident audit-chain metadata for gateway, remote-node, and daemon audit streams. |
 | `AuditSinkHealth` / `AuditRetentionFloorStatus` | `src/audit.rs` | Redacted audit-sink health and retention-floor status for degraded/fail-closed reporting. |
 | `ConstellationError` | `src/error.rs` | Typed error frame with stable `ErrorKind`, bounded message, and structured missing capability for capability denials. |
-| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `RealmAccessResolverRequest` / `RealmAccessResolverResponse`, `RealmAccessResolverDiagnostic`, `RealmAccessClientBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement, access bindings, resolver input/output, alias/conflict diagnostics, capability preflight, and client binding DTOs for realm access discovery. |
-| `ProviderRegistryEntry`, `WorkloadPlacement`, `WorkloadPlacementSummary`, `RealmTreeEdge`, `DescendantRoute`, `RouteAdvertisement` | `src/registry.rs`, `src/routing.rs` | Provider/workload placement and tree-route metadata. |
-| `EnrollmentRecord`, `RevocationRecord`, `KeyPin`, `SignatureRef`, migration DTOs | `src/enrollment.rs`, `src/routing.rs`, `src/migration.rs` | Realm identity lifecycle, signed-route metadata, and typed migration-error envelopes. |
-| `LeaseAllocationRequest` / `LeaseAllocationResponse`, `AllocatorLease`, `ReconciliationReport`, allocator event DTOs | `src/allocator.rs` | Contract-only local-root host-resource leases, total acquisition order, reconciliation/quarantine/reclaim decisions, and bounded allocator observability metadata. |
+| `RealmControllerPlacement`, `RealmAccessBinding`, `RealmTransportBinding`, `RealmAccessResolverRequest` / `RealmAccessResolverResponse`, `RealmAccessResolverDiagnostic`, `RealmAccessClientBinding`, `AccessBindingRef`, `UnixSocketPath` | `src/realm.rs`, `src/access.rs` | Controller placement, access bindings, resolver input/output, alias/conflict diagnostics, capability preflight, and client binding models for realm access discovery. |
+| `ProviderRegistryEntry`, `WorkloadPlacement`, `WorkloadPlacementSummary` | `src/registry.rs` | Provider/workload placement metadata and positive capability advertisements. |
+| `DiscoveryQueuePolicy`, `UnverifiedPeerAdmissionAttemptMetadata`, `ReplayWindowMetadata`, `RealmTreeEdge`, `DescendantRoute`, `RouteAdvertisement`, `RouteNamespaceAllocation`, `TreeRouteDecision`, `DirectShortcutAuthorizationMetadata`, `RouteAuditLabels`, `RouteTelemetryBatch` | `src/routing.rs` | Metadata-only discovery, strict parent/child tree routing, namespace validation, direct shortcut, route audit, and telemetry contracts. |
+| `EnrollmentRecord`, `RevocationRecord`, `KeyPin`, `SignatureRef`, migration models | `src/enrollment.rs`, `src/routing.rs`, `src/migration.rs` | Realm identity lifecycle, signed-route metadata, and typed migration-error envelopes. |
+| `LeaseAllocationRequest` / `LeaseAllocationResponse`, `AllocatorLease`, `ReconciliationReport`, allocator event models | `src/allocator.rs` | Contract-only local-root host-resource leases, total acquisition order, reconciliation/quarantine/reclaim decisions, and bounded allocator observability metadata. |
 | `NodeSummary` / `WorkloadSelector` / `WorkloadSummary` / `ExecutionSummary` / `ShellSummary` | `src/node.rs`, `src/workload.rs`, `src/execution.rs`, `src/shell.rs` | Bounded status summaries and selectors for nodes, workloads, durable executions, and persistent shells. |
 | `ExecStartRequest` / `ExecAttachRequest` / `ExecLogsRequest` / `ExecCancelRequest` | `src/execution.rs` | Bounded durable-execution metadata for start, reconnect, retained logs, and retry-safe cancel. |
 | `ShellListRequest` / `ShellAttachRequest` / `ShellDetachRequest` / `ShellKillRequest` / `ShellListResponse` / `ShellAttachSummary` | `src/shell.rs` | Bounded persistent-shell metadata for list, attach, detach, kill, list responses, and shell-authorized PTY attachment. |
@@ -132,7 +133,7 @@ automatically relay-exportable.
 
 ## Realm access resolver contracts
 
-The access resolver DTOs define the target-to-binding contract shape without
+The access resolver models define the target-to-binding contract shape without
 changing today's CLI routing or daemon APIs. See
 [Realm access resolver contract](./realm-access-resolver.md) for the complete
 resolver behavior reference.
@@ -174,8 +175,7 @@ enrollment, controller-generation admission, key rotation, revocation,
 teardown, and recovery flows. See
 [Realm identity lifecycle contract](./realm-identity-lifecycle.md) for the
 field-level lifecycle reference and
-[`schemas/v2/d2b-realm-core.md`](./schemas/v2/d2b-realm-core.md) for the
-generated schema companion.
+the generated schema companion for machine-readable fields.
 
 - `RealmIdentityMetadata` names a realm identity by opaque
   `RealmIdentityRef` plus `RealmIdentityFingerprint`; it never carries key
@@ -190,9 +190,22 @@ generated schema companion.
   low-cardinality lifecycle state, bounded timestamps, reason/status enums, and
   correlation ids for future admission and audit code.
 
-These DTOs do not implement live route selection, session admission,
+These metadata models do not implement live route selection, session admission,
 revocation enforcement, process teardown, provider credential exchange, or
 relay transport in the current runtime.
+
+## Discovery and tree routing
+
+The routing roots are schema contracts only. They describe how future
+controllers can bound pre-auth discovery, verify parent/child route
+advertisements, validate namespace delegation, authorize direct shortcuts, and
+record route audit/telemetry without exposing relay endpoints or tunnel handles.
+See [Realm tree routing contract](./realm-routing.md) for the field-level
+reference and current implementation boundary.
+
+They do not implement live relay sessions, runtime route enforcement, SSH
+fallback, VPN/overlay networking, raw tunnels, provider adapters, or migration
+from current `d2b.envs` routing.
 
 ## Operation authorization and idempotency
 
@@ -230,7 +243,7 @@ The pure `StreamMux` state machine enforces:
 
 ## Persistent shell routing
 
-ADR 0039 persistent shell is part of the generated realm-core contract.
+Persistent shell support is part of the generated realm-core contract.
 It is a semantic operation family, not durable exec and not a
 provider-native shell channel.
 
@@ -250,7 +263,7 @@ but it does not authorize persistent shell attach. `StreamOpen` decode rejects a
 `shell-pty` descriptor paired with any capability other than
 `persistent-shell`.
 
-The shell DTOs carry only bounded metadata: validated 64-byte shell names,
+The shell metadata carries only bounded fields: validated 64-byte shell names,
 generation tokens, state/cause enums, opaque attach/session ids, stream ids, and
 bounded summaries. They do not contain terminal bytes, argv, environment, cwd,
 provider endpoints, provider resource ids, credentials, raw helper output, or
@@ -307,11 +320,13 @@ the structured capability.
 
 ## Related references
 
-- [ADR 0032 — d2b v2 constellation control plane](../adr/0032-d2b-v2-constellation-control-plane.md)
-- [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
-- [Constellation peer protocol reference](./constellation-protocol.md)
+- [ADR 0043 — Realm-native control plane](../adr/0043-realm-native-control-plane.md)
+- [ADR 0039 — Persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
+- [Realm peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)
 - [Realm option schema](./realm-options.md)
+- [Realm access resolver contract](./realm-access-resolver.md)
+- [Realm tree routing contract](./realm-routing.md)
 - [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
 - [Manifest bundle reference](./manifest-bundle.md)

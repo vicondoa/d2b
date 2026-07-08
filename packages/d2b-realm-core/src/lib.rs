@@ -2,7 +2,7 @@
 //! supersedes ADR 0032's host-centric entrypoint model while preserving the
 //! semantic operation, stream, capability, idempotency, relay-as-reachability,
 //! and bounded-audit invariants. The crate defines identifiers, realm targets,
-//! realm-controller DTOs, provider/workload placement summaries, routing and
+//! realm-controller data models, provider/workload placement summaries, routing and
 //! enrollment metadata, the persistent-shell contract, the audit envelope, the
 //! semantic `ConstellationFrame`, a bounded `TraceContext`, and the typed error
 //! surface.
@@ -15,7 +15,7 @@
 //!   host-only broker/daemon internals. Codecs map bytes to/from the
 //!   semantic [`frame::ConstellationFrame`]; the operation/routing layer
 //!   never depends on a wire encoding.
-//! - DTOs are `serde` + `schemars` and security-sensitive structures use
+//! - Data models are `serde` + `schemars` and security-sensitive structures use
 //!   `deny_unknown_fields` (ADR 0010 strict wire discipline).
 
 pub mod access;
@@ -36,6 +36,7 @@ pub mod node;
 pub mod payload;
 pub mod realm;
 pub mod registry;
+pub mod route_engine;
 pub mod routing;
 pub mod shell;
 pub mod stream;
@@ -114,8 +115,24 @@ pub use node::{NodeKind, NodeSummary};
 pub use payload::OpaquePayload;
 pub use realm::{EntrypointMode, RealmControllerPlacement, RealmPath};
 pub use registry::{ProviderRegistryEntry, WorkloadPlacement, WorkloadPlacementSummary};
+pub use route_engine::{
+    DirectShortcutAuthorizationDecision, DirectShortcutAuthorizationRequest,
+    DirectShortcutTeardownDecision, DiscoveryQueueDecision, MAX_PARENT_ENTRIES, MAX_REPLAY_KEYS,
+    MAX_ROUTE_ENTRIES, RouteAdvertisementAdmission, RouteAdvertisementAdmissionOutcome,
+    RouteEngineEvent, RouteInventoryEntry, RoutePruneReport, RouteTreeEngine,
+    decide_discovery_queue,
+};
 pub use routing::{
-    DescendantRoute, RealmTreeEdge, RouteAdvertisement, RouteSignature, SignatureRef,
+    DescendantRoute, DirectShortcutAuthorizationMetadata, DirectShortcutState,
+    DirectShortcutTeardownMetadata, DirectShortcutTeardownReason, DiscoveryIngressClass,
+    DiscoveryQueueDropPolicy, DiscoveryQueuePolicy, PreAuthAdmissionOutcome, RealmTreeEdge,
+    ReplayWindowMetadata, RouteAdvertisement, RouteAdvertisementEnvelope, RouteAuditEventKind,
+    RouteAuditLabels, RouteFailClosedReason, RouteNamespaceAllocation, RoutePlacementClass,
+    RoutePolicyRuleId, RouteRealmClass, RouteReplayWindowId, RouteSignature, RouteTelemetryBatch,
+    RouteTelemetryCounterKind, RouteTelemetryLabels, RouteTelemetrySample,
+    SessionAdmissionAttemptMetadata, SessionAdmissionOutcome, ShortcutAuthorizationId,
+    SignatureRef, TreeRouteDecision, TreeRouteDecisionOutcome, TreeRouteHop, TreeRouteHopDirection,
+    TreeRoutePath, UnverifiedPeerAdmissionAttemptMetadata, UnverifiedPeerRef,
 };
 pub use shell::{
     ShellAttachId, ShellAttachRequest, ShellAttachSummary, ShellCause, ShellDetachRequest,

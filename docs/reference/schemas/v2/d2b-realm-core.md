@@ -54,8 +54,22 @@ The generated top-level schema is an `anyOf` wrapper over these roots:
   `SessionTeardownReason`, `SessionTeardownDirective`, `RecoveryReason`,
   `RecoveryStatus`, `RecoveryProcedure`, `IdentityAuditEventKind`,
   `IdentityAuditEventMetadata`;
-- `SignatureRef`, `RealmTreeEdge`, `DescendantRoute`, `RouteSignature`,
-  `RouteAdvertisement`;
+- `SignatureRef`, `UnverifiedPeerRef`, `RoutePolicyRuleId`,
+  `RouteReplayWindowId`, `ShortcutAuthorizationId`,
+  `DiscoveryQueueDropPolicy`, `DiscoveryQueuePolicy`,
+  `DiscoveryIngressClass`, `PreAuthAdmissionOutcome`,
+  `UnverifiedPeerAdmissionAttemptMetadata`, `ReplayWindowMetadata`,
+  `SessionAdmissionAttemptMetadata`, `SessionAdmissionOutcome`,
+  `RealmTreeEdge`, `DescendantRoute`, `RouteSignature`,
+  `RouteAdvertisement`, `RouteAdvertisementEnvelope`,
+  `RouteNamespaceAllocation`, `TreeRouteHopDirection`, `TreeRouteHop`,
+  `TreeRoutePath`, `RouteFailClosedReason`, `TreeRouteDecisionOutcome`,
+  `TreeRouteDecision`, `DirectShortcutState`,
+  `DirectShortcutAuthorizationMetadata`, `DirectShortcutTeardownMetadata`,
+  `DirectShortcutTeardownReason`, `RouteAuditEventKind`,
+  `RouteRealmClass`, `RoutePlacementClass`, `RouteAuditLabels`,
+  `RouteTelemetryCounterKind`, `RouteTelemetryLabels`,
+  `RouteTelemetrySample`, `RouteTelemetryBatch`;
 - `LegacySurface`, `MigrationLegacyId`, `MigrationReasonCode`,
   `MigrationErrorEnvelope`;
 - `NodeSummary`, `WorkloadSelector`, `WorkloadSummary`,

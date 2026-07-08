@@ -1,6 +1,6 @@
 //! Enrollment and identity-lifecycle metadata for realms.
 //!
-//! These DTOs carry only opaque references, fingerprints, ids, timestamps, and
+//! These data models carry only opaque references, fingerprints, ids, timestamps, and
 //! status metadata. They never carry private keys, public key bytes, provider
 //! credentials, signatures, session secrets, or signed credential material.
 

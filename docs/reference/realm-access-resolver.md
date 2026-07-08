@@ -137,6 +137,7 @@ VM lifecycle operations onto per-realm routing.
 
 - [Realm core model reference](./realm-core.md)
 - [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
+- [Realm tree routing contract](./realm-routing.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm option schema](./realm-options.md)
 - [CLI contract](./cli-contract.md)
