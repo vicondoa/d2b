@@ -217,6 +217,25 @@ retired `d2b.vms` or `d2b.envs` Nix AST. This metadata is presentation and
 launch intent only: it must not contain secrets, provider tokens, session
 handles, unredacted command payloads, or authorization decisions.
 
+Additions to the realm-to-workload association schema — new optional workload
+fields, new capability status keys, new desktop launch metadata keys — are
+**additive** and do not require a `schemaVersion` or `manifestVersion` bump.
+Structural breaking changes — removing a required field, renaming a field,
+or changing a field's type — require a coordinated `schemaVersion` and
+`manifestVersion` bump per the existing manifest contract rules, a CHANGELOG
+breaking-change entry, and migration notes for downstream sibling flake
+consumers.
+
+`/etc/d2b/realm-identity.json` exposes **public identity metadata only**: the
+stable realm id, realm name, and public verification keys that clients need for
+session authentication and route advertisement validation. Private realm
+identity keys, controller-generation signing keys, enrollment credentials, and
+any private material must reside in per-realm credential paths readable only
+by the owning realm daemon user. If a future release adds private key material
+to this file, the current shared-read named-user ACLs (`r--` for each realm
+daemon) become forbidden and the file must be reclassified as a private
+credential artifact with access limited to the owning realm's daemon user.
+
 ### Local root and peer realms
 
 On a local machine, the minimal root realm anchors local operator access,
@@ -283,6 +302,15 @@ The implementation must define:
   path for authenticating to a peer realm's local socket;
 - per-realm state and audit paths;
 - credential paths readable only by the owning realm daemon user/group;
+- per-realm run directories provisioned as `1770 root <publicSocketGroup>`;
+  the sticky bit prevents access-group members from deleting each other's
+  socket entries in the shared parent; the group-class ACL on each per-realm
+  run directory **must be `r-x`** (traverse and read) so access-group users can
+  reach the public socket but cannot write to the directory; only the named
+  realm daemon user carries `rwx` in its user-named ACL entry, enabling socket
+  create and unlink; a group-class ACL of `rwx` violates this invariant even
+  when the ACL mask is `rwx`; the code fix for this invariant is tracked as a
+  separate hotfix (PR #263) and does not alter this ADR's design requirement;
 - a per-realm dedicated systemd slice and delegated cgroup subtree; local
   workload cgroups use a **hierarchical** layout
   `/sys/fs/cgroup/d2b.slice/<realm>/<workload>/<role>` rather than the flat
@@ -636,6 +664,34 @@ parameters, clipboard metadata, and other payload-derived labels must never be
 accepted as authoritative realm or VM identity and must not become audit or
 metric labels.
 
+### Visual presentation requirements
+
+The realm-native model requires consistent visual treatment across desktop
+surfaces so operators can identify the realm boundary at a glance:
+
+- **Waybar quick-launch buttons** use the owning realm's resolved color as a
+  left-side border accent (CSS `border-left` or equivalent). Button position
+  and launch behavior are unchanged; the realm color is the only realm-visible
+  element on the button itself.
+- **wlcontrol realm group cards** use the realm color as the outer/group border.
+  Inner workload card borders use default theme styling unless the workload
+  explicitly overrides its presentation color. Realm grouping is the primary
+  visual hierarchy; workload cards nest inside realm groups.
+- **Wayland proxy rail** uses the workload's resolved realm color as the default
+  rail accent. The label defaults to `<workload>.<realmPath>`. Color and label
+  are asserted by the d2b Wayland proxy, never derived from guest-provided
+  metadata.
+- **wlterm** groups shell-capable workloads by realm with a clear realm header
+  row separating each realm's workload entries.
+- **clip-picker** groups clipboard sources and destinations by realm, using realm
+  color accents for group separators. Grouping is presentation only and does
+  not alter clipd authority.
+
+These requirements are the target UX contract for Wave 17. They are codified
+here so sibling flake implementations (`d2b-wlcontrol`, `d2b-wlterm`,
+`d2b-clip-picker`) target the same presentation model from ADR review rather
+than diverging across sibling PRs.
+
 ## Provider model
 
 Providers implement standard d2b contracts below a realm controller.
@@ -821,6 +877,16 @@ The legacy node-qualified parser should remain only long enough to emit typed
 migration diagnostics. New routing code must not accept
 ambiguous optional-node targets as a normal path.
 
+The implementation must define a **strongly typed `WorkloadTarget` type** in
+`d2b-core` as the single canonical representation of a parsed workload address.
+Ad hoc string splitting on `"."` separators must not appear in CLI argument
+handling, daemon dispatch, broker ops, or any other site that accepts a workload
+target. Every code path that receives a workload address from user input,
+public socket messages, or configuration must parse it through the single
+`d2b-core::WorkloadTarget` parser and propagate only the typed result. A raw
+string reaching daemon or broker code without first passing through
+`WorkloadTarget::parse` is an invariant violation.
+
 Provider/session traits must preserve the existing invariants in type shapes:
 
 - mutating operation constructors require idempotency keys;
@@ -829,6 +895,29 @@ Provider/session traits must preserve the existing invariants in type shapes:
 - stream-open types encode the authorizing operation and stream capability;
 - provider-specific request bodies remain opaque payloads or typed DTOs below
   the standard d2b operation envelope.
+
+Wire DTOs that carry both a workload identity and a provider-specific execution
+request — the primary example being `SpawnRunner` — must **structurally
+separate universal workload identity from provider-specific backend config**
+using a typed/polymorphic envelope:
+
+```text
+SpawnRunnerRequest {
+  workload: WorkloadIdentity,   // universal: workload id, realm path,
+                                //   canonical target, process role, cgroup slot
+  backend: SpawnBackend,        // typed enum, one variant per runtime kind:
+                                //   LocalVm(LocalVmConfig) | QemuMedia(...)
+                                //   | AcaSandbox(...) | ...
+}
+```
+
+Universal workload identity fields must be present for every provider and must
+appear in the outer envelope so they can be audited, routed, and processed
+uniformly without inspecting the inner variant. Provider-specific fields
+(hypervisor command, image path, container registry, sandbox parameters) belong
+in the inner typed variant. Flattening both sets into a single struct makes it
+impossible to audit, route, or extend provider-specific spawns without
+reinterpreting universal fields and creates implicit cross-provider coupling.
 
 ## Security consequences
 

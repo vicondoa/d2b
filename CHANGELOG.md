@@ -46,6 +46,16 @@ deprecations ship one minor release before removal.
   cross-realm `externalNetwork` uplink conflicts, and explicit
   workload/provider telemetry label bounding and workload-identity audit
   redaction rules.
+- Amended ADR 0043 with further design requirements from the R2 panel review:
+  per-realm run directory `r-x` group-class ACL invariant (code hotfix PR #263
+  tracked separately); `/etc/d2b/realm-identity.json` public-identity-only
+  constraint; additive vs breaking schema versioning rule for
+  `realm-controllers.json`/display-list shape changes; mandatory strongly typed
+  `WorkloadTarget` parser in `d2b-core` with no ad hoc string splitting;
+  `SpawnRunner` typed/polymorphic envelope separating universal workload identity
+  from provider-specific backend config; and a Visual presentation requirements
+  section codifying Waybar left-border realm accents, wlcontrol realm group card
+  borders, realm-colored Wayland rail, and wlterm/clip-picker realm grouping.
 
 ### Added
 
