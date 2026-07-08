@@ -49,6 +49,11 @@ pub struct WaylandProxyArgvInput {
     ///
     /// Default: `d2b.<vm>.`
     pub app_id_prefix: String,
+    /// Canonical realm target asserted by d2b host metadata.
+    ///
+    /// Default: `<vm>.local.d2b` for the transitional host-local realm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_target: Option<String>,
     /// Title prefix prepended to guest window titles.
     ///
     /// Default: `[<vm>] `
@@ -125,12 +130,14 @@ impl WaylandProxyArgvInput {
         let listen_socket = format!("/run/d2b-wlproxy/{vm_name}/wayland-0");
         let upstream_socket = format!("/run/d2b-wlproxy/{vm_name}/upstream");
         let app_id_prefix = format!("d2b.{vm_name}.");
+        let realm_target = Some(format!("{vm_name}.local.d2b"));
         let title_prefix = format!("[{vm_name}] ");
         Self {
             vm_name,
             listen_socket,
             upstream_socket,
             app_id_prefix,
+            realm_target,
             title_prefix,
             border: None,
         }
@@ -177,6 +184,12 @@ pub fn generate_wayland_proxy_argv(
     if !input.app_id_prefix.is_empty() {
         argv.push("--app-id-prefix".to_owned());
         argv.push(input.app_id_prefix.clone());
+    }
+    if let Some(realm_target) = &input.realm_target
+        && !realm_target.is_empty()
+    {
+        argv.push("--realm-target".to_owned());
+        argv.push(realm_target.clone());
     }
     if !input.title_prefix.is_empty() {
         argv.push("--title-prefix".to_owned());
@@ -244,6 +257,7 @@ mod tests {
         assert_eq!(argv[listen_idx + 1], "/run/d2b-wlproxy/work/wayland-0");
         let connect_idx = argv.iter().position(|a| a == "--connect").unwrap();
         assert_eq!(argv[connect_idx + 1], "/run/d2b-wlproxy/work/upstream");
+        assert_eq!(flag_value(&argv, "--realm-target"), Some("work.local.d2b"));
     }
 
     #[test]
@@ -283,6 +297,13 @@ mod tests {
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         let prefix_idx = argv.iter().position(|a| a == "--app-id-prefix").unwrap();
         assert_eq!(argv[prefix_idx + 1], "d2b.dev.");
+    }
+
+    #[test]
+    fn realm_target_in_argv() {
+        let input = WaylandProxyArgvInput::for_vm("dev");
+        let argv = generate_wayland_proxy_argv(&input).expect("valid");
+        assert_eq!(flag_value(&argv, "--realm-target"), Some("dev.local.d2b"));
     }
 
     #[test]

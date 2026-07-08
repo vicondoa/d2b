@@ -89,6 +89,9 @@ deprecations ship one minor release before removal.
 - Added canonical realm-target and picker/clipd capability-preflight metadata
   to the clipboard picker protocol so desktop pickers can display trusted
   d2b-provided VM identity without using guest titles or app ids as authority.
+- Added d2b-asserted Wayland proxy `realmTarget` / `--realm-target` metadata so
+  downstream desktop tools can identify proxied VM windows from host-provided
+  realm metadata while preserving the existing app-id/title rewrite behavior.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and

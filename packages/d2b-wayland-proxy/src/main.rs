@@ -62,6 +62,10 @@ struct Args {
     #[arg(long)]
     app_id_prefix: Option<String>,
 
+    /// Canonical d2b realm target asserted by host metadata.
+    #[arg(long = "realm-target", value_name = "TARGET")]
+    realm_target: Option<String>,
+
     /// Override the xdg_toplevel title prefix (default: `[<vm>] `).
     #[arg(long)]
     title_prefix: Option<String>,
@@ -242,6 +246,7 @@ fn main() {
     let input = PolicyInput {
         vm_name: args.vm_name.clone(),
         app_id_prefix: args.app_id_prefix.clone(),
+        realm_target: args.realm_target.clone(),
         title_prefix: args.title_prefix.clone(),
         deny_globals: args.deny_globals.clone(),
         allow_globals: args.allow_globals.clone(),
@@ -723,6 +728,8 @@ mod tests {
             "wayland-1",
             "--vm-name",
             "work",
+            "--realm-target",
+            "work.local.d2b",
             "--border-enable",
             "--border-color-active",
             "#112233",
@@ -746,6 +753,7 @@ mod tests {
         assert_eq!(args.border_thickness, 9);
         assert_eq!(args.border_label.as_deref(), Some("work vm"));
         assert_eq!(args.border_label_position, LabelPosition::TopCenter);
+        assert_eq!(args.realm_target.as_deref(), Some("work.local.d2b"));
     }
 
     #[test]

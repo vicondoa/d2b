@@ -27,6 +27,12 @@ that match by app-id.  Rules that matched `org.mozilla.firefox` must
 be updated to match `d2b.work.org.mozilla.firefox` or the regex
 pattern `^d2b\.work\.`.
 
+The proxy process also receives a d2b-asserted canonical realm target
+(`--realm-target <vm>.local.d2b` during the host-local transition). This
+metadata is separate from guest-provided titles and app ids: downstream d2b
+tools should prefer the d2b-provided realm target when they need trusted VM
+identity, and treat rewritten app ids as presentation/routing hints only.
+
 ### Window title prefix is retained
 
 The window title prefix `[<vm>] ` behavior is preserved for

@@ -629,6 +629,8 @@ in
           "media"
           "--app-id-prefix"
           "d2b.media."
+          "--realm-target"
+          "media.local.d2b"
           "--title-prefix"
           "[media] "
           "--border-enable"
