@@ -80,6 +80,9 @@ deprecations ship one minor release before removal.
   `realm-controllers.json`, binding host-local realms to existing VM runtime
   providers, preserved VM state/run/store-view paths, and explicit runtime
   operation capability summaries without moving state during activation.
+- Added a host-provider qemu-media runtime adapter that validates the typed
+  qemu-media argv scaffold, redacts argv/path inputs from debug output, and
+  fails closed for lifecycle calls until daemon runtime control is wired.
 - Added host-local realm control-plane materialization from `d2b.realms`,
   including deterministic bounded unit names, daemon/broker users and groups,
   socket access groups for allowed users, runtime/state/audit directories, and

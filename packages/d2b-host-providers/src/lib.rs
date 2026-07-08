@@ -7,17 +7,26 @@
 use async_trait::async_trait;
 use d2b_core::host::HostJson;
 use d2b_core::host_check::{self, HostCheckReport, HostCheckSeverity};
-use d2b_host::wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv};
+use d2b_host::{
+    qemu_media_argv::{QemuMediaArgvError, generate_qemu_media_argv},
+    wayland_proxy_argv::{WaylandProxyArgvError, generate_wayland_proxy_argv},
+};
 use d2b_realm_core::{Capability, CapabilitySet, ErrorKind, ProviderId};
 use d2b_realm_provider::{
-    DisplayProvider, HostSubstrateProvider,
-    capabilities::{DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet},
+    DisplayProvider, HostSubstrateProvider, RuntimeProvider,
+    capabilities::{
+        DisplayCapabilitySet, HostSubstrateKind, NodeCapabilitySet, RuntimeCapabilitySet,
+    },
     error::{ProviderError, ProviderResult},
-    types::{DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest},
+    types::{
+        DisplaySessionHandle, DisplaySessionId, DisplaySessionRequest, RuntimeHandle, RuntimePlan,
+        RuntimeStatus, WorkloadSpec,
+    },
 };
 
 pub use d2b_host::{
     ch_argv::ChArgvInput,
+    qemu_media_argv::QemuMediaArgvInput,
     runtime_provider::{
         CLOUD_HYPERVISOR_RUNTIME_PROVIDER_ID,
         CloudHypervisorRuntimeProvider as LocalMicroVmProvider, RuntimeWorkloadRequirements,
@@ -26,6 +35,7 @@ pub use d2b_host::{
     wayland_proxy_argv::WaylandProxyArgvInput,
 };
 
+const LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID: &str = "local-qemu-media";
 const LOCAL_CROSS_DOMAIN_WAYLAND_PROVIDER_ID: &str = "local-cross-domain-wayland";
 const NIXOS_HOST_SUBSTRATE_PROVIDER_ID: &str = "nixos-host-substrate";
 const GENERIC_LINUX_HOST_SUBSTRATE_PROVIDER_ID: &str = "generic-linux-host-substrate";
@@ -187,6 +197,106 @@ fn host_check_failed(report: HostCheckReport) -> ProviderError {
     ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
 }
 
+/// RuntimeProvider adapter for the local qemu-media runner scaffold.
+#[derive(Clone)]
+pub struct LocalQemuMediaRuntimeProvider {
+    provider_id: ProviderId,
+    argv_input: QemuMediaArgvInput,
+}
+
+impl std::fmt::Debug for LocalQemuMediaRuntimeProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalQemuMediaRuntimeProvider")
+            .field("provider_id", &self.provider_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalQemuMediaRuntimeProvider {
+    /// Construct a qemu-media provider using the realm metadata provider id.
+    pub fn new(argv_input: QemuMediaArgvInput) -> Self {
+        Self::with_provider_id(
+            static_provider_id(LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID),
+            argv_input,
+        )
+    }
+
+    /// Construct a qemu-media provider with an explicit id.
+    pub fn with_provider_id(provider_id: ProviderId, argv_input: QemuMediaArgvInput) -> Self {
+        Self {
+            provider_id,
+            argv_input,
+        }
+    }
+
+    /// Borrow the qemu-media argv input this adapter wraps.
+    pub fn argv_input(&self) -> &QemuMediaArgvInput {
+        &self.argv_input
+    }
+
+    /// Generate qemu-media argv through the existing d2b-host generator.
+    pub async fn qemu_media_argv(&self) -> ProviderResult<Vec<String>> {
+        render_qemu_media_argv(self.argv_input.clone()).await
+    }
+
+    fn ensure_workload_matches(&self, spec: &WorkloadSpec) -> ProviderResult<()> {
+        if spec.alias.as_str() == self.argv_input.vm_name.as_str() {
+            Ok(())
+        } else {
+            Err(ProviderError::new(
+                ErrorKind::InvalidTarget,
+                "workload alias does not match the local qemu-media runtime input",
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl RuntimeProvider for LocalQemuMediaRuntimeProvider {
+    fn provider_id(&self) -> ProviderId {
+        self.provider_id.clone()
+    }
+
+    fn capabilities(&self) -> RuntimeCapabilitySet {
+        RuntimeCapabilitySet {
+            caps: CapabilitySet::empty(),
+        }
+    }
+
+    async fn plan_workload(&self, spec: WorkloadSpec) -> ProviderResult<RuntimePlan> {
+        self.ensure_workload_matches(&spec)?;
+        self.qemu_media_argv().await?;
+        Ok(RuntimePlan {
+            provider: self.provider_id(),
+            workload: spec.alias,
+        })
+    }
+
+    async fn start(&self, plan: RuntimePlan) -> ProviderResult<RuntimeHandle> {
+        if plan.provider != self.provider_id {
+            return Err(ProviderError::new(
+                ErrorKind::InvalidTarget,
+                "runtime plan provider does not match local qemu-media provider",
+            ));
+        }
+        Err(ProviderError::unsupported(format!(
+            "runtime provider '{LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID}' start requires daemon runtime control"
+        )))
+    }
+
+    async fn stop(&self, _handle: RuntimeHandle) -> ProviderResult<()> {
+        Err(ProviderError::unsupported(format!(
+            "runtime provider '{LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID}' stop requires daemon runtime control"
+        )))
+    }
+
+    async fn inspect(&self, _handle: RuntimeHandle) -> ProviderResult<RuntimeStatus> {
+        Err(ProviderError::unsupported(format!(
+            "runtime provider '{LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID}' inspect requires daemon runtime control"
+        )))
+    }
+}
+
 /// Result of parsing `/etc/os-release`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedHostSubstrate {
@@ -328,11 +438,52 @@ async fn render_wayland_proxy_argv(input: WaylandProxyArgvInput) -> ProviderResu
         .map_err(wayland_proxy_argv_error)
 }
 
+async fn render_qemu_media_argv(input: QemuMediaArgvInput) -> ProviderResult<Vec<String>> {
+    tokio::task::spawn_blocking(move || generate_qemu_media_argv(&input))
+        .await
+        .map_err(|_| {
+            ProviderError::new(
+                ErrorKind::ProviderAllocationFailed,
+                "blocking task failed while rendering qemu-media argv",
+            )
+        })?
+        .map_err(qemu_media_argv_error)
+}
+
 fn wayland_proxy_argv_error(err: WaylandProxyArgvError) -> ProviderError {
     let message = match err {
         WaylandProxyArgvError::EmptyVmName => "invalid Wayland proxy argv input: empty VM name",
         WaylandProxyArgvError::RelativeSocketPath { .. } => {
             "invalid Wayland proxy argv input: relative socket path"
+        }
+    };
+    ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
+}
+
+fn qemu_media_argv_error(err: QemuMediaArgvError) -> ProviderError {
+    let message = match err {
+        QemuMediaArgvError::InvalidQemuBinaryPath { .. } => {
+            "invalid qemu-media argv input: invalid QEMU binary path"
+        }
+        QemuMediaArgvError::EmptyVmName => "invalid qemu-media argv input: empty VM name",
+        QemuMediaArgvError::InvalidQmpSocketPath { .. } => {
+            "invalid qemu-media argv input: invalid QMP socket path"
+        }
+        QemuMediaArgvError::InvalidMacAddress { .. } => {
+            "invalid qemu-media argv input: invalid MAC address"
+        }
+        QemuMediaArgvError::InvalidTapFd { .. } => "invalid qemu-media argv input: invalid TAP fd",
+        QemuMediaArgvError::InvalidMemoryMiB { .. } => {
+            "invalid qemu-media argv input: invalid memory size"
+        }
+        QemuMediaArgvError::InvalidVcpu { .. } => {
+            "invalid qemu-media argv input: invalid vCPU count"
+        }
+        QemuMediaArgvError::InvalidConsoleFd { .. } => {
+            "invalid qemu-media argv input: invalid console fd"
+        }
+        QemuMediaArgvError::ConsoleFdConflictsWithTapFd { .. } => {
+            "invalid qemu-media argv input: console fd conflicts with TAP fd"
         }
     };
     ProviderError::new(ErrorKind::ProviderAllocationFailed, message)
@@ -350,6 +501,7 @@ mod tests {
     };
     use d2b_host::{
         ch_argv::{ChFsShare, ChNetHandoff, ChNetIface, ChVsock, generate_ch_argv},
+        qemu_media_argv::generate_qemu_media_argv,
         wayland_proxy_argv::generate_wayland_proxy_argv,
     };
     use d2b_realm_core::{ErrorKind, WorkloadId};
@@ -504,6 +656,22 @@ mod tests {
         WaylandProxyArgvInput::for_vm("corp-vm")
     }
 
+    fn representative_qemu_media_input() -> QemuMediaArgvInput {
+        QemuMediaArgvInput {
+            qemu_binary_path: "/nix/store/QEMUQEMUQEMU-qemu/bin/qemu-system-x86_64".to_owned(),
+            vm_name: "media-vm".to_owned(),
+            qmp_socket_path: "/run/d2b/vms/media-vm/qmp.sock".to_owned(),
+            mac_address: "02:76:53:AE:57:2A".to_owned(),
+            tap_fd: 10,
+            memory_mib: 4096,
+            vcpu: 2,
+            lock_memory: false,
+            exclude_memory_from_core_dump: true,
+            disable_memory_merge: true,
+            console_fd: Some(11),
+        }
+    }
+
     fn expected_wayland_argv() -> Vec<String> {
         [
             "d2b-corp-vm-wlproxy",
@@ -548,6 +716,19 @@ mod tests {
             .expect("adapter delegates to Wayland proxy generator");
 
         assert_eq!(direct, expected_wayland_argv());
+        assert_eq!(from_adapter, direct);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_qemu_media_adapter_matches_generator_byte_for_byte() {
+        let input = representative_qemu_media_input();
+        let direct = generate_qemu_media_argv(&input).expect("representative qemu input is valid");
+        let adapter = LocalQemuMediaRuntimeProvider::new(input);
+        let from_adapter = adapter
+            .qemu_media_argv()
+            .await
+            .expect("adapter delegates to qemu-media generator");
+
         assert_eq!(from_adapter, direct);
     }
 
@@ -605,6 +786,26 @@ mod tests {
                 "Wayland provider Debug leaked {forbidden}: {wayland_debug}"
             );
         }
+
+        let mut qemu_input = representative_qemu_media_input();
+        qemu_input.qemu_binary_path =
+            "/nix/store/debug-redact-qemu/bin/qemu-system-x86_64".to_owned();
+        qemu_input.qmp_socket_path = "/run/d2b/vms/debug-redact-media/qmp.sock".to_owned();
+        qemu_input.vm_name = "debug-redact-media".to_owned();
+
+        let qemu_debug = format!("{:?}", LocalQemuMediaRuntimeProvider::new(qemu_input));
+        assert!(qemu_debug.contains("LocalQemuMediaRuntimeProvider"));
+        assert!(qemu_debug.contains(LOCAL_QEMU_MEDIA_RUNTIME_PROVIDER_ID));
+        for forbidden in [
+            "debug-redact-qemu",
+            "/run/d2b/vms/debug-redact-media/qmp.sock",
+            "debug-redact-media",
+        ] {
+            assert!(
+                !qemu_debug.contains(forbidden),
+                "qemu-media provider Debug leaked {forbidden}: {qemu_debug}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -649,6 +850,24 @@ mod tests {
                 .capabilities()
                 .has(Capability::WindowForwarding)
         );
+
+        let qemu_provider = LocalQemuMediaRuntimeProvider::new(representative_qemu_media_input());
+        let qemu_plan = RuntimeProvider::plan_workload(
+            &qemu_provider,
+            WorkloadSpec {
+                alias: workload_id("media-vm"),
+            },
+        )
+        .await
+        .expect("qemu-media planning validates argv through spawn_blocking");
+        assert_eq!(qemu_plan.provider, qemu_provider.provider_id());
+        assert_eq!(qemu_plan.workload.as_str(), "media-vm");
+
+        let qemu_start_err = RuntimeProvider::start(&qemu_provider, qemu_plan)
+            .await
+            .expect_err("qemu-media start is intentionally not wired");
+        assert_eq!(qemu_start_err.kind(), ErrorKind::UnsupportedFeature);
+        assert!(!qemu_provider.capabilities().has(Capability::Lifecycle));
     }
 
     #[test]
@@ -665,6 +884,14 @@ mod tests {
         assert!(!display.shm_buffers);
         assert!(!display.dmabuf);
         assert!(!display.reconnect);
+
+        let qemu =
+            LocalQemuMediaRuntimeProvider::new(representative_qemu_media_input()).capabilities();
+        assert!(!qemu.has(Capability::Lifecycle));
+        assert!(!qemu.has(Capability::Vsock));
+        assert!(!qemu.has(Capability::Virtiofs));
+        assert!(!qemu.has(Capability::WindowForwarding));
+        assert!(!qemu.has(Capability::Usb));
     }
 
     #[test]
