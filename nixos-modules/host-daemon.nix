@@ -266,7 +266,7 @@ EOF
     "d ${realm.paths.auditDir} 0750 root ${realm.controller.daemon.group} -"
     "d ${realm.paths.runDir} 1770 root ${realm.controller.daemon.publicSocketGroup} -"
     "z ${realm.paths.runDir} 1770 root ${realm.controller.daemon.publicSocketGroup} -"
-    "a+ ${realm.paths.runDir} - - - - g::rwx"
+    "a+ ${realm.paths.runDir} - - - - g::r-x"
     "a+ ${realm.paths.runDir} - - - - u:${realm.controller.daemon.user}:rwx"
     "a+ ${realm.paths.runDir} - - - - m::rwx"
     "f ${realm.controller.daemon.stateLockPath} 0640 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"

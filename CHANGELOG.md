@@ -12,6 +12,14 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Narrowed the group ACL on host-local realm run directories from `g::rwx` to
+  `g::r-x` so realm-access-group members can traverse and list but cannot
+  write. The previous `g::rwx` ACL combined with the sticky `1770` base mode
+  allowed a local group member to pre-create `broker.sock` or `daemon.lock`,
+  preventing the daemon from binding its sockets or acquiring its lock (local
+  DoS). The base mode `1770` and the explicit daemon-user `u:<user>:rwx` ACL
+  entry are unchanged; the mask `m::rwx` is unchanged so the daemon retains
+  full effective access.
 - Granted host-local realm daemon users read ACLs for the shared
   `realm-controllers.json` and `realm-identity.json` metadata files so startup
   can load realm metadata after switching to per-realm principals.

@@ -1062,7 +1062,7 @@ in
               tmpfiles;
           runDirGroupAccessAcl =
             builtins.elem
-              "a+ /run/d2b/realms/home - - - - g::rwx"
+              "a+ /run/d2b/realms/home - - - - g::r-x"
               tmpfiles;
           daemonRunAcl =
             builtins.elem
