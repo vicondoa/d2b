@@ -118,11 +118,13 @@
       "properties": {
         "realm": { "type": "string", "minLength": 1, "maxLength": 128 },
         "realm_kind": { "enum": ["host", "vm"] },
+        "canonical_target": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$" },
         "app_id": { "type": ["string", "null"], "maxLength": 256 },
         "application": { "type": ["string", "null"], "maxLength": 256 },
         "workspace": { "type": ["string", "null"], "maxLength": 128 },
         "output": { "type": ["string", "null"], "maxLength": 128 },
-        "attribution": { "enum": ["exact_client", "focused_window_guess", "cache_stale_focused_window_guess", "broker_injected_debug"] }
+        "attribution": { "enum": ["exact_client", "focused_window_guess", "cache_stale_focused_window_guess", "broker_injected_debug"] },
+        "capability_preflight": { "anyOf": [{ "$ref": "#/$defs/CapabilityPreflight" }, { "type": "null" }] }
       }
     },
     "PlacementHints": {
@@ -154,6 +156,7 @@
         "entry_id": { "$ref": "#/$defs/OpaqueId" },
         "source_realm": { "type": "string", "minLength": 1, "maxLength": 128 },
         "source_realm_kind": { "enum": ["host", "vm"] },
+        "source_canonical_target": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$" },
         "source_app": { "type": ["string", "null"], "maxLength": 256 },
         "source_app_id": { "type": ["string", "null"], "maxLength": 256 },
         "source_attribution": { "enum": ["exact_client", "focused_window_guess", "cache_stale_focused_window_guess", "broker_injected_debug"] },
@@ -161,8 +164,64 @@
         "content_type": { "$ref": "#/$defs/Mime" },
         "timestamp_unix_ms": { "type": "integer", "minimum": 0 },
         "thumbnail_png_base64": { "type": ["string", "null"], "maxLength": 0 },
-        "confirmation_required": { "type": "boolean" }
+        "confirmation_required": { "type": "boolean" },
+        "capability_preflight": { "anyOf": [{ "$ref": "#/$defs/CapabilityPreflight" }, { "type": "null" }] }
       }
+    },
+    "CapabilityPreflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "required_capabilities",
+        "advertised_capabilities",
+        "missing_capabilities",
+        "authority"
+      ],
+      "properties": {
+        "status": { "enum": ["satisfied", "denied", "unknown"] },
+        "required_capabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/Capability" }
+        },
+        "advertised_capabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/Capability" }
+        },
+        "missing_capabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/Capability" }
+        },
+        "authority": { "enum": ["picker_clipd"] }
+      }
+    },
+    "Capability": {
+      "enum": [
+        "lifecycle",
+        "exec",
+        "pty",
+        "logs",
+        "file-copy",
+        "port-forward",
+        "persistent-shell",
+        "vsock",
+        "virtiofs",
+        "window-forwarding",
+        "display-streaming",
+        "clipboard",
+        "audio-playback",
+        "audio-capture",
+        "hid",
+        "usb",
+        "gpu-accel",
+        "snapshots",
+        "hotplug",
+        "ephemeral-sessions",
+        "provider-managed-isolation"
+      ]
     },
     "Mime": {
       "enum": ["text/plain;charset=utf-8", "text/plain", "text/html", "image/png"]

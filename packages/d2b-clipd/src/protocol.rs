@@ -74,6 +74,8 @@ pub struct Candidate {
     pub entry_id: String,
     pub source_realm: String,
     pub source_realm_kind: RealmKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_canonical_target: Option<String>,
     pub source_app: Option<String>,
     pub source_app_id: Option<String>,
     pub source_attribution: AttributionQuality,
@@ -83,18 +85,47 @@ pub struct Candidate {
     pub thumbnail_png_base64: Option<String>,
     pub byte_count: Option<u64>,
     pub confirmation_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_preflight: Option<ClipboardCapabilityPreflight>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DestinationMetadata {
     pub realm: String,
     pub realm_kind: RealmKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
     pub application: Option<String>,
     pub app_id: Option<String>,
     pub title: Option<String>,
     pub workspace: Option<String>,
     pub output: Option<String>,
     pub attribution: AttributionQuality,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_preflight: Option<ClipboardCapabilityPreflight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardCapabilityPreflight {
+    pub status: ClipboardCapabilityPreflightStatus,
+    pub required_capabilities: Vec<String>,
+    pub advertised_capabilities: Vec<String>,
+    pub missing_capabilities: Vec<String>,
+    pub authority: ClipboardTransferAuthority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardCapabilityPreflightStatus {
+    Satisfied,
+    Denied,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardTransferAuthority {
+    PickerClipd,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,6 +190,7 @@ mod tests {
           "entry_id":"e",
           "source_realm":"Host",
           "source_realm_kind":"host",
+          "source_canonical_target":null,
           "source_app":null,
           "source_app_id":null,
           "source_attribution":"focused_window_guess",
@@ -168,10 +200,79 @@ mod tests {
           "thumbnail_png_base64":null,
           "byte_count":12,
           "confirmation_required":false,
+          "capability_preflight":{
+            "status":"satisfied",
+            "required_capabilities":["clipboard"],
+            "advertised_capabilities":["clipboard"],
+            "missing_capabilities":[],
+            "authority":"picker_clipd"
+          },
           "future_display_field":"ignored"
         }"#;
         let candidate: Candidate = serde_json::from_str(json).expect("candidate");
         assert_eq!(candidate.entry_id, "e");
+        assert_eq!(
+            candidate.capability_preflight.as_ref().map(|p| p.status),
+            Some(ClipboardCapabilityPreflightStatus::Satisfied)
+        );
+    }
+
+    #[test]
+    fn daemon_open_request_can_carry_canonical_realm_metadata() {
+        let msg = DaemonToPickerMessage::OpenRequest(Box::new(OpenRequest {
+            selected_protocol_version: 1,
+            clipd_version: "0.0.0".to_owned(),
+            picker_version: "picker".to_owned(),
+            request_id: "req".to_owned(),
+            destination: DestinationMetadata {
+                realm: "builder".to_owned(),
+                realm_kind: RealmKind::Vm,
+                canonical_target: Some("builder.local.d2b".to_owned()),
+                application: None,
+                app_id: None,
+                title: None,
+                workspace: None,
+                output: None,
+                attribution: AttributionQuality::ExactClient,
+                capability_preflight: Some(ClipboardCapabilityPreflight {
+                    status: ClipboardCapabilityPreflightStatus::Satisfied,
+                    required_capabilities: vec!["clipboard".to_owned()],
+                    advertised_capabilities: vec!["clipboard".to_owned()],
+                    missing_capabilities: Vec::new(),
+                    authority: ClipboardTransferAuthority::PickerClipd,
+                }),
+            },
+            requested_mime_type: "text/plain".to_owned(),
+            expires_at_unix_ms: 7,
+            placement_hints: None,
+            candidates: vec![Candidate {
+                entry_id: "entry".to_owned(),
+                source_realm: "builder".to_owned(),
+                source_realm_kind: RealmKind::Vm,
+                source_canonical_target: Some("builder.local.d2b".to_owned()),
+                source_app: None,
+                source_app_id: None,
+                source_attribution: AttributionQuality::ExactClient,
+                preview_text: None,
+                content_type: "text/plain".to_owned(),
+                timestamp_unix_ms: 7,
+                thumbnail_png_base64: None,
+                byte_count: Some(4),
+                confirmation_required: false,
+                capability_preflight: Some(ClipboardCapabilityPreflight {
+                    status: ClipboardCapabilityPreflightStatus::Satisfied,
+                    required_capabilities: vec!["clipboard".to_owned()],
+                    advertised_capabilities: vec!["clipboard".to_owned()],
+                    missing_capabilities: Vec::new(),
+                    authority: ClipboardTransferAuthority::PickerClipd,
+                }),
+            }],
+        }));
+
+        let json = serde_json::to_string(&msg).expect("serialize open request");
+        assert!(json.contains(r#""canonical_target":"builder.local.d2b""#));
+        assert!(json.contains(r#""source_canonical_target":"builder.local.d2b""#));
+        assert!(json.contains(r#""authority":"picker_clipd""#));
     }
 
     #[test]
