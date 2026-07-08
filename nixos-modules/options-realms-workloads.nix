@@ -127,7 +127,14 @@ let
   workloadSubmodule = lib.types.submodule ({ name, config, ... }:
     let
       workloadId = config.id;
-      defaultStateDir = "/var/lib/d2b/vms/${workloadId}";
+      # stateDir default respects legacyVmName so existing on-disk state
+      # (TPM, store-view, guest-control token, …) is preserved when the
+      # workload wraps a legacy d2b.vms entry.  No activation-time migration
+      # ever occurs; the path is purely a default override.
+      defaultStateDir =
+        if config.legacyVmName != null
+        then "/var/lib/d2b/vms/${config.legacyVmName}"
+        else "/var/lib/d2b/vms/${workloadId}";
       defaultRunDir = "/run/d2b/vms/${workloadId}";
     in
     {
@@ -180,12 +187,15 @@ let
         stateDir = lib.mkOption {
           type = lib.types.strMatching "^/.*$";
           default = defaultStateDir;
-          defaultText = lib.literalExpression "\"/var/lib/d2b/vms/<workload-id>\"";
+          defaultText = lib.literalExpression
+            "\"/var/lib/d2b/vms/<legacyVmName>\" or \"/var/lib/d2b/vms/<workload-id>\"";
           description = ''
-            Primary state directory for this workload.  The default maps
-            1:1 to the legacy `d2b.vms.<vm>` path so existing on-disk
-            state (TPM, store-view, audio state, guest-control token, …)
-            is preserved without any activation-time migration.
+            Primary state directory for this workload.  When `legacyVmName`
+            is set the default maps to `/var/lib/d2b/vms/<legacyVmName>`,
+            preserving existing on-disk state (TPM, store-view, audio state,
+            guest-control token, …) without any activation-time migration.
+            When `legacyVmName` is null the default is
+            `/var/lib/d2b/vms/<workload-id>`.
           '';
         };
 
