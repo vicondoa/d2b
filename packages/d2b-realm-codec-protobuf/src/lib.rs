@@ -280,7 +280,10 @@ struct ProtoAuditEnvelope {
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct ProtoAuthorizationScope {
-    #[prost(oneof = "proto_authorization_scope::Scope", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(
+        oneof = "proto_authorization_scope::Scope",
+        tags = "1, 2, 3, 4, 5, 6, 7"
+    )]
     scope: Option<proto_authorization_scope::Scope>,
 }
 
@@ -899,9 +902,7 @@ fn encode_authorization_scope(
         AuthorizationScope::Revocation => {
             proto_authorization_scope::Scope::Revocation(ProtoUnit {})
         }
-        AuthorizationScope::Recovery => {
-            proto_authorization_scope::Scope::Recovery(ProtoUnit {})
-        }
+        AuthorizationScope::Recovery => proto_authorization_scope::Scope::Recovery(ProtoUnit {}),
     };
     Ok(ProtoAuthorizationScope { scope: Some(scope) })
 }
