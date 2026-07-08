@@ -2,9 +2,9 @@
 # cross-realm assertion contracts introduced in Wave 14.
 #
 # Coverage:
-#   • Accepted workload config shapes (vmRef present, vmRef null, disabled)
+#   • Accepted workload config shapes (legacyVmName present, provider-placeholder, disabled)
 #   • Workload index row rendering: targetAddress, runtimeKind, substrateId,
-#     capabilityRefs/preflightRefs sorted+deduped, all/enabled/byVm accessors
+#     capabilityRefs sorted+deduped, all/enabled/byVm accessors
 #   • realm-workloads-launcher.json emitter: schemaVersion, runtimeState,
 #     per-workload fields, vsockCid advisory, invariants block
 #   • Bundle artifact registration: installFileName, classification,
@@ -83,28 +83,27 @@ let
       network.envs = [ "work" ];
       workloads.corp-laptop = {
         enable = true;
-        vmRef = "corpbox";
-        label = "Corp Laptop";
-        icon = "computer-laptop";
-        actionId = "corp-laptop";
-        capabilityRefs = [ "guest-exec" "graphics" "guest-exec" ];
-        preflightRefs = [ "tpm-ready" "net-ready" "tpm-ready" ];
+        kind = "local-vm";
+        legacyVmName = "corpbox";
+        launcher = {
+          label = "Corp Laptop";
+          icon.id = "computer-laptop";
+          capabilities = [ "guest-exec" "graphics" "guest-exec" ];
+        };
       };
       workloads.provider-service = {
         enable = true;
-        vmRef = null;
-        label = "Provider Service";
-        icon = null;
-        actionId = "provider-service";
-        capabilityRefs = [ ];
-        preflightRefs = [ ];
+        kind = "provider-placeholder";
+        launcher = {
+          label = "Provider Service";
+          capabilities = [ ];
+        };
       };
       workloads.archived = {
         enable = false;
-        vmRef = "corpbox";
-        label = "Archived";
-        icon = null;
-        actionId = "archived";
+        kind = "local-vm";
+        legacyVmName = "corpbox";
+        launcher.label = "Archived";
       };
     };
   };
@@ -141,16 +140,16 @@ let
       path = "alpha";
       network.envs = [ ];
       workloads.wl-a = {
-        vmRef = "svc2532";
-        label = "Service A";
+        legacyVmName = "svc2532";
+        launcher.label = "Service A";
       };
     };
     d2b.realms.beta = {
       path = "beta";
       network.envs = [ ];
       workloads.wl-b = {
-        vmRef = "svc4319";
-        label = "Service B";
+        legacyVmName = "svc4319";
+        launcher.label = "Service B";
       };
     };
   };
@@ -164,8 +163,8 @@ let
       env = "home";
       network.envs = [ "home" ];
       workloads.home-main = {
-        vmRef = "homebox";
-        label = "Home Main";
+        legacyVmName = "homebox";
+        launcher.label = "Home Main";
       };
     };
     d2b.realms.realm-b = {
@@ -173,8 +172,8 @@ let
       env = "home";
       network.envs = [ "home" ];
       workloads.home-alias = {
-        vmRef = "homebox";
-        label = "Home Alias";
+        legacyVmName = "homebox";
+        launcher.label = "Home Alias";
       };
     };
   };
@@ -206,8 +205,8 @@ let
   extNetMessages = failureMessages [ extNetConflictFixture ];
 in
 {
-  # ── workload index: accepted config with vmRef ──────────────────────────────
-  "realm-workloads/index-accepted-with-vmref" = {
+  # ── workload index: accepted config with legacyVmName ─────────────────────
+  "realm-workloads/index-accepted-with-legacyvmname" = {
     expr =
       let
         row = lib.findFirst
@@ -220,15 +219,14 @@ in
         realmPath = row.realmPath;
         targetAddress = row.targetAddress;
         substrateId = row.substrateId;
-        vmRef = row.vmRef;
+        legacyVmName = row.legacyVmName;
         runtimeKind = row.runtimeKind;
         runtimeProviderId = row.runtimeProviderId;
         label = row.label;
         icon = row.icon;
         actionId = row.actionId;
-        # capabilityRefs/preflightRefs must be sorted and deduplicated
+        # capabilityRefs must be sorted and deduplicated
         capabilityRefs = row.capabilityRefs;
-        preflightRefs = row.preflightRefs;
         enable = row.enable;
       };
     expected = {
@@ -237,20 +235,19 @@ in
       realmPath = "work.home";
       targetAddress = "corp-laptop.work.home.d2b";
       substrateId = "corpbox";
-      vmRef = "corpbox";
+      legacyVmName = "corpbox";
       runtimeKind = "nixos";
       runtimeProviderId = "local-cloud-hypervisor";
       label = "Corp Laptop";
       icon = "computer-laptop";
       actionId = "corp-laptop";
       capabilityRefs = [ "graphics" "guest-exec" ];
-      preflightRefs = [ "net-ready" "tpm-ready" ];
       enable = true;
     };
   };
 
-  # ── workload index: accepted config without vmRef ───────────────────────────
-  "realm-workloads/index-accepted-no-vmref" = {
+  # ── workload index: accepted provider-placeholder (no legacyVmName) ─────────
+  "realm-workloads/index-accepted-provider-placeholder" = {
     expr =
       let
         row = lib.findFirst
@@ -259,7 +256,7 @@ in
           workRealm.workloads;
       in {
         workloadName = row.workloadName;
-        vmRef = row.vmRef;
+        legacyVmName = row.legacyVmName;
         substrateId = row.substrateId;
         runtimeKind = row.runtimeKind;
         runtimeProviderId = row.runtimeProviderId;
@@ -267,7 +264,7 @@ in
       };
     expected = {
       workloadName = "provider-service";
-      vmRef = null;
+      legacyVmName = null;
       substrateId = null;
       runtimeKind = null;
       runtimeProviderId = null;
@@ -390,8 +387,7 @@ in
           label = corpRow.label;
           icon = corpRow.icon;
           capabilityRefs = corpRow.capabilityRefs;
-          preflightRefs = corpRow.preflightRefs;
-          vmRef = corpRow.vmRef;
+          legacyVmName = corpRow.legacyVmName;
           substrateId = corpRow.substrateId;
           runtimeKind = corpRow.runtimeKind;
           runtimeProviderId = corpRow.runtimeProviderId;
@@ -399,7 +395,7 @@ in
         };
         providerFields = {
           workloadName = providerRow.workloadName;
-          vmRef = providerRow.vmRef;
+          legacyVmName = providerRow.legacyVmName;
           runtimeKind = providerRow.runtimeKind;
           vsockCid = providerRow.vsockCid;
         };
@@ -418,8 +414,7 @@ in
         label = "Corp Laptop";
         icon = "computer-laptop";
         capabilityRefs = [ "graphics" "guest-exec" ];
-        preflightRefs = [ "net-ready" "tpm-ready" ];
-        vmRef = "corpbox";
+        legacyVmName = "corpbox";
         substrateId = "corpbox";
         runtimeKind = "nixos";
         runtimeProviderId = "local-cloud-hypervisor";
@@ -427,9 +422,9 @@ in
       };
       providerFields = {
         workloadName = "provider-service";
-        vmRef = null;
+        legacyVmName = null;
         runtimeKind = null;
-        # no vmRef → vsockCid must be null
+        # no legacyVmName → vsockCid must be null
         vsockCid = null;
       };
     };
@@ -494,9 +489,8 @@ in
             env = "home";
             network.envs = [ "home" ];
             workloads.browser = {
-              label = "Web Browser";
-              icon = "web-browser";
-              actionId = "browser";
+              launcher.label = "Web Browser";
+              launcher.icon.id = "web-browser";
             };
           };
           d2b.realms.realm-b = {
@@ -504,9 +498,8 @@ in
             env = "dev";
             network.envs = [ "dev" ];
             workloads.browser = {
-              label = "Web Browser";
-              icon = "web-browser";
-              actionId = "browser";
+              launcher.label = "Web Browser";
+              launcher.icon.id = "web-browser";
             };
           };
         };
