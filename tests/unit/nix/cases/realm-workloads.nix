@@ -124,37 +124,33 @@ let
       messages;
 
   # ── CID collision fixture ────────────────────────────────────────────────────
-  # Two VMs in the same env with the same index → same derived CID.
-  # Workloads in two different realms each reference one of these VMs.
+  # Use two envless VMs whose MD5-based CID formula produces the same value.
+  # svc2532 and svc4319 both hash to md5-prefix 0x69b166 → CID 6930790.
+  # Envless VMs use the hash-based CID formula (index is irrelevant).
   cidCollisionFixture = lib.recursiveUpdate hostBase {
-    d2b.vms.vm-a = {
-      env = "dev";
-      index = 5;
+    d2b.vms.svc2532 = {
+      # no env → hash-based CID derivation
       ssh.user = "alice";
       config.users.users.alice = { isNormalUser = true; uid = 1000; };
     };
-    d2b.vms.vm-b = {
-      env = "dev";
-      index = 5;
+    d2b.vms.svc4319 = {
       ssh.user = "alice";
       config.users.users.alice = { isNormalUser = true; uid = 1000; };
     };
     d2b.realms.alpha = {
       path = "alpha";
-      env = "dev";
-      network.envs = [ "dev" ];
+      network.envs = [ ];
       workloads.wl-a = {
-        vmRef = "vm-a";
-        label = "Workload A";
+        vmRef = "svc2532";
+        label = "Service A";
       };
     };
     d2b.realms.beta = {
       path = "beta";
-      env = "dev";
-      network.envs = [ "dev" ];
+      network.envs = [ ];
       workloads.wl-b = {
-        vmRef = "vm-b";
-        label = "Workload B";
+        vmRef = "svc4319";
+        label = "Service B";
       };
     };
   };
@@ -188,15 +184,11 @@ let
 
   # ── external-network attachment conflict fixture ─────────────────────────────
   # Two realms both associate with the "work" env which has attachment enabled.
+  # Only attachment is needed for conflict detection; no egress required.
   extNetConflictFixture = lib.recursiveUpdate hostBase {
-    d2b.envs.work.externalNetwork = {
+    d2b.envs.work.externalNetwork.attachment = {
       enable = true;
-      attachment = {
-        enable = true;
-        interface = "eth0";
-      };
-      egress.enable = true;
-      egress.allowedCidrs = [ "0.0.0.0/0" ];
+      interface = "eth0";
     };
     d2b.realms.realm-a = {
       path = "realm-a";
@@ -247,7 +239,7 @@ in
       substrateId = "corpbox";
       vmRef = "corpbox";
       runtimeKind = "nixos";
-      runtimeProviderId = "d2b";
+      runtimeProviderId = "local-cloud-hypervisor";
       label = "Corp Laptop";
       icon = "computer-laptop";
       actionId = "corp-laptop";
@@ -430,7 +422,7 @@ in
         vmRef = "corpbox";
         substrateId = "corpbox";
         runtimeKind = "nixos";
-        runtimeProviderId = "d2b";
+        runtimeProviderId = "local-cloud-hypervisor";
         vsockCidIsInt = true;
       };
       providerFields = {
@@ -532,7 +524,7 @@ in
   };
 
   # ── cross-realm vsock CID collision: assertion fires ─────────────────────────
-  # Two VMs in the same env with the same index derive the same CID.
+  # svc2532 and svc4319 are envless VMs with the same hash-based CID.
   # Workloads in different realms reference them → cross-realm assertion fires.
   "realm-workloads/cross-realm-cid-collision-assertion-fires" = {
     expr = hasMessage [
@@ -547,8 +539,8 @@ in
   "realm-workloads/cross-realm-cid-collision-names-affected-pairs" = {
     expr = hasMessage [
       "Cross-realm vsock CID collision"
-      "vm-a"
-      "vm-b"
+      "svc2532"
+      "svc4319"
     ] cidCollisionMessages;
     expected = true;
   };
