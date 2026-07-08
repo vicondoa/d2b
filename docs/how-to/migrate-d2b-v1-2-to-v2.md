@@ -39,7 +39,7 @@ large VM state, rewrite `/var/lib/d2b/vms/<vm>`, or migrate network bridges.
 4. Note every VM's current env:
 
    ```bash
-   d2b list --json | jq '.vms[] | {name, env, runtimeKind}'
+   d2b list --json | jq '.[] | {name, env, runtimeKind}'
    ```
 
 ## Step 1: keep existing envs and VMs
@@ -60,6 +60,13 @@ d2b.vms.laptop = {
   ssh.user = "alice";
 };
 ```
+
+Do not map distinct trust-boundary realms onto the same env unless you
+intentionally want them on the same L2 broadcast domain. Today,
+`d2b.realms.<realm>.env` and `network.envs` point at existing
+`d2b.envs` bridges; sharing that env means sharing the bridge, net VM, DHCP/NAT
+surface, and east-west policy. Work, personal, provider, and remote-host realms
+that require isolation should use separate envs, gateway guests, and L2 bridges.
 
 ## Step 2: add host-local realm metadata
 
@@ -99,6 +106,17 @@ sudo systemctl restart d2bd.service
 be re-adopted by the daemon. If you intentionally changed VM closures, restart
 affected VMs through normal lifecycle commands after the daemon is ready.
 
+For a production rollout, verify this on the host after the switch:
+
+```bash
+systemctl is-active d2bd.service
+d2b status laptop
+```
+
+The static gates cover the service posture and metadata contract; live
+running-VM adoption is still a host validation step because it depends on active
+runner processes and pidfds.
+
 ## Step 4: verify realm metadata
 
 Check the generated realm artifact:
@@ -136,6 +154,27 @@ Use fully-qualified realm targets only where you intend realm-aware routing:
 ```bash
 d2b vm display list --target laptop.work.d2b --json
 ```
+
+### Validation evidence in this repository
+
+The migration guide relies on existing Layer-1 coverage:
+
+- `tests/unit/nix/cases/realms.nix` checks that `realm-controllers.json`
+  materializes host-local controller metadata, direct socket groups, local
+  runtime rows, preserved `/var/lib/d2b/vms/<vm>` and `/run/d2b/vms/<vm>` paths,
+  and the `metadataOnly`, `existingGlobalVmPathsPreserved`,
+  `noStateMigrationDuringActivation`, and
+  `brokerEffectsRemainRealmDelegated` invariants.
+- `packages/d2b-core/tests/realm_controller_config.rs` parses and validates the
+  typed `RealmControllersJson` DTO, including local runtime provider/workload
+  rows and fail-closed invariant validation.
+- `tests/unit/nix/cases/d2bd-startup-smoke.nix` checks daemon restart posture
+  such as `restartIfChanged`, while `nixos-modules/host-daemon.nix` keeps the
+  shutdown hook guarded so normal daemon restarts are not host-shutdown teardown.
+
+These gates do not replace live host validation after a switch; they prove the
+rendered configuration preserves the metadata-first contract that the host
+validation exercises.
 
 ## Step 5: verify desktop metadata
 

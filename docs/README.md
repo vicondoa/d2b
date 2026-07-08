@@ -107,10 +107,6 @@ The contracts. Stable interfaces a consumer can depend on.
   metadata-only discovery, strict parent/child tree routing, signed route
   advertisements, namespace validation, direct shortcut constraints, and
   bounded route audit/telemetry contracts.
-- [`explanation/realm-tree-routing.md`](./explanation/realm-tree-routing.md) —
-  conceptual boundaries for route discovery, namespace delegation, shortcuts,
-  and why the contract does not imply live relay, VPN, overlay, SSH, or raw
-  tunnel routing.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) —
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.
@@ -218,6 +214,10 @@ Understanding-oriented prose. The "why" behind the design choices.
 - [`explanation/realm-controller-boundaries.md`](./explanation/realm-controller-boundaries.md) —
   why host-local realm controller metadata keeps direct socket authorization,
   local-root resolution, state, and audit boundaries separate.
+- [`explanation/realm-tree-routing.md`](./explanation/realm-tree-routing.md) —
+  conceptual boundaries for route discovery, namespace delegation, shortcuts,
+  and why the contract does not imply live relay, VPN, overlay, SSH, or raw
+  tunnel routing.
 - [`explanation/persistent-shells.md`](./explanation/persistent-shells.md) —
   persistence boundary, local IPC model, same-UID AF_UNIX trust boundary, and
   non-goals for persistent named guest shells.
