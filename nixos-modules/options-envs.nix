@@ -112,6 +112,14 @@ in
       the uplink IP.
 
       Workload VMs reference an env via `d2b.vms.<vm>.env`.
+
+      **Transitional surface.** In the v2 realm-native model the
+      public replacement for `d2b.envs.<env>` is
+      `d2b.realms.<realm>.network` with `network.mode = "declared"`.
+      Existing `d2b.envs` declarations remain the active runtime
+      substrate during the metadata-first transition; do not remove
+      them until you have completed the steps in
+      `docs/how-to/migrate-d2b-v1-2-to-v2.md`.
     '';
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {

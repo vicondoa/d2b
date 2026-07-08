@@ -1780,6 +1780,80 @@ let
         ''
       ])
     cfg.vms);
+
+  # Realm-to-legacy migration advisory warnings.
+  #
+  # These are informational nudges, not hard failures.  They fire
+  # when a realm declaration is present but its `network.mode` or `env`
+  # still points at a legacy `d2b.envs` bridge, or when a realm has no
+  # workloads while one or more `d2b.vms` entries list `env` membership
+  # in that realm's declared env.  The message points at the v1.2→v2
+  # migration guide without blocking any activation.
+  realmLegacyTransitionWarnings =
+    let
+      enabledRealms = lib.filterAttrs (_: r: r.enable) cfg.realms;
+
+      # Per-realm warning: realm has env/network.envs pointing at an
+      # existing d2b.envs entry but network.mode is still "none".
+      inheritEnvNudges = lib.flatten (lib.mapAttrsToList
+        (realmName: realm:
+          let
+            linkedEnvs =
+              lib.unique (
+                (lib.optional (realm.env != null) realm.env)
+                ++ realm.network.envs
+              );
+            hasMatchingEnv = lib.any (e: cfg.envs ? ${e}) linkedEnvs;
+          in
+          lib.optionals
+            (hasMatchingEnv && realm.network.mode == "none" && realm.workloads == {})
+            [
+              ''
+                d2b.realms.${realmName}: this realm links to existing d2b.envs entries
+                (${lib.concatStringsSep ", " (map (e: "d2b.envs.${e}") linkedEnvs)}) but
+                has no workloads declared and network.mode = "none".
+
+                To complete the v2 realm-native transition, migrate your env and VM
+                declarations into realm workloads and set network.mode = "declared" or
+                "inherit-env".  Until then the legacy substrate continues to work.
+
+                Migration guide: docs/how-to/migrate-d2b-v1-2-to-v2.md
+                Replacement surface:
+                  d2b.realms.${realmName}.network (replaces d2b.envs.*)
+                  d2b.realms.${realmName}.workloads (replaces d2b.vms.*)
+              ''
+            ])
+        enabledRealms);
+
+      # Per-realm warning: realm has workloads declared but some of them
+      # carry a legacyVmName whose state dir would diverge if the VM
+      # declaration is removed before checking legacyVmName.
+      orphanLegacyVmWarnings = lib.flatten (lib.mapAttrsToList
+        (realmName: realm:
+          lib.flatten (lib.mapAttrsToList
+            (wName: w:
+              let
+                lvm = w.legacyVmName;
+                vmExists = lvm != null && cfg.vms ? ${lvm};
+              in
+              lib.optionals
+                (w.enable && lvm != null && !vmExists)
+                [
+                  ''
+                    d2b.realms.${realmName}.workloads.${wName}.legacyVmName = "${lvm}" but
+                    d2b.vms.${lvm} does not exist in this configuration.
+
+                    Either declare d2b.vms.${lvm} (keeping the legacy VM entry during the
+                    transition) or remove legacyVmName once you no longer need the legacy
+                    reference.  Workload state will still be written to the default path
+                    /var/lib/d2b/vms/${wName}; mismatched legacyVmName and id can result
+                    in diverged state paths.
+                  ''
+                ])
+            realm.workloads))
+        enabledRealms);
+    in
+    inheritEnvNudges ++ orphanLegacyVmWarnings;
 in
 {
   assertions = lib.flatten (
@@ -1812,5 +1886,5 @@ in
   # The daemon-only end state is now the default. Do not warn on the
   # compatibility option here: option-default definitions make
   # `options.<path>.isDefined` true even when consumers do not set it.
-  warnings = deprecatedWaylandProxyBorderWarnings;
+  warnings = deprecatedWaylandProxyBorderWarnings ++ realmLegacyTransitionWarnings;
 }

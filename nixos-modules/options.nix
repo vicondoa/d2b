@@ -1,15 +1,20 @@
 # d2b option schema.
 #
-# Per-VM declarations live under `d2b.vms.<name>`. Component
-# toggles (graphics.enable / tpm.enable / usbip.* / audio.* /
-# audit.*) are defined here on the same submodule; the matching
-# component file
-# under `nixos-modules/components/` is conditionally imported by
-# host.nix.
+# Per-VM declarations live under `d2b.vms.<name>`. Component toggles
+# (graphics.enable / tpm.enable / usbip.* / audio.* / audit.*) are
+# defined on the per-VM submodule; the matching component file under
+# `nixos-modules/components/` is conditionally imported by host.nix.
 #
-# Realm-native declarations live under `d2b.realms.<realm>` as schema
-# foundation only during the realm-native transition; they do not yet alter
-# env or VM runtime behaviour.
+# Realm-native declarations live under `d2b.realms.<realm>`.  Each realm
+# may carry `network.*` (env-replacement bridge/subnet/externalNetwork/
+# mDNS/port-forward shape) and `workloads.*` (local-vm / qemu-media
+# workload declarations with desktop-launcher metadata).  The extended
+# sub-option groups come from focused companion files imported inside the
+# realm submodule in options-realms.nix.
+#
+# Transitional surface: `d2b.envs.<env>` and `d2b.vms.<name>` remain the
+# active runtime substrate during the v2 metadata-first migration.  See
+# docs/how-to/migrate-d2b-v1-2-to-v2.md for the step-by-step guide.
 #
 # Isolated environments live under `d2b.envs.<env>`. Each env
 # is materialised by network.nix into two host bridges (`br-<env>-up`
