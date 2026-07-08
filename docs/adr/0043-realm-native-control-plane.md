@@ -71,11 +71,14 @@ Gateway VMs remain valid deployment locations for realm controllers, but they
 are no longer the public abstraction. The public Nix surface moves from
 `d2b.gateways` to `d2b.realms`.
 
-Providers and runtimes sit below a realm controller. Cloud Hypervisor, crosvm,
-libkrun, qemu-media, Windows hypervisor, Azure VM full hosts, ACA sandboxes,
-and future providers implement the standard d2b semantic contract and
-advertise positive capabilities. They do not define provider-specific d2b
-protocol forks.
+Workloads sit below a realm controller. A workload is the thing an operator
+runs or targets: a local Cloud Hypervisor/NixOS VM, a qemu-media machine, an
+ACA sandbox, a workload on an Azure VM full host, or a future provider-backed
+execution environment. Providers and runtimes are how those workloads are
+realized. Cloud Hypervisor, crosvm, libkrun, qemu-media, Windows hypervisor,
+Azure VM full hosts, ACA sandboxes, and future providers implement the standard
+d2b semantic contract and advertise positive capabilities. They do not define
+provider-specific d2b protocol forks.
 
 The realm-native cutover is a clean architectural break from the old realm and
 ACA sandbox surfaces. Existing local Cloud Hypervisor VMs and ACA sandboxes are
@@ -83,14 +86,24 @@ migrated into `d2b.realms` and the shared realm protocol; old ACA sandbox
 contracts, gateway-shaped realm functionality, and legacy realm entrypoint
 surfaces are removed rather than carried as compatibility modes.
 
-Realm declarations also replace the current user-facing grouping abstraction.
-The canonical first local realms are `home`, `dev`, and `work`; VMs move into
-realms according to their current group membership or an explicit operator
-mapping. Network/env declarations may remain as realm-owned substrate for
-bridges, address allocation, and isolation, but they are no longer the
-user-facing trust-boundary model. Until the implementation waves land,
-`d2b.envs` remains the active configuration key; this ADR defines the target
-cutover, not an already-shipped module surface.
+Realm declarations also replace the current user-facing grouping and local-VM
+abstractions. The canonical first local realms are `home`, `dev`, and `work`;
+historical groups/envs become realm-owned network substrate, and top-level
+`d2b.vms` becomes realm-owned workloads. The target public Nix shape is:
+
+```nix
+d2b.realms.<realm>.network = { ... };
+d2b.realms.<realm>.workloads.<workload> = {
+  kind = "local-vm" | "qemu-media" | "aca-sandbox" | ...;
+};
+```
+
+Network/env declarations may remain internally as generated substrate for
+bridges, address allocation, NAT/DHCP net VMs, and isolation, but they are no
+longer the user-facing grouping or trust-boundary model. Until the
+implementation waves land, `d2b.envs` and `d2b.vms` may remain active
+configuration keys; this ADR defines the target cutover, not an already-shipped
+module surface.
 
 Relay infrastructure is a discovery and byte-transport substrate only. Relay
 identity never authorizes d2b operations. Every cross-realm operation uses
@@ -129,7 +142,7 @@ A realm has:
 - a `RealmPath` in a strict parent/child tree;
 - a realm identity key;
 - one active realm controller generation;
-- policy for local workloads and descendants;
+- policy for workloads, providers, local network substrate, and descendants;
 - a node/workload/provider registry owned by that realm controller;
 - a capability set derived from the controller and its providers;
 - an audit domain;
@@ -139,6 +152,89 @@ Every realm and every ancestor up to the root can constrain nested children.
 A creation, route, operation, or stream is allowed only when the applicable
 policy chain permits it. A child realm cannot bypass its parent by advertising
 an alternate peer route; the initial routing model is tree-only.
+
+### Realm-owned workloads and local substrate
+
+The long-term operator-facing object model is:
+
+```text
+realm
+  -> network substrate (bridge/subnet/uplink/net VM, generated internally)
+  -> workloads
+       -> runtime provider/backend
+       -> workload desktop metadata
+  -> realm providers
+  -> policy, identity, audit, routing
+```
+
+This deliberately removes the old "group/env plus top-level VM" mental model
+from the public surface. `env` was mostly network/runtime substrate, while
+`vm` described one local workload kind. In the realm-native surface, the realm
+is the user-facing isolation and trust boundary; network substrate is generated
+from `d2b.realms.<realm>.network`, and workloads are declared under
+`d2b.realms.<realm>.workloads`.
+
+Local VM workloads keep their existing implementation safety properties, but
+the public declaration moves under the owning realm:
+
+```nix
+d2b.realms.work.workloads.work-aad = {
+  kind = "local-vm";
+  # former d2b.vms.work-aad options
+};
+```
+
+Provider-managed workloads use the same namespace:
+
+```nix
+d2b.realms.work.workloads.build-sandbox = {
+  kind = "aca-sandbox";
+  provider = "aca";
+};
+```
+
+A runtime provider instance such as Cloud Hypervisor is not itself a realm
+member or controller. It is the execution backend for a workload. If a provider
+environment runs an agent or full d2bd that participates in realm
+authentication, routing, policy, or audit, that controller/agent belongs to a
+realm or child realm; the low-level runtime backend remains substrate below the
+workload.
+
+Canonical workload targets are rendered as
+`<workload>.<realmPath>.d2b`. Bare local aliases are allowed only when the
+configured local access policy makes them unambiguous.
+
+Workload-owned desktop launch metadata is part of the realm workload contract.
+Waybar, wlcontrol, wlterm, clip-picker, and Wayland rails consume the same
+d2b-authored workload/realm metadata rather than maintaining separate
+host-local group lists. Desktop-facing JSON metadata (such as
+`realm-controllers.json` and display-list outputs) **must expose the
+realm-to-workload association explicitly**: each workload entry must carry its
+realm path, canonical `<workload>.<realm>.d2b` target, and desktop launch
+metadata so sibling flakes (`d2b-wlcontrol`, `d2b-wlterm`, `d2b-clip-picker`,
+Waybar integrations) can render and launch workloads without inspecting
+retired `d2b.vms` or `d2b.envs` Nix AST. This metadata is presentation and
+launch intent only: it must not contain secrets, provider tokens, session
+handles, unredacted command payloads, or authorization decisions.
+
+Additions to the realm-to-workload association schema — new optional workload
+fields, new capability status keys, new desktop launch metadata keys — are
+**additive** and do not require a `schemaVersion` or `manifestVersion` bump.
+Structural breaking changes — removing a required field, renaming a field,
+or changing a field's type — require a coordinated `schemaVersion` and
+`manifestVersion` bump per the existing manifest contract rules, a CHANGELOG
+breaking-change entry, and migration notes for downstream sibling flake
+consumers.
+
+`/etc/d2b/realm-identity.json` exposes **public identity metadata only**: the
+stable realm id, realm name, and public verification keys that clients need for
+session authentication and route advertisement validation. Private realm
+identity keys, controller-generation signing keys, enrollment credentials, and
+any private material must reside in per-realm credential paths readable only
+by the owning realm daemon user. If a future release adds private key material
+to this file, the current shared-read named-user ACLs (`r--` for each realm
+daemon) become forbidden and the file must be reclassified as a private
+credential artifact with access limited to the owning realm's daemon user.
 
 ### Local root and peer realms
 
@@ -206,12 +302,38 @@ The implementation must define:
   path for authenticating to a peer realm's local socket;
 - per-realm state and audit paths;
 - credential paths readable only by the owning realm daemon user/group;
-- a dedicated systemd slice and delegated cgroup subtree for each host-local
-  realm, with no cross-realm cgroup mutation;
+- per-realm run directories provisioned as `1770 root <publicSocketGroup>`;
+  the sticky bit prevents access-group members from deleting each other's
+  socket entries in the shared parent; the group-class ACL on each per-realm
+  run directory **must be `r-x`** (traverse and read) so access-group users can
+  reach the public socket but cannot write to the directory; only the named
+  realm daemon user carries `rwx` in its user-named ACL entry, enabling socket
+  create and unlink; a group-class ACL of `rwx` violates this invariant even
+  when the ACL mask is `rwx`; the code fix for this invariant is tracked as a
+  separate hotfix (PR #263) and does not alter this ADR's design requirement;
+- a per-realm dedicated systemd slice and delegated cgroup subtree; local
+  workload cgroups use a **hierarchical** layout
+  `/sys/fs/cgroup/d2b.slice/<realm>/<workload>/<role>` rather than the flat
+  `d2b.slice/<workload>/<role>` shape; the realm cgroup subtree is created and
+  delegated to the realm daemon (per ADR 0011 Phase A) before any workload
+  processes start; this requires allocation order (realm slice created first,
+  workload leaves second), a `cgroup.subtree_control` cascade at the realm
+  subtree boundary, and a runtime invariant check that the realm-owned subtree
+  is fully delegated before any workload spawn; no cross-realm cgroup mutation;
 - deterministic TAP, bridge, veth, subnet, and interface-name allocation with
   NixOS assertions for declared conflicts and runtime fail-closed checks for
   undeclared drift; generated interface names must fit Linux `IFNAMSIZ`
   limits by using bounded hash-derived names rather than raw realm ids;
+  **when bridge or interface names change from legacy `d2b-<env>-*` forms to
+  hash-derived realm names, any nftables rules or firewall policies that
+  reference the old names drift silently**; the migration guide must document
+  the explicit nftables replace or bridge-rename path and validation steps;
+  **the net VM renamed from `sys-<env>-net` to `sys-<realm>-net` may present a
+  different MAC address to the uplink**; operators must either (a) configure the
+  uplink/router to use the new realm-derived MAC address, (b) pin the MAC address
+  explicitly in the realm network declaration to preserve the legacy value, or
+  (c) be warned at activation time that upstream DHCP static bindings may need
+  updating; the migration guide must call out this risk explicitly;
 - realm-specific nftables tables or a root-owned allocator/lock that guarantees
   atomic updates without one realm flushing another realm's rules;
 - NetworkManager, sysctl, and `/etc/hosts` ownership partitions serialized
@@ -455,7 +577,17 @@ realm class, placement kind, and outcome enums. Static operator-declared realms
 may contribute a bounded configured realm label only when the configured set is
 known at startup; dynamically discovered, nested, provider-created, or ephemeral
 realms must be rolled up to bounded classes rather than emitted as raw realm
-paths. The local-root host-resource allocator also emits bounded audit records
+paths. The same bounding rule applies to **workload and provider labels**:
+operator-declared static workloads may use a bounded configured workload label
+only when the full set is known at startup; dynamically provisioned,
+provider-created, or ephemeral workloads must roll up to bounded workload-class
+or provider-class labels; provider kind and placement kind are bounded enum
+labels; provider endpoint strings, sandbox ids, provider-assigned workload
+names, and any identifier that could be PII-bearing or high-cardinality are
+**never** metric labels. Workload ids that could encode operator-chosen names
+with PII potential appear in the owning realm's audit log only, subject to that
+realm's access controls, and are never emitted to shared telemetry backends or
+labels. The local-root host-resource allocator also emits bounded audit records
 and low-cardinality metrics for allocation grants, denials, conflicts,
 reconciliation, reclamation, and quarantine decisions.
 
@@ -478,7 +610,12 @@ streams. The current [ADR 0032](0032-d2b-v2-constellation-control-plane.md) /
 - missing capability returns typed denial, not fallback behavior;
 - audit labels are bounded and metadata-only;
 - payload bytes, argv, stdio, provider endpoints, host paths, relay
-  credentials, and provider tokens are not audit or metric labels.
+  credentials, and provider tokens are not audit or metric labels;
+- workload ids in audit records are limited to operator-declared static
+  workload names; dynamically provisioned, provider-created, or ephemeral
+  workload identifiers that may be PII-bearing or high-cardinality are replaced
+  with bounded class tokens in telemetry and stored only in the owning realm's
+  audit log under that realm's access controls.
 
 The architecture should pursue local d2b parity where feasible:
 
@@ -526,6 +663,34 @@ Wayland/clipboard proxy. Guest-provided window titles, app ids, MIME
 parameters, clipboard metadata, and other payload-derived labels must never be
 accepted as authoritative realm or VM identity and must not become audit or
 metric labels.
+
+### Visual presentation requirements
+
+The realm-native model requires consistent visual treatment across desktop
+surfaces so operators can identify the realm boundary at a glance:
+
+- **Waybar quick-launch buttons** use the owning realm's resolved color as a
+  left-side border accent (CSS `border-left` or equivalent). Button position
+  and launch behavior are unchanged; the realm color is the only realm-visible
+  element on the button itself.
+- **wlcontrol realm group cards** use the realm color as the outer/group border.
+  Inner workload card borders use default theme styling unless the workload
+  explicitly overrides its presentation color. Realm grouping is the primary
+  visual hierarchy; workload cards nest inside realm groups.
+- **Wayland proxy rail** uses the workload's resolved realm color as the default
+  rail accent. The label defaults to `<workload>.<realmPath>`. Color and label
+  are asserted by the d2b Wayland proxy, never derived from guest-provided
+  metadata.
+- **wlterm** groups shell-capable workloads by realm with a clear realm header
+  row separating each realm's workload entries.
+- **clip-picker** groups clipboard sources and destinations by realm, using realm
+  color accents for group separators. Grouping is presentation only and does
+  not alter clipd authority.
+
+These requirements are the target UX contract for Wave 17. They are codified
+here so sibling flake implementations (`d2b-wlcontrol`, `d2b-wlterm`,
+`d2b-clip-picker`) target the same presentation model from ADR review rather
+than diverging across sibling PRs.
 
 ## Provider model
 
@@ -619,7 +784,10 @@ NixOS module evaluation is the primary place to reject declared conflicts:
 - conflicting nftables ownership ids or table names;
 - duplicate realm socket/state/audit paths;
 - child realms without a declared parent;
-- child realm units that would start before their local parent.
+- child realm units that would start before their local parent;
+- two realms declaring `externalNetwork` attachment to the same uplink
+  interface or bridge without an explicit shared-uplink declaration that opts
+  both realms into the shared resource and names the allocating realm.
 
 Runtime arbitration remains fail-closed for drift, hand-edited host state, and
 provider-created resources not visible at eval time. Host-local child realm
@@ -640,16 +808,38 @@ grouping surface are removed as public configuration. The migration path is an
 explicit cutover into `d2b.realms`, not a compatibility transform. A generation
 that still declares the old surfaces fails with a typed migration error pointing
 at the new realm declaration shape.
-On NixOS, removed options use explicit removed-option modules or equivalent
-assertion errors so operators see the migration message at evaluation time
-rather than a generic unknown-option failure. Realm parent-cycle detection uses
-an explicit visited set or bounded topological sort; it must not rely on
+On NixOS, retired top-level options `d2b.envs` and `d2b.vms` use
+`mkRemovedOptionModule` or `mkRenamedOptionModule` tombstones so operators see
+a clear eval-time migration message rather than a generic unknown-option error.
+The tombstone message must name the replacement surface
+(`d2b.realms.<realm>.network` for envs,
+`d2b.realms.<realm>.workloads.<workload>` for VMs) and include a link to the
+v1.2-to-v2 migration guide. Generated internal substrate options (bridge and
+subnet allocations, net VM declarations, and other options derived from realm
+network config that have no direct operator-facing meaning) must be declared
+with `internal = true; visible = false;` or the equivalent NixOS option
+attributes so they do not appear in `nixos-option` output or documentation as
+public operator-facing configuration. Realm parent-cycle detection uses an
+explicit visited set or bounded topological sort; it must not rely on
 unbounded recursive parent traversal.
 
 Large disk/state moves for existing local Cloud Hypervisor VMs are not
 performed implicitly inside `nixos-rebuild switch` activation. They run through
 an explicit migration command or daemon-owned adoption workflow so activation
-does not time out or leave partially moved state.
+does not time out or leave partially moved state. State path mapping is **1:1
+by default**: a workload whose id matches an existing VM name continues to use
+`/var/lib/d2b/vms/<vm>`, `/run/d2b/vms/<vm>`, per-VM TPM state at
+`/var/lib/d2b/vms/<vm>/swtpm`, and per-VM hardlink farm paths unchanged.
+Activation must not rename, move, or recreate these paths. An explicit
+migration command (`d2b migrate workload --from <old-vm> --to <realm>/<workload>
+--confirm`) is the only permitted path for a name-changing state move; it
+emits a structured audit record, is resumable on partial failure, and must be
+confirmed by the operator. This 1:1 default prevents data loss for TPM NVRAM
+(whose loss looks like device tampering to identity providers), hardlink farms,
+disk images, and media registry state. If a workload is declared under a new
+name without running the migration command, the old state path is left
+untouched and must not be silently deleted by activation, cleanup, or garbage
+collection.
 
 ## Rust architecture consequences
 
@@ -687,6 +877,16 @@ The legacy node-qualified parser should remain only long enough to emit typed
 migration diagnostics. New routing code must not accept
 ambiguous optional-node targets as a normal path.
 
+The implementation must define a **strongly typed `WorkloadTarget` type** in
+`d2b-core` as the single canonical representation of a parsed workload address.
+Ad hoc string splitting on `"."` separators must not appear in CLI argument
+handling, daemon dispatch, broker ops, or any other site that accepts a workload
+target. Every code path that receives a workload address from user input,
+public socket messages, or configuration must parse it through the single
+`d2b-core::WorkloadTarget` parser and propagate only the typed result. A raw
+string reaching daemon or broker code without first passing through
+`WorkloadTarget::parse` is an invariant violation.
+
 Provider/session traits must preserve the existing invariants in type shapes:
 
 - mutating operation constructors require idempotency keys;
@@ -695,6 +895,29 @@ Provider/session traits must preserve the existing invariants in type shapes:
 - stream-open types encode the authorizing operation and stream capability;
 - provider-specific request bodies remain opaque payloads or typed DTOs below
   the standard d2b operation envelope.
+
+Wire DTOs that carry both a workload identity and a provider-specific execution
+request — the primary example being `SpawnRunner` — must **structurally
+separate universal workload identity from provider-specific backend config**
+using a typed/polymorphic envelope:
+
+```text
+SpawnRunnerRequest {
+  workload: WorkloadIdentity,   // universal: workload id, realm path,
+                                //   canonical target, process role, cgroup slot
+  backend: SpawnBackend,        // typed enum, one variant per runtime kind:
+                                //   LocalVm(LocalVmConfig) | QemuMedia(...)
+                                //   | AcaSandbox(...) | ...
+}
+```
+
+Universal workload identity fields must be present for every provider and must
+appear in the outer envelope so they can be audited, routed, and processed
+uniformly without inspecting the inner variant. Provider-specific fields
+(hypervisor command, image path, container registry, sandbox parameters) belong
+in the inner typed variant. Flattening both sets into a single struct makes it
+impossible to audit, route, or extend provider-specific spawns without
+reinterpreting universal fields and creates implicit cross-provider coupling.
 
 ## Security consequences
 
@@ -783,6 +1006,41 @@ remain valid and should be carried forward:
 - idempotency for mutating operations;
 - bounded/redacted audit and telemetry;
 - provider adapters must not imply full-host authority when absent.
+
+### CLI transition for old `d2b vm` and `d2b env` commands
+
+Old `d2b vm <subcommand>` and `d2b env <subcommand>` commands must produce
+actionable migration errors or compatibility behavior when used after the
+realm-native cutover. The implementation plan must choose **exactly one** of
+the following strategies and document it in the v1.2-to-v2 migration guide:
+
+- **Compatibility verb with deprecation warning**: `d2b vm <subcommand> <name>`
+  attempts to resolve the bare VM name through the configured default realm or
+  local alias table and emits a deprecation warning listing the realm-qualified
+  canonical address and the replacement command form. Bare VM name resolution
+  still follows the alias conflict and default-realm rules from the addressing
+  section; it must not silently succeed for ambiguous names.
+- **Hard typed error with guidance**: `d2b vm <subcommand> <name>` fails
+  immediately with a typed `legacy-verb-removed` error that lists the
+  realm-qualified canonical address (`<workload>.<realm>.d2b`) and the
+  replacement command (`d2b workload <subcommand> <canonical-target>`).
+
+Either strategy is acceptable; there must be no silent fallback to
+host-global daemon behavior. `d2b env <subcommand>` always fails closed with
+a typed migration error and a reference to `d2b realm <subcommand>` and the
+migration guide, because there is no direct realm equivalent for the old
+env management commands.
+
+Nix option migration UX follows the same principle: `d2b.envs` and `d2b.vms`
+tombstones at eval time must provide the full replacement declaration, not just
+the option name. A tombstone for `d2b.vms.<vm>` should print:
+
+```
+error: option `d2b.vms.<vm>` was removed. Declare this VM as a workload under
+its realm instead:
+  d2b.realms.<realm>.workloads.<vm> = { kind = "local-vm"; ... };
+See the v1.2-to-v2 migration guide: <link>.
+```
 
 ## Implementation outline
 
