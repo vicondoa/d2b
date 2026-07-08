@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Gave host-local realm daemon users traverse access to `/run/d2b` and made
+  realm run directories match the daemon lock-parent contract
+  (`root:<realm-access-group>` sticky `1770`) so realm daemons can validate
+  their own lock files.
 - Ordered generated host-local realm daemon units after the root privileged
   broker socket/service so switch-time activation does not race broker
   socket-activation startup.
