@@ -532,9 +532,8 @@ mod tests {
         // Two workloads with the same workload_id but different vm_names.
         let w1 = workload_with_identity("builder", "work", "builder-work");
         let w2 = workload_with_identity("builder", "dev", "builder-dev");
-        // Override canonical targets so they don't clash:
-        let w2_fixed = w2.replace("\"builder.dev.d2b\"", "\"builder.dev.d2b\"");
-        let config = controllers_json_with_workloads(&format!("[{w1}, {w2_fixed}]"));
+        // canonical targets already differ: builder.work.d2b vs builder.dev.d2b
+        let config = controllers_json_with_workloads(&format!("[{w1}, {w2}]"));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         let err = index
             .resolve_target("builder", &known_vms(&[]))
