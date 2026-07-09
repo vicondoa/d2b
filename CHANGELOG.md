@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed `realm_workload_schema_contract` contract tests to assert the correct
+  nested `WorkloadIdentity` shape and field names. The old tests checked for
+  the wrong field name `runtimeProviderId` (renamed to `providerId` in the DTO)
+  and did not verify nested identity structure or guard against the invalid
+  `kind` key. Updated tests now verify: `identity =` nesting, presence of all
+  required identity field names (`workloadId`, `realmId`, `realmPath`,
+  `canonicalTarget`, `providerId`), and absence of `kind = workloadRow.kind`
+  and `runtimeProviderId =` as JSON keys.
+
 - Narrowed the group ACL on host-local realm run directories from `g::rwx` to
   `g::r-x` so realm-access-group members can traverse and list but cannot
   write. The previous `g::rwx` ACL combined with the sticky `1770` base mode
