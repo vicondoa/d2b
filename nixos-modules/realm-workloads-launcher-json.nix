@@ -48,6 +48,10 @@ let
     realmId = workload.realmId;
     realmPath = workload.realmPath;
     workloadName = workload.workloadName;
+    # workloadId: explicit DTO-named alias for workloadName.  Matches the
+    # WorkloadIdentity.workloadId field used by daemon/broker consumers.
+    # Stable across restarts; equal to workloadName.
+    workloadId = workload.workloadId;
     targetAddress = workload.targetAddress;
     # canonicalTarget: routing address for realm-native desktop tooling.
     # Equals targetAddress unless launcher.app.targetRealm overrides it.
@@ -55,7 +59,20 @@ let
     kind = workload.kind;
     actionId = workload.actionId;
     label = workload.label;
+    # icon: resolved display icon string (iconId if set, else iconName).
+    # Backward-compatible field; stable for single-icon display use.
     icon = workload.icon;
+    # iconId: raw XDG icon theme id from launcher.icon.id; null when not set.
+    iconId = workload.iconId;
+    # iconName: raw symbolic icon name fallback from launcher.icon.name;
+    # null when not set.
+    iconName = workload.iconName;
+    # iconGroupKey: stable grouping key for duplicate-icon / app-chooser
+    # semantics.  Desktop consumers (Waybar, wlcontrol, clip-picker) use this
+    # to cluster workloads representing the same application type across
+    # realms.  Equals iconId when set, else iconName; null when neither is
+    # declared.  Always identical to the resolved `icon` field.
+    iconGroupKey = workload.iconGroupKey;
     capabilityRefs = workload.capabilityRefs;
     # appCommand: static operator-declared primary launch command; null when
     # not set.  Consumers must not shell-expand without validation.

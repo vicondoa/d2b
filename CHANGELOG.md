@@ -21,6 +21,25 @@ deprecations ship one minor release before removal.
   schema is updated to document the new optional `realms` field. Realm colors
   are presentation metadata only and carry no authorization semantics.
 
+- Hardened realm workload launcher metadata contract for desktop consumers
+  (Waybar, wlcontrol, wlterm, clip-picker). The generated
+  `realm-workloads-launcher.json` artifact now exposes three additional fields
+  per workload row:
+  - `workloadId` — explicit DTO-named alias for `workloadName`, matching the
+    `WorkloadIdentity.workloadId` field used by daemon/broker consumers.
+  - `iconId` — raw `launcher.icon.id` option value (null when not set);
+    allows consumers to round-trip the XDG icon theme id without re-parsing
+    the resolved `icon` string.
+  - `iconName` — raw `launcher.icon.name` fallback value (null when not set).
+  - `iconGroupKey` — stable clustering key for duplicate-icon / app-chooser
+    semantics; equals `iconId` when set, else `iconName`, else null. Desktop
+    consumers use this to cluster workloads representing the same application
+    type across realms (e.g. "Firefox" in both work and personal realms).
+  The workload index (`_index.realms.workloads`) also derives these fields so
+  any consumer of the index has access to them, not only the launcher emitter.
+  New nix-unit cases cover all field shapes and the duplicate-icon grouping
+  invariant; new contract tests enforce the emitter and index wiring.
+
 - Added restart/adoption validation gates for workload identity. Four hermetic
   type-2 unit tests in `WorkloadTargetIndex` prove the index is deterministic
   when rebuilt from the same config before/after a daemon restart cycle, that a
