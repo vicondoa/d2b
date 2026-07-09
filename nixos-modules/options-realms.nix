@@ -112,7 +112,7 @@ in
       let
         realmConfig = config;
         realmStateDir = "${toString outerConfig.d2b.site.stateDir}/realms/${realmConfig.id}";
-        realmAuditDir = "/var/lib/d2b/audit/realms/${realmConfig.id}";
+        realmLogDir = "/var/lib/d2b/audit/realms/${realmConfig.id}";
         realmRunDir = "/run/d2b/realms/${realmConfig.id}";
       in
       {
@@ -427,7 +427,7 @@ in
 
             auditDir = lib.mkOption {
               type = lib.types.strMatching absolutePath;
-              default = realmAuditDir;
+              default = realmLogDir;
               defaultText = lib.literalExpression "\"/var/lib/d2b/audit/realms/<realm>\"";
               description = ''
                 Derived per-realm audit directory. The default is deliberately
