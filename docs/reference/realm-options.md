@@ -3,7 +3,7 @@
 **Diataxis category:** reference.
 
 `d2b.realms.<realm>` is the public Nix option namespace for the
-realm-native control-plane model. It records intent,
+realm-native control-plane model. It records intent and owned workloads,
 validates option shape, emits private host-local controller metadata in
 `/etc/d2b/realm-controllers.json`, and materializes host-local scaffolding:
 deterministic daemon/broker units and sockets, realm users and groups,
@@ -12,11 +12,11 @@ socket access ACLs. It does not allocate realm-owned network resources,
 migrate VMs, start provider adapters, or enable realm routing/identity/access
 policy beyond that inert host-local scaffolding.
 
-Existing `d2b.envs` declarations remain the network substrate.
-Workload VMs still join that substrate with `d2b.vms.<vm>.env = "<env>"`.
-Realm declarations may point at existing envs as transition metadata so runtime
-support can map realm policy to the bridge, net-VM, NAT, DHCP, and firewall
-substrate without changing VM placement behavior.
+Existing `d2b.envs` declarations remain the network substrate during the v2
+transition. Workload VMs still join that substrate with
+`d2b.vms.<vm>.env = "<env>"`, while `d2b.realms.<realm>.workloads` records the
+realm-native workload identity, runtime kind, state mapping, and desktop
+launcher metadata.
 
 ## Minimal declaration
 
@@ -34,11 +34,18 @@ d2b.envs.work = {
 };
 
 d2b.vms.laptop.env = "work";
+
+d2b.realms.work.workloads.laptop = {
+  kind = "local-vm";
+  legacyVmName = "laptop";
+  launcher.enable = true;
+};
 ```
 
 The realm above does not move `laptop` into a new runtime namespace. The
 active VM placement remains `d2b.vms.laptop.env = "work"` until runtime
-support consumes the realm declaration.
+support consumes the realm declaration. The workload row still emits the
+canonical target `laptop.work.d2b` for CLI output and desktop consumers.
 
 ## Identifier and path fields
 
@@ -185,6 +192,30 @@ binding to `/etc/d2b/allocator.json`. That binding is a typed resolver
 contract for host-resource leases; it is not permission for a realm
 broker to send raw commands, raw host paths, or free-form network rules through
 the host daemon.
+
+## Workload launcher metadata
+
+`d2b.realms.<realm>.workloads.<workload>.launcher` is the shared desktop
+metadata source for d2b-aware launchers and bars. Enabled workload rows appear
+in `/etc/d2b/realm-workloads-launcher.json`, a private non-secret bundle
+artifact installed as `root:d2bd 0640`. Desktop tools should receive this data
+through d2bd/public helper surfaces or generated user config, not by reading the
+root-owned artifact directly.
+
+Each row includes:
+
+| Field | Meaning |
+| --- | --- |
+| `realmName`, `realmId`, `realmPath` | Owning realm identity. |
+| `workloadName`, `workloadId` | Workload identity. |
+| `targetAddress`, `canonicalTarget` | Public workload target such as `laptop.work.d2b`. |
+| `legacyVmName` | Existing VM substrate when the workload wraps `d2b.vms.<vm>`. |
+| `label`, `icon`, `iconId`, `iconName`, `iconGroupKey` | Presentation and duplicate-app grouping metadata. |
+| `appCommand`, `actions[]` | Operator-declared launch actions. |
+
+Waybar quick-launch buttons, wlcontrol realm cards, wlterm shell grouping, and
+clip-picker realm grouping all consume the same realm/workload identity model.
+Realm colors come from the UI color contract, not from authorization state.
 
 ## Related references
 

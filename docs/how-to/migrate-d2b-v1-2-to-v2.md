@@ -123,7 +123,8 @@ d2b.realms.work = {
     legacyVmName = "laptop";    # maps stateDir → /var/lib/d2b/vms/laptop
     localVm.ssh.user = "alice";
 
-    # Optional desktop-launcher metadata for d2b-wlterm and Waybar.
+    # Optional desktop-launcher metadata for Waybar, wlcontrol, wlterm,
+    # clip-picker, and other realm-aware desktop consumers.
     launcher = {
       enable = true;
       label = "Work Laptop";
@@ -138,6 +139,19 @@ The workload `stateDir` defaults to `/var/lib/d2b/vms/<workload-id>`.  If
 the workload id matches the legacy VM name (e.g. both are `laptop`) the
 paths are identical and no data moves.  Setting `legacyVmName` is required
 only when the realm workload id differs from the legacy VM name.
+
+After this metadata is present, d2b emits
+`/etc/d2b/realm-workloads-launcher.json`. Desktop consumers use that private
+non-secret artifact (or public daemon surfaces derived from it) to group
+launchers by realm, show canonical targets such as `laptop.work.d2b`, and
+cluster duplicate app icons within one realm. The canonical target is also
+accepted by local CLI status and guest-exec paths while the legacy VM remains
+the underlying substrate:
+
+```bash
+d2b vm status laptop.work.d2b
+d2b vm exec -d laptop.work.d2b -- firefox
+```
 
 `qemu-media` workloads use the same shape with `kind = "qemu-media"` and
 `qemuMedia.*` options mirroring `d2b.vms.<vm>.qemuMedia.*`:
@@ -221,6 +235,7 @@ For a production rollout, verify this on the host after the switch:
 ```bash
 systemctl is-active d2bd.service
 d2b status laptop
+d2b vm status laptop.work.d2b
 ```
 
 The static gates cover the service posture and metadata contract; live
@@ -259,9 +274,12 @@ d2b status laptop
 d2b vm restart laptop --apply
 ```
 
-Use fully-qualified realm targets only where you intend realm-aware routing:
+Use fully-qualified realm targets for realm-aware status, detached exec, and
+desktop launchers:
 
 ```bash
+d2b vm status laptop.work.d2b
+d2b vm exec -d laptop.work.d2b -- true
 d2b vm display list --target laptop.work.d2b --json
 ```
 
@@ -292,13 +310,20 @@ Clipboard picker requests now include optional d2b-provided realm identity and
 capability-preflight fields. The picker should treat these as trusted d2b
 metadata and keep guest titles/app ids as presentation hints only.
 
-Wayland proxy processes receive `--realm-target <vm>.local.d2b` for local VMs
-during the transition. Existing app-id and title rewriting still behaves as
-before:
+Wayland proxy processes use the workload's canonical realm target when the
+VM maps unambiguously to a realm workload. Existing app-id and title rewriting
+still behaves as before:
 
 - app ids are still prefixed as `d2b.<vm>.<guest-app-id>`;
 - titles still receive `[<vm>] `;
-- the new realm target is separate trusted metadata for d2b-aware tooling.
+- the realm target is separate trusted metadata for d2b-aware tooling.
+
+The generated launcher metadata should also expose the canonical target:
+
+```bash
+sudo jq '.workloads[] | {legacyVmName, canonicalTarget, realmName, workloadName}' \
+  /etc/d2b/realm-workloads-launcher.json
+```
 
 Display sessions listed with JSON include `canonicalTarget`, `identitySource`,
 and `capabilityPreflight`:

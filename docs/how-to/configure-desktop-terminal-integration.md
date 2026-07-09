@@ -20,7 +20,9 @@ launcher, or terminal emulator.
 
 ## Prerequisites
 
-Enable persistent shells on every VM that should appear in the launcher:
+Enable persistent shells on every workload that should appear in the launcher.
+During the v2 transition, keep the legacy VM runtime declaration and add a
+realm workload row that points at it:
 
 ```nix
 d2b.vms.work = {
@@ -29,6 +31,16 @@ d2b.vms.work = {
   guest.control.enable = true;
   guest.exec.enable = true;
   guest.shell.enable = true;
+};
+
+d2b.realms.work.workloads.shellbox = {
+  kind = "local-vm";
+  legacyVmName = "work";
+  launcher = {
+    enable = true;
+    label = "Work Shell";
+    capabilities = [ "persistent-shell" "guest-exec" ];
+  };
 };
 ```
 
@@ -102,6 +114,11 @@ operators who manage Waybar outside Home Manager. The upstream `d2b-wlterm`
 flake has a `checks.<system>.home-manager-module` evaluation check that exercises
 this rendered shape.
 
+When realm workload metadata is present, d2b-wlterm groups shell-capable
+workloads by realm and displays canonical targets such as
+`shellbox.work.d2b`. It still uses the d2bd public socket and guest-control
+capability checks; it does not read root-owned d2b bundle artifacts directly.
+
 ## Configure Waybar
 
 When Waybar is managed by Home Manager, enable native injection instead of
@@ -132,6 +149,7 @@ nix flake check
 home-manager build --flake .#alice
 d2b shell work list
 d2b-wlterm list work
+d2b vm status shellbox.work.d2b
 ```
 
 If `d2b-wlterm list` reports a typed shell capability error, confirm that the
