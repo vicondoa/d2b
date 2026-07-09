@@ -304,24 +304,68 @@ fn realm_workloads_launcher_exposes_canonical_target_and_actions() {
 
 // ── realm-controller-config emitter: identity fields ─────────────────────────
 
-/// The controller config emitter must include explicit workload identity fields
-/// (`kind`, `realmPath`, `canonicalTarget`, `legacyVmName`, `runtimeKind`,
-/// `runtimeProviderId`) in the `mkLocalWorkloadEntry` helper so that
-/// controller JSON entries carry the full identity context.
+// ── realm-controller-config emitter: identity fields ─────────────────────────
+
+/// The controller config emitter must wire workload identity as a **nested**
+/// `identity = { ... }` object (matching the `RealmControllerLocalWorkload.identity:
+/// Option<WorkloadIdentity>` field) with the correct field names.
+///
+/// Required WorkloadIdentity fields in the emitter:
+///   - `workloadId`   (maps from workload name)
+///   - `realmId`      (from `workloadRow.realmId`)
+///   - `realmPath`    (as a Nix list, via `lib.splitString "." workloadRow.realmPath`)
+///   - `canonicalTarget`
+///
+/// Optional WorkloadIdentity fields in the emitter:
+///   - `legacyVmName`, `runtimeKind`, `providerId` (renamed from `runtimeProviderId`)
+///
+/// Fields that must NOT appear as identity keys:
+///   - `kind`           (not in WorkloadIdentity; was a W15 pre-review error)
+///   - `runtimeProviderId` as a JSON key (renamed to `providerId`)
+///
+/// The identity object must be nested (not flat-merged with `//` into the
+/// workload root), because `RealmControllerLocalWorkload` has `deny_unknown_fields`.
 #[test]
 fn realm_controller_config_emitter_wires_workload_identity_fields() {
     let emitter = read_repo_file("nixos-modules/realm-controller-config-json.nix");
-    for field in [
-        "canonicalTarget",
-        "legacyVmName",
-        "runtimeKind",
-        "runtimeProviderId",
-    ] {
+
+    // Required fields must appear as Nix keys inside the identity block:
+    for field in ["workloadId", "realmId", "realmPath", "canonicalTarget", "legacyVmName", "runtimeKind"] {
         assert!(
             emitter.contains(field),
-            "realm-controller-config emitter must wire identity field {field}"
+            "realm-controller-config emitter must wire WorkloadIdentity field {field}"
         );
     }
+
+    // The renamed field: the Nix key must be `providerId` (the DTO name),
+    // not `runtimeProviderId`. The value source `workloadRow.runtimeProviderId`
+    // may still appear, but `providerId` must be present as a key.
+    assert!(
+        emitter.contains("providerId"),
+        "realm-controller-config emitter must use 'providerId' as the WorkloadIdentity key \
+         (not runtimeProviderId)"
+    );
+
+    // Identity must be nested, not flat-merged: the `identity =` assignment
+    // must appear so that the identity fields travel in a sub-object.
+    assert!(
+        emitter.contains("identity ="),
+        "realm-controller-config emitter must nest workload identity under 'identity = {{ ... }}' \
+         (RealmControllerLocalWorkload.identity: Option<WorkloadIdentity> — deny_unknown_fields \
+         rejects flat identity keys at the workload root)"
+    );
+
+    // `kind` must NOT be used as a key inside the identity block.
+    // It was a pre-review error: WorkloadIdentity has no `kind` field.
+    // The emitter may still reference `workload.kind` elsewhere (index row
+    // access), but there must not be a `kind = workloadRow.kind` assignment
+    // inside the identity attrset.
+    assert!(
+        !emitter.contains("kind = workloadRow.kind"),
+        "realm-controller-config emitter must not assign 'kind = workloadRow.kind' \
+         inside the identity block; WorkloadIdentity has no 'kind' field"
+    );
+
     // Bug-fix from W14: vmRef was renamed to legacyVmName; the emitter must
     // not reference the old name.
     assert!(
@@ -332,7 +376,9 @@ fn realm_controller_config_emitter_wires_workload_identity_fields() {
 
 /// The controller config emitter must use `row.legacyVmName` (not the
 /// previously broken `row.vmRef`) in all three call sites of
-/// `localRuntimeWorkloadsFor`.
+/// `localRuntimeWorkloadsFor`.  Also guards that the old flat field name
+/// `runtimeProviderId` is not used as a JSON key in the identity object
+/// (it was renamed to `providerId` to match WorkloadIdentity).
 #[test]
 fn realm_controller_config_emitter_uses_legacy_vm_name_not_vm_ref() {
     let emitter = read_repo_file("nixos-modules/realm-controller-config-json.nix");
@@ -340,6 +386,14 @@ fn realm_controller_config_emitter_uses_legacy_vm_name_not_vm_ref() {
         !emitter.contains("vmRef"),
         "realm-controller-config emitter must not contain any reference to 'vmRef' \
          (renamed to legacyVmName in W14)"
+    );
+    // `runtimeProviderId` may appear as the Nix value source
+    // (workloadRow.runtimeProviderId) but must NOT appear as the
+    // JSON key name; the DTO field is `providerId`.
+    assert!(
+        !emitter.contains("runtimeProviderId ="),
+        "realm-controller-config emitter must not use 'runtimeProviderId =' as a key; \
+         the WorkloadIdentity DTO field is 'providerId'"
     );
 }
 
