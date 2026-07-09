@@ -379,6 +379,13 @@
             "null"
           ]
         },
+        "canonicalTarget": {
+          "description": "Canonical realm-native workload target address (`<workload>.<realm>.d2b`). Present when the daemon has associated this VM with a realm workload identity. Absent for classical VMs not yet adopted into a realm. Additive — old CLI consumers must tolerate its absence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "current": {
           "type": [
             "string",

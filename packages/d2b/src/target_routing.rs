@@ -234,7 +234,10 @@ pub enum TargetMigrationHint {
 impl core::fmt::Display for TargetMigrationHint {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            TargetMigrationHint::BareVmHasCanonicalTarget { vm, canonical_target } => write!(
+            TargetMigrationHint::BareVmHasCanonicalTarget {
+                vm,
+                canonical_target,
+            } => write!(
                 f,
                 "target `{vm}` is a bare VM name; consider using the canonical workload target `{canonical_target}` instead"
             ),
@@ -835,8 +838,8 @@ mod tests {
 
     #[test]
     fn detect_env_style_target_identifies_missing_suffix() {
-        let hint = super::detect_env_style_target("corp-vm.work")
-            .expect("should detect env-style target");
+        let hint =
+            super::detect_env_style_target("corp-vm.work").expect("should detect env-style target");
         match hint {
             super::TargetMigrationHint::OldEnvStyleTarget { raw, suggested } => {
                 assert_eq!(raw, "corp-vm.work");
@@ -880,8 +883,8 @@ mod tests {
 
     #[test]
     fn detect_env_style_target_multi_label_path() {
-        let hint = super::detect_env_style_target("builder.staging")
-            .expect("two-label env-style target");
+        let hint =
+            super::detect_env_style_target("builder.staging").expect("two-label env-style target");
         match hint {
             super::TargetMigrationHint::OldEnvStyleTarget { raw, suggested } => {
                 assert_eq!(raw, "builder.staging");
@@ -896,7 +899,10 @@ mod tests {
         let hint = super::migration_hint_for_bare_vm("corp-vm", "corp-vm.work.d2b")
             .expect("bare name should produce a hint");
         match hint {
-            super::TargetMigrationHint::BareVmHasCanonicalTarget { vm, canonical_target } => {
+            super::TargetMigrationHint::BareVmHasCanonicalTarget {
+                vm,
+                canonical_target,
+            } => {
                 assert_eq!(vm, "corp-vm");
                 assert_eq!(canonical_target, "corp-vm.work.d2b");
             }
@@ -929,8 +935,14 @@ mod tests {
         };
         let msg = hint.to_string();
         assert!(msg.contains("my-vm"), "hint message includes vm name");
-        assert!(msg.contains("my-vm.work.d2b"), "hint message includes canonical target");
-        assert!(msg.contains("canonical"), "hint message mentions canonical form");
+        assert!(
+            msg.contains("my-vm.work.d2b"),
+            "hint message includes canonical target"
+        );
+        assert!(
+            msg.contains("canonical"),
+            "hint message mentions canonical form"
+        );
     }
 
     #[test]
@@ -940,9 +952,18 @@ mod tests {
             suggested: "my-vm.work.d2b".to_owned(),
         };
         let msg = hint.to_string();
-        assert!(msg.contains("my-vm.work"), "hint message includes raw target");
-        assert!(msg.contains("my-vm.work.d2b"), "hint message includes suggested form");
-        assert!(msg.contains(".d2b"), "hint message mentions the required suffix");
+        assert!(
+            msg.contains("my-vm.work"),
+            "hint message includes raw target"
+        );
+        assert!(
+            msg.contains("my-vm.work.d2b"),
+            "hint message includes suggested form"
+        );
+        assert!(
+            msg.contains(".d2b"),
+            "hint message mentions the required suffix"
+        );
     }
 
     #[test]

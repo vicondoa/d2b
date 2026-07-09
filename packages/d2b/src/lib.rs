@@ -5516,27 +5516,23 @@ fn print_workload_migration_hint(hint: &target_routing::TargetMigrationHint, jso
 fn route_vm_target(context: &Context, raw: &str, json: bool) -> Result<VmTargetRoute, CliFailure> {
     // Fail-closed for old env-qualified targets missing the `.d2b` suffix.
     // E.g. `corp-vm.work` → error with suggestion `corp-vm.work.d2b`.
-    if let Some(hint) = target_routing::detect_env_style_target(raw) {
-        match &hint {
-            target_routing::TargetMigrationHint::OldEnvStyleTarget { suggested, .. } => {
-                let message = hint.to_string();
-                let exit_code = emit_host_error(
-                    &host_error_envelope(
-                        &message,
-                        "old-env-style-target",
-                        2,
-                        "CLI target parsing: env-qualified names require the `.d2b` suffix.",
-                        raw,
-                        &format!("Use `{suggested}` (the canonical workload target form)."),
-                        "docs/reference/cli-contract.md",
-                    ),
-                    json,
-                )
-                .map_err(|f| f)?;
-                return Err(CliFailure::new(exit_code, message));
-            }
-            _ => {}
-        }
+    if let Some(hint) = target_routing::detect_env_style_target(raw)
+        && let target_routing::TargetMigrationHint::OldEnvStyleTarget { suggested, .. } = &hint
+    {
+        let message = hint.to_string();
+        let exit_code = emit_host_error(
+            &host_error_envelope(
+                &message,
+                "old-env-style-target",
+                2,
+                "CLI target parsing: env-qualified names require the `.d2b` suffix.",
+                raw,
+                &format!("Use `{suggested}` (the canonical workload target form)."),
+                "docs/reference/cli-contract.md",
+            ),
+            json,
+        )?;
+        return Err(CliFailure::new(exit_code, message));
     }
     route_vm_target_with_table(context, raw, json, load_realm_entrypoint_table()?)
 }
@@ -6594,16 +6590,12 @@ fn cmd_vm_lifecycle_verb(
     // Emit a non-fatal compatibility warning when a bare VM name is used but
     // a canonical workload target is available for it in the realm-controllers
     // artifact. Advisory only: the local fast path continues to work.
-    if !json && !vm.contains('.') {
-        if let Some(canonical) =
-            try_canonical_target_for_vm(&context.bundle_path, &vm)
-        {
-            if let Some(hint) =
-                target_routing::migration_hint_for_bare_vm(&vm, &canonical)
-            {
-                print_workload_migration_hint(&hint, json);
-            }
-        }
+    if !json
+        && !vm.contains('.')
+        && let Some(canonical) = try_canonical_target_for_vm(&context.bundle_path, &vm)
+        && let Some(hint) = target_routing::migration_hint_for_bare_vm(&vm, &canonical)
+    {
+        print_workload_migration_hint(&hint, json);
     }
     if (verb == "start" || verb == "restart") && !json {
         warn_pending_staged_config(&vm);
@@ -9476,7 +9468,9 @@ fn render_list_human(
                 item.tpm,
                 item.usbip,
                 static_ip,
-                item.canonical_target.clone().unwrap_or_else(|| "-".to_owned()),
+                item.canonical_target
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
                 status,
             );
         } else {
@@ -12365,10 +12359,8 @@ mod host_install_dispatch_tests {
         let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         // Make `work` a local realm so the route resolves without a daemon.
         table.host_resident(
-            d2b_realm_core::RealmPath::new(vec![
-                d2b_realm_core::RealmId::parse("work").unwrap(),
-            ])
-            .unwrap(),
+            d2b_realm_core::RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()])
+                .unwrap(),
         );
         let context = test_context(manifest_path.clone());
 
