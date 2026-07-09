@@ -5510,7 +5510,7 @@ fn print_workload_migration_hint(hint: &target_routing::TargetMigrationHint, jso
     if json {
         return;
     }
-    eprintln!("note: {hint}");
+    print_stderr(&format!("note: {hint}\n"));
 }
 
 fn route_vm_target(context: &Context, raw: &str, json: bool) -> Result<VmTargetRoute, CliFailure> {
@@ -6538,6 +6538,10 @@ fn cmd_vm_lifecycle_verb(
     } = invocation;
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     let route = route_vm_target(context, vm, json)?;
+    // Preserve the raw user input before the resolved local name shadows it.
+    // Migration hint logic must check the original target string, not the
+    // workload label extracted by the router (which is always dot-free).
+    let raw_target = vm;
     let vm = match route {
         VmTargetRoute::Local { vm } => vm,
         VmTargetRoute::Gateway {
@@ -6590,10 +6594,15 @@ fn cmd_vm_lifecycle_verb(
     // Emit a non-fatal compatibility warning when a bare VM name is used but
     // a canonical workload target is available for it in the realm-controllers
     // artifact. Advisory only: the local fast path continues to work.
+    // Gate on raw_target (the original user input), NOT on the resolved local
+    // VM name: for host-local realms the router strips the realm suffix
+    // (e.g. "corp-vm.work.d2b" → "corp-vm"), so testing the resolved name
+    // would always appear dot-free and incorrectly trigger the hint for users
+    // who already typed the canonical form.
     if !json
-        && !vm.contains('.')
+        && !raw_target.contains('.')
         && let Some(canonical) = try_canonical_target_for_vm(&context.bundle_path, &vm)
-        && let Some(hint) = target_routing::migration_hint_for_bare_vm(&vm, &canonical)
+        && let Some(hint) = target_routing::migration_hint_for_bare_vm(raw_target, &canonical)
     {
         print_workload_migration_hint(&hint, json);
     }
@@ -15431,6 +15440,249 @@ mod host_install_dispatch_tests {
         let rendered = String::from_utf8(stdout).expect("stdout utf8");
         assert!(rendered.contains("host-reconcile"));
         assert!(rendered.contains("qemu-media"));
+    }
+
+    /// Write a minimal bundle.json + realm-controllers.json so that
+    /// `try_canonical_target_for_vm(vm)` finds `"<vm>.work.d2b"`.
+    fn write_bundle_with_realm_controllers(bundle_path: &std::path::Path, vm: &str) {
+        let dir = bundle_path.parent().expect("bundle parent dir");
+        std::fs::create_dir_all(dir).expect("create bundle dir");
+        let unique = bundle_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("bundle filename");
+        let rc_filename = format!("{unique}.realm-controllers.json");
+        let realm_controllers = json!({
+            "schemaVersion": "v2",
+            "runtimeState": "metadata-only",
+            "controllers": [{
+                "realmName": "Work",
+                "realmId": "work",
+                "realmPath": "work",
+                "placement": "host-local",
+                "daemon": {
+                    "user": "d2br-work",
+                    "group": "d2br-work",
+                    "publicSocketGroup": "d2bra-work",
+                    "serviceName": "d2b-realm-work-daemon.service",
+                    "configPath": "/etc/d2b/realms/work/daemon-config.json",
+                    "stateLockPath": "/run/d2b/realms/work/daemon.lock",
+                    "locksDir": "/run/d2b/realms/work/locks",
+                    "socketActivated": false,
+                    "materializedService": false
+                },
+                "broker": {
+                    "enabled": true,
+                    "hostMutation": true,
+                    "user": "root",
+                    "group": "d2br-work",
+                    "socketPath": "/run/d2b/realms/work/broker.sock",
+                    "socketUnitName": "d2b-realm-work-priv-broker.socket",
+                    "serviceUnitName": "d2b-realm-work-priv-broker.service",
+                    "auditDir": "/var/lib/d2b/realms/work/audit",
+                    "materializedSocket": false,
+                    "materializedService": false
+                },
+                "paths": {
+                    "runDir": "/run/d2b/realms/work",
+                    "stateDir": "/var/lib/d2b/realms/work",
+                    "auditDir": "/var/lib/d2b/realms/work/audit"
+                },
+                "sockets": {
+                    "publicSocketPath": "/run/d2b/realms/work/public.sock",
+                    "brokerSocketPath": "/run/d2b/realms/work/broker.sock"
+                },
+                "allocator": {
+                    "kind": "local-root-metadata",
+                    "configPath": "/etc/d2b/allocator.json",
+                    "rootSocket": "/run/d2b/allocator/local-root.sock"
+                },
+                "access": {},
+                "localRuntime": {
+                    "runtimeState": "metadata-only",
+                    "workloads": [{
+                        "workloadId": vm,
+                        "vmName": vm,
+                        "env": "work",
+                        "runtime": {
+                            "kind": "nixos",
+                            "provider": { "id": "local-provider", "driver": "local-ch", "type": "local" },
+                            "capabilities": {
+                                "lifecycle": true, "display": false, "usbHotplug": false,
+                                "guestControl": true, "exec": true, "configSync": true,
+                                "ssh": false, "storeSync": true, "keys": true,
+                                "inGuestObservability": false
+                            },
+                            "operationCapabilities": {
+                                "lifecycle": {
+                                    "start": true, "stop": true, "restart": true,
+                                    "switch": false, "hostPrepare": false
+                                },
+                                "media": { "usbHotplug": false, "removableMedia": false, "qemuMedia": false },
+                                "display": { "display": false, "graphics": false, "video": false, "waylandProxy": false },
+                                "guest": {
+                                    "guestControl": true, "exec": true, "shell": false,
+                                    "configSync": true, "ssh": false, "keys": true,
+                                    "inGuestObservability": false
+                                },
+                                "storage": { "storeSync": true, "virtiofs": true, "volumes": false }
+                            },
+                            "autostartPolicy": "manual"
+                        },
+                        "paths": {
+                            "stateDir": format!("/var/lib/d2b/vms/{vm}/state"),
+                            "runDir": format!("/run/d2b/vms/{vm}"),
+                            "storeView": format!("/var/lib/d2b/vms/{vm}/store"),
+                            "guestControlDir": format!("/run/d2b/vms/{vm}/guest-control")
+                        },
+                        "identity": {
+                            "workloadId": vm,
+                            "realmId": "work",
+                            "realmPath": ["work"],
+                            "canonicalTarget": format!("{vm}.work.d2b")
+                        }
+                    }],
+                    "invariants": {
+                        "metadataOnly": true,
+                        "existingGlobalVmPathsPreserved": true,
+                        "noStateMigrationDuringActivation": true,
+                        "brokerEffectsRemainRealmDelegated": true
+                    }
+                }
+            }],
+            "invariants": {
+                "metadataOnly": true,
+                "noSystemdUnitsMaterialized": true,
+                "preservesGlobalDaemonBehavior": true,
+                "preservesDirectUnixSocketSemantics": true
+            }
+        });
+        std::fs::write(
+            dir.join(&rc_filename),
+            serde_json::to_vec(&realm_controllers).expect("serialize realm-controllers"),
+        )
+        .expect("write realm-controllers.json");
+        let bundle = json!({
+            "bundleVersion": 4,
+            "schemaVersion": "v2",
+            "publicManifestPath": format!("{unique}.vms.json"),
+            "hostPath": format!("{unique}.host.json"),
+            "processesPath": format!("{unique}.processes.json"),
+            "privilegesPath": format!("{unique}.privileges.json"),
+            "realmControllersPath": rc_filename,
+            "closures": [],
+            "minijailProfiles": [],
+            "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null }
+        });
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle.json");
+    }
+
+    #[test]
+    fn lifecycle_verb_bare_target_emits_migration_hint_when_canonical_known() {
+        // When a user types a bare VM name and the realm-controllers artifact
+        // advertises a canonical workload target, an advisory hint must appear
+        // on stderr pointing at the canonical form.
+        let vm = "corp-vm";
+        let manifest_path = test_socket_path("lv-bare-hint", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create manifest dir");
+        }
+        write_test_manifest(&manifest_path, vm);
+        let bundle_path = manifest_path.with_extension("bundle.json");
+        write_bundle_with_realm_controllers(&bundle_path, vm);
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: bundle_path.clone(),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        let (result, _stdout, stderr) = super::with_test_output_capture(|| {
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "start",
+                    vm,
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: false,
+                },
+            )
+        });
+        assert_eq!(result.expect("bare-target lifecycle dry-run"), 0);
+        let stderr_text = String::from_utf8(stderr).expect("stderr utf8");
+        assert!(
+            stderr_text.contains("corp-vm.work.d2b"),
+            "expected migration hint for bare input to mention canonical target; stderr: {stderr_text:?}"
+        );
+        assert!(
+            stderr_text.contains("note:"),
+            "expected migration hint prefix 'note:'; stderr: {stderr_text:?}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_verb_canonical_target_skips_migration_hint() {
+        // Typing the canonical form "corp-vm.work.d2b" must not produce a
+        // migration hint. In the test environment (no realm-entrypoint table
+        // on disk) the router treats ".work.d2b" as a conventional gateway
+        // target and routes through "sys-work-gateway"; the Gateway branch
+        // returns early before any hint logic runs, so stderr stays empty.
+        //
+        // On a host with a host-local work realm, the router returns
+        // VmTargetRoute::Local { vm: "corp-vm" } for "corp-vm.work.d2b".
+        // The raw_target preservation fix ensures !raw_target.contains('.')
+        // is false for the dotted input, suppressing the hint correctly.
+        let manifest_path = test_socket_path("lv-canonical-no-hint", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create manifest dir");
+        }
+        // "sys-work-gateway" must be declared so the conventional gateway
+        // route resolves rather than erroring with "missing realm entrypoint".
+        write_test_manifest(&manifest_path, "sys-work-gateway");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("missing-bundle.json"),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        let (result, _stdout, stderr) = super::with_test_output_capture(|| {
+            super::cmd_vm_lifecycle_verb(
+                &context,
+                super::VmLifecycleInvocation {
+                    verb: "start",
+                    vm: "corp-vm.work.d2b",
+                    dry_run: true,
+                    apply: false,
+                    no_wait_api: false,
+                    force: false,
+                    json: false,
+                },
+            )
+        });
+        assert_eq!(result.expect("canonical-target lifecycle dry-run"), 0);
+        let stderr_text = String::from_utf8(stderr).expect("stderr utf8");
+        assert!(
+            !stderr_text.contains("note:"),
+            "canonical input must not produce a migration hint; stderr: {stderr_text:?}"
+        );
     }
 
     #[test]

@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed `cmd_vm_lifecycle_verb` migration hint to check the raw user-supplied
+  target string rather than the resolved local VM name. For host-local realms
+  the router strips the realm suffix (e.g. `corp-vm.work.d2b` → `corp-vm`),
+  so the previous check (`!vm.contains('.')`) always evaluated true after
+  resolution and incorrectly emitted the "use the canonical form" hint to users
+  who had already typed the canonical form. The raw input is now preserved
+  before the shadow binding and used for both the dot-guard and the
+  `migration_hint_for_bare_vm` call.
+
 - Fixed `realm-controllers.json` workload identity emitter: workload identity
   fields are now nested under `identity: { ... }` matching the
   `RealmControllerLocalWorkload.identity: Option<WorkloadIdentity>` Rust DTO
