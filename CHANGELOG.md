@@ -103,6 +103,22 @@ deprecations ship one minor release before removal.
   accessors, `realm-workloads-launcher.json` shape and invariants, bundle
   artifact registration, cross-realm vsock CID collision assertion,
   cross-realm external-network conflict index, and empty-realm edge cases.
+- Extended realm workload index rows with `canonicalTarget` (derived from
+  `launcher.app.targetRealm` override or the standard `<workload>.<realm>.d2b`
+  formula), `appCommand` (from `launcher.app.command`), and `actions` (from
+  `launcher.actions`) so downstream emitters have full desktop launch metadata
+  without accessing raw workload options.
+- Extended `realm-workloads-launcher.json` to expose `canonicalTarget`,
+  `appCommand`, and `actions` (each action carries `id`, `label`, and
+  `command`). Commands are static operator-declared launch metadata, not
+  sensitive payloads; the invariant is refined to `noSensitiveCommandPayloads`
+  with accompanying security contract notes.
+- Extended `realm-controllers.json` workload entries for explicit realm
+  workload declarations: each entry now carries `kind`, `realmPath`,
+  `canonicalTarget`, `legacyVmName`, `runtimeKind`, and `runtimeProviderId`
+  alongside existing runtime/path fields. Transitional env-based entries
+  remain unchanged. Fixed a bug where the emitter still referenced the removed
+  `vmRef` field instead of the correct `legacyVmName`.
 
 - Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
   PR-only merges, panel/review evidence requirements, integrator ownership of
