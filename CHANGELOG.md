@@ -12,6 +12,23 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed `realm-controllers.json` workload identity emitter: workload identity
+  fields are now nested under `identity: { ... }` matching the
+  `RealmControllerLocalWorkload.identity: Option<WorkloadIdentity>` Rust DTO
+  field instead of being flat-merged into the workload root (which violated
+  `deny_unknown_fields` on `RealmControllerLocalWorkload`). Field names now
+  match `WorkloadIdentity`: required `workloadId`, `realmId`, `realmPath`
+  (emitted as a label array via `lib.splitString`), `canonicalTarget`; optional
+  `legacyVmName`, `runtimeKind`, `providerId` (renamed from the incorrect
+  `runtimeProviderId` key). The `kind` field is removed from the identity block
+  (it has no corresponding field in `WorkloadIdentity`). Transitional env-based
+  workload entries correctly omit the identity object entirely.
+- Fixed `launcher.app.targetRealm` nix-unit test to use a valid
+  `WorkloadTarget`-format address ending in `.d2b` (`corp-laptop.alt.d2b`).
+  Added `realmWorkloadTargetAssertions` in `assertions.nix` to reject invalid
+  `targetRealm` values at eval time (must match
+  `<workload>.<realmPath>.d2b` with `[a-z][a-z0-9-]*` labels).
+
 - Narrowed the group ACL on host-local realm run directories from `g::rwx` to
   `g::r-x` so realm-access-group members can traverse and list but cannot
   write. The previous `g::rwx` ACL combined with the sticky `1770` base mode
