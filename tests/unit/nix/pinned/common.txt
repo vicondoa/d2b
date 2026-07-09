@@ -588,6 +588,10 @@ readiness-waves/has-p6
 readiness-waves/has-p7
 readiness-waves/p0-implemented-default
 readiness-waves/p0-validated-default
+realms/accepted-all-workload-kinds-eval-clean
+realms/accepted-local-vm-workload-fields
+realms/accepted-provider-placeholder-workload-fields
+realms/accepted-qemu-media-workload-fields
 realms/allocator-artifact-roots-enabled-realm-index
 realms/controller-config-artifact-materializes-host-local-units
 realms/examples-minimal-and-multi-env-still-eval
@@ -603,7 +607,12 @@ realms/rejects-overlong-unix-socket-paths
 realms/rejects-parent-cycle
 realms/rejects-secret-shaped-identity-key-refs
 realms/requires-provider-for-provider-backed-placement
+realms/tombstone-inherit-env-nudge-warning-fires
+realms/tombstone-no-nudge-when-workloads-declared
+realms/tombstone-no-orphan-warning-when-vm-exists
+realms/tombstone-orphan-legacy-vm-warning-fires
 realms/valid-home-dev-work-keeps-env-substrate-active
+realm-workloads/controller-config-explicit-workload-identity
 realm-workloads/cross-realm-cid-collision-assertion-fires
 realm-workloads/cross-realm-cid-collision-names-affected-pairs
 realm-workloads/cross-realm-ext-network-conflict-advisory-only
@@ -616,6 +625,7 @@ realm-workloads/index-all-includes-disabled
 realm-workloads/index-by-vm-accessor
 realm-workloads/index-flat-enabled-accessor
 realm-workloads/launcher-json-bundle-artifact
+realm-workloads/launcher-json-canonical-target-override
 realm-workloads/launcher-json-excludes-disabled
 realm-workloads/launcher-json-invariants
 realm-workloads/launcher-json-no-implicit-dedup

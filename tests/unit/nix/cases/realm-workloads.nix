@@ -16,6 +16,11 @@
 #     same-VM cross-realm references do NOT trigger the assertion
 #   • Cross-realm external-network attachment conflict: advisory (assertion
 #     stays true) but index.realms.externalNetworkConflicts is populated
+#   • controller config: explicit workload identity is nested under `identity`
+#     with correct WorkloadIdentity DTO field names (workloadId, realmId,
+#     realmPath as array, canonicalTarget, providerId); kind and runtimeProviderId
+#     are absent at the workload root
+#   • launcher canonicalTarget override uses a valid .d2b target address
 { mkEval, lib, ... }:
 
 let
@@ -463,13 +468,15 @@ in
 
   # ── launcher JSON: canonicalTarget override ──────────────────────────────────
   # When launcher.app.targetRealm is set, canonicalTarget must use the override
-  # rather than the derived targetAddress.
+  # rather than the derived targetAddress.  The override value must end in
+  # `.d2b` to be a valid WorkloadTarget; `corp-laptop.alt.d2b` is a valid
+  # target that differs from the default `corp-laptop.work.home.d2b`.
   "realm-workloads/launcher-json-canonical-target-override" = {
     expr =
       let
         overrideFixture = lib.recursiveUpdate workloadFixture {
           d2b.realms.work.workloads.corp-laptop.launcher.app.targetRealm =
-            "corp-laptop.work.home.d2b.custom-override";
+            "corp-laptop.alt.d2b";
         };
         data = (mkEval [ overrideFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
         row = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
@@ -480,7 +487,7 @@ in
       };
     expected = {
       targetAddress = "corp-laptop.work.home.d2b";
-      canonicalTarget = "corp-laptop.work.home.d2b.custom-override";
+      canonicalTarget = "corp-laptop.alt.d2b";
       overrideDiffers = true;
     };
   };
@@ -674,11 +681,13 @@ in
     };
   };
 
-  # ── controller config: explicit workload entry carries identity fields ─────────
+  # ── controller config: explicit workload entry carries nested identity ─────────
   # When a realm workload has legacyVmName pointing to an enabled VM, the
-  # controller config localRuntime.workloads entry must include workload
-  # identity fields (kind, realmPath, canonicalTarget, legacyVmName,
-  # runtimeKind, runtimeProviderId) alongside the existing runtime/path fields.
+  # controller config localRuntime.workloads entry must include a nested
+  # `identity` object whose fields match WorkloadIdentity (deny_unknown_fields):
+  # required workloadId/realmId/realmPath(array)/canonicalTarget; optional
+  # legacyVmName/runtimeKind/providerId.  The old flat fields
+  # (kind, runtimeProviderId at workload root) are NOT present.
   "realm-workloads/controller-config-explicit-workload-identity" = {
     expr =
       let
@@ -688,31 +697,44 @@ in
         workLocal = workController.localRuntime;
         corpEntry =
           lib.findFirst (w: w.workloadId == "corp-laptop") null workLocal.workloads;
+        corpIdentity = corpEntry.identity;
       in {
         localRuntimePresent = workLocal != null;
         corpEntryPresent = corpEntry != null;
+        identityPresent = corpIdentity != null;
+        # top-level workload fields (no flat identity fields at root):
         workloadId = corpEntry.workloadId;
         vmName = corpEntry.vmName;
-        kind = corpEntry.kind;
-        realmPath = corpEntry.realmPath;
-        canonicalTarget = corpEntry.canonicalTarget;
-        legacyVmName = corpEntry.legacyVmName;
-        runtimeKind = corpEntry.runtimeKind;
-        runtimeProviderId = corpEntry.runtimeProviderId;
+        # nested identity fields must match WorkloadIdentity DTO:
+        identityWorkloadId = corpIdentity.workloadId;
+        identityRealmId = corpIdentity.realmId;
+        identityRealmPath = corpIdentity.realmPath;
+        identityCanonicalTarget = corpIdentity.canonicalTarget;
+        identityLegacyVmName = corpIdentity.legacyVmName;
+        identityRuntimeKind = corpIdentity.runtimeKind;
+        identityProviderId = corpIdentity.providerId;
+        # deny_unknown_fields guards: kind must not appear at workload root
+        # or as an identity key; runtimeProviderId must not appear as a key.
+        kindAbsentAtRoot = !(corpEntry ? kind);
+        runtimeProviderIdAbsentAtRoot = !(corpEntry ? runtimeProviderId);
         pathsPresent = corpEntry.paths != null;
         runtimePresent = corpEntry.runtime != null;
       };
     expected = {
       localRuntimePresent = true;
       corpEntryPresent = true;
+      identityPresent = true;
       workloadId = "corp-laptop";
       vmName = "corpbox";
-      kind = "local-vm";
-      realmPath = "work.home";
-      canonicalTarget = "corp-laptop.work.home.d2b";
-      legacyVmName = "corpbox";
-      runtimeKind = "nixos";
-      runtimeProviderId = "local-cloud-hypervisor";
+      identityWorkloadId = "corp-laptop";
+      identityRealmId = "work";
+      identityRealmPath = [ "work" "home" ];
+      identityCanonicalTarget = "corp-laptop.work.home.d2b";
+      identityLegacyVmName = "corpbox";
+      identityRuntimeKind = "nixos";
+      identityProviderId = "local-cloud-hypervisor";
+      kindAbsentAtRoot = true;
+      runtimeProviderIdAbsentAtRoot = true;
       pathsPresent = true;
       runtimePresent = true;
     };

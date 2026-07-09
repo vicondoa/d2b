@@ -613,6 +613,40 @@ let
     }
   ];
 
+  # Validate launcher.app.targetRealm against the WorkloadTarget format:
+  # <workload>.<realmPath>.d2b where every label is [a-z][a-z0-9-]*.
+  # Rejects values that would fail WorkloadTarget::parse on the Rust side
+  # (deny_unknown_fields / Deserialize means the bundle consumer fails on
+  # a bad target rather than silently ignoring it).
+  validWorkloadTarget = s:
+    builtins.match "[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b" s != null;
+
+  realmWorkloadTargetAssertions =
+    lib.flatten (lib.mapAttrsToList
+      (realmName: realm:
+        lib.mapAttrsToList
+          (wName: w:
+            let
+              tr = w.launcher.app.targetRealm;
+            in
+            lib.optional
+              (w.enable && tr != null && !validWorkloadTarget tr)
+              {
+                assertion = false;
+                message = ''
+                  d2b.realms.${realmName}.workloads.${wName}.launcher.app.targetRealm
+                  = "${tr}" is not a valid workload target address.
+
+                  A valid target address has the form
+                  <workload>.<realmPath>.d2b where every label matches
+                  [a-z][a-z0-9-]* and the last component is exactly "d2b".
+
+                  Examples: "corp-laptop.work.d2b", "api.payments.work.d2b".
+                '';
+              })
+          realm.workloads)
+      (lib.filterAttrs (_: r: r.enable) cfg.realms));
+
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
       (name: gw: {
@@ -1953,6 +1987,7 @@ in
     ++ realmIdentitySecretRefAssertions
     ++ realmAssertions
     ++ realmPortForwardAssertions
+    ++ realmWorkloadTargetAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions

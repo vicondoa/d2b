@@ -71,18 +71,25 @@ let
           guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
         };
       };
-      # Workload identity fields: present for explicit realm workload entries,
-      # absent for transitional env-based entries (no declaration to source from).
+      # Realm-native workload identity: present for explicit realm workload
+      # entries, absent for transitional env-based entries (no declaration to
+      # source from).  Field names and nesting must match WorkloadIdentity in
+      # d2b-core (deny_unknown_fields; required: workloadId, realmId,
+      # realmPath, canonicalTarget; optional: legacyVmName, runtimeKind,
+      # providerId).
       identity =
-        if workloadRow != null then {
-          kind = workloadRow.kind;
-          realmPath = workloadRow.realmPath;
-          canonicalTarget = workloadRow.canonicalTarget;
-          legacyVmName = workloadRow.legacyVmName;
-          runtimeKind = workloadRow.runtimeKind;
-          runtimeProviderId = workloadRow.runtimeProviderId;
-        } else {};
-    in base // identity;
+        if workloadRow != null then
+          lib.filterAttrs (_: v: v != null) {
+            inherit workloadId;
+            realmId = workloadRow.realmId;
+            realmPath = lib.splitString "." workloadRow.realmPath;
+            canonicalTarget = workloadRow.canonicalTarget;
+            legacyVmName = workloadRow.legacyVmName;
+            runtimeKind = workloadRow.runtimeKind;
+            providerId = workloadRow.runtimeProviderId;
+          }
+        else null;
+    in base // lib.optionalAttrs (identity != null) { inherit identity; };
 
   localRuntimeWorkloadsFor = realm:
     let
