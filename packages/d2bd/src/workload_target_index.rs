@@ -117,9 +117,7 @@ impl WorkloadTargetIndex {
                 let vm_name = workload.vm_name.as_str().to_owned();
                 let canonical = identity.canonical_target.to_canonical();
 
-                index
-                    .by_canonical_target
-                    .insert(canonical, vm_name.clone());
+                index.by_canonical_target.insert(canonical, vm_name.clone());
                 index
                     .by_workload_id
                     .entry(identity.workload_id.as_str().to_owned())
@@ -423,21 +421,20 @@ mod tests {
 
     #[test]
     fn build_from_controllers_skips_workloads_without_identity() {
-        let config = controllers_json_with_workloads(
-            &format!("[{}]", workload_no_identity("corp-vm", "corp-vm")),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_no_identity("corp-vm", "corp-vm")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         assert!(index.is_empty());
     }
 
     #[test]
     fn build_from_controllers_indexes_identity_workloads() {
-        let config = controllers_json_with_workloads(
-            &format!(
-                "[{}]",
-                workload_with_identity("corp-vm", "work", "corp-vm")
-            ),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("corp-vm", "work", "corp-vm")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         assert!(!index.is_empty());
         assert!(index.identity_for_vm("corp-vm").is_some());
@@ -452,12 +449,10 @@ mod tests {
 
     #[test]
     fn identity_for_vm_returns_identity_when_present() {
-        let config = controllers_json_with_workloads(
-            &format!(
-                "[{}]",
-                workload_with_identity("corp-vm", "work", "corp-vm")
-            ),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("corp-vm", "work", "corp-vm")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         let found = index.identity_for_vm("corp-vm").expect("identity present");
         assert_eq!(found.canonical_target.to_canonical(), "corp-vm.work.d2b");
@@ -469,12 +464,10 @@ mod tests {
 
     #[test]
     fn resolve_canonical_target_succeeds() {
-        let config = controllers_json_with_workloads(
-            &format!(
-                "[{}]",
-                workload_with_identity("corp-vm", "work", "corp-vm")
-            ),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("corp-vm", "work", "corp-vm")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         let result = index
             .resolve_target("corp-vm.work.d2b", &known_vms(&[]))
@@ -518,9 +511,10 @@ mod tests {
 
     #[test]
     fn resolve_workload_id_alias_unambiguous_succeeds() {
-        let config = controllers_json_with_workloads(
-            &format!("[{}]", workload_with_identity("builder", "dev", "builder")),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("builder", "dev", "builder")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         // "builder" is not a known legacy VM name for the caller.
         let result = index
@@ -540,8 +534,7 @@ mod tests {
         let w2 = workload_with_identity("builder", "dev", "builder-dev");
         // Override canonical targets so they don't clash:
         let w2_fixed = w2.replace("\"builder.dev.d2b\"", "\"builder.dev.d2b\"");
-        let config =
-            controllers_json_with_workloads(&format!("[{w1}, {w2_fixed}]"));
+        let config = controllers_json_with_workloads(&format!("[{w1}, {w2_fixed}]"));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         let err = index
             .resolve_target("builder", &known_vms(&[]))
@@ -563,12 +556,10 @@ mod tests {
     fn resolve_legacy_vm_name_takes_priority_over_workload_id_alias() {
         // A workload id "corp-vm" exists in the index, but "corp-vm" is also a
         // known legacy VM name. The fast path wins and no alias resolution runs.
-        let config = controllers_json_with_workloads(
-            &format!(
-                "[{}]",
-                workload_with_identity("corp-vm", "work", "corp-vm")
-            ),
-        );
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("corp-vm", "work", "corp-vm")
+        ));
         let index = WorkloadTargetIndex::build_from_controllers(&config);
         let result = index
             .resolve_target("corp-vm", &known_vms(&["corp-vm"]))

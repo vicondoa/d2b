@@ -115,10 +115,10 @@ pub mod guest_control_health;
 pub mod guest_control_vsock;
 pub mod realm_access_resolver;
 pub mod supervisor;
-pub mod workload_target_index;
 pub mod terminal_session;
 pub mod typed_error;
 pub mod wire;
+pub mod workload_target_index;
 use admission::{
     PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
     gateway_display_peer_principal, gateway_display_peer_principal_string,
@@ -16623,14 +16623,12 @@ fn load_public_request_artifacts(
             .expect("qemu-media declared requires bundle resolver");
         refresh_qemu_media_registry_index_if_needed(state, resolver)?;
     }
-    let workload_index = load_realm_controllers_config(
-        &state.config.realm_controllers_config_path,
-    )
-    .ok()
-    .flatten()
-    .map(|loaded| {
-        workload_target_index::WorkloadTargetIndex::build_from_controllers(&loaded.config)
-    });
+    let workload_index = load_realm_controllers_config(&state.config.realm_controllers_config_path)
+        .ok()
+        .flatten()
+        .map(|loaded| {
+            workload_target_index::WorkloadTargetIndex::build_from_controllers(&loaded.config)
+        });
     Ok(PublicRequestArtifacts {
         manifest,
         host,
@@ -16679,17 +16677,19 @@ fn build_public_list(
 
     // Resolve the `vm` filter through the workload index so callers can
     // use a canonical target (`vm.realm.d2b`) or unambiguous workload id.
-    let resolved_vm_filter = resolve_vm_filter_target(
-        request.vm.as_deref(),
-        workload_index.as_ref(),
-        &manifest,
-    )?;
+    let resolved_vm_filter =
+        resolve_vm_filter_target(request.vm.as_deref(), workload_index.as_ref(), &manifest)?;
 
     let vms = std::thread::scope(|scope| {
         let workers = manifest
             .iter()
             .filter(|(name, _)| !name.starts_with('_'))
-            .filter(|(name, _)| resolved_vm_filter.as_ref().map(|vm| vm == *name).unwrap_or(true))
+            .filter(|(name, _)| {
+                resolved_vm_filter
+                    .as_ref()
+                    .map(|vm| vm == *name)
+                    .unwrap_or(true)
+            })
             .filter(|(_, value)| {
                 request
                     .env
@@ -16818,11 +16818,8 @@ fn build_public_status(
     } = load_public_request_artifacts(state, true, false)?;
 
     // Resolve the `vm` filter through the workload index.
-    let resolved_vm_filter = resolve_vm_filter_target(
-        request.vm.as_deref(),
-        workload_index.as_ref(),
-        &manifest,
-    )?;
+    let resolved_vm_filter =
+        resolve_vm_filter_target(request.vm.as_deref(), workload_index.as_ref(), &manifest)?;
 
     let statuses = std::thread::scope(|scope| {
         let workers = manifest
@@ -16915,31 +16912,6 @@ fn resolve_vm_filter_target(
     Ok(Some(resolution.vm_name().to_owned()))
 }
 
-/// Resolve an incoming VM target string for a lifecycle/exec/shell operation
-/// through the workload index.
-///
-/// If the target is already a known legacy VM name, the fast path is taken
-/// and no translation occurs. Only canonical targets and unambiguous workload-id
-/// aliases are translated. Ambiguous aliases fail closed.
-///
-/// Returns the resolved legacy VM name. The caller is responsible for
-/// validating that the VM exists in the manifest.
-fn resolve_lifecycle_vm_target(
-    target: &str,
-    workload_index: Option<&workload_target_index::WorkloadTargetIndex>,
-    manifest: &serde_json::Map<String, Value>,
-) -> Result<String, TypedError> {
-    let known_legacy: HashSet<String> = manifest.keys().cloned().collect();
-    let resolution = if let Some(index) = workload_index {
-        index
-            .resolve_target(target, &known_legacy)
-            .map_err(typed_error_from_resolution_error)?
-    } else {
-        workload_target_index::TargetResolution::LegacyVmName(target.to_owned())
-    };
-    Ok(resolution.vm_name().to_owned())
-}
-
 fn typed_error_from_resolution_error(
     err: workload_target_index::TargetResolutionError,
 ) -> TypedError {
@@ -16952,25 +16924,10 @@ fn typed_error_from_resolution_error(
             candidates,
         } => TypedError::WorkloadAliasConflict {
             workload_id: workload_id.clone(),
-            detail: format!(
-                "matches workloads [{}]",
-                candidates.join(", ")
-            ),
+            detail: format!("matches workloads [{}]", candidates.join(", ")),
         },
     }
 }
-
-/// Load the workload target index for a lifecycle operation. Returns `None`
-/// when no realm controllers config exists so the caller can skip resolution.
-fn load_workload_index_for_routing(
-    state: &ServerState,
-) -> Option<workload_target_index::WorkloadTargetIndex> {
-    load_realm_controllers_config(&state.config.realm_controllers_config_path)
-        .ok()
-        .flatten()
-        .map(|loaded| workload_target_index::WorkloadTargetIndex::build_from_controllers(&loaded.config))
-}
-
 
 fn public_vm_lifecycle(
     state: &ServerState,

@@ -897,7 +897,10 @@ impl TypedError {
             Self::WorkloadTargetNotFound { target } => {
                 format!("workload target '{target}' not found in the realm workload index")
             }
-            Self::WorkloadAliasConflict { workload_id, detail } => {
+            Self::WorkloadAliasConflict {
+                workload_id,
+                detail,
+            } => {
                 format!(
                     "workload id '{workload_id}' is ambiguous: {detail}; \
                      use the canonical target (e.g. {workload_id}.realm.d2b) to disambiguate"
