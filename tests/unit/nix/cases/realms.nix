@@ -914,7 +914,7 @@ in
           Group = "d2br-${realmHash "home"}";
           ExecStart = "${cfg.d2b._hostToolPackages.d2bd}/bin/d2bd serve --config /etc/d2b/realms/home/daemon-config.json --daemon-state-dir /var/lib/d2b/realms/home";
           execStartHasDaemonStateDir = true;
-          SupplementaryGroups = [ "d2bra-${realmHash "home"}" ];
+          SupplementaryGroups = [ "d2bra-${realmHash "home"}" "d2bd" ];
           Slice = "d2b.slice";
         };
         devDaemonAfterHome = true;
@@ -1262,7 +1262,7 @@ in
           isSystemUser = true;
           group = "d2br-${realmHash "home"}";
           description = "d2b realm daemon user for home";
-          extraGroups = [ "d2bra-${realmHash "home"}" ];
+          extraGroups = [ "d2bra-${realmHash "home"}" "d2bd" ];
         };
         disabledDaemonUserAbsent = true;
       };

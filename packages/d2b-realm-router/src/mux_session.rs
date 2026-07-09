@@ -424,7 +424,6 @@ impl<C: ProtocolCodec> MuxSession<C> {
             .map(TraceContext::span_id);
         tracing::warn!(
             event = "stream-open-denied",
-            stream = %open.descriptor.id.as_str(),
             "stream-kind" = %open.descriptor.kind.code(),
             "operation-id" = %open.operation_id.as_str(),
             "operation-kind" = %operation_kind,

@@ -102,7 +102,7 @@ in
           isSystemUser = true;
           uid = stablePrincipalId realm.controller.daemon.user;
           group = realm.controller.daemon.group;
-          extraGroups = [ realm.controller.daemon.publicSocketGroup ];
+          extraGroups = [ realm.controller.daemon.publicSocketGroup "d2bd" ];
           description = "d2b realm daemon user for ${realm.path}";
         })
       hostLocalRealms))

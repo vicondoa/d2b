@@ -102,8 +102,8 @@ fn group_rename_semantic() {
     );
     require_match(
         &host_users,
-        r#"extraGroups = \[ "d2b" \];"#,
-        "launcherUsers are not added to d2b",
+        r#"lib\.optional \(builtins\.elem user cfg\.site\.launcherUsers\) "d2b""#,
+        "launcherUsers are not added to d2b through hostAccessGroupsForUser",
     );
     require_match(
         &host_daemon,
