@@ -187,6 +187,66 @@ let
     })
   ];
   realmDisabledJson = builtins.fromJSON (jsonText realmDisabledEtc);
+
+  # Wayland proxy realm rail fixtures.
+  # Single-realm unambiguous mapping: work VM -> corp realm workload.
+  # The proxy should use the realm accent as active color, the
+  # workload-qualified label, and the canonical realm target.
+  proxyRealmCfg = cfgOf [
+    ({ ... }: {
+      d2b.realms.corp = {
+        network.ui.accentColor = "#ff8800";
+        workloads.work = {
+          kind = "local-vm";
+          legacyVmName = "work";
+          localVm.graphics.enable = true;
+        };
+      };
+    })
+  ];
+  proxyRealmArgv = (processNode proxyRealmCfg "wayland-proxy").argv;
+  proxyRealmAccent = proxyRealmCfg.d2b._uiColors.realms.corp.accent;
+  proxyRealmVmBorder = proxyRealmCfg.d2b._uiColors.vms.work.border;
+
+  # Single realm mapping with an explicit operator border label override.
+  proxyRealmLabelOverrideCfg = cfgOf [
+    ({ ... }: {
+      d2b.realms.corp = {
+        network.ui.accentColor = "#ff8800";
+        workloads.work = {
+          kind = "local-vm";
+          legacyVmName = "work";
+          localVm.graphics.enable = true;
+        };
+      };
+      d2b.vms.work.graphics.waylandProxy.border.label.text = "My Work VM";
+    })
+  ];
+  proxyRealmLabelOverrideArgv = (processNode proxyRealmLabelOverrideCfg "wayland-proxy").argv;
+
+  # Ambiguous multi-realm mapping: two realms both claim the work VM via
+  # legacyVmName.  The proxy must fall back to host-local defaults.
+  proxyMultiRealmCfg = cfgOf [
+    ({ ... }: {
+      d2b.realms.corp = {
+        network.ui.accentColor = "#ff8800";
+        workloads.work = {
+          kind = "local-vm";
+          legacyVmName = "work";
+          localVm.graphics.enable = true;
+        };
+      };
+      d2b.realms.personal = {
+        network.ui.accentColor = "#00cc88";
+        workloads.work = {
+          kind = "local-vm";
+          legacyVmName = "work";
+          localVm.graphics.enable = true;
+        };
+      };
+    })
+  ];
+  proxyMultiRealmArgv = (processNode proxyMultiRealmCfg "wayland-proxy").argv;
 in
 {
   "niri-vm-borders/disabled-no-kdl" = {
@@ -419,6 +479,55 @@ in
     # No realms declared: the realms key is present but empty.
     expr = realmUiJson.realms == { } || builtins.hasAttr "work" realmUiJson.realms;
     expected = true;
+  };
+
+  # --- wayland proxy realm rail cases ---
+
+  "niri-vm-borders/wayland-proxy-realm-workload-active-color-is-realm-accent" = {
+    # When the VM maps unambiguously to a realm, active rail color is the
+    # realm's resolved accent; inactive and urgent retain the VM border colors.
+    expr = {
+      active = flagValue "--border-color-active" proxyRealmArgv;
+      inactive = flagValue "--border-color-inactive" proxyRealmArgv;
+      urgent = flagValue "--border-color-urgent" proxyRealmArgv;
+    };
+    expected = {
+      active = proxyRealmAccent;
+      inactive = proxyRealmVmBorder.inactive;
+      urgent = proxyRealmVmBorder.urgent;
+    };
+  };
+  "niri-vm-borders/wayland-proxy-realm-workload-label-is-workload-realmpath" = {
+    # Default rail label is <workload>.<realmPath> for a realm-mapped VM.
+    expr = flagValue "--border-label" proxyRealmArgv;
+    expected = "work.corp";
+  };
+  "niri-vm-borders/wayland-proxy-realm-workload-target-is-canonical" = {
+    # Realm target is <workload>.<realmPath>.d2b for a realm-mapped VM.
+    expr = flagValue "--realm-target" proxyRealmArgv;
+    expected = "work.corp.d2b";
+  };
+  "niri-vm-borders/wayland-proxy-realm-explicit-label-override-preserved" = {
+    # Explicit operator border.label.text overrides the derived realm label.
+    expr = flagValue "--border-label" proxyRealmLabelOverrideArgv;
+    expected = "My Work VM";
+  };
+  "niri-vm-borders/wayland-proxy-realm-explicit-label-override-target-unchanged" = {
+    # Even with a label override, the realm target is still the canonical form.
+    expr = flagValue "--realm-target" proxyRealmLabelOverrideArgv;
+    expected = "work.corp.d2b";
+  };
+  "niri-vm-borders/wayland-proxy-ambiguous-realm-uses-vm-defaults" = {
+    # When >1 realm claims the same VM via legacyVmName, the proxy falls back
+    # to the host-local transitional defaults (vmName label, vmName.local.d2b).
+    expr = {
+      label = flagValue "--border-label" proxyMultiRealmArgv;
+      realmTarget = flagValue "--realm-target" proxyMultiRealmArgv;
+    };
+    expected = {
+      label = "work";
+      realmTarget = "work.local.d2b";
+    };
   };
 }
 )

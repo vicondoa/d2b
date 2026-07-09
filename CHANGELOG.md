@@ -12,6 +12,18 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Wayland proxy rail now defaults to realm identity when a VM maps
+  unambiguously to a single realm workload via `legacyVmName`. The active
+  rail color defaults to the realm's resolved accent color (from
+  `d2b.realms.<realm>.network.ui.accentColor`), the rail label defaults to
+  `<workload>.<realmPath>`, and the realm target defaults to
+  `<workload>.<realmPath>.d2b`. Inactive and urgent colors remain derived
+  from the VM border palette. Explicit operator `border.label.text` overrides
+  are fully preserved. When the mapping is ambiguous (multiple realms claim
+  the same VM) or absent (classical `d2b.vms` entry without a realm
+  workload), behavior is unchanged: VM border colors, VM-name label, and
+  `<vmName>.local.d2b` transitional target.
+
 - Added first-class realm colors to the UI color contract. Enabled realms are
   now included in `ui-colors.json` under a `realms` key, each with `path` and
   `accent` fields. Corresponding `@define-color d2b_realm_<id>_accent` entries

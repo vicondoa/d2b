@@ -639,17 +639,42 @@ EOF
       upstreamSock = waylandHostSock;
       bridgeSock = "${config.d2b.site.clipboard.runtime.bridgeRoot}/${waylandUid}/bridge/${vmName}/${config.d2b.site.clipboard.runtime.bridgeSocketName}";
       appIdPrefix = "d2b.${vmName}.";
-      realmTarget = "${vmName}.local.d2b";
+      # Realm identity: unambiguous when exactly one enabled realm workload
+      # row references this VM (via legacyVmName).  Multiple rows (cross-realm
+      # VM) or no rows (classical d2b.vms entry) both fall back to the
+      # host-local transitional defaults.
+      vmRealmRows = cfg._index.realms.workloads.byVm.${vmName} or [];
+      unambiguousRow = if lib.length vmRealmRows == 1 then builtins.head vmRealmRows else null;
+      # Default realm target: <workload>.<realmPath>.d2b when unambiguous,
+      # else <vmName>.local.d2b for the transitional host-local realm.
+      realmTarget =
+        if unambiguousRow != null
+        then "${unambiguousRow.workloadName}.${unambiguousRow.realmPath}.d2b"
+        else "${vmName}.local.d2b";
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
-      borderLabelText = if border.label.text == null then vmName else border.label.text;
+      # Active rail color: realm accent when the VM maps unambiguously to a
+      # realm and that realm has a resolved accent entry; falls back to the
+      # VM border active color.
+      realmActiveColor =
+        if unambiguousRow != null
+          && builtins.hasAttr unambiguousRow.realmName cfg._uiColors.realms
+        then cfg._uiColors.realms.${unambiguousRow.realmName}.accent
+        else borderColors.active;
+      # Default rail label: <workload>.<realmPath> when unambiguous, else VM
+      # name.  Explicit operator border.label.text always takes precedence.
+      defaultBorderLabel =
+        if unambiguousRow != null
+        then "${unambiguousRow.workloadName}.${unambiguousRow.realmPath}"
+        else vmName;
+      borderLabelText = if border.label.text != null then border.label.text else defaultBorderLabel;
       borderLabelArgs = lib.optionals (border.label.enable && borderLabelText != "") [
         "--border-label" borderLabelText
       ];
       borderArgs = lib.optionals border.enable ([
         "--border-enable"
-        "--border-color-active" borderColors.active
+        "--border-color-active" realmActiveColor
         "--border-color-inactive" borderColors.inactive
         "--border-color-urgent" borderColors.urgent
       ] ++ borderLabelArgs);
