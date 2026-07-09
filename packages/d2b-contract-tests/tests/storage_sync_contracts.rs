@@ -92,6 +92,22 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
         bundle_artifacts.contains("realmControllersJson"),
         "bundle-artifacts.nix must declare realmControllersJson metadata"
     );
+    assert!(
+        bundle_artifacts.contains("d2bRealmBundleArtifactAcls"),
+        "bundle-artifacts.nix must restore realm daemon read ACLs for shared private bundle artifacts"
+    );
+    for needle in [
+        "/etc/d2b/bundle.json",
+        "/etc/d2b/realm-controllers.json",
+        "/etc/d2b/realm-identity.json",
+        "g:${group}:r--",
+        "deps = [ \"etc\" \"users\" ];",
+    ] {
+        assert!(
+            bundle_artifacts.contains(needle),
+            "bundle-artifacts.nix missing realm shared artifact ACL marker: {needle}"
+        );
+    }
 
     let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
     for needle in [
