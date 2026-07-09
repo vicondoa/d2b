@@ -1,8 +1,8 @@
 # UI color contract
 
 D2b can emit a compositor-agnostic, resolved UI color contract for
-desktop components that want to share the same host, environment, VM, and
-state colors. Enable the generic artifacts with:
+desktop components that want to share the same host, realm, workload, VM,
+environment, and state colors. Enable the generic artifacts with:
 
 ```nix
 d2b.site.ui.enable = true;
@@ -83,11 +83,14 @@ proxy is active and can be disabled per VM:
 d2b.vms.work.graphics.waylandProxy.border.enable = false;
 ```
 
-The proxy uses the same resolved VM border colors documented above. It exposes a
-proxy-owned wrapper toplevel and draws only proxy-owned rail pixels; guest
-application buffers and dma-bufs stay forwarded as Wayland objects and file
-descriptors and are not copied or sampled to render the rail. The default
-identity rail appears on the left side with the authenticated VM-name label.
+The proxy uses the resolved realm color when a VM maps unambiguously to a
+realm workload, falling back to the resolved VM border colors documented
+above. It exposes a proxy-owned wrapper toplevel and draws only proxy-owned
+rail pixels; guest application buffers and dma-bufs stay forwarded as Wayland
+objects and file descriptors and are not copied or sampled to render the rail.
+The default identity rail appears on the left side with the
+`<workload>.<realmPath>` label when realm workload identity is available, and
+with the authenticated VM-name label otherwise.
 
 Proxy borders are visual-only. They do not intercept pointer input, and
 popup/menu positioning remains based on the guest surface geometry.
@@ -171,8 +174,8 @@ compositor-adjacent stylesheets:
 ```css
 @import url("/etc/d2b/ui-colors.css");
 
-#work {
-  border-left-color: @d2b_env_work_accent;
+#realm-work {
+  border-left-color: @d2b_realm_work_accent;
 }
 ```
 
@@ -188,8 +191,8 @@ Definition names include:
 | `d2b_state_error` | Error state accent |
 | `d2b_state_denied` | Authorization-denied state accent |
 | `d2b_state_unknown` | Unknown/unavailable state accent |
-| `d2b_env_<env>_accent` | Environment identity accent |
 | `d2b_realm_<realm>_accent` | Realm identity accent |
+| `d2b_env_<env>_accent` | Environment identity accent for the transition substrate |
 | `d2b_vm_<vm>_border_active` | VM active border color |
 | `d2b_vm_<vm>_border_inactive` | VM inactive border color |
 | `d2b_vm_<vm>_border_urgent` | VM urgent border color |

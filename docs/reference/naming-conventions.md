@@ -41,14 +41,29 @@ See [ADR 0015](../adr/0015-daemon-only-clean-break.md) for the
 daemon-only authz/audit invariants that make these labels stable across
 host-side group renames.
 
-## VM and env identifiers
+## Realm, workload, VM, and env identifiers
 
 - VM name regex: `^[a-z][a-z0-9-]*$`
 - Reserved VM prefix: `sys-`
 - Reserved VM name: `launcher`
 - `sys-<env>-net` is framework-reserved for the auto-declared net VM.
 
-These constraints let the CLI, manifest, and host-side units resolve resources mechanically without collisions. When docs and code differ, the passing code is canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
+Realm and workload labels use the same lowercase label shape. The canonical
+public workload target form is:
+
+```text
+<workload>.<realm>[.<ancestor>...].d2b
+```
+
+During the v2 transition, `d2b.realms.<realm>.workloads.<workload>.legacyVmName`
+maps that public workload id to the existing local VM substrate. For example,
+`workloads.aad.legacyVmName = "work-aad"` makes `aad.work.d2b` resolve to the
+local `work-aad` VM for status and guest-control exec while preserving
+`/var/lib/d2b/vms/work-aad`.
+
+These constraints let the CLI, manifest, and host-side units resolve resources
+mechanically without collisions. When docs and code differ, the passing code is
+canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
 
 ## Persistent shell session names
 
@@ -64,10 +79,10 @@ operator commands, but daemon metrics never use them as labels. Daemon audit
 records use a fixed-length digest for shell correlation instead of raw shell
 names or terminal session handles.
 
-## Constellation target and model identifiers
+## Realm target and model identifiers
 
-Constellation targets extend the VM/env naming rules without making a
-target address a network address. The canonical realm target form is:
+Realm targets extend the VM/env naming rules without making a target address a
+network address. The canonical realm target form is:
 
 ```text
 <workload>.<realm>[.<ancestor>...].d2b
@@ -97,11 +112,9 @@ transition metadata only in the current implementation; bridge and TAP
 names below are still generated from `d2b.envs` and `d2b.vms.<vm>.env`.
 See [Realm option schema](./realm-options.md).
 
-Gateway-backed realms use a local gateway VM entrypoint. The default
-gateway VM name is `sys-<realm-path-with-dashes>-gateway`, but
-operators may override `d2b.gateways.<name>.vmName`; consumers
-should read the generated `realm-entrypoints.json` table rather than
-reconstructing the name from the realm path.
+Gateway-backed realms use a configured realm entrypoint. Consumers should read
+the generated access/entrypoint metadata rather than reconstructing gateway
+names from realm paths.
 
 ## Network device names
 

@@ -24,8 +24,9 @@ the runner contract is shaped so additional VMM backends can fit later.
 
 d2b gives you boundaries without device juggling:
 
-- **Isolated networking:** per-env bridges, firewalling, and an
-  auto-declared NAT/DHCP "net VM".
+- **Realm-owned topology:** realms are the user-facing trust boundaries.
+  During the v2 transition they point at existing env bridges; new workload
+  metadata lives under `d2b.realms.<realm>.workloads`.
 - **Isolated store views:** each guest sees a per-VM `/nix/store`
   hardlink farm containing only its own closure.
 - **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
@@ -33,13 +34,14 @@ d2b gives you boundaries without device juggling:
   broker-supervised per-VM sidecars instead of ad-hoc host services.
 - **One Wayland desktop:** graphical realms integrate with the host
   compositor without asking you to live in a separate desktop.
-- **Shared UI colors:** d2b can emit a compositor-agnostic JSON and
-  GTK-compatible CSS color contract so niri, Waybar, and desktop control
-  tools use the same host/env/VM identity colors.
+- **Shared realm UI identity:** d2b emits compositor-agnostic JSON and
+  GTK-compatible CSS so niri, Waybar, wlcontrol, wlterm, clip-picker, and
+  Wayland rails use the same host/realm/workload/state colors.
 - **One operator surface:** the Rust `d2b` CLI talks to `d2bd`
   and the privileged broker for lifecycle, keys, USB, and host prep.
-- **Persistent guest shells:** `d2b shell <vm>` can reconnect to
-  named interactive guest shells when `guest.shell` is enabled.
+- **Persistent guest shells:** `d2b shell <workload>.<realm>.d2b` (or a
+  still-supported legacy VM name) can reconnect to named interactive guest
+  shells when `guest.shell` is enabled.
 
 Get on the bus: separate sides, shared experience.
 
@@ -121,13 +123,14 @@ Concretely:
   NixOS module that composes into your existing host instead of a new OS
   and Xen stack.
 - You could build the pieces with raw microVMs, but you would rather
-  declare "work" and "personal" environments and let the framework keep
-  the host/guest boundary consistent.
+  declare "work" and "personal" realms with owned workloads and let the
+  framework keep the host/guest boundary consistent.
 - One human, one host. Multi-tenant trust boundaries are out of scope.
 - Wayland-native. There is no X11 fallback for graphics VMs.
-- Headless workloads also work — the same `d2b.envs.<env>`
-  + `d2b.vms.<vm>` shape covers CI runners or
-  background-service VMs without graphics + audio bits.
+- Headless workloads also work. During the v2 migration the runtime
+  substrate is still `d2b.envs.<env>` + `d2b.vms.<vm>`, while
+  `d2b.realms.<realm>.workloads.<workload>` carries realm-native workload
+  identity and desktop metadata.
 
 ## What d2b is NOT
 
@@ -174,7 +177,7 @@ d2b into an existing host config.
 | [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` — sentinel TODOs + assertion gates |
 | [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
-| [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
+| [`examples/multi-env`](./examples/multi-env) | Two isolated runtime envs (work + personal) | Demonstrates the transition substrate that realms can point at with `network.mode = "inherit-env"`. |
 | [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs` VM (native SigNoz + ClickHouse) and wires host/guest OTel collectors over virtio-vsock. |
 
 ## Quick start (Rust CLI / examples)
@@ -215,7 +218,10 @@ d2b status                        # same table + bridge-health footer
 d2b vm start corp-vm --apply
 ```
 
-The scaffold is ~150 lines and is documented inline. See
+For v2-ready configs, add `d2b.realms.<realm>.workloads.<workload>` metadata
+with `legacyVmName = "<existing-vm>"` so desktop tools and CLI output expose
+canonical targets such as `corp-vm.work.d2b` without moving state. The
+scaffold is ~150 lines and is documented inline. See
 [`templates/default/README.md`](./templates/default/README.md) for
 the full TODO walk-through.
 

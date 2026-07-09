@@ -63,6 +63,13 @@ deprecations ship one minor release before removal.
   `ServerState`, `identity_for_vm` is used in list/status population, and the
   hermetic restart-invariant unit test is present.
 
+### Changed
+
+- Updated the consumer-facing realm/workload documentation to describe
+  `d2b.realms.<realm>.workloads.<workload>` as the realm-native workload and
+  desktop metadata surface, with `d2b.envs`/`d2b.vms` documented as the v2
+  transition runtime substrate.
+
 ### Fixed
 
 - Fixed host-local realm daemon startup after `/etc/d2b` private bundle
