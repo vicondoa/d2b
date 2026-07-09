@@ -306,7 +306,8 @@ in
       text = ''
         for artifact in ${lib.escapeShellArgs realmSharedArtifactPaths}; do
           if [ -e "$artifact" ]; then
-            ${pkgs.acl}/bin/setfacl -m ${lib.escapeShellArg realmReadAclSpec} "$artifact"
+            ${pkgs.acl}/bin/setfacl -m ${lib.escapeShellArg realmReadAclSpec} "$artifact" \
+              || echo "d2b: warning: failed to set realm daemon read ACLs on $artifact" >&2
           fi
         done
       '';

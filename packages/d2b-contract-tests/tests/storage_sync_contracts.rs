@@ -102,6 +102,7 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
         "/etc/d2b/realm-identity.json",
         "g:${group}:r--",
         "deps = [ \"etc\" \"users\" ];",
+        "failed to set realm daemon read ACLs",
     ] {
         assert!(
             bundle_artifacts.contains(needle),
