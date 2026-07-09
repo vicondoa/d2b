@@ -10,6 +10,34 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added `workload_identity: Option<WorkloadIdentity>` to `VmProcessDag` in
+  `d2b-core::processes`. Process JSON artifacts now carry the universal
+  realm-scoped identity alongside the VM process DAG when the VM is declared as
+  a realm workload. Absent for classical `d2b.vms.<vm>` entries without a realm
+  workload row. Backend-specific config (vm_id, role, runner argv) stays in
+  existing per-node fields — the identity never duplicates backend data.
+- Added `workload_identity: Option<WorkloadIdentity>` to `SpawnRunnerRequest`
+  in `d2b-contracts::broker_wire`. The broker SpawnRunner request now
+  structurally carries the universal workload identity separate from the typed
+  backend fields (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`). The
+  field is additive: `None` means "no realm identity available" and old brokers
+  continue to function normally.
+- Updated `nixos-modules/processes-json.nix` to emit `workloadIdentity` in
+  `VmProcessDag` for both `vmDag` (Cloud Hypervisor / NixOS VMs) and
+  `qemuMediaDag` (QEMU media VMs). The field is gated on
+  `cfg._index.realms.workloads.byVm.${name}` and omitted when no realm workload
+  row exists, preserving backward compatibility with classical VM entries.
+- Added `process_workload_identity_contract.rs` contract tests covering:
+  schema presence of `workloadIdentity` on `VmProcessDag` and
+  `SpawnRunnerRequest`; additive (non-required) invariant in both schemas;
+  `additionalProperties: false` preservation; backward-compat deserialization
+  without the field; `skip_serializing_if = "Option::is_none"` serialization
+  invariant; and Nix emitter source-lints.
+- `processes.json` and `wire-protocol.json` schemas regenerated to reflect the
+  new `workloadIdentity` property on `VmProcessDag` and `SpawnRunnerRequest`.
+
 ### Fixed
 
 - Fixed `cmd_vm_lifecycle_verb` migration hint to check the raw user-supplied

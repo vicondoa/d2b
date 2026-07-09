@@ -436,6 +436,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         schema_version: "v2".to_owned(),
         vms: vec![VmProcessDag {
             vm: "work-vm".to_owned(),
+            workload_identity: None,
             nodes: vec![ProcessNode {
                 id: NodeId("ch-runner".to_owned()),
                 role: ProcessRole::CloudHypervisorRunner,

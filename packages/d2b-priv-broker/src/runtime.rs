@@ -9949,6 +9949,7 @@ mod tests {
             schema_version: "v2".to_owned(),
             vms: vec![
                 VmProcessDag {
+                    workload_identity: None,
                     vm: "corp-vm".to_owned(),
                     nodes: vec![ProcessNode {
                         id: NodeId("ch-runner".to_owned()),
@@ -9990,6 +9991,7 @@ mod tests {
                     },
                 },
                 VmProcessDag {
+                    workload_identity: None,
                     vm: "sys-work-usbipd".to_owned(),
                     nodes: vec![ProcessNode {
                         id: NodeId("backend".to_owned()),
@@ -11431,6 +11433,7 @@ mod tests {
 
         let spawn_runner = assert_dispatch(
             BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
@@ -11863,6 +11866,7 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
             role: RunnerRole::CloudHypervisor,
@@ -12555,6 +12559,7 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
             // Use the existing corp-vm runner intent but assert
@@ -12679,6 +12684,7 @@ mod tests {
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
         let request = BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
+            workload_identity: None,
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("otel-host-bridge"),
             role: RunnerRole::OtelHostBridge,

@@ -1,4 +1,5 @@
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use crate::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -19,6 +20,18 @@ pub struct ProcessesJson {
 pub struct VmProcessDag {
     /// VM name from the public manifest.
     pub vm: String,
+    /// Universal workload identity from the realm-native model.
+    ///
+    /// Additive: present for VMs that are declared as realm workloads;
+    /// absent (`None`) for VMs that predate realm workload declarations.
+    /// Consumers must not treat absence as an error — it simply means the
+    /// VM is a classical `d2b.vms.<vm>` entry without a realm workload row.
+    ///
+    /// The provider/backend-specific config (vm_id, role, runner argv) is
+    /// carried separately in the per-node `profile` and `argv` fields so
+    /// the universal identity never duplicates backend-specific data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_identity: Option<WorkloadIdentity>,
     /// Ordered role nodes in the DAG.
     pub nodes: Vec<ProcessNode>,
     /// Dependency edges between DAG nodes.

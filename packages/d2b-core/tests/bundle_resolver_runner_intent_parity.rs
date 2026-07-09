@@ -247,6 +247,7 @@ fn bundle_resolver_runner_intents_match_typed_process_node_helper_for_runner_rol
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),
         vms: vec![VmProcessDag {
+            workload_identity: None,
             vm: VM.to_owned(),
             nodes: nodes.clone(),
             edges: Vec::new(),

@@ -3219,6 +3219,7 @@ mod tests {
         let processes = ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![VmProcessDag {
+                workload_identity: None,
                 vm: "personal-dev".to_owned(),
                 nodes: vec![
                     ProcessNode {
@@ -4189,6 +4190,7 @@ mod tests {
         };
 
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
                 id: NodeId("video".to_owned()),
@@ -4272,6 +4274,7 @@ mod tests {
         };
 
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
                 id: NodeId("swtpm".to_owned()),
@@ -4378,6 +4381,7 @@ mod tests {
         };
 
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
                 id: NodeId("gpu-render-node".to_owned()),
@@ -4497,6 +4501,7 @@ mod tests {
         };
 
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "test-vm".to_owned(),
             nodes: vec![ProcessNode {
                 id: NodeId("audio".to_owned()),

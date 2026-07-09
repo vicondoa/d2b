@@ -2208,6 +2208,7 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
     ) -> usbipd_perenv_autostart::PerEnvUsbipdOutcome {
         use usbipd_perenv_autostart::PerEnvUsbipdOutcome;
         let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+            workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
             role: usbipd_perenv_autostart::spawn_runner_role(spec),
@@ -10143,6 +10144,7 @@ impl VmStartRunner<'_> {
         match dispatch_broker_request_with_fds_timeout(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
+                workload_identity: None,
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id.clone()),
                 role: runner_role,
@@ -18508,6 +18510,7 @@ mod public_status_tests {
     fn qemu_media_process_dag() -> d2b_core::processes::VmProcessDag {
         use d2b_core::processes::{NodeId, VmProcessDag, VmProcessInvariants};
         VmProcessDag {
+            workload_identity: None,
             vm: "installer".to_owned(),
             nodes: vec![ProcessNode {
                 id: NodeId("qemu-media".to_owned()),
@@ -26459,6 +26462,7 @@ mod broker_dispatch_tests {
             readiness: vec![],
         };
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "work".to_owned(),
             nodes: vec![node],
             edges: vec![],

@@ -10514,6 +10514,17 @@
         "vmId": {
           "description": "VM scope the runner belongs to.",
           "type": "string"
+        },
+        "workloadIdentity": {
+          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. The broker treats `None` as \"no realm identity available\" and does not reject the request — this field is for audit, observability, and routing purposes only. The backend-specific runtime config (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always carried in the existing typed fields, never inside this identity.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkloadIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

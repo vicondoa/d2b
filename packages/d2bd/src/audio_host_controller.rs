@@ -584,6 +584,7 @@ mod tests {
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
             vms: vec![VmProcessDag {
+                workload_identity: None,
                 vm: "corp-vm".to_owned(),
                 nodes: vec![],
                 edges: vec![],
@@ -610,6 +611,7 @@ mod tests {
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
             vms: vec![VmProcessDag {
+                workload_identity: None,
                 vm: "corp-vm".to_owned(),
                 nodes: vec![audio_node.clone()],
                 edges: vec![],
