@@ -143,18 +143,29 @@ let
       icon =
         if workload.launcher.icon.id != null then workload.launcher.icon.id
         else workload.launcher.icon.name;
+      # Canonical target address: launcher override if set, else derived.
+      canonicalTarget =
+        if workload.launcher.app.targetRealm != null
+        then workload.launcher.app.targetRealm
+        else "${workloadName}.${realm.path}.d2b";
     in {
       inherit realmName workloadName;
       realmId = realm.id;
       realmPath = realm.path;
-      # Canonical target address for realm-native tooling: <workload>.<realmPath>.d2b
+      # targetAddress: derived canonical target; always the computed value.
+      # canonicalTarget may diverge when launcher.app.targetRealm is set.
       targetAddress = "${workloadName}.${realm.path}.d2b";
+      inherit canonicalTarget;
       enable = workload.enable;
       kind = workload.kind;
       # actionId: stable launcher action identifier; defaults to workload id.
       actionId = workloadName;
       inherit label icon;
       capabilityRefs = sortNames (lib.unique workload.launcher.capabilities);
+      # appCommand: operator-declared primary launch command; null when not set.
+      appCommand = workload.launcher.app.command;
+      # actions: additional named launcher actions (id, label, command).
+      actions = workload.launcher.actions;
       inherit legacyVmName;
       # substrateId: stable substrate reference for downstream consumers.
       substrateId = legacyVmName;

@@ -1,12 +1,14 @@
 # nix-unit coverage for realm-owned workload index, launcher metadata, and
-# cross-realm assertion contracts introduced in Wave 14.
+# cross-realm assertion contracts introduced in Wave 14, extended in Wave 15.
 #
 # Coverage:
 #   • Accepted workload config shapes (legacyVmName present, provider-placeholder, disabled)
-#   • Workload index row rendering: targetAddress, runtimeKind, substrateId,
-#     capabilityRefs sorted+deduped, all/enabled/byVm accessors
+#   • Workload index row rendering: targetAddress, canonicalTarget, runtimeKind,
+#     substrateId, capabilityRefs sorted+deduped, appCommand, actions,
+#     all/enabled/byVm accessors
 #   • realm-workloads-launcher.json emitter: schemaVersion, runtimeState,
-#     per-workload fields, vsockCid advisory, invariants block
+#     per-workload fields (incl. canonicalTarget, appCommand, actions),
+#     vsockCid advisory, invariants block (noSensitiveCommandPayloads)
 #   • Bundle artifact registration: installFileName, classification,
 #     sensitivity, /etc install mode
 #   • Cross-realm vsock CID collision assertion: fires when two workloads in
@@ -67,7 +69,7 @@ let
   };
 
   # ── workload fixture ────────────────────────────────────────────────────────
-  # One realm ("work.home") with two workloads: one with a vmRef, one without.
+  # One realm ("work.home") with two workloads: one with a legacyVmName, one without.
   workloadFixture = lib.recursiveUpdate hostBase {
     d2b.realms.home = {
       name = "Home";
@@ -89,6 +91,11 @@ let
           label = "Corp Laptop";
           icon.id = "computer-laptop";
           capabilities = [ "guest-exec" "graphics" "guest-exec" ];
+          app.command = "d2b vm exec corp-laptop -- bash -l";
+          actions = [
+            { id = "open-terminal"; label = "Open Terminal"; command = "d2b vm exec corp-laptop -- bash -l"; }
+            { id = "restart"; label = "Restart"; command = "d2b vm restart corp-laptop"; }
+          ];
         };
       };
       workloads.provider-service = {
@@ -218,6 +225,8 @@ in
         realmName = row.realmName;
         realmPath = row.realmPath;
         targetAddress = row.targetAddress;
+        # canonicalTarget defaults to targetAddress when launcher.app.targetRealm is null
+        canonicalTargetEqualsTargetAddress = row.canonicalTarget == row.targetAddress;
         substrateId = row.substrateId;
         legacyVmName = row.legacyVmName;
         runtimeKind = row.runtimeKind;
@@ -228,12 +237,16 @@ in
         # capabilityRefs must be sorted and deduplicated
         capabilityRefs = row.capabilityRefs;
         enable = row.enable;
+        appCommand = row.appCommand;
+        actionsCount = builtins.length row.actions;
+        firstActionId = (builtins.head row.actions).id;
       };
     expected = {
       workloadName = "corp-laptop";
       realmName = "work";
       realmPath = "work.home";
       targetAddress = "corp-laptop.work.home.d2b";
+      canonicalTargetEqualsTargetAddress = true;
       substrateId = "corpbox";
       legacyVmName = "corpbox";
       runtimeKind = "nixos";
@@ -243,6 +256,9 @@ in
       actionId = "corp-laptop";
       capabilityRefs = [ "graphics" "guest-exec" ];
       enable = true;
+      appCommand = "d2b vm exec corp-laptop -- bash -l";
+      actionsCount = 2;
+      firstActionId = "open-terminal";
     };
   };
 
@@ -383,10 +399,15 @@ in
           realmPath = corpRow.realmPath;
           workloadName = corpRow.workloadName;
           targetAddress = corpRow.targetAddress;
+          canonicalTarget = corpRow.canonicalTarget;
           actionId = corpRow.actionId;
           label = corpRow.label;
           icon = corpRow.icon;
           capabilityRefs = corpRow.capabilityRefs;
+          appCommand = corpRow.appCommand;
+          actionsCount = builtins.length corpRow.actions;
+          firstActionId = (builtins.head corpRow.actions).id;
+          firstActionLabel = (builtins.head corpRow.actions).label;
           legacyVmName = corpRow.legacyVmName;
           substrateId = corpRow.substrateId;
           runtimeKind = corpRow.runtimeKind;
@@ -397,6 +418,8 @@ in
           workloadName = providerRow.workloadName;
           legacyVmName = providerRow.legacyVmName;
           runtimeKind = providerRow.runtimeKind;
+          appCommand = providerRow.appCommand;
+          actionsEmpty = providerRow.actions == [ ];
           vsockCid = providerRow.vsockCid;
         };
       };
@@ -410,10 +433,16 @@ in
         realmPath = "work.home";
         workloadName = "corp-laptop";
         targetAddress = "corp-laptop.work.home.d2b";
+        # canonicalTarget matches targetAddress when no override is set
+        canonicalTarget = "corp-laptop.work.home.d2b";
         actionId = "corp-laptop";
         label = "Corp Laptop";
         icon = "computer-laptop";
         capabilityRefs = [ "graphics" "guest-exec" ];
+        appCommand = "d2b vm exec corp-laptop -- bash -l";
+        actionsCount = 2;
+        firstActionId = "open-terminal";
+        firstActionLabel = "Open Terminal";
         legacyVmName = "corpbox";
         substrateId = "corpbox";
         runtimeKind = "nixos";
@@ -424,9 +453,35 @@ in
         workloadName = "provider-service";
         legacyVmName = null;
         runtimeKind = null;
+        appCommand = null;
+        actionsEmpty = true;
         # no legacyVmName → vsockCid must be null
         vsockCid = null;
       };
+    };
+  };
+
+  # ── launcher JSON: canonicalTarget override ──────────────────────────────────
+  # When launcher.app.targetRealm is set, canonicalTarget must use the override
+  # rather than the derived targetAddress.
+  "realm-workloads/launcher-json-canonical-target-override" = {
+    expr =
+      let
+        overrideFixture = lib.recursiveUpdate workloadFixture {
+          d2b.realms.work.workloads.corp-laptop.launcher.app.targetRealm =
+            "corp-laptop.work.home.d2b.custom-override";
+        };
+        data = (mkEval [ overrideFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
+        row = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
+      in {
+        targetAddress = row.targetAddress;
+        canonicalTarget = row.canonicalTarget;
+        overrideDiffers = row.canonicalTarget != row.targetAddress;
+      };
+    expected = {
+      targetAddress = "corp-laptop.work.home.d2b";
+      canonicalTarget = "corp-laptop.work.home.d2b.custom-override";
+      overrideDiffers = true;
     };
   };
 
@@ -435,7 +490,9 @@ in
     expr = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data.invariants;
     expected = {
       noSecretsOrCredentials = true;
-      noCommandPayloads = true;
+      # appCommand and actions[].command are static operator-declared launch
+      # metadata, not sensitive payloads; the invariant reflects this.
+      noSensitiveCommandPayloads = true;
       noOpaqueSessionHandles = true;
       noProviderTokens = true;
       metadataOnly = true;
@@ -614,6 +671,50 @@ in
       workloadsEmpty = true;
       workloadNamesEmpty = true;
       enabledWorkloadNamesEmpty = true;
+    };
+  };
+
+  # ── controller config: explicit workload entry carries identity fields ─────────
+  # When a realm workload has legacyVmName pointing to an enabled VM, the
+  # controller config localRuntime.workloads entry must include workload
+  # identity fields (kind, realmPath, canonicalTarget, legacyVmName,
+  # runtimeKind, runtimeProviderId) alongside the existing runtime/path fields.
+  "realm-workloads/controller-config-explicit-workload-identity" = {
+    expr =
+      let
+        data = wlCfg.d2b._bundle.realmControllersJson.data;
+        workController =
+          lib.findFirst (row: row.realmPath == "work.home") null data.controllers;
+        workLocal = workController.localRuntime;
+        corpEntry =
+          lib.findFirst (w: w.workloadId == "corp-laptop") null workLocal.workloads;
+      in {
+        localRuntimePresent = workLocal != null;
+        corpEntryPresent = corpEntry != null;
+        workloadId = corpEntry.workloadId;
+        vmName = corpEntry.vmName;
+        kind = corpEntry.kind;
+        realmPath = corpEntry.realmPath;
+        canonicalTarget = corpEntry.canonicalTarget;
+        legacyVmName = corpEntry.legacyVmName;
+        runtimeKind = corpEntry.runtimeKind;
+        runtimeProviderId = corpEntry.runtimeProviderId;
+        pathsPresent = corpEntry.paths != null;
+        runtimePresent = corpEntry.runtime != null;
+      };
+    expected = {
+      localRuntimePresent = true;
+      corpEntryPresent = true;
+      workloadId = "corp-laptop";
+      vmName = "corpbox";
+      kind = "local-vm";
+      realmPath = "work.home";
+      canonicalTarget = "corp-laptop.work.home.d2b";
+      legacyVmName = "corpbox";
+      runtimeKind = "nixos";
+      runtimeProviderId = "local-cloud-hypervisor";
+      pathsPresent = true;
+      runtimePresent = true;
     };
   };
 }
