@@ -221,8 +221,7 @@ fn workload_identity_absent_from_cli_status_output_schema() {
 /// must live inside the gateway guest, not in the host-resident bundle.
 #[test]
 fn realm_controllers_schema_contains_no_sensitive_credential_fields() {
-    let schema_text =
-        read_repo_file("docs/reference/schemas/v2/realm-controllers.json");
+    let schema_text = read_repo_file("docs/reference/schemas/v2/realm-controllers.json");
     for forbidden in [
         "\"privateKey\"",
         "\"credentialMaterial\"",
@@ -330,7 +329,14 @@ fn realm_controller_config_emitter_wires_workload_identity_fields() {
     let emitter = read_repo_file("nixos-modules/realm-controller-config-json.nix");
 
     // Required fields must appear as Nix keys inside the identity block:
-    for field in ["workloadId", "realmId", "realmPath", "canonicalTarget", "legacyVmName", "runtimeKind"] {
+    for field in [
+        "workloadId",
+        "realmId",
+        "realmPath",
+        "canonicalTarget",
+        "legacyVmName",
+        "runtimeKind",
+    ] {
         assert!(
             emitter.contains(field),
             "realm-controller-config emitter must wire WorkloadIdentity field {field}"
@@ -441,7 +447,12 @@ fn workload_identity_structs_carry_deny_unknown_fields() {
 #[test]
 fn workload_identity_module_doc_names_version_bump_requirements() {
     let source = read_repo_file("packages/d2b-core/src/workload_identity.rs");
-    for marker in ["bundleVersion", "schemaVersion", "Additive changes", "Breaking changes"] {
+    for marker in [
+        "bundleVersion",
+        "schemaVersion",
+        "Additive changes",
+        "Breaking changes",
+    ] {
         assert!(
             source.contains(marker),
             "workload_identity.rs module doc must mention {marker} as part of the DTO version policy"
