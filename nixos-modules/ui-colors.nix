@@ -6,6 +6,7 @@ let
   legacyNiri = config.d2b.site.niriVmBorders;
   vmsCfg = config.d2b.vms;
   envsCfg = config.d2b.envs;
+  realmsCfg = config.d2b.realms;
 
   colorPalette = [
     "#7fc8ff"
@@ -34,6 +35,7 @@ let
   normalizeColor = color: lib.toLower color;
   defaultVmColor = colorForName "d2b-niri-border";
   defaultEnvColor = colorForName "d2b-env-accent";
+  defaultRealmColor = colorForName "d2b-realm-accent";
 
   enabledEnvNames = builtins.sort (a: b: a < b) (
     lib.attrNames (lib.filterAttrs (_: env: env.enable) envsCfg)
@@ -41,6 +43,10 @@ let
 
   enabledVmNames = builtins.sort (a: b: a < b) (
     lib.attrNames (lib.filterAttrs (_: vm: vm.enable) vmsCfg)
+  );
+
+  enabledRealmNames = builtins.sort (a: b: a < b) (
+    lib.attrNames (lib.filterAttrs (_: realm: realm.enable) realmsCfg)
   );
 
   legacyVmActiveColor = name: vm:
@@ -94,6 +100,18 @@ let
         env = vm.env;
         border = resolvedVmBorder name vm;
       });
+    realms = lib.genAttrs enabledRealmNames (name:
+      let
+        realm = realmsCfg.${name};
+      in
+      {
+        path = realm.path;
+        accent = normalizeColor (
+          if realm.network.ui.accentColor != null
+          then realm.network.ui.accentColor
+          else defaultRealmColor name
+        );
+      });
   };
 
   artifactEnabled =
@@ -119,6 +137,9 @@ let
     ++ (lib.concatMap
       (name: [ "@define-color d2b_env_${cssIdent name}_accent ${resolved.envs.${name}.accent};" ])
       enabledEnvNames)
+    ++ (lib.concatMap
+      (name: [ "@define-color d2b_realm_${cssIdent name}_accent ${resolved.realms.${name}.accent};" ])
+      enabledRealmNames)
     ++ (lib.concatMap
       (name:
         let

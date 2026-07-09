@@ -70,6 +70,21 @@
           }
         }
       }
+    },
+    "realms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "accent"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+          },
+          "accent": { "$ref": "#/$defs/hexColor" }
+        }
+      }
     }
   },
   "$defs": {

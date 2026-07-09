@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added first-class realm colors to the UI color contract. Enabled realms are
+  now included in `ui-colors.json` under a `realms` key, each with `path` and
+  `accent` fields. Corresponding `@define-color d2b_realm_<id>_accent` entries
+  are emitted in `ui-colors.css`. Colors are sourced from
+  `d2b.realms.<realm>.network.ui.accentColor` and fall back to a deterministic
+  palette color derived from the realm name. The `ui-colors-schema.json`
+  schema is updated to document the new optional `realms` field. Realm colors
+  are presentation metadata only and carry no authorization semantics.
+
 - Added restart/adoption validation gates for workload identity. Four hermetic
   type-2 unit tests in `WorkloadTargetIndex` prove the index is deterministic
   when rebuilt from the same config before/after a daemon restart cycle, that a
