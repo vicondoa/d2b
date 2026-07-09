@@ -6,8 +6,12 @@
 #
 # Security contract:
 #   • No secrets, provider tokens, opaque session handles, or sensitive
-#     command payloads. Every field is either static metadata, a stable
-#     opaque ref, or a non-secret descriptor.
+#     payloads.  Every field is either static operator-declared metadata, a
+#     stable opaque ref, or a non-secret descriptor.
+#   • appCommand and actions[].command are static launch commands declared
+#     by the operator in Nix.  They do not contain credentials, tokens, or
+#     dynamic runtime data.  Consumers must not treat them as trusted inputs
+#     and should validate them before shell-expansion.
 #   • vsockCid is included as a numeric advisory hint only (it is never
 #     an authentication token); launchers that read it MUST treat it as
 #     informational and MUST NOT use it as an authorization factor.
@@ -45,11 +49,20 @@ let
     realmPath = workload.realmPath;
     workloadName = workload.workloadName;
     targetAddress = workload.targetAddress;
+    # canonicalTarget: routing address for realm-native desktop tooling.
+    # Equals targetAddress unless launcher.app.targetRealm overrides it.
+    canonicalTarget = workload.canonicalTarget;
     kind = workload.kind;
     actionId = workload.actionId;
     label = workload.label;
     icon = workload.icon;
     capabilityRefs = workload.capabilityRefs;
+    # appCommand: static operator-declared primary launch command; null when
+    # not set.  Consumers must not shell-expand without validation.
+    appCommand = workload.appCommand;
+    # actions: additional named launcher actions with id, label, command.
+    # Commands are static operator-declared metadata, not sensitive payloads.
+    actions = workload.actions;
     legacyVmName = workload.legacyVmName;
     substrateId = workload.substrateId;
     runtimeKind = workload.runtimeKind;
@@ -69,7 +82,9 @@ let
     invariants = {
       # Affirm that no secrets, credentials, or sensitive payloads appear.
       noSecretsOrCredentials = true;
-      noCommandPayloads = true;
+      # appCommand and actions[].command are static operator-declared launch
+      # metadata — not sensitive command payloads or dynamic runtime data.
+      noSensitiveCommandPayloads = true;
       noOpaqueSessionHandles = true;
       noProviderTokens = true;
       metadataOnly = true;

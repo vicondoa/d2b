@@ -12,6 +12,23 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed `realm-controllers.json` workload identity emitter: workload identity
+  fields are now nested under `identity: { ... }` matching the
+  `RealmControllerLocalWorkload.identity: Option<WorkloadIdentity>` Rust DTO
+  field instead of being flat-merged into the workload root (which violated
+  `deny_unknown_fields` on `RealmControllerLocalWorkload`). Field names now
+  match `WorkloadIdentity`: required `workloadId`, `realmId`, `realmPath`
+  (emitted as a label array via `lib.splitString`), `canonicalTarget`; optional
+  `legacyVmName`, `runtimeKind`, `providerId` (renamed from the incorrect
+  `runtimeProviderId` key). The `kind` field is removed from the identity block
+  (it has no corresponding field in `WorkloadIdentity`). Transitional env-based
+  workload entries correctly omit the identity object entirely.
+- Fixed `launcher.app.targetRealm` nix-unit test to use a valid
+  `WorkloadTarget`-format address ending in `.d2b` (`corp-laptop.alt.d2b`).
+  Added `realmWorkloadTargetAssertions` in `assertions.nix` to reject invalid
+  `targetRealm` values at eval time (must match
+  `<workload>.<realmPath>.d2b` with `[a-z][a-z0-9-]*` labels).
+
 - Narrowed the group ACL on host-local realm run directories from `g::rwx` to
   `g::r-x` so realm-access-group members can traverse and list but cannot
   write. The previous `g::rwx` ACL combined with the sticky `1770` base mode
@@ -103,6 +120,22 @@ deprecations ship one minor release before removal.
   accessors, `realm-workloads-launcher.json` shape and invariants, bundle
   artifact registration, cross-realm vsock CID collision assertion,
   cross-realm external-network conflict index, and empty-realm edge cases.
+- Extended realm workload index rows with `canonicalTarget` (derived from
+  `launcher.app.targetRealm` override or the standard `<workload>.<realm>.d2b`
+  formula), `appCommand` (from `launcher.app.command`), and `actions` (from
+  `launcher.actions`) so downstream emitters have full desktop launch metadata
+  without accessing raw workload options.
+- Extended `realm-workloads-launcher.json` to expose `canonicalTarget`,
+  `appCommand`, and `actions` (each action carries `id`, `label`, and
+  `command`). Commands are static operator-declared launch metadata, not
+  sensitive payloads; the invariant is refined to `noSensitiveCommandPayloads`
+  with accompanying security contract notes.
+- Extended `realm-controllers.json` workload entries for explicit realm
+  workload declarations: each entry now carries `kind`, `realmPath`,
+  `canonicalTarget`, `legacyVmName`, `runtimeKind`, and `runtimeProviderId`
+  alongside existing runtime/path fields. Transitional env-based entries
+  remain unchanged. Fixed a bug where the emitter still referenced the removed
+  `vmRef` field instead of the correct `legacyVmName`.
 
 - Added stacked-PR workflow documentation to AGENTS.md covering branch naming,
   PR-only merges, panel/review evidence requirements, integrator ownership of

@@ -53,21 +53,43 @@ let
         allocatorData.resourceRequests));
 
   # Build a local runtime workload entry for a given vmName.
-  mkLocalWorkloadEntry = workloadId: vmName:
+  # workloadRow is the index entry for an explicit workload declaration, or
+  # null for transitional env-based workload entries that have no
+  # corresponding realm workload declaration yet.
+  mkLocalWorkloadEntry = workloadId: vmName: workloadRow:
     let
       vm = enabledVms.${vmName};
       runtime = runtimeRows.${vmName}.metadata;
-    in {
-      inherit workloadId vmName;
-      env = if vm.env != null then vm.env else "none";
-      inherit runtime;
-      paths = {
-        stateDir = cfg.manifest.${vmName}.stateDir;
-        runDir = "/run/d2b/vms/${vmName}";
-        storeView = "${toString cfg.store.stateDir}/${vmName}/store-view";
-        guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
+      base = {
+        inherit workloadId vmName;
+        env = if vm.env != null then vm.env else "none";
+        inherit runtime;
+        paths = {
+          stateDir = cfg.manifest.${vmName}.stateDir;
+          runDir = "/run/d2b/vms/${vmName}";
+          storeView = "${toString cfg.store.stateDir}/${vmName}/store-view";
+          guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
+        };
       };
-    };
+      # Realm-native workload identity: present for explicit realm workload
+      # entries, absent for transitional env-based entries (no declaration to
+      # source from).  Field names and nesting must match WorkloadIdentity in
+      # d2b-core (deny_unknown_fields; required: workloadId, realmId,
+      # realmPath, canonicalTarget; optional: legacyVmName, runtimeKind,
+      # providerId).
+      identity =
+        if workloadRow != null then
+          lib.filterAttrs (_: v: v != null) {
+            inherit workloadId;
+            realmId = workloadRow.realmId;
+            realmPath = lib.splitString "." workloadRow.realmPath;
+            canonicalTarget = workloadRow.canonicalTarget;
+            legacyVmName = workloadRow.legacyVmName;
+            runtimeKind = workloadRow.runtimeKind;
+            providerId = workloadRow.runtimeProviderId;
+          }
+        else null;
+    in base // lib.optionalAttrs (identity != null) { inherit identity; };
 
   localRuntimeWorkloadsFor = realm:
     let
@@ -76,13 +98,13 @@ let
         (row:
           row.enable
           && row.realmName == realm.realmName
-          && row.vmRef != null
-          && builtins.hasAttr row.vmRef enabledVms)
+          && row.legacyVmName != null
+          && builtins.hasAttr row.legacyVmName enabledVms)
         cfg._index.realms.workloads.enabled;
-      explicitVmNames = map (row: row.vmRef) explicitRows;
+      explicitVmNames = map (row: row.legacyVmName) explicitRows;
 
       explicitEntries = map
-        (row: mkLocalWorkloadEntry row.workloadName row.vmRef)
+        (row: mkLocalWorkloadEntry row.workloadName row.legacyVmName row)
         explicitRows;
 
       # Transitional env-based workloads: VMs in realm.network.env that are
@@ -97,7 +119,7 @@ let
             (sortedMapAttrsToList
               (vmName: vm:
                 if vm.env == realm.network.env && !(builtins.elem vmName explicitVmNames)
-                then mkLocalWorkloadEntry vmName vmName
+                then mkLocalWorkloadEntry vmName vmName null
                 else null)
               enabledVms);
     in
