@@ -46,8 +46,14 @@ niri-vm-borders/ui-json-default-vm-border
 niri-vm-borders/ui-json-env-accent-present
 niri-vm-borders/ui-json-mode
 niri-vm-borders/ui-json-version
+niri-vm-borders/wayland-proxy-ambiguous-realm-uses-vm-defaults
 niri-vm-borders/wayland-proxy-border-default-uses-resolved-colors
 niri-vm-borders/wayland-proxy-border-disable-omits-border-flags
+niri-vm-borders/wayland-proxy-realm-explicit-label-override-preserved
+niri-vm-borders/wayland-proxy-realm-explicit-label-override-target-unchanged
+niri-vm-borders/wayland-proxy-realm-workload-active-color-is-realm-accent
+niri-vm-borders/wayland-proxy-realm-workload-label-is-workload-realmpath
+niri-vm-borders/wayland-proxy-realm-workload-target-is-canonical
 umask-roundtrip/audio
 umask-roundtrip/gpu
 umask-roundtrip/swtpm
