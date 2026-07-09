@@ -158,22 +158,6 @@ let
       (_: artifact: shouldInstall artifact)
       (singletonArtifacts // extraArtifacts);
 
-  realmDaemonGroups = lib.unique (map
-    (realm: realm.controller.daemon.group)
-    (lib.filter (realm: realm.placement == "host-local") topConfig.d2b._index.realms.enabledList));
-
-  realmSharedArtifactPaths = [
-    "/etc/d2b/bundle.json"
-    "/etc/d2b/realm-controllers.json"
-    "/etc/d2b/realm-identity.json"
-  ];
-
-  realmReadAclSpec =
-    lib.concatStringsSep "," (
-      (map (group: "g:${group}:r--") realmDaemonGroups)
-      ++ [ "m::r--" ]
-    );
-
 in
 {
   options.d2b._bundle = {
@@ -300,17 +284,5 @@ in
         };
       })
       centrallyInstalledArtifacts);
-
-    system.activationScripts.d2bRealmBundleArtifactAcls = lib.mkIf (realmDaemonGroups != [ ]) {
-      deps = [ "etc" "users" ];
-      text = ''
-        for artifact in ${lib.escapeShellArgs realmSharedArtifactPaths}; do
-          if [ -e "$artifact" ]; then
-            ${pkgs.acl}/bin/setfacl -m ${lib.escapeShellArg realmReadAclSpec} "$artifact" \
-              || echo "d2b: warning: failed to set realm daemon read ACLs on $artifact" >&2
-          fi
-        done
-      '';
-    };
   };
 }

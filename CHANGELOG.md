@@ -66,10 +66,11 @@ deprecations ship one minor release before removal.
 ### Fixed
 
 - Fixed host-local realm daemon startup after `/etc/d2b` private bundle
-  artifacts are materialized. Activation now restores read ACLs for each
-  `d2br-*` daemon group on `bundle.json`, `realm-controllers.json`, and
-  `realm-identity.json`, preventing realm daemons from exiting with
-  `internal-io` / permission-denied errors on switch.
+  artifacts are materialized. Realm daemon users and services now carry the
+  canonical `d2bd` supplementary group, preserving read access to
+  `root:d2bd 0640` private bundle artifacts (`bundle.json`,
+  `realm-controllers.json`, and `realm-identity.json`) without a parallel
+  activation-time ACL path.
 
 - Fixed local CLI routing for realm workload targets whose workload id differs
   from the legacy VM substrate name. `d2b vm status <workload>.<realm>.d2b` and

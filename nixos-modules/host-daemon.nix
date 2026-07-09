@@ -327,7 +327,7 @@ EOF
         ProtectHome = true;
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
-        SupplementaryGroups = [ realm.controller.daemon.publicSocketGroup ];
+        SupplementaryGroups = [ realm.controller.daemon.publicSocketGroup "d2bd" ];
         Slice = "d2b.slice";
       };
     };

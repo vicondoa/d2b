@@ -92,23 +92,22 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
         bundle_artifacts.contains("realmControllersJson"),
         "bundle-artifacts.nix must declare realmControllersJson metadata"
     );
-    assert!(
-        bundle_artifacts.contains("d2bRealmBundleArtifactAcls"),
-        "bundle-artifacts.nix must restore realm daemon read ACLs for shared private bundle artifacts"
-    );
-    for needle in [
-        "/etc/d2b/bundle.json",
-        "/etc/d2b/realm-controllers.json",
-        "/etc/d2b/realm-identity.json",
-        "g:${group}:r--",
-        "deps = [ \"etc\" \"users\" ];",
-        "failed to set realm daemon read ACLs",
-    ] {
+    let host_users = read_repo_file("nixos-modules/host-users.nix");
+    let host_daemon = read_repo_file("nixos-modules/host-daemon.nix");
+    for needle in ["realm.controller.daemon.publicSocketGroup \"d2bd\""] {
         assert!(
-            bundle_artifacts.contains(needle),
-            "bundle-artifacts.nix missing realm shared artifact ACL marker: {needle}"
+            host_users.contains(needle),
+            "host-users.nix must put realm daemon users in d2bd for private bundle artifact reads: {needle}"
+        );
+        assert!(
+            host_daemon.contains(needle),
+            "host-daemon.nix must run realm daemon services with d2bd as a supplementary group: {needle}"
         );
     }
+    assert!(
+        !bundle_artifacts.contains("d2bRealmBundleArtifactAcls"),
+        "realm daemon private artifact access must use canonical group membership, not a parallel activation ACL hook"
+    );
 
     let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
     for needle in [
