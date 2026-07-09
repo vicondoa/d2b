@@ -26,6 +26,7 @@ pub mod static_invariants;
 pub mod storage;
 pub mod storage_lifecycle;
 pub mod sync;
+pub mod workload_identity;
 
 // `test_support` is needed both by external crates (which opt in via the
 // `test-support` feature) and by d2b-core's OWN tests. Gating on

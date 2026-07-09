@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 
 use crate::contract_id::{ContractId, ContractStringError, PathTemplate};
+use crate::workload_identity::WorkloadIdentity;
 
 pub const REALM_CONTROLLERS_SCHEMA_VERSION: &str = "v2";
 pub const MAX_REALM_CONTROLLER_REALM_PATH_BYTES: usize = 255;
@@ -436,6 +437,11 @@ pub struct RealmControllerLocalWorkload {
     pub env: ContractId,
     pub runtime: RealmControllerRuntimeMetadata,
     pub paths: RealmControllerLocalWorkloadPaths,
+    /// Realm-native workload identity. Additive field: `None` for workloads
+    /// emitted by Nix that pre-date this field; present once the emitter is
+    /// updated. See the `workload_identity` module for the DTO version policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<WorkloadIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

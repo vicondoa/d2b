@@ -15890,6 +15890,7 @@ mod host_install_dispatch_tests {
                 state: d2b_contracts::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
+            workload_identity: None,
             guest_closure_out_path: Some("/nix/store/vm-a-system".to_owned()),
             autostart: None,
             qemu_media: None,
@@ -16093,6 +16094,7 @@ mod host_install_dispatch_tests {
                 state: d2b_contracts::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
+            workload_identity: None,
             autostart: None,
             qemu_media: None,
             runtime: d2b_contracts::public_wire::RuntimeSummary {

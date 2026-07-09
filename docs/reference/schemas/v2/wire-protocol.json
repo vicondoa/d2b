@@ -3583,6 +3583,13 @@
       },
       "additionalProperties": false
     },
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
     "CreateOrReconcileUsersGroupsRequest": {
       "type": "object",
       "required": [
@@ -6385,6 +6392,17 @@
         },
         "vm": {
           "type": "string"
+        },
+        "workloadIdentity": {
+          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field — old daemons omit it; new CLI consumers must tolerate its absence.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkloadIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -8416,6 +8434,18 @@
         }
       },
       "additionalProperties": false
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
     },
     "ReconcileStorageScopeRequest": {
       "description": "Broker-side storage reconciliation request.\n\nThe daemon supplies only a bundle-resolved storage id. The broker looks up the concrete path, owner, mode, kind, cleanup/repair policy, and invariants in its trusted `storage.json`; no raw path or mode crosses the wire.",
@@ -12081,6 +12111,107 @@
         },
         "vm": {
           "type": "string"
+        },
+        "workloadIdentity": {
+          "description": "Realm-native workload identity. Present for workloads that have been associated with a realm; `None` for classical `d2b.vms` entries that have not yet been adopted into a realm. Additive field — old daemons omit it; new CLI consumers must tolerate its absence.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkloadIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadIdentity": {
+      "description": "Universal workload identity, independent of any runtime or provider backend.\n\nSeparates the stable, realm-scoped identity of a workload from the backend configuration in [`WorkloadBackend`]. Any code that routes, logs, or audits a workload should carry a `WorkloadIdentity` rather than raw VM-name strings so the realm context is always available.\n\n# DTO version policy\n\nSee the [module-level note][crate::workload_identity] on additive vs. breaking changes. Adding new `Option<T>` fields here is additive; renaming or removing fields requires a `bundleVersion` + `schemaVersion` bump.",
+      "type": "object",
+      "required": [
+        "canonicalTarget",
+        "realmId",
+        "realmPath",
+        "workloadId"
+      ],
+      "properties": {
+        "canonicalTarget": {
+          "description": "Fully-qualified canonical target address, kept pre-rendered to avoid repeated formatting and to make it audit-log safe.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          ]
+        },
+        "legacyVmName": {
+          "description": "Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM entry while the realm-native model is being adopted. `None` for workloads declared directly inside a realm without a legacy VM entry.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmId": {
+          "description": "Realm identifier of the owning realm controller.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "realmPath": {
+          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "runtimeKind": {
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workloadId": {
+          "description": "Stable operator-facing workload identifier (the leading label of the canonical target address).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        },
+        "workloadName": {
+          "description": "Human-readable workload name if it differs from the id. Omitted when the workload name and id are identical.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

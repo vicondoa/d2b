@@ -1797,6 +1797,7 @@ mod tests {
                 state,
             },
             name: vm.to_owned(),
+            workload_identity: None,
             guest_closure_out_path: None,
             autostart: None,
             qemu_media: None,
