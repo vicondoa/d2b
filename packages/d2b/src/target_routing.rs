@@ -200,6 +200,110 @@ impl core::fmt::Display for RealmArgError {
     }
 }
 
+/// A migration hint produced when a target string is detected to be an old
+/// non-canonical form that the CLI no longer accepts (fail-closed), or a bare
+/// VM name that the CLI still accepts but for which a canonical workload target
+/// is now available (compatibility warning).
+///
+/// Callers use this to emit typed, actionable guidance to the operator without
+/// changing the routing decision itself (except for `OldEnvStyleTarget`, which
+/// is always fail-closed and does not produce a valid route).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetMigrationHint {
+    /// The operator used a bare VM name (e.g. `corp-vm`) and the daemon has
+    /// advertised a canonical workload target for it (e.g. `corp-vm.work.d2b`).
+    /// The local fast path still works — this is a non-fatal compatibility
+    /// warning suggesting the canonical form.
+    BareVmHasCanonicalTarget {
+        /// The bare VM name as supplied by the operator.
+        vm: String,
+        /// The canonical workload target address to suggest.
+        canonical_target: String,
+    },
+    /// The operator used an env-qualified name without the required `.d2b`
+    /// suffix (e.g. `corp-vm.work` instead of `corp-vm.work.d2b`). This form
+    /// is rejected fail-closed; the hint carries the corrected form.
+    OldEnvStyleTarget {
+        /// The raw string as supplied by the operator.
+        raw: String,
+        /// The corrected canonical target to suggest.
+        suggested: String,
+    },
+}
+
+impl core::fmt::Display for TargetMigrationHint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TargetMigrationHint::BareVmHasCanonicalTarget { vm, canonical_target } => write!(
+                f,
+                "target `{vm}` is a bare VM name; consider using the canonical workload target `{canonical_target}` instead"
+            ),
+            TargetMigrationHint::OldEnvStyleTarget { raw, suggested } => write!(
+                f,
+                "target `{raw}` looks like an env-qualified VM name but is missing the required `.d2b` suffix; use `{suggested}` instead"
+            ),
+        }
+    }
+}
+
+/// Detect whether a raw target string looks like an old env-qualified VM name
+/// missing the `.d2b` suffix (e.g. `corp-vm.work`), and if so, return a
+/// fail-closed `TargetMigrationHint::OldEnvStyleTarget` with the corrected
+/// canonical form.
+///
+/// Returns `None` if the target is a bare name (no dot), already has the `.d2b`
+/// suffix, uses the explicit `d2b://` scheme, or is otherwise not an
+/// env-qualified form.
+pub fn detect_env_style_target(raw: &str) -> Option<TargetMigrationHint> {
+    // Explicit scheme is always handled by the realm parser, not this path.
+    if raw.starts_with("d2b://") {
+        return None;
+    }
+    // Must contain a dot but must NOT already end with `.d2b`.
+    if !raw.contains('.') || raw.ends_with(".d2b") {
+        return None;
+    }
+    // Must look like valid label components (only lowercase alphanumeric and hyphens).
+    let labels: Vec<&str> = raw.split('.').collect();
+    let all_label_like = labels.iter().all(|label| {
+        !label.is_empty()
+            && label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    });
+    if !all_label_like {
+        return None;
+    }
+    // Must parse as a valid workload + realm path when `.d2b` is appended.
+    let candidate = format!("{raw}.d2b");
+    if RealmTarget::parse(&candidate).is_err() {
+        return None;
+    }
+    Some(TargetMigrationHint::OldEnvStyleTarget {
+        raw: raw.to_owned(),
+        suggested: candidate,
+    })
+}
+
+/// Produce a `TargetMigrationHint::BareVmHasCanonicalTarget` when `raw` is a
+/// bare VM name (no dots, not a realm target) and `canonical_target` is the
+/// workload target address that the daemon has advertised for it.
+///
+/// Returns `None` if `raw` is not a bare name (contains dots or has an
+/// explicit scheme).
+pub fn migration_hint_for_bare_vm(
+    raw: &str,
+    canonical_target: &str,
+) -> Option<TargetMigrationHint> {
+    if raw.starts_with("d2b://") || raw.contains('.') {
+        return None;
+    }
+    Some(TargetMigrationHint::BareVmHasCanonicalTarget {
+        vm: raw.to_owned(),
+        canonical_target: canonical_target.to_owned(),
+    })
+}
+
 /// A target's conventional local gateway entrypoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayHint {
@@ -725,6 +829,120 @@ mod tests {
 
     fn access_ref(raw: &str) -> AccessBindingRef {
         AccessBindingRef::parse(raw).unwrap()
+    }
+
+    // --- migration hint tests ---
+
+    #[test]
+    fn detect_env_style_target_identifies_missing_suffix() {
+        let hint = super::detect_env_style_target("corp-vm.work")
+            .expect("should detect env-style target");
+        match hint {
+            super::TargetMigrationHint::OldEnvStyleTarget { raw, suggested } => {
+                assert_eq!(raw, "corp-vm.work");
+                assert_eq!(suggested, "corp-vm.work.d2b");
+            }
+            other => panic!("expected OldEnvStyleTarget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detect_env_style_target_passes_already_canonical() {
+        assert!(
+            super::detect_env_style_target("corp-vm.work.d2b").is_none(),
+            "target already has .d2b suffix"
+        );
+    }
+
+    #[test]
+    fn detect_env_style_target_passes_bare_name() {
+        assert!(
+            super::detect_env_style_target("corp-vm").is_none(),
+            "bare name has no dot"
+        );
+    }
+
+    #[test]
+    fn detect_env_style_target_passes_explicit_scheme() {
+        assert!(
+            super::detect_env_style_target("d2b://corp-vm.work.d2b").is_none(),
+            "explicit scheme bypasses env-style detection"
+        );
+    }
+
+    #[test]
+    fn detect_env_style_target_passes_uppercase_label() {
+        assert!(
+            super::detect_env_style_target("Corp-VM.Work").is_none(),
+            "uppercase labels are not valid realm labels"
+        );
+    }
+
+    #[test]
+    fn detect_env_style_target_multi_label_path() {
+        let hint = super::detect_env_style_target("builder.staging")
+            .expect("two-label env-style target");
+        match hint {
+            super::TargetMigrationHint::OldEnvStyleTarget { raw, suggested } => {
+                assert_eq!(raw, "builder.staging");
+                assert_eq!(suggested, "builder.staging.d2b");
+            }
+            other => panic!("expected OldEnvStyleTarget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn migration_hint_for_bare_vm_returns_hint() {
+        let hint = super::migration_hint_for_bare_vm("corp-vm", "corp-vm.work.d2b")
+            .expect("bare name should produce a hint");
+        match hint {
+            super::TargetMigrationHint::BareVmHasCanonicalTarget { vm, canonical_target } => {
+                assert_eq!(vm, "corp-vm");
+                assert_eq!(canonical_target, "corp-vm.work.d2b");
+            }
+            other => panic!("expected BareVmHasCanonicalTarget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn migration_hint_for_bare_vm_passes_dotted_name() {
+        assert!(
+            super::migration_hint_for_bare_vm("corp-vm.work.d2b", "corp-vm.work.d2b").is_none(),
+            "already a realm target, not a bare name"
+        );
+    }
+
+    #[test]
+    fn migration_hint_for_bare_vm_passes_explicit_scheme() {
+        assert!(
+            super::migration_hint_for_bare_vm("d2b://corp-vm.work.d2b", "corp-vm.work.d2b")
+                .is_none(),
+            "explicit scheme is not a bare name"
+        );
+    }
+
+    #[test]
+    fn migration_hint_display_bare_vm() {
+        let hint = super::TargetMigrationHint::BareVmHasCanonicalTarget {
+            vm: "my-vm".to_owned(),
+            canonical_target: "my-vm.work.d2b".to_owned(),
+        };
+        let msg = hint.to_string();
+        assert!(msg.contains("my-vm"), "hint message includes vm name");
+        assert!(msg.contains("my-vm.work.d2b"), "hint message includes canonical target");
+        assert!(msg.contains("canonical"), "hint message mentions canonical form");
+    }
+
+    #[test]
+    fn migration_hint_display_env_style() {
+        let hint = super::TargetMigrationHint::OldEnvStyleTarget {
+            raw: "my-vm.work".to_owned(),
+            suggested: "my-vm.work.d2b".to_owned(),
+        };
+        let msg = hint.to_string();
+        assert!(msg.contains("my-vm.work"), "hint message includes raw target");
+        assert!(msg.contains("my-vm.work.d2b"), "hint message includes suggested form");
+        assert!(msg.contains(".d2b"), "hint message mentions the required suffix");
     }
 
     #[test]

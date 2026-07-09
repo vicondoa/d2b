@@ -39,6 +39,12 @@ pub struct ListItemOutputV2 {
     pub qemu_media: Option<crate::public_wire::QemuMediaStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity_ok: Option<bool>,
+    /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
+    /// Present when the daemon has associated this entry with a realm workload
+    /// identity. Absent for classical `d2b.vms` entries not yet adopted into
+    /// a realm. Additive — old CLI consumers must tolerate its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -419,6 +425,12 @@ pub struct StatusVmOutputV2 {
     pub live_pool_integrity: Option<LivePoolIntegrityOutputV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb: Option<crate::public_wire::UsbipVmStatus>,
+    /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
+    /// Present when the daemon has associated this VM with a realm workload
+    /// identity. Absent for classical VMs not yet adopted into a realm.
+    /// Additive — old CLI consumers must tolerate its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

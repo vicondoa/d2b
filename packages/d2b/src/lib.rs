@@ -38,6 +38,7 @@ use d2b_contracts::{
 use d2b_core::{
     bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
+    realm_controller_config::RealmControllersJson,
 };
 use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
@@ -5502,7 +5503,41 @@ fn emit_route_error(err: target_routing::RouteError, json: bool) -> Result<CliFa
     Ok(CliFailure::new(exit_code, message))
 }
 
+/// Emit a non-fatal compatibility warning to stderr when a bare VM name is used
+/// and the daemon has advertised a canonical workload target for it. Does
+/// nothing in `--json` mode (JSON callers parse structured output only).
+fn print_workload_migration_hint(hint: &target_routing::TargetMigrationHint, json: bool) {
+    if json {
+        return;
+    }
+    eprintln!("note: {hint}");
+}
+
 fn route_vm_target(context: &Context, raw: &str, json: bool) -> Result<VmTargetRoute, CliFailure> {
+    // Fail-closed for old env-qualified targets missing the `.d2b` suffix.
+    // E.g. `corp-vm.work` → error with suggestion `corp-vm.work.d2b`.
+    if let Some(hint) = target_routing::detect_env_style_target(raw) {
+        match &hint {
+            target_routing::TargetMigrationHint::OldEnvStyleTarget { suggested, .. } => {
+                let message = hint.to_string();
+                let exit_code = emit_host_error(
+                    &host_error_envelope(
+                        &message,
+                        "old-env-style-target",
+                        2,
+                        "CLI target parsing: env-qualified names require the `.d2b` suffix.",
+                        raw,
+                        &format!("Use `{suggested}` (the canonical workload target form)."),
+                        "docs/reference/cli-contract.md",
+                    ),
+                    json,
+                )
+                .map_err(|f| f)?;
+                return Err(CliFailure::new(exit_code, message));
+            }
+            _ => {}
+        }
+    }
     route_vm_target_with_table(context, raw, json, load_realm_entrypoint_table()?)
 }
 
@@ -6556,6 +6591,20 @@ fn cmd_vm_lifecycle_verb(
         }
     };
     require_known_vm(context, &vm, json)?;
+    // Emit a non-fatal compatibility warning when a bare VM name is used but
+    // a canonical workload target is available for it in the realm-controllers
+    // artifact. Advisory only: the local fast path continues to work.
+    if !json && !vm.contains('.') {
+        if let Some(canonical) =
+            try_canonical_target_for_vm(&context.bundle_path, &vm)
+        {
+            if let Some(hint) =
+                target_routing::migration_hint_for_bare_vm(&vm, &canonical)
+            {
+                print_workload_migration_hint(&hint, json);
+            }
+        }
+    }
     if (verb == "start" || verb == "restart") && !json {
         warn_pending_staged_config(&vm);
     }
@@ -9382,9 +9431,16 @@ fn render_list_human(
     output: &ListOutputV2,
     read_model: Option<&d2b_contracts::public_wire::PublicReadModelMetadata>,
 ) -> String {
-    let mut text = String::from(
-        "NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS\n",
-    );
+    let has_canonical = output.0.iter().any(|item| item.canonical_target.is_some());
+    let mut text = if has_canonical {
+        String::from(
+            "NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       WORKLOAD TARGET          STATUS\n",
+        )
+    } else {
+        String::from(
+            "NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS\n",
+        )
+    };
     for item in &output.0 {
         let status = if item.is_net_vm {
             format!("{} (net-vm)", item.status)
@@ -9410,17 +9466,32 @@ fn render_list_human(
             item.status.clone()
         };
         let static_ip = item.static_ip.clone().unwrap_or_else(|| "-".to_owned());
-        let _ = writeln!(
-            text,
-            "{:<18} {:<9} {:<9} {:<5} {:<7} {:<15} {}",
-            item.name,
-            item.env.clone().unwrap_or_else(|| "-".to_owned()),
-            item.graphics,
-            item.tpm,
-            item.usbip,
-            static_ip,
-            status,
-        );
+        if has_canonical {
+            let _ = writeln!(
+                text,
+                "{:<18} {:<9} {:<9} {:<5} {:<7} {:<15} {:<24} {}",
+                item.name,
+                item.env.clone().unwrap_or_else(|| "-".to_owned()),
+                item.graphics,
+                item.tpm,
+                item.usbip,
+                static_ip,
+                item.canonical_target.clone().unwrap_or_else(|| "-".to_owned()),
+                status,
+            );
+        } else {
+            let _ = writeln!(
+                text,
+                "{:<18} {:<9} {:<9} {:<5} {:<7} {:<15} {}",
+                item.name,
+                item.env.clone().unwrap_or_else(|| "-".to_owned()),
+                item.graphics,
+                item.tpm,
+                item.usbip,
+                static_ip,
+                status,
+            );
+        }
     }
     if let Some(rm) = read_model {
         let fp = if rm.source_fingerprint.len() > 8 {
@@ -9444,6 +9515,9 @@ fn render_status_vm_human(
 ) -> String {
     let mut text = String::new();
     let _ = writeln!(text, "=== {} ===", output.name);
+    if let Some(canonical) = &output.canonical_target {
+        let _ = writeln!(text, "workload target: {canonical}");
+    }
     if let Some(env) = &output.env {
         let _ = writeln!(text, "env: {env}");
     }
@@ -9997,6 +10071,37 @@ where
     read_json_file(&path)
         .map(Some)
         .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))
+}
+
+/// Look up the canonical workload target address for a VM by its VM name.
+/// Reads the bundle.json and, if it references a realm-controllers artifact,
+/// parses it to find the workload's `identity.canonicalTarget`. Returns `None`
+/// on any IO or parse error (advisory hint path — never blocks the caller).
+fn try_canonical_target_for_vm(bundle_path: &Path, vm: &str) -> Option<String> {
+    let bundle: Bundle = read_json_file(bundle_path).ok()?;
+    let realm_controllers_ref = bundle.realm_controllers_path.as_deref()?;
+    let base_dir = bundle_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let rc_path = if Path::new(realm_controllers_ref).is_absolute() {
+        PathBuf::from(realm_controllers_ref)
+    } else {
+        base_dir.join(realm_controllers_ref)
+    };
+    let rc: RealmControllersJson = read_json_file(&rc_path).ok()?;
+    for controller in &rc.controllers {
+        let local_rt = controller.local_runtime.as_ref()?;
+        for workload in &local_rt.workloads {
+            if workload.vm_name.as_str() == vm {
+                return workload
+                    .identity
+                    .as_ref()
+                    .map(|id| id.canonical_target.to_canonical());
+            }
+        }
+    }
+    None
 }
 
 fn print_json<T>(value: &T) -> Result<(), CliFailure>
@@ -12212,6 +12317,213 @@ mod host_install_dispatch_tests {
                 .is_some_and(|text| text.contains("corp-gateway"))
         );
         let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn route_vm_target_rejects_env_style_target_fail_closed() {
+        // `corp-vm.work` looks like an old env-qualified target missing `.d2b`.
+        // route_vm_target must fail-closed with error code `old-env-style-target`
+        // and a suggestion to use `corp-vm.work.d2b`.
+        let manifest_path = test_socket_path("env-style-fail-closed", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "vm-a");
+        let context = test_context(manifest_path.clone());
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            super::route_vm_target(&context, "corp-vm.work", true)
+        });
+        let err = result.expect_err("env-style target must fail closed");
+        assert_eq!(err.exit_code, 2, "exit code 2 for usage error");
+        let envelope: Value = serde_json::from_slice(&stdout).expect("json error envelope");
+        assert_eq!(
+            envelope.get("code").and_then(Value::as_str),
+            Some("old-env-style-target"),
+            "error code must be old-env-style-target"
+        );
+        let remediation = envelope
+            .get("remediation")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(
+            remediation.contains("corp-vm.work.d2b"),
+            "remediation must suggest the canonical form; got: {remediation}"
+        );
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn route_vm_target_passes_canonical_realm_target() {
+        // `corp-vm.work.d2b` already has the `.d2b` suffix — env-style detection
+        // must not reject it. This test verifies there is no false positive.
+        let manifest_path = test_socket_path("env-style-no-false-positive", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "vm-a");
+        let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
+        // Make `work` a local realm so the route resolves without a daemon.
+        table.host_resident(
+            d2b_realm_core::RealmPath::new(vec![
+                d2b_realm_core::RealmId::parse("work").unwrap(),
+            ])
+            .unwrap(),
+        );
+        let context = test_context(manifest_path.clone());
+
+        let (result, _stdout) = super::with_test_stdout_capture(|| {
+            super::route_vm_target_with_table(&context, "corp-vm.work.d2b", false, Some(table))
+        });
+        // Must not produce an env-style error — the result may be Ok (Local) or a
+        // different error (gateway not found), but never old-env-style-target.
+        if let Err(err) = &result {
+            assert!(
+                !err.message.contains("old-env-style-target"),
+                "canonical target must not trigger env-style detection; got: {}",
+                err.message
+            );
+        }
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn render_list_human_shows_workload_target_column_when_present() {
+        let output = super::ListOutputV2(vec![
+            super::ListItemOutputV2 {
+                name: "corp-vm".to_owned(),
+                env: Some("work".to_owned()),
+                graphics: false,
+                tpm: false,
+                usbip: false,
+                static_ip: None,
+                status: "running".to_owned(),
+                is_net_vm: false,
+                guest_closure_out_path: None,
+                runtime_kind: None,
+                autostart: None,
+                runtime_capabilities: Vec::new(),
+                service_capabilities: Vec::new(),
+                unsupported_capabilities: Vec::new(),
+                qemu_media: None,
+                runner_parity_ok: None,
+                canonical_target: Some("corp-vm.work.d2b".to_owned()),
+            },
+            super::ListItemOutputV2 {
+                name: "personal-vm".to_owned(),
+                env: Some("home".to_owned()),
+                graphics: false,
+                tpm: false,
+                usbip: false,
+                static_ip: None,
+                status: "stopped".to_owned(),
+                is_net_vm: false,
+                guest_closure_out_path: None,
+                runtime_kind: None,
+                autostart: None,
+                runtime_capabilities: Vec::new(),
+                service_capabilities: Vec::new(),
+                unsupported_capabilities: Vec::new(),
+                qemu_media: None,
+                runner_parity_ok: None,
+                canonical_target: None,
+            },
+        ]);
+        let rendered = super::render_list_human(&output, None);
+        assert!(
+            rendered.contains("WORKLOAD TARGET"),
+            "header must include WORKLOAD TARGET column when any entry has canonical_target"
+        );
+        assert!(
+            rendered.contains("corp-vm.work.d2b"),
+            "canonical target must appear in output row"
+        );
+    }
+
+    #[test]
+    fn render_list_human_omits_workload_target_column_when_absent() {
+        let output = super::ListOutputV2(vec![super::ListItemOutputV2 {
+            name: "vm-a".to_owned(),
+            env: None,
+            graphics: false,
+            tpm: false,
+            usbip: false,
+            static_ip: None,
+            status: "stopped".to_owned(),
+            is_net_vm: false,
+            guest_closure_out_path: None,
+            runtime_kind: None,
+            autostart: None,
+            runtime_capabilities: Vec::new(),
+            service_capabilities: Vec::new(),
+            unsupported_capabilities: Vec::new(),
+            qemu_media: None,
+            runner_parity_ok: None,
+            canonical_target: None,
+        }]);
+        let rendered = super::render_list_human(&output, None);
+        assert!(
+            !rendered.contains("WORKLOAD TARGET"),
+            "WORKLOAD TARGET column must not appear when no entry has canonical_target"
+        );
+    }
+
+    #[test]
+    fn render_status_vm_human_shows_workload_target_when_present() {
+        let output = super::StatusVmOutputV2 {
+            name: "corp-vm".to_owned(),
+            env: Some("work".to_owned()),
+            services: super::StatusServicesOutputV2 {
+                d2b: "active".to_owned(),
+                microvm: "active".to_owned(),
+                virtiofsd: "active".to_owned(),
+                qemu_media: None,
+                gpu: None,
+                video: None,
+                snd: None,
+                swtpm: None,
+            },
+            current: None,
+            booted: None,
+            pending_restart: false,
+            runtime: super::RUNTIME_UNKNOWN.to_owned(),
+            runtime_kind: None,
+            autostart: None,
+            runtime_capabilities: Vec::new(),
+            service_capabilities: Vec::new(),
+            unsupported_capabilities: Vec::new(),
+            qemu_media: None,
+            usb: None,
+            declared_roles: Vec::new(),
+            readiness: Vec::new(),
+            api_ready: None,
+            runner_parity: None,
+            live_pool_integrity: None,
+            canonical_target: Some("corp-vm.work.d2b".to_owned()),
+        };
+        let manifest_vm = super::ManifestVm {
+            name: "corp-vm".to_owned(),
+            env: Some("work".to_owned()),
+            graphics: false,
+            tpm: false,
+            audio: false,
+            usbip_yubikey: false,
+            static_ip: None,
+            is_net_vm: false,
+            state_dir: "/var/lib/d2b/vms/corp-vm".to_owned(),
+            bridge: "d2b-work".to_owned(),
+            ssh_user: None,
+            runtime: None,
+        };
+        let rendered = super::render_status_vm_human(&output, &manifest_vm, Vec::new());
+        assert!(
+            rendered.contains("workload target"),
+            "workload target label must appear"
+        );
+        assert!(
+            rendered.contains("corp-vm.work.d2b"),
+            "canonical target value must appear in status output"
+        );
     }
 
     #[test]
@@ -15723,6 +16035,7 @@ mod host_install_dispatch_tests {
             api_ready: None,
             runner_parity: None,
             live_pool_integrity: None,
+            canonical_target: None,
         };
         let manifest_vm = super::ManifestVm {
             name: "vm-a".to_owned(),
@@ -15973,6 +16286,7 @@ mod host_install_dispatch_tests {
             unsupported_capabilities: Vec::new(),
             qemu_media: None,
             runner_parity_ok: None,
+            canonical_target: None,
         }]);
 
         let rendered = super::render_list_human(&output, None);
