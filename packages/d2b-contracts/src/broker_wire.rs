@@ -14,6 +14,7 @@ use crate::types::{
     VmId,
 };
 use d2b_core::host::IfName;
+use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -1588,6 +1589,17 @@ pub struct SpawnRunnerRequest {
     pub runtime_allocations: Vec<RunnerAllocation>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+    /// Universal workload identity from the realm-native model.
+    ///
+    /// Additive: present for VMs that are declared as realm workloads;
+    /// absent (`None`) for VMs that predate realm workload declarations.
+    /// The broker treats `None` as "no realm identity available" and does
+    /// not reject the request — this field is for audit, observability, and
+    /// routing purposes only. The backend-specific runtime config
+    /// (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always
+    /// carried in the existing typed fields, never inside this identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_identity: Option<WorkloadIdentity>,
 }
 
 /// Per-runner runtime allocation tuple. Each entry pairs a typed slot

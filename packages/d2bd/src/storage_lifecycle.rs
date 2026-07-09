@@ -568,6 +568,7 @@ mod tests {
         ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![VmProcessDag {
+                workload_identity: None,
                 vm: "corp-vm".to_owned(),
                 nodes: vec![ProcessNode {
                     id: d2b_core::processes::NodeId("cloud-hypervisor".to_owned()),

@@ -14561,6 +14561,7 @@ mod host_install_dispatch_tests {
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![d2b_core::processes::VmProcessDag {
+                workload_identity: None,
                 vm: vm.to_owned(),
                 nodes: vec![d2b_core::processes::ProcessNode {
                     id: d2b_core::processes::NodeId("guest-control-health".to_owned()),
@@ -16379,6 +16380,7 @@ mod host_install_dispatch_tests {
             runtime: None,
         };
         let dag = d2b_core::processes::VmProcessDag {
+            workload_identity: None,
             vm: "vm-a".to_owned(),
             nodes: vec![
                 d2b_core::processes::ProcessNode {
@@ -17913,6 +17915,7 @@ mod ssh_spawn_gate {
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![d2b_core::processes::VmProcessDag {
+                workload_identity: None,
                 vm: vm.to_owned(),
                 // No GuestControlHealth node: the VM is a known but
                 // pre-guest-control generation.

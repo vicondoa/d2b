@@ -516,6 +516,7 @@ mod tests {
     /// host-reconcile -> store-preflight -> virtiofsd -> ch -> ssh-ready
     fn audit_headless_dag() -> VmProcessDag {
         VmProcessDag {
+            workload_identity: None,
             vm: "corp-vm".to_owned(),
             nodes: vec![
                 dummy_node("host-reconcile", ProcessRole::HostReconcile),
@@ -556,6 +557,7 @@ mod tests {
             "/run/d2b/vms/corp-vm/ch.sock".to_owned(),
         )];
         VmProcessDag {
+            workload_identity: None,
             vm: "corp-vm".to_owned(),
             nodes: vec![dummy_node("host-reconcile", ProcessRole::HostReconcile), ch],
             edges: vec![DagEdge {
@@ -587,6 +589,7 @@ mod tests {
     fn topo_sort_diamond_emits_both_branches() {
         // root -> a, root -> b, a -> join, b -> join
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "diamond".to_owned(),
             nodes: vec![
                 dummy_node("root", ProcessRole::HostReconcile),
@@ -635,6 +638,7 @@ mod tests {
     #[test]
     fn topo_sort_detects_cycle() {
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "cycle".to_owned(),
             nodes: vec![
                 dummy_node("a", ProcessRole::Virtiofsd),
@@ -673,6 +677,7 @@ mod tests {
     #[test]
     fn topo_sort_rejects_self_loop_as_cycle() {
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "self".to_owned(),
             nodes: vec![dummy_node("a", ProcessRole::Virtiofsd)],
             edges: vec![DagEdge {
@@ -689,6 +694,7 @@ mod tests {
     #[test]
     fn topo_sort_rejects_unknown_edge_target() {
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "bad".to_owned(),
             nodes: vec![dummy_node("a", ProcessRole::Virtiofsd)],
             edges: vec![DagEdge {
@@ -705,6 +711,7 @@ mod tests {
     #[test]
     fn topo_sort_rejects_duplicate_node_ids() {
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "dup".to_owned(),
             nodes: vec![
                 dummy_node("a", ProcessRole::Virtiofsd),
@@ -868,6 +875,7 @@ mod tests {
     #[tokio::test]
     async fn executor_propagates_topo_error() {
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "broken".to_owned(),
             nodes: vec![dummy_node("a", ProcessRole::Virtiofsd)],
             edges: vec![DagEdge {
@@ -907,6 +915,7 @@ mod tests {
         }
 
         let dag = VmProcessDag {
+            workload_identity: None,
             vm: "x".to_owned(),
             nodes: vec![dummy_node("a", ProcessRole::Virtiofsd)],
             edges: vec![],

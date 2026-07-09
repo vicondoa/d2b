@@ -504,6 +504,7 @@ mod tests {
             .map(|(idx, role)| serde_json::from_value(process_node_json(vm, idx, role)).unwrap())
             .collect();
         VmProcessDag {
+            workload_identity: None,
             vm: vm.to_owned(),
             nodes,
             edges: Vec::<DagEdge>::new(),

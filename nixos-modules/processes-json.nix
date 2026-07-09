@@ -975,8 +975,30 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           ++ (lib.optionals vm.audio.enable [ "audio" ])
           ++ lib.optionals (!vm.graphics.enable && !vm.audio.enable) optionalSidecarBaseNodeIds
         );
+      # Realm workload identity: present for VMs declared as realm workloads.
+      # Uses the first matching enabled row; absence means the VM is a
+      # classical d2b.vms.<vm> entry without a realm workload declaration.
+      realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
+      vmWorkloadRow = if realmWorkloadRows != [ ] then builtins.head realmWorkloadRows else null;
+      vmWorkloadIdentity =
+        if vmWorkloadRow != null then {
+          workloadId = vmWorkloadRow.workloadName;
+          realmId = vmWorkloadRow.realmId;
+          realmPath = lib.splitString "." vmWorkloadRow.realmPath;
+          canonicalTarget = vmWorkloadRow.canonicalTarget;
+        } // lib.optionalAttrs (vmWorkloadRow.legacyVmName != null) {
+          legacyVmName = vmWorkloadRow.legacyVmName;
+        } // lib.optionalAttrs (vmWorkloadRow.runtimeKind != null) {
+          runtimeKind = vmWorkloadRow.runtimeKind;
+        } // lib.optionalAttrs (vmWorkloadRow.runtimeProviderId != null) {
+          providerId = vmWorkloadRow.runtimeProviderId;
+        }
+        else null;
     in {
       vm = name;
+    } // lib.optionalAttrs (vmWorkloadIdentity != null) {
+      workloadIdentity = vmWorkloadIdentity;
+    } // {
       nodes = [
         (node name {
           id = "host-reconcile";
@@ -1165,9 +1187,29 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       emitWaylandProxy = cfg.site.waylandUser != null;
       hypervisorService = d2bLib.runtimeHypervisorService "qemu-media";
+      # Realm workload identity: present for VMs declared as realm workloads.
+      realmWorkloadRows = cfg._index.realms.workloads.byVm.${name} or [ ];
+      vmWorkloadRow = if realmWorkloadRows != [ ] then builtins.head realmWorkloadRows else null;
+      vmWorkloadIdentity =
+        if vmWorkloadRow != null then {
+          workloadId = vmWorkloadRow.workloadName;
+          realmId = vmWorkloadRow.realmId;
+          realmPath = lib.splitString "." vmWorkloadRow.realmPath;
+          canonicalTarget = vmWorkloadRow.canonicalTarget;
+        } // lib.optionalAttrs (vmWorkloadRow.legacyVmName != null) {
+          legacyVmName = vmWorkloadRow.legacyVmName;
+        } // lib.optionalAttrs (vmWorkloadRow.runtimeKind != null) {
+          runtimeKind = vmWorkloadRow.runtimeKind;
+        } // lib.optionalAttrs (vmWorkloadRow.runtimeProviderId != null) {
+          providerId = vmWorkloadRow.runtimeProviderId;
+        }
+        else null;
     in
     {
       vm = name;
+    } // lib.optionalAttrs (vmWorkloadIdentity != null) {
+      workloadIdentity = vmWorkloadIdentity;
+    } // {
       nodes = [
         (node name {
           id = "host-reconcile";
