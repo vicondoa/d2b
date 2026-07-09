@@ -73,6 +73,7 @@ use d2b_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
+use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
@@ -2207,6 +2208,13 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
         spec: &usbipd_perenv_autostart::PerEnvUsbipdSpec,
     ) -> usbipd_perenv_autostart::PerEnvUsbipdOutcome {
         use usbipd_perenv_autostart::PerEnvUsbipdOutcome;
+        // Per-env usbipd runners (`sys-<env>-usbipd`) are framework
+        // infrastructure services, not realm workloads.  They serve the
+        // USBIP transport layer for ALL VMs in an env and are never
+        // declared under `d2b.realms.<realm>.workloads`.  Their
+        // `workload_identity` is correctly `None`: no realm workload row
+        // exists for them and threading a synthetic identity would
+        // misrepresent their scope in the broker audit trail.
         let request = BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
@@ -9975,6 +9983,12 @@ fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
 struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
+    /// Workload identity from the `VmProcessDag` this runner was constructed
+    /// for.  `None` for VMs that predate realm workload declarations; `Some`
+    /// for VMs declared as realm workloads.  Threaded into every
+    /// `SpawnRunner` request so the broker can record the identity in the
+    /// audit trail and privilege metadata without re-reading the process DAG.
+    workload_identity: Option<WorkloadIdentity>,
 }
 
 fn resolve_store_view_intent_for_vm<'a>(
@@ -10144,7 +10158,7 @@ impl VmStartRunner<'_> {
         match dispatch_broker_request_with_fds_timeout(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
-                workload_identity: None,
+                workload_identity: self.workload_identity.clone(),
                 vm_id: VmId::new(vm),
                 role_id: RoleId::new(role_id.clone()),
                 role: runner_role,
@@ -13684,11 +13698,6 @@ fn dispatch_broker_vm_start(
         return Ok(response);
     }
 
-    let runner = VmStartRunner {
-        state,
-        resolver: &resolver,
-    };
-
     let dag = resolver
         .processes
         .vms
@@ -13698,6 +13707,12 @@ fn dispatch_broker_vm_start(
             context: format!("load process DAG for {}", request.vm),
             detail: "VM not present in processes.json".to_owned(),
         })?;
+
+    let runner = VmStartRunner {
+        state,
+        resolver: &resolver,
+        workload_identity: dag.workload_identity.clone(),
+    };
 
     // StoreSync owns the guest-served live marker
     // (`store-view/live/.d2b-marker-<vm>`) and postures it as

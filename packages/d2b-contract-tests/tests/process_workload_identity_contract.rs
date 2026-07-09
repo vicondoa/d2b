@@ -22,6 +22,12 @@
 //!    `workloadIdentity` deserializes successfully (additive invariant).
 //!  * Backward-compat process DAG test: a `VmProcessDag` JSON without
 //!    `workloadIdentity` deserializes successfully.
+//!  * Runtime propagation: `VmStartRunner` carries `workload_identity` as a
+//!    struct field and `spawn_runner` uses `self.workload_identity` (not a
+//!    hardcoded `None`) so the DAG identity reaches every `SpawnRunner` request.
+//!  * Per-env usbipd invariant: `BrokerPerEnvUsbipdSpawner` uses
+//!    `workload_identity: None` because `sys-<env>-usbipd` runners are
+//!    framework infrastructure, not realm workloads.
 
 use d2b_contract_tests::read_repo_file;
 use d2b_core::processes::{VmProcessDag, VmProcessInvariants};
@@ -450,5 +456,100 @@ fn processes_json_nix_emits_workload_identity_in_both_dag_functions() {
         identity_count >= 4,
         "processes-json.nix must declare vmWorkloadIdentity in both vmDag and qemuMediaDag \
          (expected ≥4 occurrences, found {identity_count})"
+    );
+}
+
+// ── VmStartRunner runtime propagation source-lints ───────────────────────────
+
+/// `VmStartRunner` must declare a `workload_identity: Option<WorkloadIdentity>`
+/// field so the daemon can thread the DAG identity into every `SpawnRunner`
+/// broker request.
+#[test]
+fn vm_start_runner_struct_has_workload_identity_field() {
+    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+
+    // Find the struct VmStartRunner block and verify the field is there.
+    let struct_start = lib
+        .find("struct VmStartRunner")
+        .expect("VmStartRunner struct must be present in d2bd/src/lib.rs");
+    // The struct body ends at the first `}` after the struct declaration.
+    let struct_body_end = lib[struct_start..]
+        .find('}')
+        .map(|rel| struct_start + rel)
+        .expect("VmStartRunner struct must have a closing brace");
+    let struct_body = &lib[struct_start..=struct_body_end];
+
+    assert!(
+        struct_body.contains("workload_identity"),
+        "VmStartRunner struct must have a `workload_identity` field; \
+         found body: {struct_body}"
+    );
+}
+
+/// `VmStartRunner::spawn_runner` must use `self.workload_identity` when
+/// building the `SpawnRunnerRequest`, not a hardcoded `None`.  This lint
+/// verifies the propagation path is wired.
+#[test]
+fn vm_start_runner_spawn_runner_uses_self_workload_identity() {
+    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+
+    // Find the spawn_runner function body inside VmStartRunner's impl block.
+    let fn_start = lib
+        .find("fn spawn_runner(")
+        .expect("spawn_runner fn must be present in d2bd/src/lib.rs");
+
+    // Look for `SpawnRunner(BrokerSpawnRunnerRequest` within 5000 chars of
+    // spawn_runner (the function is ~150 lines; 5000 chars is a safe window).
+    let window_end = (fn_start + 5000).min(lib.len());
+    let window = &lib[fn_start..window_end];
+
+    // The SpawnRunner request must reference `self.workload_identity`.
+    assert!(
+        window.contains("self.workload_identity"),
+        "VmStartRunner::spawn_runner must use `self.workload_identity` in the \
+         SpawnRunnerRequest, not a hardcoded `None`"
+    );
+
+    // Belt-and-suspenders: confirm there is no raw `workload_identity: None`
+    // in the same function window (hardcoded None would be a regression).
+    assert!(
+        !window.contains("workload_identity: None"),
+        "VmStartRunner::spawn_runner must not hardcode `workload_identity: None`; \
+         it must propagate `self.workload_identity`"
+    );
+}
+
+/// `BrokerPerEnvUsbipdSpawner::spawn` must explicitly use `workload_identity: None`
+/// for per-env usbipd runners.  The comment adjacent to that field documents why:
+/// these are framework infrastructure services, not realm workloads.
+#[test]
+fn broker_perenv_usbipd_spawner_workload_identity_is_none_and_documented() {
+    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+
+    // Locate BrokerPerEnvUsbipdSpawner struct definition.
+    let struct_offset = lib
+        .find("struct BrokerPerEnvUsbipdSpawner")
+        .expect("BrokerPerEnvUsbipdSpawner must be present in d2bd/src/lib.rs");
+
+    // The spawn fn is after the struct; search from there.
+    let spawn_offset = lib[struct_offset..]
+        .find("fn spawn(")
+        .map(|rel| struct_offset + rel)
+        .expect("BrokerPerEnvUsbipdSpawner::spawn fn must be present");
+
+    // 2000 chars covers the full spawn implementation.
+    let window_end = (spawn_offset + 2000).min(lib.len());
+    let window = &lib[spawn_offset..window_end];
+
+    assert!(
+        window.contains("workload_identity: None"),
+        "BrokerPerEnvUsbipdSpawner::spawn must use `workload_identity: None` \
+         for per-env usbipd runners (they are infrastructure, not realm workloads)"
+    );
+    // The comment explaining why None is used must be present near the field.
+    assert!(
+        window.contains("infrastructure") || window.contains("not realm workload"),
+        "BrokerPerEnvUsbipdSpawner::spawn must include a comment explaining why \
+         workload_identity is None (these are infrastructure services, not realm workloads)"
     );
 }
