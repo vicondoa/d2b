@@ -35,8 +35,10 @@ fn processes_schema() -> Value {
 }
 
 fn wire_protocol_schema() -> Value {
-    serde_json::from_str(&read_repo_file("docs/reference/schemas/v2/wire-protocol.json"))
-        .expect("wire-protocol.json parses as JSON")
+    serde_json::from_str(&read_repo_file(
+        "docs/reference/schemas/v2/wire-protocol.json",
+    ))
+    .expect("wire-protocol.json parses as JSON")
 }
 
 fn definition<'a>(schema: &'a Value, name: &str) -> &'a Value {
@@ -310,7 +312,9 @@ fn vm_process_dag_workload_identity_has_additive_serde_annotations() {
     let lines: Vec<&str> = source.lines().collect();
     let field_idx = lines
         .iter()
-        .position(|line| line.contains("pub workload_identity") && line.contains("WorkloadIdentity"))
+        .position(|line| {
+            line.contains("pub workload_identity") && line.contains("WorkloadIdentity")
+        })
         .expect("processes.rs must declare pub workload_identity: Option<WorkloadIdentity>");
 
     // The 5 lines before the field must include the serde annotations:
@@ -337,7 +341,9 @@ fn spawn_runner_request_workload_identity_has_additive_serde_annotations() {
     let lines: Vec<&str> = source.lines().collect();
     let field_idx = lines
         .iter()
-        .position(|line| line.contains("pub workload_identity") && line.contains("WorkloadIdentity"))
+        .position(|line| {
+            line.contains("pub workload_identity") && line.contains("WorkloadIdentity")
+        })
         .expect(
             "broker_wire.rs must declare pub workload_identity: Option<WorkloadIdentity> in \
              SpawnRunnerRequest",
