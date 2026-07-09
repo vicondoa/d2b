@@ -325,7 +325,7 @@ fn realm_workloads_launcher_exposes_workload_id_field() {
 /// - `iconId`       — raw launcher.icon.id value (null when not set)
 /// - `iconName`     — raw launcher.icon.name fallback value (null when not set)
 /// - `iconGroupKey` — stable clustering key for duplicate-icon / app-chooser
-///                    semantics; equals iconId when set, else iconName, else null
+///   semantics; equals iconId when set, else iconName, else null
 ///
 /// These fields let desktop consumers (Waybar, wlcontrol, clip-picker) cluster
 /// workloads that represent the same application type across realms without
