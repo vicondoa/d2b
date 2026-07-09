@@ -28,6 +28,14 @@ deprecations ship one minor release before removal.
   Added `realmWorkloadTargetAssertions` in `assertions.nix` to reject invalid
   `targetRealm` values at eval time (must match
   `<workload>.<realmPath>.d2b` with `[a-z][a-z0-9-]*` labels).
+- Fixed `realm_workload_schema_contract` contract tests to assert the correct
+  nested `WorkloadIdentity` shape and field names. The old tests checked for
+  the wrong field name `runtimeProviderId` (renamed to `providerId` in the DTO)
+  and did not verify nested identity structure or guard against the invalid
+  `kind` key. Updated tests now verify: `identity =` nesting, presence of all
+  required identity field names (`workloadId`, `realmId`, `realmPath`,
+  `canonicalTarget`, `providerId`), and absence of `kind = workloadRow.kind`
+  and `runtimeProviderId =` as JSON keys.
 
 - Narrowed the group ACL on host-local realm run directories from `g::rwx` to
   `g::r-x` so realm-access-group members can traverse and list but cannot
@@ -120,6 +128,19 @@ deprecations ship one minor release before removal.
   accessors, `realm-workloads-launcher.json` shape and invariants, bundle
   artifact registration, cross-realm vsock CID collision assertion,
   cross-realm external-network conflict index, and empty-realm edge cases.
+- Added Rust contract tests (`realm_workload_schema_contract`) for realm
+  workload DTOs and artifacts: schema presence and definition of
+  `WorkloadIdentity` / `RealmTarget` in `realm-controllers.json` and
+  `wire-protocol.json`; additive-field invariant verifying `identity` and
+  `workloadIdentity` are not in `required[]`; wire/CLI schema separation
+  (workload identity travels in the daemon-wire schema only, not in CLI output
+  schemas); `realm-workloads-launcher.json` emitter contract markers
+  (`noSensitiveCommandPayloads`, `canonicalTarget`, `appCommand`, `actions`,
+  classification); controller config emitter wires identity fields and does not
+  reference removed field `vmRef`; `deny_unknown_fields` source-lint for
+  `WorkloadIdentity` and sibling structs; module-level version policy doc gate
+  (`bundleVersion` + `schemaVersion` bump requirement); absence of sensitive
+  credential fields in `realm-controllers.json`.
 - Extended realm workload index rows with `canonicalTarget` (derived from
   `launcher.app.targetRealm` override or the standard `<workload>.<realm>.d2b`
   formula), `appCommand` (from `launcher.app.command`), and `actions` (from
