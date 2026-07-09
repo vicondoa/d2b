@@ -82,6 +82,7 @@ pub(crate) fn list_output_from_manifest(
                     runner_parity_ok: bundle
                         .and_then(|bundle| bundle.closures.get(&vm.name))
                         .map(|closure| closure.runner_parity_ok),
+                    canonical_target: None,
                 }
             })
             .collect(),
@@ -118,6 +119,10 @@ pub(crate) fn list_output_from_public_entries(
                 runner_parity_ok: bundle
                     .and_then(|bundle| bundle.closures.get(&entry.vm))
                     .map(|closure| closure.runner_parity_ok),
+                canonical_target: entry
+                    .workload_identity
+                    .as_ref()
+                    .map(|id| id.canonical_target.to_canonical()),
             })
             .collect(),
     )
@@ -506,6 +511,7 @@ pub(crate) fn build_vm_status_output(
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
         runner_parity,
         live_pool_integrity: read_live_pool_integrity(context, vm),
+        canonical_target: None,
     }
 }
 
@@ -591,6 +597,10 @@ pub(crate) fn build_vm_status_output_from_public(
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
         runner_parity,
         live_pool_integrity: read_live_pool_integrity(context, vm),
+        canonical_target: public
+            .workload_identity
+            .as_ref()
+            .map(|id| id.canonical_target.to_canonical()),
     }
 }
 

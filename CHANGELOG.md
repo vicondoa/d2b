@@ -12,6 +12,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed `cmd_vm_lifecycle_verb` migration hint to check the raw user-supplied
+  target string rather than the resolved local VM name. For host-local realms
+  the router strips the realm suffix (e.g. `corp-vm.work.d2b` → `corp-vm`),
+  so the previous check (`!vm.contains('.')`) always evaluated true after
+  resolution and incorrectly emitted the "use the canonical form" hint to users
+  who had already typed the canonical form. The raw input is now preserved
+  before the shadow binding and used for both the dot-guard and the
+  `migration_hint_for_bare_vm` call.
+
 - Fixed `realm-controllers.json` workload identity emitter: workload identity
   fields are now nested under `identity: { ... }` matching the
   `RealmControllerLocalWorkload.identity: Option<WorkloadIdentity>` Rust DTO
@@ -106,6 +115,26 @@ deprecations ship one minor release before removal.
 - The `vm` filter in list and status requests now resolves canonical targets and
   unambiguous workload-id aliases through the workload index before matching
   against manifest entries.
+- Added `canonical_target` field to `ListItemOutputV2` and `StatusVmOutputV2`
+  CLI output structs. When the daemon advertises workload identity for a VM,
+  the field is populated with the canonical workload target address
+  (e.g. `corp-vm.work.d2b`); it is absent (not serialized) when no workload
+  identity is available, preserving backward compatibility with old daemons.
+- `d2b vm list` human output now shows a `WORKLOAD TARGET` column when at least
+  one listed VM has a canonical workload target.
+- `d2b vm status` human output now shows a `workload target:` line when the
+  queried VM has a canonical workload target.
+- `d2b vm <verb>` commands emit a non-fatal compatibility note to stderr when a
+  bare VM name is used and the daemon has advertised a canonical workload target
+  for it, suggesting the canonical form (e.g.
+  `note: target 'corp-vm' is a bare VM name; consider using 'corp-vm.work.d2b'`).
+  The bare-name local fast path continues to work unchanged.
+- Env-qualified VM names missing the required `.d2b` suffix
+  (e.g. `corp-vm.work` instead of `corp-vm.work.d2b`) are now rejected
+  fail-closed with error code `old-env-style-target` and a clear remediation
+  message suggesting the canonical form. This closes the migration UX gap
+  for operators moving from legacy env-scoped targeting.
+
 - Added `d2b.realms.<realm>.workloads.<workload>` option for declaring
   realm-owned workloads. Each workload optionally references an existing
   `d2b.vms.<vm>` substrate via `vmRef` for runtime kind and provider id
