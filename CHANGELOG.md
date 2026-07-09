@@ -103,6 +103,19 @@ deprecations ship one minor release before removal.
   accessors, `realm-workloads-launcher.json` shape and invariants, bundle
   artifact registration, cross-realm vsock CID collision assertion,
   cross-realm external-network conflict index, and empty-realm edge cases.
+- Added Rust contract tests (`realm_workload_schema_contract`) for realm
+  workload DTOs and artifacts: schema presence and definition of
+  `WorkloadIdentity` / `RealmTarget` in `realm-controllers.json` and
+  `wire-protocol.json`; additive-field invariant verifying `identity` and
+  `workloadIdentity` are not in `required[]`; wire/CLI schema separation
+  (workload identity travels in the daemon-wire schema only, not in CLI output
+  schemas); `realm-workloads-launcher.json` emitter contract markers
+  (`noSensitiveCommandPayloads`, `canonicalTarget`, `appCommand`, `actions`,
+  classification); controller config emitter wires identity fields and does not
+  reference removed field `vmRef`; `deny_unknown_fields` source-lint for
+  `WorkloadIdentity` and sibling structs; module-level version policy doc gate
+  (`bundleVersion` + `schemaVersion` bump requirement); absence of sensitive
+  credential fields in `realm-controllers.json`.
 - Extended realm workload index rows with `canonicalTarget` (derived from
   `launcher.app.targetRealm` override or the standard `<workload>.<realm>.d2b`
   formula), `appCommand` (from `launcher.app.command`), and `actions` (from
