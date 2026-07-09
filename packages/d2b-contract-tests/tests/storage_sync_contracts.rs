@@ -94,16 +94,15 @@ fn realm_controller_artifact_is_wired_into_private_bundle() {
     );
     let host_users = read_repo_file("nixos-modules/host-users.nix");
     let host_daemon = read_repo_file("nixos-modules/host-daemon.nix");
-    for needle in ["realm.controller.daemon.publicSocketGroup \"d2bd\""] {
-        assert!(
-            host_users.contains(needle),
-            "host-users.nix must put realm daemon users in d2bd for private bundle artifact reads: {needle}"
-        );
-        assert!(
-            host_daemon.contains(needle),
-            "host-daemon.nix must run realm daemon services with d2bd as a supplementary group: {needle}"
-        );
-    }
+    let d2bd_group_marker = "realm.controller.daemon.publicSocketGroup \"d2bd\"";
+    assert!(
+        host_users.contains(d2bd_group_marker),
+        "host-users.nix must put realm daemon users in d2bd for private bundle artifact reads: {d2bd_group_marker}"
+    );
+    assert!(
+        host_daemon.contains(d2bd_group_marker),
+        "host-daemon.nix must run realm daemon services with d2bd as a supplementary group: {d2bd_group_marker}"
+    );
     assert!(
         !bundle_artifacts.contains("d2bRealmBundleArtifactAcls"),
         "realm daemon private artifact access must use canonical group membership, not a parallel activation ACL hook"
