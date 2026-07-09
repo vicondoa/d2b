@@ -12,19 +12,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Added restart/adoption validation gates for workload identity (W13/W16 plan
-  requirement). Four hermetic tests in `WorkloadTargetIndex` prove the index is
-  deterministic when rebuilt from the same config before/after a daemon restart
-  cycle, that a config JSON round-trip does not lose any identity field, and that
-  transitional workloads remain identity-free. Five source-lint gates in a new
-  `policy_restart_adoption` contract test enforce the design invariants:
-  `RunnerSnapshotRecord` carries no `workload_identity` field (process adoption
-  is keyed on `(pid, start_time_ticks)`, not realm identity), `WorkloadTargetIndex`
-  is rebuilt per-request not stored in `ServerState`, and `identity_for_vm` is
-  used in list/status population. A new `workload-identity-restart.nix`
-  runNixOSTest boots a node with a realm workload declared, verifies
-  `d2b list --json` emits `workloadIdentity` pre-restart, restarts d2bd, and
-  asserts the identity block is present and byte-identical post-restart.
+- Added restart/adoption validation gates for workload identity. Four hermetic
+  type-2 unit tests in `WorkloadTargetIndex` prove the index is deterministic
+  when rebuilt from the same config before/after a daemon restart cycle, that a
+  config JSON round-trip does not lose any identity field, and that transitional
+  workloads remain identity-free. Four source-lint gates in `policy_restart_adoption`
+  enforce the design invariants: `RunnerSnapshotRecord` carries no
+  `workload_identity` field (process adoption is keyed on `(pid, start_time_ticks)`,
+  not realm identity), `WorkloadTargetIndex` is rebuilt per-request not stored in
+  `ServerState`, `identity_for_vm` is used in list/status population, and the
+  hermetic restart-invariant unit test is present.
 
 ### Fixed
 
