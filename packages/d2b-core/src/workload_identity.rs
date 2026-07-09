@@ -288,7 +288,10 @@ mod tests {
     fn workload_identity_rejects_unknown_fields() {
         let json = r#"{"workloadId":"demo","realmId":"work","realmPath":["work"],"canonicalTarget":"demo.work.d2b","unexpected":"value"}"#;
         let result = serde_json::from_str::<WorkloadIdentity>(json);
-        assert!(result.is_err(), "deny_unknown_fields must reject extra keys");
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject extra keys"
+        );
     }
 
     #[test]
@@ -326,7 +329,10 @@ mod tests {
         };
         let json = serde_json::to_string(&intent).unwrap();
         let back: WorkloadRuntimeIntent = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.identity.canonical_target.to_canonical(), "corp-vm.work.d2b");
+        assert_eq!(
+            back.identity.canonical_target.to_canonical(),
+            "corp-vm.work.d2b"
+        );
         assert!(matches!(back.backend, WorkloadBackend::LocalVm(_)));
     }
 
@@ -337,10 +343,16 @@ mod tests {
             vm_id: ContractId::parse("demo").unwrap(),
             env: ContractId::parse("dev").unwrap(),
         });
-        let intent = WorkloadRuntimeIntent { identity: id, backend };
+        let intent = WorkloadRuntimeIntent {
+            identity: id,
+            backend,
+        };
         let mut json_val: serde_json::Value = serde_json::to_value(&intent).unwrap();
         json_val["extraField"] = serde_json::Value::String("bad".to_owned());
         let result = serde_json::from_value::<WorkloadRuntimeIntent>(json_val);
-        assert!(result.is_err(), "deny_unknown_fields must reject extra keys");
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject extra keys"
+        );
     }
 }
