@@ -143,6 +143,14 @@ let
       icon =
         if workload.launcher.icon.id != null then workload.launcher.icon.id
         else workload.launcher.icon.name;
+      # iconGroupKey: stable grouping key for duplicate-icon / app-chooser
+      # semantics.  Desktop consumers (Waybar, wlcontrol, clip-picker) use this
+      # to cluster workloads that represent the same application type across
+      # realms.  Equals iconId when set, else iconName; null when neither is
+      # declared.  Always identical to the resolved `icon` field.
+      iconGroupKey =
+        if workload.launcher.icon.id != null then workload.launcher.icon.id
+        else workload.launcher.icon.name;
       # Canonical target address: launcher override if set, else derived.
       canonicalTarget =
         if workload.launcher.app.targetRealm != null
@@ -150,6 +158,9 @@ let
         else "${workloadName}.${realm.path}.d2b";
     in {
       inherit realmName workloadName;
+      # workloadId: explicit DTO-named alias for workloadName; matches the
+      # WorkloadIdentity.workloadId field used by daemon/broker consumers.
+      workloadId = workloadName;
       realmId = realm.id;
       realmPath = realm.path;
       # targetAddress: derived canonical target; always the computed value.
@@ -161,6 +172,14 @@ let
       # actionId: stable launcher action identifier; defaults to workload id.
       actionId = workloadName;
       inherit label icon;
+      # iconId: raw XDG icon theme id from launcher.icon.id; null when not set.
+      # Consumers that need to round-trip the option value (e.g. .desktop
+      # file generators) should use iconId rather than the resolved `icon`.
+      iconId = workload.launcher.icon.id;
+      # iconName: raw symbolic icon name fallback from launcher.icon.name; null
+      # when not set.
+      iconName = workload.launcher.icon.name;
+      inherit iconGroupKey;
       capabilityRefs = sortNames (lib.unique workload.launcher.capabilities);
       # appCommand: operator-declared primary launch command; null when not set.
       appCommand = workload.launcher.app.command;

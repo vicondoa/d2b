@@ -301,7 +301,82 @@ fn realm_workloads_launcher_exposes_canonical_target_and_actions() {
     }
 }
 
-// ── realm-controller-config emitter: identity fields ─────────────────────────
+/// The launcher JSON emitter must expose `workloadId` as an explicit DTO-named
+/// field alongside `workloadName`.  This matches the `WorkloadIdentity.workloadId`
+/// contract and ensures downstream consumers (Waybar, wlcontrol, clip-picker) can
+/// use a stable daemon-wire-compatible identifier without relying on `workloadName`.
+#[test]
+fn realm_workloads_launcher_exposes_workload_id_field() {
+    let emitter = read_repo_file("nixos-modules/realm-workloads-launcher-json.nix");
+    assert!(
+        emitter.contains("workloadId"),
+        "realm-workloads-launcher emitter must expose workloadId per workload row"
+    );
+    // Both workloadName (backward compat) and workloadId (explicit DTO alias) must be present.
+    assert!(
+        emitter.contains("workloadName"),
+        "realm-workloads-launcher emitter must also retain workloadName for backward compat"
+    );
+}
+
+/// The launcher JSON emitter must expose `iconId`, `iconName`, and `iconGroupKey`
+/// in addition to the existing resolved `icon` field.
+///
+/// - `iconId`       — raw launcher.icon.id value (null when not set)
+/// - `iconName`     — raw launcher.icon.name fallback value (null when not set)
+/// - `iconGroupKey` — stable clustering key for duplicate-icon / app-chooser
+///   semantics; equals iconId when set, else iconName, else null
+///
+/// These fields let desktop consumers (Waybar, wlcontrol, clip-picker) cluster
+/// workloads that represent the same application type across realms without
+/// having to re-derive the group key from display strings.
+#[test]
+fn realm_workloads_launcher_exposes_icon_grouping_fields() {
+    let emitter = read_repo_file("nixos-modules/realm-workloads-launcher-json.nix");
+    for field in ["iconId", "iconName", "iconGroupKey"] {
+        assert!(
+            emitter.contains(field),
+            "realm-workloads-launcher emitter must wire {field} per workload row"
+        );
+    }
+    // The backward-compatible resolved `icon` field must still be present.
+    assert!(
+        emitter.contains("icon = workload.icon"),
+        "realm-workloads-launcher emitter must retain backward-compat 'icon' resolved field"
+    );
+}
+
+/// The launcher JSON emitter must document the `iconGroupKey` field with an
+/// explanation of its duplicate-icon / app-chooser purpose so that the
+/// design decision is discoverable in the source.
+#[test]
+fn realm_workloads_launcher_icon_group_key_has_semantic_comment() {
+    let emitter = read_repo_file("nixos-modules/realm-workloads-launcher-json.nix");
+    // The comment must mention the grouping / app-chooser semantic:
+    assert!(
+        emitter.contains("iconGroupKey"),
+        "realm-workloads-launcher emitter must contain iconGroupKey"
+    );
+    assert!(
+        emitter.contains("app-chooser") || emitter.contains("grouping"),
+        "realm-workloads-launcher emitter must document the duplicate-icon / app-chooser semantic \
+         for iconGroupKey"
+    );
+}
+
+/// The index emitter (`index.nix`) must also derive `workloadId`, `iconId`,
+/// `iconName`, and `iconGroupKey` on the workload row so that any consumer of
+/// the index (not just the launcher emitter) has access to these fields.
+#[test]
+fn realm_workloads_index_derives_grouping_fields() {
+    let index = read_repo_file("nixos-modules/index.nix");
+    for field in ["workloadId", "iconId", "iconName", "iconGroupKey"] {
+        assert!(
+            index.contains(field),
+            "nixos-modules/index.nix must derive {field} on the workload row"
+        );
+    }
+}
 
 // ── realm-controller-config emitter: identity fields ─────────────────────────
 

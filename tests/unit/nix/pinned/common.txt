@@ -626,10 +626,16 @@ realm-workloads/index-by-vm-accessor
 realm-workloads/index-flat-enabled-accessor
 realm-workloads/launcher-json-bundle-artifact
 realm-workloads/launcher-json-canonical-target-override
+realm-workloads/launcher-json-duplicate-icon-group-key-matches
 realm-workloads/launcher-json-excludes-disabled
+realm-workloads/launcher-json-icon-group-key
+realm-workloads/launcher-json-icon-group-key-falls-back-to-name
+realm-workloads/launcher-json-icon-group-key-prefers-id-over-name
+realm-workloads/launcher-json-icon-id-name-fields
 realm-workloads/launcher-json-invariants
 realm-workloads/launcher-json-no-implicit-dedup
 realm-workloads/launcher-json-shape
+realm-workloads/launcher-json-workload-id-field
 realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
 requested-vm-config/boot-selector-and-hotplug-source-coexist

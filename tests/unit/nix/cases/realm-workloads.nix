@@ -403,11 +403,15 @@ in
           realmName = corpRow.realmName;
           realmPath = corpRow.realmPath;
           workloadName = corpRow.workloadName;
+          workloadId = corpRow.workloadId;
           targetAddress = corpRow.targetAddress;
           canonicalTarget = corpRow.canonicalTarget;
           actionId = corpRow.actionId;
           label = corpRow.label;
           icon = corpRow.icon;
+          iconId = corpRow.iconId;
+          iconName = corpRow.iconName;
+          iconGroupKey = corpRow.iconGroupKey;
           capabilityRefs = corpRow.capabilityRefs;
           appCommand = corpRow.appCommand;
           actionsCount = builtins.length corpRow.actions;
@@ -421,10 +425,14 @@ in
         };
         providerFields = {
           workloadName = providerRow.workloadName;
+          workloadId = providerRow.workloadId;
           legacyVmName = providerRow.legacyVmName;
           runtimeKind = providerRow.runtimeKind;
           appCommand = providerRow.appCommand;
           actionsEmpty = providerRow.actions == [ ];
+          iconId = providerRow.iconId;
+          iconName = providerRow.iconName;
+          iconGroupKey = providerRow.iconGroupKey;
           vsockCid = providerRow.vsockCid;
         };
       };
@@ -437,12 +445,16 @@ in
         realmName = "work";
         realmPath = "work.home";
         workloadName = "corp-laptop";
+        workloadId = "corp-laptop";
         targetAddress = "corp-laptop.work.home.d2b";
         # canonicalTarget matches targetAddress when no override is set
         canonicalTarget = "corp-laptop.work.home.d2b";
         actionId = "corp-laptop";
         label = "Corp Laptop";
         icon = "computer-laptop";
+        iconId = "computer-laptop";
+        iconName = null;
+        iconGroupKey = "computer-laptop";
         capabilityRefs = [ "graphics" "guest-exec" ];
         appCommand = "d2b vm exec corp-laptop -- bash -l";
         actionsCount = 2;
@@ -456,10 +468,14 @@ in
       };
       providerFields = {
         workloadName = "provider-service";
+        workloadId = "provider-service";
         legacyVmName = null;
         runtimeKind = null;
         appCommand = null;
         actionsEmpty = true;
+        iconId = null;
+        iconName = null;
+        iconGroupKey = null;
         # no legacyVmName → vsockCid must be null
         vsockCid = null;
       };
@@ -538,6 +554,204 @@ in
     expected = {
       archivedExcluded = true;
       corpPresent = true;
+    };
+  };
+
+  # ── launcher JSON: workloadId field equals workloadName ─────────────────────
+  # The launcher row must expose `workloadId` as an explicit DTO-named alias
+  # for `workloadName`, matching the WorkloadIdentity.workloadId contract used
+  # by daemon/broker consumers.
+  "realm-workloads/launcher-json-workload-id-field" = {
+    expr =
+      let
+        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
+        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
+        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
+      in {
+        corpWorkloadId = corpRow.workloadId;
+        corpWorkloadIdEqualsName = corpRow.workloadId == corpRow.workloadName;
+        providerWorkloadId = providerRow.workloadId;
+        providerWorkloadIdEqualsName = providerRow.workloadId == providerRow.workloadName;
+      };
+    expected = {
+      corpWorkloadId = "corp-laptop";
+      corpWorkloadIdEqualsName = true;
+      providerWorkloadId = "provider-service";
+      providerWorkloadIdEqualsName = true;
+    };
+  };
+
+  # ── launcher JSON: iconId and iconName fields present separately ─────────────
+  # The launcher row must expose `iconId` (raw launcher.icon.id) and `iconName`
+  # (raw launcher.icon.name) in addition to the resolved `icon` string, so that
+  # desktop tooling can round-trip option values and distinguish primary-id from
+  # symbolic-name.
+  "realm-workloads/launcher-json-icon-id-name-fields" = {
+    expr =
+      let
+        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
+        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
+        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
+      in {
+        # corp-laptop sets icon.id = "computer-laptop" and no icon.name
+        corpIconId = corpRow.iconId;
+        corpIconName = corpRow.iconName;
+        corpIconResolved = corpRow.icon;
+        corpIconIdEqualsResolved = corpRow.iconId == corpRow.icon;
+        # provider-service sets neither icon.id nor icon.name
+        providerIconId = providerRow.iconId;
+        providerIconName = providerRow.iconName;
+        providerIconResolved = providerRow.icon;
+      };
+    expected = {
+      corpIconId = "computer-laptop";
+      corpIconName = null;
+      corpIconResolved = "computer-laptop";
+      corpIconIdEqualsResolved = true;
+      providerIconId = null;
+      providerIconName = null;
+      providerIconResolved = null;
+    };
+  };
+
+  # ── launcher JSON: iconGroupKey stable grouping key ──────────────────────────
+  # iconGroupKey must equal iconId when set, else iconName, else null.
+  # It is always identical to the resolved `icon` field.
+  "realm-workloads/launcher-json-icon-group-key" = {
+    expr =
+      let
+        data = wlCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
+        corpRow = lib.findFirst (w: w.workloadName == "corp-laptop") null data.workloads;
+        providerRow = lib.findFirst (w: w.workloadName == "provider-service") null data.workloads;
+      in {
+        # corp-laptop: iconGroupKey = iconId (preferred over iconName)
+        corpGroupKey = corpRow.iconGroupKey;
+        corpGroupKeyEqualsIcon = corpRow.iconGroupKey == corpRow.icon;
+        corpGroupKeyEqualsIconId = corpRow.iconGroupKey == corpRow.iconId;
+        # provider-service: neither id nor name → null group key
+        providerGroupKey = providerRow.iconGroupKey;
+      };
+    expected = {
+      corpGroupKey = "computer-laptop";
+      corpGroupKeyEqualsIcon = true;
+      corpGroupKeyEqualsIconId = true;
+      providerGroupKey = null;
+    };
+  };
+
+  # ── launcher JSON: iconGroupKey prefers iconId over iconName ─────────────────
+  # When both icon.id and icon.name are set, iconGroupKey must equal iconId.
+  "realm-workloads/launcher-json-icon-group-key-prefers-id-over-name" = {
+    expr =
+      let
+        bothIconFixture = lib.recursiveUpdate hostBase {
+          d2b.realms.home = {
+            name = "Home";
+            path = "home";
+            network.envs = [ "home" ];
+            workloads.notes = {
+              launcher.label = "Notes";
+              launcher.icon.id = "notes-app";
+              launcher.icon.name = "notes";
+            };
+          };
+        };
+        data = (mkEval [ bothIconFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
+        row = lib.findFirst (w: w.workloadName == "notes") null data.workloads;
+      in {
+        iconId = row.iconId;
+        iconName = row.iconName;
+        iconGroupKey = row.iconGroupKey;
+        iconResolved = row.icon;
+        groupKeyEqualsId = row.iconGroupKey == row.iconId;
+      };
+    expected = {
+      iconId = "notes-app";
+      iconName = "notes";
+      iconGroupKey = "notes-app";
+      iconResolved = "notes-app";
+      groupKeyEqualsId = true;
+    };
+  };
+
+  # ── launcher JSON: iconGroupKey equals iconName when only name is set ─────────
+  # When icon.name is set but icon.id is null, iconGroupKey must equal iconName.
+  "realm-workloads/launcher-json-icon-group-key-falls-back-to-name" = {
+    expr =
+      let
+        nameOnlyFixture = lib.recursiveUpdate hostBase {
+          d2b.realms.home = {
+            name = "Home";
+            path = "home";
+            network.envs = [ "home" ];
+            workloads.legacy-app = {
+              launcher.label = "Legacy App";
+              launcher.icon.name = "application-x-generic";
+            };
+          };
+        };
+        data = (mkEval [ nameOnlyFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
+        row = lib.findFirst (w: w.workloadName == "legacy-app") null data.workloads;
+      in {
+        iconId = row.iconId;
+        iconName = row.iconName;
+        iconGroupKey = row.iconGroupKey;
+        iconResolved = row.icon;
+        groupKeyEqualsName = row.iconGroupKey == row.iconName;
+      };
+    expected = {
+      iconId = null;
+      iconName = "application-x-generic";
+      iconGroupKey = "application-x-generic";
+      iconResolved = "application-x-generic";
+      groupKeyEqualsName = true;
+    };
+  };
+
+  # ── launcher JSON: duplicate icon — iconGroupKey identical across realms ───────
+  # Two workloads in different realms with the same icon.id must have identical
+  # iconGroupKey values so desktop consumers can use it as a cluster key for
+  # duplicate-app chooser semantics.
+  "realm-workloads/launcher-json-duplicate-icon-group-key-matches" = {
+    expr =
+      let
+        dupFixture = lib.recursiveUpdate hostBase {
+          d2b.realms.realm-a = {
+            path = "realm-a";
+            env = "home";
+            network.envs = [ "home" ];
+            workloads.browser = {
+              launcher.label = "Web Browser";
+              launcher.icon.id = "web-browser";
+            };
+          };
+          d2b.realms.realm-b = {
+            path = "realm-b";
+            env = "dev";
+            network.envs = [ "dev" ];
+            workloads.browser = {
+              launcher.label = "Web Browser";
+              launcher.icon.id = "web-browser";
+            };
+          };
+        };
+        data = (mkEval [ dupFixture ]).config.d2b._bundle.realmWorkloadsLauncherJson.data;
+        browserRows = lib.filter (w: w.workloadName == "browser") data.workloads;
+        groupKeys = lib.unique (map (w: w.iconGroupKey) browserRows);
+      in {
+        bothPresent = builtins.length browserRows == 2;
+        # Both rows must share exactly one iconGroupKey value.
+        singleGroupKey = builtins.length groupKeys == 1;
+        theGroupKey = builtins.head groupKeys;
+        # workloadId must differ (different realms, same workload name).
+        distinctRealms = lib.sort lib.lessThan
+          (lib.unique (map (w: w.realmPath) browserRows));
+      };
+    expected = {
+      bothPresent = true;
+      singleGroupKey = true;
+      theGroupKey = "web-browser";
+      distinctRealms = [ "realm-a" "realm-b" ];
     };
   };
 
