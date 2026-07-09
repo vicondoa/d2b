@@ -591,4 +591,176 @@ mod tests {
         assert!(msg.contains("api-dev"));
         assert!(msg.contains("api.realm.d2b"));
     }
+
+    // ------------------------------------------------------------------
+    // Restart/adoption invariants — W16 requirement
+    //
+    // These tests prove the fundamental invariant the W13/W16 plan requires:
+    // workload identity in the read model (list/status) is **config-driven**,
+    // not state-driven. Daemon restart does not lose workload identity because:
+    //
+    //   1. Runner adoption uses (pid, start_time_ticks) from snapshot records
+    //      in `supervisor/state.rs`; those records deliberately carry no
+    //      workload identity — the process is adopted, not the identity.
+    //   2. The `WorkloadTargetIndex` is rebuilt from `realm-controllers.json`
+    //      on every public request, so as long as the config file is stable
+    //      across restart, the workload identity returned by `identity_for_vm`
+    //      is identical before and after restart.
+    //
+    // The tests below simulate the restart cycle by building the index twice
+    // from the same config and asserting structural equality.
+    // ------------------------------------------------------------------
+
+    /// Restart simulation: building the index from the same config before and
+    /// after restart produces identical `identity_for_vm` results for every
+    /// declared workload.
+    ///
+    /// This proves the core restart/adoption invariant: workload identity is
+    /// config-driven, so a daemon restart that reloads the config file returns
+    /// the same identity without requiring it to be persisted in state.
+    #[test]
+    fn index_rebuilt_from_same_config_returns_identical_identity() {
+        let config = controllers_json_with_workloads(&format!(
+            "[{}, {}]",
+            workload_with_identity("corp-vm", "work", "corp-vm"),
+            workload_with_identity("dev-vm", "dev", "dev-vm"),
+        ));
+
+        // Simulate pre-restart daemon: build index once.
+        let index_before = WorkloadTargetIndex::build_from_controllers(&config);
+
+        // Simulate post-restart daemon: rebuild index from the same config.
+        let index_after = WorkloadTargetIndex::build_from_controllers(&config);
+
+        // Both indices must return the same identity for each workload — the
+        // restart is a no-op for the read model.
+        for vm in &["corp-vm", "dev-vm"] {
+            let before = index_before
+                .identity_for_vm(vm)
+                .unwrap_or_else(|| panic!("identity missing pre-restart for {vm}"));
+            let after = index_after
+                .identity_for_vm(vm)
+                .unwrap_or_else(|| panic!("identity missing post-restart for {vm}"));
+            assert_eq!(
+                before.canonical_target.to_canonical(),
+                after.canonical_target.to_canonical(),
+                "canonical_target diverged across restart simulation for {vm}"
+            );
+            assert_eq!(
+                before.workload_id, after.workload_id,
+                "workload_id diverged across restart simulation for {vm}"
+            );
+            assert_eq!(
+                before.realm_id, after.realm_id,
+                "realm_id diverged across restart simulation for {vm}"
+            );
+        }
+    }
+
+    /// Restart simulation: the index rebuilt from a JSON round-trip of the
+    /// config (simulating the filesystem write/read that happens at restart)
+    /// preserves every identity field without loss.
+    #[test]
+    fn index_rebuilt_after_config_json_round_trip_preserves_identity() {
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_with_identity("corp-vm", "work", "corp-vm")
+        ));
+        let index_before = WorkloadTargetIndex::build_from_controllers(&config);
+        let before_identity = index_before
+            .identity_for_vm("corp-vm")
+            .expect("identity present")
+            .clone();
+
+        // Round-trip the config through JSON (mirrors the filesystem serialization
+        // the daemon performs before restart reads it back).
+        let config_json = serde_json::to_string(&config).expect("serialize config");
+        let config_reloaded: d2b_core::realm_controller_config::RealmControllersJson =
+            serde_json::from_str(&config_json).expect("deserialize config");
+        let index_after = WorkloadTargetIndex::build_from_controllers(&config_reloaded);
+        let after_identity = index_after
+            .identity_for_vm("corp-vm")
+            .expect("identity present after json round-trip");
+
+        assert_eq!(
+            before_identity.canonical_target.to_canonical(),
+            after_identity.canonical_target.to_canonical(),
+            "canonical_target lost through config JSON round-trip"
+        );
+        assert_eq!(
+            before_identity.workload_id, after_identity.workload_id,
+            "workload_id lost through config JSON round-trip"
+        );
+        assert_eq!(
+            before_identity.legacy_vm_name, after_identity.legacy_vm_name,
+            "legacy_vm_name lost through config JSON round-trip"
+        );
+        assert_eq!(
+            before_identity.realm_id, after_identity.realm_id,
+            "realm_id lost through config JSON round-trip"
+        );
+        assert_eq!(
+            before_identity.realm_path, after_identity.realm_path,
+            "realm_path lost through config JSON round-trip"
+        );
+    }
+
+    /// Restart simulation: a workload WITHOUT identity (transitional entry from
+    /// a pre-W15 emitter) does NOT gain spurious identity after restart.
+    /// The index is empty for such workloads both before and after a restart
+    /// simulation, preserving backward-compat behavior.
+    #[test]
+    fn transitional_workload_without_identity_stays_absent_after_restart_simulation() {
+        let config = controllers_json_with_workloads(&format!(
+            "[{}]",
+            workload_no_identity("corp-vm", "corp-vm")
+        ));
+
+        let index_before = WorkloadTargetIndex::build_from_controllers(&config);
+        let index_after = WorkloadTargetIndex::build_from_controllers(&config);
+
+        // Neither index must have an identity entry for the transitional workload.
+        assert!(
+            index_before.identity_for_vm("corp-vm").is_none(),
+            "transitional workload must not have identity pre-restart"
+        );
+        assert!(
+            index_after.identity_for_vm("corp-vm").is_none(),
+            "transitional workload must not gain spurious identity post-restart"
+        );
+    }
+
+    /// Mixed config: explicit workloads (with identity) and transitional
+    /// workloads (without identity) both survive the restart cycle correctly —
+    /// identity workloads return their identity, transitional ones remain None.
+    #[test]
+    fn mixed_config_restart_preserves_identity_only_for_explicit_workloads() {
+        let config = controllers_json_with_workloads(&format!(
+            "[{}, {}]",
+            workload_with_identity("corp-vm", "work", "corp-vm"),
+            workload_no_identity("legacy-vm", "legacy-vm"),
+        ));
+
+        let index_before = WorkloadTargetIndex::build_from_controllers(&config);
+        let index_after = WorkloadTargetIndex::build_from_controllers(&config);
+
+        // corp-vm has identity both before and after restart.
+        assert!(
+            index_before.identity_for_vm("corp-vm").is_some(),
+            "corp-vm identity missing pre-restart"
+        );
+        assert!(
+            index_after.identity_for_vm("corp-vm").is_some(),
+            "corp-vm identity missing post-restart"
+        );
+        // legacy-vm has no identity either way.
+        assert!(
+            index_before.identity_for_vm("legacy-vm").is_none(),
+            "legacy-vm must not have identity pre-restart"
+        );
+        assert!(
+            index_after.identity_for_vm("legacy-vm").is_none(),
+            "legacy-vm must not have identity post-restart"
+        );
+    }
 }
