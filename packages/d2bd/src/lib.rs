@@ -73,8 +73,8 @@ use d2b_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
-use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
+use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_gateway::{
     AgentHandle, AgentSpawnRequest, AppCommand, Clock, ContextSeed, DisplayListener,
     DisplaySessionContext, GatewayDeps, GatewayError, GatewayOrchestrator, GatewayWorkload,
