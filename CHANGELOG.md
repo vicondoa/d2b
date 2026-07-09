@@ -65,6 +65,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed local CLI routing for realm workload targets whose workload id differs
+  from the legacy VM substrate name. `d2b vm status <workload>.<realm>.d2b` and
+  local lifecycle/exec routing now resolve through the generated workload
+  identity bundle before falling back to gateway-style dotted target handling.
+
 - Fixed `cmd_vm_lifecycle_verb` migration hint to check the raw user-supplied
   target string rather than the resolved local VM name. For host-local realms
   the router strips the realm suffix (e.g. `corp-vm.work.d2b` → `corp-vm`),

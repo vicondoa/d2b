@@ -3608,7 +3608,7 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
         return Ok(0);
     }
 
-    let selected_vm = resolve_selected_vm(args)?;
+    let selected_vm = resolve_selected_vm(context, args)?;
     if !args.json {
         match &selected_vm {
             // Single-VM status only warns about THAT VM's pending edit,
@@ -5543,6 +5543,10 @@ fn route_vm_target_with_table(
     json: bool,
     table: Option<d2b_realm_router::RealmEntrypointTable>,
 ) -> Result<VmTargetRoute, CliFailure> {
+    if let Some(vm) = try_vm_for_canonical_target(&context.bundle_path, raw) {
+        return Ok(VmTargetRoute::Local { vm });
+    }
+
     if table.is_none() {
         if let Some(route) = conventional_gateway_route(raw, json)? {
             if context
@@ -9222,8 +9226,8 @@ fn cmd_auth_status(context: &Context, args: &AuthStatusArgs) -> Result<i32, CliF
     Ok(0)
 }
 
-fn resolve_selected_vm(args: &StatusArgs) -> Result<Option<String>, CliFailure> {
-    match (&args.vm, &args.vm_flag) {
+fn resolve_selected_vm(context: &Context, args: &StatusArgs) -> Result<Option<String>, CliFailure> {
+    let selected = match (&args.vm, &args.vm_flag) {
         (Some(positional), Some(flagged)) if positional != flagged => Err(CliFailure::new(
             2,
             "status received conflicting VM selectors",
@@ -9231,7 +9235,8 @@ fn resolve_selected_vm(args: &StatusArgs) -> Result<Option<String>, CliFailure> 
         (Some(positional), _) => Ok(Some(positional.clone())),
         (_, Some(flagged)) => Ok(Some(flagged.clone())),
         (None, None) => Ok(None),
-    }
+    }?;
+    Ok(selected.map(|vm| resolve_vm_selector_from_bundle(context, &vm)))
 }
 
 /// Read the per-VM api-ready state file written by d2bd on each DAG run.
@@ -10094,7 +10099,9 @@ fn try_canonical_target_for_vm(bundle_path: &Path, vm: &str) -> Option<String> {
     };
     let rc: RealmControllersJson = read_json_file(&rc_path).ok()?;
     for controller in &rc.controllers {
-        let local_rt = controller.local_runtime.as_ref()?;
+        let Some(local_rt) = controller.local_runtime.as_ref() else {
+            continue;
+        };
         for workload in &local_rt.workloads {
             if workload.vm_name.as_str() == vm {
                 return workload
@@ -10105,6 +10112,40 @@ fn try_canonical_target_for_vm(bundle_path: &Path, vm: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn try_vm_for_canonical_target(bundle_path: &Path, raw_target: &str) -> Option<String> {
+    let bundle: Bundle = read_json_file(bundle_path).ok()?;
+    let realm_controllers_ref = bundle.realm_controllers_path.as_deref()?;
+    let base_dir = bundle_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let rc_path = if Path::new(realm_controllers_ref).is_absolute() {
+        PathBuf::from(realm_controllers_ref)
+    } else {
+        base_dir.join(realm_controllers_ref)
+    };
+    let rc: RealmControllersJson = read_json_file(&rc_path).ok()?;
+    for controller in &rc.controllers {
+        let Some(local_rt) = controller.local_runtime.as_ref() else {
+            continue;
+        };
+        for workload in &local_rt.workloads {
+            let Some(identity) = workload.identity.as_ref() else {
+                continue;
+            };
+            if identity.canonical_target.to_canonical() == raw_target {
+                return Some(workload.vm_name.as_str().to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_vm_selector_from_bundle(context: &Context, selector: &str) -> String {
+    try_vm_for_canonical_target(&context.bundle_path, selector)
+        .unwrap_or_else(|| selector.to_owned())
 }
 
 fn print_json<T>(value: &T) -> Result<(), CliFailure>
@@ -12275,6 +12316,78 @@ mod host_install_dispatch_tests {
             }
             other => panic!("expected gateway route, got {other:?}"),
         }
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn route_vm_target_uses_bundle_identity_for_host_local_workload_target() {
+        let manifest_path = test_socket_path("route-workload-canonical-local", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "work-aad");
+        let bundle_path = manifest_path.with_extension("bundle.json");
+        write_bundle_with_realm_controllers(&bundle_path, "work-aad");
+        rewrite_bundle_workload_identity(&bundle_path, "aad", "aad.work.d2b");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: bundle_path.clone(),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+
+        let route = super::route_vm_target(&context, "aad.work.d2b", false)
+            .expect("canonical workload target resolves through bundle identity");
+        assert_eq!(
+            route,
+            super::VmTargetRoute::Local {
+                vm: "work-aad".to_owned()
+            }
+        );
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
+    fn cmd_status_accepts_canonical_workload_target_selector() {
+        let manifest_path = test_socket_path("status-workload-canonical", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("manifest parent");
+        }
+        write_test_manifest(&manifest_path, "work-aad");
+        let bundle_path = manifest_path.with_extension("bundle.json");
+        write_bundle_with_realm_controllers(&bundle_path, "work-aad");
+        rewrite_bundle_workload_identity(&bundle_path, "aad", "aad.work.d2b");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: bundle_path.clone(),
+            public_socket: manifest_path.with_extension("sock"),
+            broker_socket: manifest_path.with_extension("broker.sock"),
+            state_root: None,
+            host_runtime_path: manifest_path.with_extension("host-runtime.json"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: manifest_path.with_extension("daemon-state"),
+            metrics_url: "http://127.0.0.1:9101/metrics".to_owned(),
+        };
+        let args = super::StatusArgs {
+            json: true,
+            human: false,
+            check_bridges: false,
+            vm_flag: None,
+            vm: Some("aad.work.d2b".to_owned()),
+        };
+
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| super::cmd_status(&context, &args));
+        assert_eq!(result.expect("canonical status result"), 0);
+        let output: Value = serde_json::from_slice(&stdout).expect("status json output");
+        assert_eq!(output.get("name").and_then(Value::as_str), Some("work-aad"));
         let _ = std::fs::remove_file(&manifest_path);
     }
 
@@ -15580,6 +15693,50 @@ mod host_install_dispatch_tests {
             serde_json::to_vec(&bundle).expect("serialize bundle"),
         )
         .expect("write bundle.json");
+    }
+
+    fn rewrite_bundle_workload_identity(
+        bundle_path: &std::path::Path,
+        workload_id: &str,
+        canonical_target: &str,
+    ) {
+        let bundle: Value = serde_json::from_slice(
+            &std::fs::read(bundle_path).expect("read bundle for workload rewrite"),
+        )
+        .expect("parse bundle for workload rewrite");
+        let rc_ref = bundle
+            .get("realmControllersPath")
+            .and_then(Value::as_str)
+            .expect("bundle has realmControllersPath");
+        let rc_path = bundle_path.parent().expect("bundle parent").join(rc_ref);
+        let mut rc: Value =
+            serde_json::from_slice(&std::fs::read(&rc_path).expect("read realm controllers"))
+                .expect("parse realm controllers");
+        let workload = rc
+            .pointer_mut("/controllers/0/localRuntime/workloads/0")
+            .and_then(Value::as_object_mut)
+            .expect("first workload object");
+        workload.insert(
+            "workloadId".to_owned(),
+            Value::String(workload_id.to_owned()),
+        );
+        let identity = workload
+            .get_mut("identity")
+            .and_then(Value::as_object_mut)
+            .expect("identity object");
+        identity.insert(
+            "workloadId".to_owned(),
+            Value::String(workload_id.to_owned()),
+        );
+        identity.insert(
+            "canonicalTarget".to_owned(),
+            Value::String(canonical_target.to_owned()),
+        );
+        std::fs::write(
+            &rc_path,
+            serde_json::to_vec(&rc).expect("serialize rewritten realm controllers"),
+        )
+        .expect("write rewritten realm controllers");
     }
 
     #[test]
