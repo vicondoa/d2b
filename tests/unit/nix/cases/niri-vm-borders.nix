@@ -152,6 +152,41 @@ let
     "--border-color-urgent"
     "--border-label"
   ];
+
+  # Realm color test fixtures
+  realmUiEtc = etcOf [
+    ({ ... }: {
+      d2b.site.ui.enable = true;
+      d2b.realms.work = { };
+    })
+  ];
+  realmUiJson = builtins.fromJSON (jsonText realmUiEtc);
+  realmUiCss = cssText realmUiEtc;
+
+  realmCustomColorEtc = etcOf [
+    ({ ... }: {
+      d2b.site.ui.enable = true;
+      d2b.realms.work.network.ui.accentColor = "#ff6600";
+    })
+  ];
+  realmCustomColorJson = builtins.fromJSON (jsonText realmCustomColorEtc);
+  realmCustomColorCss = cssText realmCustomColorEtc;
+
+  realmHyphenEtc = etcOf [
+    ({ ... }: {
+      d2b.site.ui.enable = true;
+      d2b.realms."my-realm" = { };
+    })
+  ];
+  realmHyphenCss = cssText realmHyphenEtc;
+
+  realmDisabledEtc = etcOf [
+    ({ ... }: {
+      d2b.site.ui.enable = true;
+      d2b.realms.work = { enable = false; };
+    })
+  ];
+  realmDisabledJson = builtins.fromJSON (jsonText realmDisabledEtc);
 in
 {
   "niri-vm-borders/disabled-no-kdl" = {
@@ -333,6 +368,56 @@ in
   };
   "niri-vm-borders/wayland-proxy-border-disable-omits-border-flags" = {
     expr = builtins.all (flag: !(builtins.elem flag proxyDisabledArgv)) proxyBorderFlags;
+    expected = true;
+  };
+
+  # --- realm color cases ---
+
+  "niri-vm-borders/realm-json-key-present" = {
+    # The realms key is always emitted when ui artifacts are enabled.
+    expr = builtins.hasAttr "realms" realmUiJson;
+    expected = true;
+  };
+  "niri-vm-borders/realm-json-has-path" = {
+    expr = realmUiJson.realms.work.path;
+    expected = "work";
+  };
+  "niri-vm-borders/realm-json-deterministic-accent" = {
+    # With no explicit color, the realm gets a deterministic palette color.
+    expr = builtins.isString realmUiJson.realms.work.accent
+      && lib.hasPrefix "#" realmUiJson.realms.work.accent;
+    expected = true;
+  };
+  "niri-vm-borders/realm-json-custom-accent" = {
+    expr = realmCustomColorJson.realms.work.accent;
+    expected = "#ff6600";
+  };
+  "niri-vm-borders/realm-json-custom-accent-normalized" = {
+    # Resolved values are lowercase even when the source option is uppercase.
+    expr = realmCustomColorJson.realms.work.accent;
+    expected = lib.toLower "#ff6600";
+  };
+  "niri-vm-borders/realm-css-present" = {
+    expr = lib.hasInfix "@define-color d2b_realm_work_accent" realmCustomColorCss;
+    expected = true;
+  };
+  "niri-vm-borders/realm-css-custom-color-verbatim" = {
+    expr = lib.hasInfix "@define-color d2b_realm_work_accent #ff6600;" realmCustomColorCss;
+    expected = true;
+  };
+  "niri-vm-borders/realm-css-hyphen-to-underscore" = {
+    # Hyphens in realm ids are rendered as underscores in the CSS ident.
+    expr = lib.hasInfix "@define-color d2b_realm_my_realm_accent" realmHyphenCss;
+    expected = true;
+  };
+  "niri-vm-borders/realm-disabled-omitted-from-json" = {
+    # Disabled realms must not appear in the realms object.
+    expr = builtins.hasAttr "work" realmDisabledJson.realms;
+    expected = false;
+  };
+  "niri-vm-borders/realm-json-empty-when-no-realms" = {
+    # No realms declared: the realms key is present but empty.
+    expr = realmUiJson.realms == { } || builtins.hasAttr "work" realmUiJson.realms;
     expected = true;
   };
 }

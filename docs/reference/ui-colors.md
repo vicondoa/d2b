@@ -25,6 +25,8 @@ d2b.site.ui.colors.states.running = "#a6e3a1";
 
 d2b.envs.work.ui.accentColor = "#ffa500";
 
+d2b.realms.work.network.ui.accentColor = "#ffa500";
+
 d2b.vms.workstation.ui.border = {
   activeColor = "#ffa500";
   inactiveColor = "#ffa500";
@@ -34,6 +36,28 @@ d2b.vms.workstation.ui.border = {
 
 Every source color must be a six-digit CSS hex string (`#rrggbb`).
 Resolved artifacts normalize colors to lowercase.
+
+## Realm colors
+
+Each enabled realm gets an accent color entry in the resolved artifacts.
+The accent color is the primary visual identity for realm-first desktop
+surfaces such as realm status indicators, launcher badges, and desktop
+control tools. Realm colors are **presentation metadata only** — they
+carry no authorization semantics.
+
+Set a realm accent color explicitly:
+
+```nix
+d2b.realms.work.network.ui.accentColor = "#ffa500";
+```
+
+When `network.ui.accentColor` is null, d2b derives a deterministic
+palette color from the realm name. Resolved colors are always lowercase.
+
+The realm entry in `ui-colors.json` includes the canonical realm path
+(see `d2b.realms.<realm>.path`) alongside the accent so consumers can
+route colors to realm-path–qualified display targets without re-reading
+the realm config.
 
 If a VM border color is omitted, d2b resolves it as follows:
 
@@ -107,9 +131,32 @@ Shape:
         "urgent": "#ffa500"
       }
     }
+  },
+  "realms": {
+    "work": {
+      "path": "work",
+      "accent": "#ffa500"
+    },
+    "payments": {
+      "path": "payments.work",
+      "accent": "#7fc8ff"
+    }
   }
 }
 ```
+
+The `realms` object is keyed by realm id. Each entry includes:
+
+- `path` — the canonical realm path (`d2b.realms.<realm>.path`), written
+  most-specific-first (e.g. `payments.work` for a realm whose `parent` is
+  `work`). Desktop consumers use this to route the accent to
+  realm-path–qualified display targets.
+- `accent` — the resolved accent color. Set via
+  `d2b.realms.<realm>.network.ui.accentColor`; falls back to a
+  deterministic palette color derived from the realm name.
+
+Realm colors are presentation metadata only and carry no authorization
+semantics.
 
 Consumers should fail visibly but remain usable if the default artifact is
 missing or malformed. Do not treat the artifact as an authorization source;
@@ -142,13 +189,15 @@ Definition names include:
 | `d2b_state_denied` | Authorization-denied state accent |
 | `d2b_state_unknown` | Unknown/unavailable state accent |
 | `d2b_env_<env>_accent` | Environment identity accent |
+| `d2b_realm_<realm>_accent` | Realm identity accent |
 | `d2b_vm_<vm>_border_active` | VM active border color |
 | `d2b_vm_<vm>_border_inactive` | VM inactive border color |
 | `d2b_vm_<vm>_border_urgent` | VM urgent border color |
 
-Hyphens in environment and VM names are emitted as underscores in the CSS
+Hyphens in environment, realm, and VM names are emitted as underscores in the CSS
 definition name, for example VM `work-aad` becomes
-`d2b_vm_work_aad_border_active`.
+`d2b_vm_work_aad_border_active` and realm `my-work` becomes
+`d2b_realm_my_work_accent`.
 
 ## Niri backend
 
