@@ -92,6 +92,20 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `d2bd` now populates `workloadIdentity` in `ListEntry` and `VmStatus` public
+  wire responses from realm workload metadata when a `realm-controllers.json`
+  config is present. Fields populated: `workloadId`, `realmId`, `realmPath`,
+  `canonicalTarget`, and `legacyVmName` where available.
+- New `WorkloadTargetIndex` internal module in `d2bd` provides index-backed
+  resolution of VM targets from canonical targets (`<workload>.<realm>.d2b`),
+  workload-id aliases, and legacy VM name fast-path. Alias resolution is
+  unambiguous-only: ambiguous workload-id matches fail closed.
+- Two new `TypedError` variants: `WorkloadTargetNotFound` (exit code 2) and
+  `WorkloadAliasConflict` (exit code 2), returned when a `vm` filter specifies a
+  canonical target not in the index or an ambiguous workload-id alias.
+- The `vm` filter in list and status requests now resolves canonical targets and
+  unambiguous workload-id aliases through the workload index before matching
+  against manifest entries.
 - Added `d2b.realms.<realm>.workloads.<workload>` option for declaring
   realm-owned workloads. Each workload optionally references an existing
   `d2b.vms.<vm>` substrate via `vmRef` for runtime kind and provider id

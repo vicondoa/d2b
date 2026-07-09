@@ -571,6 +571,18 @@ pub enum TypedError {
     ConsoleSessionTableFull {
         vm: String,
     },
+    /// A realm workload canonical target (`workload.realm.d2b`) was supplied
+    /// but is not present in the realm workload index. The caller must use a
+    /// declared workload target or a known legacy VM name.
+    WorkloadTargetNotFound {
+        target: String,
+    },
+    /// A workload id short alias matched more than one workload in the realm
+    /// workload index. The caller must use a canonical target to disambiguate.
+    WorkloadAliasConflict {
+        workload_id: String,
+        detail: String,
+    },
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -656,6 +668,8 @@ impl TypedError {
             Self::ConsoleProviderMisconfigured { .. } => "provider-misconfigured",
             Self::ConsoleSessionStale => "console-session-stale",
             Self::ConsoleSessionTableFull { .. } => "console-session-table-full",
+            Self::WorkloadTargetNotFound { .. } => "workload-target-not-found",
+            Self::WorkloadAliasConflict { .. } => "workload-alias-conflict",
         }
     }
 
@@ -717,6 +731,13 @@ impl TypedError {
             Self::ConsoleProviderMisconfigured { .. } => 80,
             Self::ConsoleSessionStale => 75,
             Self::ConsoleSessionTableFull { .. } => 41,
+            // Realm workload target resolution failures share exit code 2
+            // ("target not found") consistent with ConsoleVmNotFound and the
+            // CLI's existing "VM not found" convention.
+            Self::WorkloadTargetNotFound { .. } => 2,
+            // Ambiguous alias is an operator error (wrong invocation),
+            // not a runtime or internal failure.
+            Self::WorkloadAliasConflict { .. } => 2,
         }
     }
 
@@ -872,6 +893,18 @@ impl TypedError {
             }
             Self::ConsoleSessionTableFull { vm } => {
                 format!("console: session table is full for VM '{vm}'")
+            }
+            Self::WorkloadTargetNotFound { target } => {
+                format!("workload target '{target}' not found in the realm workload index")
+            }
+            Self::WorkloadAliasConflict {
+                workload_id,
+                detail,
+            } => {
+                format!(
+                    "workload id '{workload_id}' is ambiguous: {detail}; \
+                     use the canonical target (e.g. {workload_id}.realm.d2b) to disambiguate"
+                )
             }
         }
     }
@@ -1030,6 +1063,18 @@ impl TypedError {
             }
             Self::ConsoleSessionTableFull { .. } => {
                 "close an existing console session before opening a new one".to_owned()
+            }
+            Self::WorkloadTargetNotFound { target } => {
+                format!(
+                    "check `d2b vm list` for declared workload targets; \
+                     '{target}' did not match any realm workload in the index"
+                )
+            }
+            Self::WorkloadAliasConflict { workload_id, .. } => {
+                format!(
+                    "use the canonical target form `{workload_id}.<realm>.d2b` to \
+                     select the specific workload unambiguously"
+                )
             }
         }
     }
@@ -1217,7 +1262,9 @@ impl TypedError {
             | Self::ConsoleNotRunning { .. }
             | Self::ConsoleProviderMisconfigured { .. }
             | Self::ConsoleSessionStale
-            | Self::ConsoleSessionTableFull { .. } => "internalError",
+            | Self::ConsoleSessionTableFull { .. }
+            | Self::WorkloadTargetNotFound { .. }
+            | Self::WorkloadAliasConflict { .. } => "internalError",
         }
     }
 }

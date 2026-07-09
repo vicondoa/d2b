@@ -118,6 +118,7 @@ pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
 pub mod wire;
+pub mod workload_target_index;
 use admission::{
     PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
     gateway_display_peer_principal, gateway_display_peer_principal_string,
@@ -16386,6 +16387,9 @@ struct PublicRequestArtifacts {
     host: Option<HostJson>,
     processes: ProcessesJson,
     resolver: Option<BundleResolver>,
+    /// Workload target index built from realm controllers config.
+    /// `None` when no realm controllers config exists (pre-realm hosts).
+    workload_index: Option<workload_target_index::WorkloadTargetIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -16619,11 +16623,18 @@ fn load_public_request_artifacts(
             .expect("qemu-media declared requires bundle resolver");
         refresh_qemu_media_registry_index_if_needed(state, resolver)?;
     }
+    let workload_index = load_realm_controllers_config(&state.config.realm_controllers_config_path)
+        .ok()
+        .flatten()
+        .map(|loaded| {
+            workload_target_index::WorkloadTargetIndex::build_from_controllers(&loaded.config)
+        });
     Ok(PublicRequestArtifacts {
         manifest,
         host,
         processes,
         resolver,
+        workload_index,
     })
 }
 
@@ -16660,13 +16671,25 @@ fn build_public_list(
         host,
         processes,
         resolver,
+        workload_index,
     } = load_public_request_artifacts(state, false, true)?;
     let closure_resolver = resolver.as_ref();
+
+    // Resolve the `vm` filter through the workload index so callers can
+    // use a canonical target (`vm.realm.d2b`) or unambiguous workload id.
+    let resolved_vm_filter =
+        resolve_vm_filter_target(request.vm.as_deref(), workload_index.as_ref(), &manifest)?;
+
     let vms = std::thread::scope(|scope| {
         let workers = manifest
             .iter()
             .filter(|(name, _)| !name.starts_with('_'))
-            .filter(|(name, _)| request.vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
+            .filter(|(name, _)| {
+                resolved_vm_filter
+                    .as_ref()
+                    .map(|vm| vm == *name)
+                    .unwrap_or(true)
+            })
             .filter(|(_, value)| {
                 request
                     .env
@@ -16680,6 +16703,10 @@ fn build_public_list(
                 let declared_guest_closure_out_path = closure_resolver
                     .and_then(|resolver| resolver.find_guest_closure_out_path(name))
                     .map(str::to_owned);
+                let workload_identity_json = workload_index
+                    .as_ref()
+                    .and_then(|idx| idx.identity_for_vm(name))
+                    .and_then(|id| serde_json::to_value(id).ok());
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, value, process_vm);
                     let guest_closure_out_path = public_guest_closure_out_path(
@@ -16690,7 +16717,7 @@ fn build_public_list(
                     let runtime_kind = public_runtime_kind(value);
                     let services = public_service_states(state, name, value, process_vm);
                     let service_capabilities = public_service_capabilities(&services);
-                    json!({
+                    let mut entry = json!({
                         "name": name,
                         "vm": name,
                         "env": value.get("env").cloned().unwrap_or(Value::Null),
@@ -16716,7 +16743,14 @@ fn build_public_list(
                             &services,
                         ),
                         "services": services,
-                    })
+                    });
+                    if let Some(identity) = workload_identity_json {
+                        entry
+                            .as_object_mut()
+                            .expect("list entry is a JSON object")
+                            .insert("workloadIdentity".to_owned(), identity);
+                    }
+                    entry
                 })
             })
             .collect::<Vec<_>>();
@@ -16780,24 +16814,32 @@ fn build_public_status(
         host,
         processes,
         resolver,
+        workload_index,
     } = load_public_request_artifacts(state, true, false)?;
-    let requested_vm = request.vm.clone();
+
+    // Resolve the `vm` filter through the workload index.
+    let resolved_vm_filter =
+        resolve_vm_filter_target(request.vm.as_deref(), workload_index.as_ref(), &manifest)?;
 
     let statuses = std::thread::scope(|scope| {
         let workers = manifest
             .iter()
             .filter(|(name, _)| !name.starts_with('_'))
-            .filter(|(name, _)| requested_vm.as_ref().map(|vm| vm == *name).unwrap_or(true))
+            .filter(|(name, _)| resolved_vm_filter.as_ref().map(|vm| vm == *name).unwrap_or(true))
             .map(|(name, manifest_entry)| {
                 let process_vm = processes.vms.iter().find(|entry| entry.vm == *name);
                 let host = host.as_ref();
                 let usb_resolver = resolver.as_ref();
+                let workload_identity_json = workload_index
+                    .as_ref()
+                    .and_then(|idx| idx.identity_for_vm(name))
+                    .and_then(|id| serde_json::to_value(id).ok());
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
                     let runtime_kind = public_runtime_kind(manifest_entry);
                     let services = public_service_states(state, name, manifest_entry, process_vm);
                     let service_capabilities = public_service_capabilities(&services);
-                    json!({
+                    let mut entry = json!({
                         "vm": name,
                         "name": name,
                         "env": manifest_entry.get("env").cloned().unwrap_or(Value::Null),
@@ -16825,7 +16867,14 @@ fn build_public_status(
                             .and_then(|resolver| public_usb_status_for_vm(state, resolver, name)),
                         "services": services,
                         "bridgeChecks": [],
-                    })
+                    });
+                    if let Some(identity) = workload_identity_json {
+                        entry
+                            .as_object_mut()
+                            .expect("status entry is a JSON object")
+                            .insert("workloadIdentity".to_owned(), identity);
+                    }
+                    entry
                 })
             })
             .collect::<Vec<_>>();
@@ -16836,6 +16885,48 @@ fn build_public_status(
     });
 
     Ok(wire::status_response(json!({ "entries": statuses })))
+}
+
+/// Resolve an optional `vm` filter string from a list/status request through
+/// the workload target index before applying it to the manifest.
+///
+/// Returns the resolved legacy VM name (or `None` if no filter was supplied).
+/// Errors when the target is a canonical target that is not in the index, or
+/// when a workload-id alias is ambiguous.
+fn resolve_vm_filter_target(
+    vm: Option<&str>,
+    workload_index: Option<&workload_target_index::WorkloadTargetIndex>,
+    manifest: &serde_json::Map<String, Value>,
+) -> Result<Option<String>, TypedError> {
+    let Some(vm) = vm else {
+        return Ok(None);
+    };
+    let known_legacy: HashSet<String> = manifest.keys().cloned().collect();
+    let resolution = if let Some(index) = workload_index {
+        index
+            .resolve_target(vm, &known_legacy)
+            .map_err(typed_error_from_resolution_error)?
+    } else {
+        workload_target_index::TargetResolution::LegacyVmName(vm.to_owned())
+    };
+    Ok(Some(resolution.vm_name().to_owned()))
+}
+
+fn typed_error_from_resolution_error(
+    err: workload_target_index::TargetResolutionError,
+) -> TypedError {
+    match err {
+        workload_target_index::TargetResolutionError::NotFound { target } => {
+            TypedError::WorkloadTargetNotFound { target }
+        }
+        workload_target_index::TargetResolutionError::AliasConflict {
+            workload_id,
+            candidates,
+        } => TypedError::WorkloadAliasConflict {
+            workload_id: workload_id.clone(),
+            detail: format!("matches workloads [{}]", candidates.join(", ")),
+        },
+    }
 }
 
 fn public_vm_lifecycle(
