@@ -9,7 +9,6 @@ use d2b_contracts::unsafe_local_wire::{
 };
 use d2b_realm_core::ids::OperationId;
 use nix::cmsg_space;
-use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::libc;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{
@@ -100,7 +99,8 @@ impl<M: UserScopeManager> HelperClient<M> {
             }),
         )?;
 
-        let accepted: DaemonToUnsafeLocalHelper = receive_frame(&socket)?;
+        let mut receive_buffer = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
+        let accepted: DaemonToUnsafeLocalHelper = receive_frame(&socket, &mut receive_buffer)?;
         match accepted {
             DaemonToUnsafeLocalHelper::HelloAccepted(accepted)
                 if accepted.protocol_version == UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION
@@ -121,6 +121,9 @@ impl<M: UserScopeManager> HelperClient<M> {
         response_wakeup_read
             .set_nonblocking(true)
             .map_err(|_| ProtocolError::ConnectFailed)?;
+        response_wakeup_write
+            .set_nonblocking(true)
+            .map_err(|_| ProtocolError::ConnectFailed)?;
         let (responses_tx, responses_rx) =
             mpsc::sync_channel::<UnsafeLocalHelperToDaemon>(MAX_HELPER_QUEUE_DEPTH);
         let response_wakeup_write = Arc::new(response_wakeup_write);
@@ -134,7 +137,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                 ControlEvent::Response => continue,
                 ControlEvent::Control => {}
             }
-            let frame: DaemonToUnsafeLocalHelper = receive_frame(&socket)?;
+            let frame: DaemonToUnsafeLocalHelper = receive_frame(&socket, &mut receive_buffer)?;
             match frame {
                 DaemonToUnsafeLocalHelper::Heartbeat(heartbeat) => {
                     if heartbeat.generation != generation {
@@ -245,9 +248,14 @@ fn wait_for_control_or_response(
 
 fn wake_response_loop(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
     let mut response_wakeup = response_wakeup;
-    response_wakeup
-        .write_all(&[1])
-        .map_err(|_| ProtocolError::QueueClosed)
+    loop {
+        match response_wakeup.write_all(&[1]) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(ProtocolError::QueueClosed),
+        }
+    }
 }
 
 fn drain_response_wakeup(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
@@ -269,9 +277,12 @@ pub fn default_helper_socket_path() -> &'static Path {
 }
 
 fn connect_control_socket(path: &Path, expected_daemon_uid: u32) -> Result<Socket, ProtocolError> {
-    let socket = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None)
-        .map_err(|_| ProtocolError::ConnectFailed)?;
-    mark_cloexec(&socket)?;
+    let socket = Socket::new(
+        Domain::UNIX,
+        Type::from(libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC),
+        None,
+    )
+    .map_err(|_| ProtocolError::ConnectFailed)?;
     configure_socket_buffers(&socket)?;
     let address = SockAddr::unix(path).map_err(|_| ProtocolError::ConnectFailed)?;
     socket
@@ -306,12 +317,6 @@ pub fn configure_socket_buffers(socket: &Socket) -> Result<(), ProtocolError> {
     Ok(())
 }
 
-fn mark_cloexec(socket: &Socket) -> Result<(), ProtocolError> {
-    fcntl(socket.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-        .map_err(|_| ProtocolError::ConnectFailed)?;
-    Ok(())
-}
-
 pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(), ProtocolError> {
     let payload = serde_json::to_vec(frame).map_err(|_| ProtocolError::InvalidFrame)?;
     if payload.len() > MAX_HELPER_FRAME_SIZE {
@@ -329,9 +334,14 @@ pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(),
     Ok(())
 }
 
-pub fn receive_frame<T: serde::de::DeserializeOwned>(socket: &Socket) -> Result<T, ProtocolError> {
-    let mut encoded = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
-    let mut iov = [IoSliceMut::new(&mut encoded)];
+pub fn receive_frame<T: serde::de::DeserializeOwned>(
+    socket: &Socket,
+    encoded: &mut [u8],
+) -> Result<T, ProtocolError> {
+    if encoded.len() < MAX_HELPER_FRAME_SIZE + 5 {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+    let mut iov = [IoSliceMut::new(encoded)];
     let mut control = cmsg_space!([RawFd; 2]);
     let message = recvmsg::<UnixAddr>(
         socket.as_raw_fd(),
@@ -475,6 +485,7 @@ mod tests {
         let control = socket_from_owned(control);
         let (wakeup_read, wakeup_write) = UnixStream::pair().unwrap();
         wakeup_read.set_nonblocking(true).unwrap();
+        wakeup_write.set_nonblocking(true).unwrap();
 
         wake_response_loop(&wakeup_write).unwrap();
 
