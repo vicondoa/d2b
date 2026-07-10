@@ -1279,6 +1279,7 @@ mod tests {
         let registry = HelperRegistry::new(uid.wrapping_add(1), [uid]);
         let (socket, peer) = seqpacket_pair();
         let (outbound, _outbound_rx) = mpsc::sync_channel(1);
+        let (_outbound_wakeup_read, outbound_wakeup_write) = UnixStream::pair().unwrap();
         outbound
             .try_send(DaemonToUnsafeLocalHelper::Heartbeat(HelperHeartbeat {
                 generation: 1,
@@ -1289,6 +1290,7 @@ mod tests {
             generation: 1,
             socket: Arc::new(socket),
             outbound,
+            outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now(),
@@ -1311,10 +1313,12 @@ mod tests {
     fn heartbeat_age_marks_helper_stale_without_global_cleanup() {
         let (socket, peer) = seqpacket_pair();
         let (outbound, _receiver) = mpsc::sync_channel(1);
+        let (_outbound_wakeup_read, outbound_wakeup_write) = UnixStream::pair().unwrap();
         let connection = HelperConnection {
             generation: 1,
             socket: Arc::new(socket),
             outbound,
+            outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now() - HELPER_STALE_AFTER - Duration::from_millis(1),
