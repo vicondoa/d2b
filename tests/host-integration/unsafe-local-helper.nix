@@ -180,7 +180,8 @@ pkgs.testers.runNixOSTest {
         "jq -e '.type == \"operation\" and "
         ".payload.disposition == \"committed\" and "
         ".payload.scope.kind == \"launcher-app\"' "
-        "/run/d2b/helper-launch-response.json"
+        "/run/d2b/helper-launch-response.json "
+        "|| { cat /run/d2b/helper-launch-response.json >&2; exit 1; }"
     )
     invocation = machine.succeed(
         "jq -r .payload.scope.invocationId /run/d2b/helper-launch-response.json"
