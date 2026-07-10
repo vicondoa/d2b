@@ -133,9 +133,11 @@ pkgs.testers.runNixOSTest {
         "  'workload':{'workloadId':'tools','realmId':'host',\n"
         "    'realmPath':['host'],'canonicalTarget':'tools.host.d2b'},\n"
         "  'itemId':'probe','argv':['sh','-c',\n"
-        "    'echo output-canary; echo error-canary >&2; '\n"
+        "    'test \"$(readlink /proc/self/fd/1)\" = /dev/null && '\n"
+        "    'test \"$(readlink /proc/self/fd/2)\" = /dev/null && '\n"
         "    'test \"$D2B_MANAGER_CANARY\" = manager-canary && '\n"
-        "    'test \"$PWD\" = /home/alice && sleep 60'],\n"
+        "    'test \"$PWD\" = /home/alice && '\n"
+        "    ': > /run/user/1000/d2b-helper-child-ok && sleep 60'],\n"
         "  'graphical':False}}\n"
         "send_frame(conn, request)\n"
         "response = recv_frame(conn)\n"
@@ -195,6 +197,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         alice_user + f" show -P InvocationID {scope} | grep -qx {invocation}"
     )
+    machine.wait_for_file("/run/user/1000/d2b-helper-child-ok", timeout=60)
     control_group = machine.succeed(
         alice_user + f" show -P ControlGroup {scope}"
     ).strip()
@@ -202,10 +205,6 @@ pkgs.testers.runNixOSTest {
         f"awk 'NR == 1 {{print $1}}' /sys/fs/cgroup{control_group}/cgroup.procs"
     ).strip()
     machine.succeed(f"test -d /proc/{app_pid}")
-    machine.fail(
-        "journalctl --no-pager | grep -E 'output-canary|error-canary'"
-    )
-
     machine.wait_for_file("/run/d2b/helper-snapshot-2.json", timeout=60)
     machine.succeed(
         f"jq -e --arg invocation {invocation} "

@@ -27,7 +27,7 @@ fn main() {
         Some(Command::ScopeSupervisor) => {
             run_scope_supervisor().map_err(|_| "scope runtime failed")
         }
-        None => ScopeRuntime::new(SystemdUserScopeManager)
+        None => ScopeRuntime::new(SystemdUserScopeManager::new())
             .map_err(|_| "helper runtime unavailable")
             .and_then(|runtime| {
                 HelperClient::new(cli.socket, &cli.daemon_user, runtime)

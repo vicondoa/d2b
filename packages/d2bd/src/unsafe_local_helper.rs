@@ -9,6 +9,7 @@ use d2b_contracts::unsafe_local_wire::{
 };
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{
     ControlMessageOwned, MsgFlags, UnixAddr, getpeername, getsockopt, recvmsg, send,
     sockopt::{AcceptConn, PeerCredentials, SockType as SocketTypeOpt},
@@ -21,9 +22,10 @@ use socket2::{Domain, SockAddr, Socket, Type};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::IoSliceMut;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::io::{IoSliceMut, Read, Write};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -89,6 +91,7 @@ struct HelperConnection {
     generation: u64,
     socket: Arc<Socket>,
     outbound: mpsc::SyncSender<DaemonToUnsafeLocalHelper>,
+    outbound_wakeup: Arc<UnixStream>,
     pending: Mutex<HashMap<u64, PendingRequest>>,
     last_heartbeat_millis: AtomicU64,
     connected_at: Instant,
@@ -123,6 +126,17 @@ impl HelperConnection {
         for (_, request) in pending {
             let _ = request.sender.try_send(Err(reason));
         }
+    }
+
+    fn queue_outbound(&self, frame: DaemonToUnsafeLocalHelper) -> Result<(), HelperRegistryError> {
+        self.outbound
+            .try_send(frame)
+            .map_err(|_| HelperRegistryError::QueueFull)?;
+        if signal_outbound(&self.outbound_wakeup).is_err() {
+            self.close(HelperRegistryError::Io);
+            return Err(HelperRegistryError::Io);
+        }
+        Ok(())
     }
 }
 
@@ -272,16 +286,12 @@ impl HelperRegistry {
                 return Err(HelperRegistryError::RequestCorrelationMismatch);
             }
         }
-        if connection
-            .outbound
-            .try_send(DaemonToUnsafeLocalHelper::Launch(request))
-            .is_err()
-        {
+        if let Err(error) = connection.queue_outbound(DaemonToUnsafeLocalHelper::Launch(request)) {
             connection.pending.lock().remove(&request_id);
             self.operations
                 .lock()
                 .abort_active(requester_uid, &operation_key);
-            return Err(HelperRegistryError::QueueFull);
+            return Err(error);
         }
 
         match receiver.recv_timeout(HELPER_OPERATION_TIMEOUT) {
@@ -320,10 +330,15 @@ impl HelperRegistry {
         }
         configure_socket_buffers(&socket)?;
         socket
+            .set_write_timeout(Some(HELPER_LOOP_TICK))
+            .map_err(|_| HelperRegistryError::Io)?;
+        socket
             .set_read_timeout(Some(HELPER_HANDSHAKE_TIMEOUT))
             .map_err(|_| HelperRegistryError::Io)?;
 
-        let (hello, fds) = receive_frame::<UnsafeLocalHelperToDaemon>(&socket)?;
+        let mut receive_buffer = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
+        let (hello, fds) =
+            receive_frame::<UnsafeLocalHelperToDaemon>(&socket, &mut receive_buffer)?;
         reject_unexpected_fds(fds)?;
         let UnsafeLocalHelperToDaemon::Hello(hello) = hello else {
             return Err(HelperRegistryError::ProtocolMismatch);
@@ -340,7 +355,8 @@ impl HelperRegistry {
                 operation_timeout_secs: HELPER_OPERATION_TIMEOUT.as_secs() as u32,
             }),
         )?;
-        let (snapshot, fds) = receive_frame::<UnsafeLocalHelperToDaemon>(&socket)?;
+        let (snapshot, fds) =
+            receive_frame::<UnsafeLocalHelperToDaemon>(&socket, &mut receive_buffer)?;
         reject_unexpected_fds(fds)?;
         let UnsafeLocalHelperToDaemon::Snapshot(snapshot) = snapshot else {
             return Err(HelperRegistryError::ProtocolMismatch);
@@ -353,14 +369,23 @@ impl HelperRegistry {
         }
 
         socket
-            .set_read_timeout(Some(HELPER_LOOP_TICK))
+            .set_read_timeout(None)
             .map_err(|_| HelperRegistryError::Io)?;
         let socket = Arc::new(socket);
         let (outbound, outbound_rx) = mpsc::sync_channel(MAX_HELPER_QUEUE_DEPTH);
+        let (outbound_wakeup_read, outbound_wakeup_write) =
+            UnixStream::pair().map_err(|_| HelperRegistryError::Io)?;
+        outbound_wakeup_read
+            .set_nonblocking(true)
+            .map_err(|_| HelperRegistryError::Io)?;
+        outbound_wakeup_write
+            .set_nonblocking(true)
+            .map_err(|_| HelperRegistryError::Io)?;
         let connection = Arc::new(HelperConnection {
             generation: hello.generation,
             socket: Arc::clone(&socket),
             outbound,
+            outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now(),
@@ -393,7 +418,13 @@ impl HelperRegistry {
             .lock()
             .adopt_snapshot(uid, &snapshot, now_epoch_seconds());
 
-        let result = self.connection_loop(uid, &connection, outbound_rx);
+        let result = self.connection_loop(
+            uid,
+            &connection,
+            outbound_rx,
+            &outbound_wakeup_read,
+            &mut receive_buffer,
+        );
         let mut state = self.state.lock();
         if state
             .connections
@@ -412,6 +443,8 @@ impl HelperRegistry {
         uid: u32,
         connection: &Arc<HelperConnection>,
         outbound: mpsc::Receiver<DaemonToUnsafeLocalHelper>,
+        outbound_wakeup: &UnixStream,
+        receive_buffer: &mut [u8],
     ) -> Result<(), HelperRegistryError> {
         let mut heartbeat_sequence = 0u64;
         let mut next_heartbeat = Instant::now() + HELPER_HEARTBEAT_INTERVAL;
@@ -443,7 +476,12 @@ impl HelperRegistry {
                 return Err(HelperRegistryError::HelperStale);
             }
 
-            match receive_frame::<UnsafeLocalHelperToDaemon>(&connection.socket) {
+            match wait_for_connection_event(&connection.socket, outbound_wakeup)? {
+                ConnectionEvent::Outbound => continue,
+                ConnectionEvent::Tick => continue,
+                ConnectionEvent::Incoming => {}
+            }
+            match receive_frame::<UnsafeLocalHelperToDaemon>(&connection.socket, receive_buffer) {
                 Ok((frame, fds)) => {
                     if !self.is_active_generation(uid, connection) {
                         close_raw_fds(fds);
@@ -452,7 +490,6 @@ impl HelperRegistry {
                     connection.touch();
                     self.handle_incoming(connection, frame, fds)?;
                 }
-                Err(HelperRegistryError::Timeout) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -548,10 +585,12 @@ pub fn bind_helper_socket(
             return Err(HelperRegistryError::Io);
         }
     }
-    let socket = Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None)
-        .map_err(|_| HelperRegistryError::Io)?;
-    fcntl(socket.as_raw_fd(), FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
-        .map_err(|_| HelperRegistryError::Io)?;
+    let socket = Socket::new(
+        Domain::UNIX,
+        Type::from(libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC),
+        None,
+    )
+    .map_err(|_| HelperRegistryError::Io)?;
     let address = SockAddr::unix(path).map_err(|_| HelperRegistryError::Io)?;
     socket.bind(&address).map_err(|_| HelperRegistryError::Io)?;
     socket.listen(128).map_err(|_| HelperRegistryError::Io)?;
@@ -603,9 +642,12 @@ fn send_frame<T: Serialize>(socket: &Socket, frame: &T) -> Result<(), HelperRegi
 
 fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
+    encoded: &mut [u8],
 ) -> Result<(T, Vec<RawFd>), HelperRegistryError> {
-    let mut encoded = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
-    let mut iov = [IoSliceMut::new(&mut encoded)];
+    if encoded.len() < MAX_HELPER_FRAME_SIZE + 5 {
+        return Err(HelperRegistryError::FrameTooLarge);
+    }
+    let mut iov = [IoSliceMut::new(encoded)];
     let mut control = cmsg_space!([RawFd; 2]);
     let message = match recvmsg::<UnixAddr>(
         socket.as_raw_fd(),
@@ -614,7 +656,6 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
         MsgFlags::MSG_CMSG_CLOEXEC,
     ) {
         Ok(message) => message,
-        Err(nix::errno::Errno::EAGAIN) => return Err(HelperRegistryError::Timeout),
         Err(_) => return Err(HelperRegistryError::Io),
     };
     let read = message.bytes;
@@ -658,6 +699,77 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
         HelperRegistryError::InvalidFrame
     })?;
     Ok((frame, fds))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionEvent {
+    Incoming,
+    Outbound,
+    Tick,
+}
+
+fn wait_for_connection_event(
+    socket: &Socket,
+    outbound_wakeup: &UnixStream,
+) -> Result<ConnectionEvent, HelperRegistryError> {
+    let interests = PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP;
+    let mut fds = [
+        PollFd::new(socket.as_fd(), interests),
+        PollFd::new(outbound_wakeup.as_fd(), interests),
+    ];
+    let timeout = PollTimeout::try_from(HELPER_LOOP_TICK).map_err(|_| HelperRegistryError::Io)?;
+    loop {
+        match poll(&mut fds, timeout) {
+            Ok(0) => return Ok(ConnectionEvent::Tick),
+            Ok(_) => break,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return Err(HelperRegistryError::Io),
+        }
+    }
+
+    let outbound_events = fds[1].revents().unwrap_or(PollFlags::empty());
+    if outbound_events.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+        return Err(HelperRegistryError::Io);
+    }
+    if outbound_events.contains(PollFlags::POLLIN) {
+        drain_outbound_wakeup(outbound_wakeup)?;
+        return Ok(ConnectionEvent::Outbound);
+    }
+
+    let socket_events = fds[0].revents().unwrap_or(PollFlags::empty());
+    if socket_events.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+        return Err(HelperRegistryError::Io);
+    }
+    if socket_events.contains(PollFlags::POLLIN) {
+        return Ok(ConnectionEvent::Incoming);
+    }
+    Err(HelperRegistryError::Io)
+}
+
+fn signal_outbound(outbound_wakeup: &UnixStream) -> Result<(), HelperRegistryError> {
+    let mut outbound_wakeup = outbound_wakeup;
+    loop {
+        match outbound_wakeup.write_all(&[1]) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(HelperRegistryError::Io),
+        }
+    }
+}
+
+fn drain_outbound_wakeup(outbound_wakeup: &UnixStream) -> Result<(), HelperRegistryError> {
+    let mut outbound_wakeup = outbound_wakeup;
+    let mut buffer = [0u8; MAX_HELPER_QUEUE_DEPTH];
+    loop {
+        match outbound_wakeup.read(&mut buffer) {
+            Ok(0) => return Err(HelperRegistryError::Io),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(HelperRegistryError::Io),
+        }
+    }
 }
 
 fn validate_terminal_fd(
@@ -940,6 +1052,31 @@ mod tests {
     }
 
     #[test]
+    fn queued_launch_wakes_idle_connection_loop() {
+        let (control, _peer) = seqpacket_pair();
+        let (wakeup_read, wakeup_write) = UnixStream::pair().unwrap();
+        wakeup_read.set_nonblocking(true).unwrap();
+        wakeup_write.set_nonblocking(true).unwrap();
+
+        signal_outbound(&wakeup_write).unwrap();
+
+        assert_eq!(
+            wait_for_connection_event(&control, &wakeup_read).unwrap(),
+            ConnectionEvent::Outbound
+        );
+    }
+
+    #[test]
+    fn bound_helper_listener_is_close_on_exec() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("helper.sock");
+        let socket = bind_helper_socket(&path, unistd::getgid(), false).unwrap();
+        let flags = fcntl(socket.as_raw_fd(), FcntlArg::F_GETFD).unwrap();
+
+        assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
+    }
+
+    #[test]
     fn operation_ledger_rejects_reuse_with_new_fingerprint() {
         let mut ledger = OperationLedger::default();
         let first = launch(1, "op-1", "first");
@@ -1101,10 +1238,12 @@ mod tests {
         let expected_operation = request.operation_id.clone();
         let dispatch_registry = Arc::clone(&registry);
         let dispatch = std::thread::spawn(move || dispatch_registry.dispatch_launch(uid, request));
+        let mut receive_buffer = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
 
         loop {
             let (frame, fds) =
-                receive_frame::<DaemonToUnsafeLocalHelper>(&helper).expect("daemon request");
+                receive_frame::<DaemonToUnsafeLocalHelper>(&helper, &mut receive_buffer)
+                    .expect("daemon request");
             close_raw_fds(fds);
             match frame {
                 DaemonToUnsafeLocalHelper::Launch(request) => {
@@ -1243,8 +1382,10 @@ mod tests {
             }),
         )
         .unwrap();
+        let mut receive_buffer = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
         let (accepted, fds) =
-            receive_frame::<DaemonToUnsafeLocalHelper>(&client).expect("hello accepted");
+            receive_frame::<DaemonToUnsafeLocalHelper>(&client, &mut receive_buffer)
+                .expect("hello accepted");
         close_raw_fds(fds);
         assert!(matches!(
             accepted,

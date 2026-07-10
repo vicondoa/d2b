@@ -16,12 +16,10 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use uzers::os::unix::UserExt;
 use uzers::{get_current_uid, get_user_by_uid};
 
-pub const MANAGER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 pub const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(5);
 pub const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LEDGER_BYTES: u64 = 1024 * 1024;
@@ -165,9 +163,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         &self,
         request: HelperLaunchRequest,
     ) -> Result<HelperOperationResult, RuntimeError> {
-        let environment = timed_manager_call(Arc::clone(&self.manager), |manager| {
-            manager.manager_environment()
-        })??;
+        let environment = self.manager.manager_environment()?;
         let argv = request.argv.as_slice();
         let program = environment.resolve_program(&argv[0])?;
         let child_environment = environment.child_entries(request.graphical, None)?;
@@ -179,14 +175,11 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         };
         let mut supervisor = BlockedSupervisor::spawn(&spec)?;
         let supervisor_pid = supervisor.id();
-        let scope = match timed_manager_call(Arc::clone(&self.manager), move |manager| {
-            manager.start_scope(supervisor_pid, HelperScopeKind::LauncherApp)
-        }) {
-            Ok(Ok(scope)) => scope,
-            Ok(Err(error)) => {
-                supervisor.abort();
-                return Err(error.into());
-            }
+        let scope = match self
+            .manager
+            .start_scope(supervisor_pid, HelperScopeKind::LauncherApp)
+        {
+            Ok(scope) => scope,
             Err(error) => {
                 supervisor.abort();
                 return Err(error.into());
@@ -237,14 +230,8 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
     }
 
     fn stop_failed_scope(&self, scope: &VerifiedScope) {
-        let scope_for_kill = scope.clone();
-        let manager = Arc::clone(&self.manager);
-        let _ = timed_manager_call(manager, move |manager| {
-            manager.terminate_scope(&scope_for_kill, libc::SIGKILL)
-        });
-        let scope_for_stop = scope.clone();
-        let manager = Arc::clone(&self.manager);
-        let _ = timed_manager_call(manager, move |manager| manager.stop_scope(&scope_for_stop));
+        let _ = self.manager.terminate_scope(scope, libc::SIGKILL);
+        let _ = self.manager.stop_scope(scope);
     }
 
     fn remove_scope_record(&self, operation_id: &OperationId) {
@@ -275,14 +262,11 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
                 HelperScopeState::Degraded
             } else {
                 let verified = entry.verified();
-                let manager = Arc::clone(&self.manager);
-                let observed =
-                    timed_manager_call(manager, move |manager| manager.inspect_scope(&verified));
-                match observed {
-                    Ok(Ok(ScopeInspection {
+                match self.manager.inspect_scope(&verified) {
+                    Ok(ScopeInspection {
                         state,
                         identity_matches: true,
-                    })) => state,
+                    }) => state,
                     _ => HelperScopeState::Degraded,
                 }
             };
@@ -296,40 +280,6 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         }
         Ok(HelperSnapshot { generation, scopes })
     }
-}
-
-fn timed_manager_call<M, T, F>(
-    manager: Arc<M>,
-    operation: F,
-) -> Result<Result<T, ScopeError>, ScopeError>
-where
-    M: UserScopeManager,
-    T: Send + 'static,
-    F: FnOnce(&M) -> Result<T, ScopeError> + Send + 'static,
-{
-    timed_manager_call_with_timeout(manager, MANAGER_OPERATION_TIMEOUT, operation)
-}
-
-fn timed_manager_call_with_timeout<M, T, F>(
-    manager: Arc<M>,
-    timeout: Duration,
-    operation: F,
-) -> Result<Result<T, ScopeError>, ScopeError>
-where
-    M: UserScopeManager,
-    T: Send + 'static,
-    F: FnOnce(&M) -> Result<T, ScopeError> + Send + 'static,
-{
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("d2b-user-manager-op".to_owned())
-        .spawn(move || {
-            let _ = sender.send(operation(&manager));
-        })
-        .map_err(|_| ScopeError::UserManagerUnavailable)?;
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|_| ScopeError::Timeout)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -543,38 +493,7 @@ fn persist_ledger(path: &Path, ledger: &PersistedScopeLedger) -> Result<(), Runt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::environment::ManagerEnvironment;
     use d2b_contracts::unsafe_local_wire::ScopeIdentity;
-
-    #[derive(Clone)]
-    struct HangingManager;
-
-    impl UserScopeManager for HangingManager {
-        fn manager_environment(&self) -> Result<ManagerEnvironment, ScopeError> {
-            std::thread::sleep(Duration::from_millis(100));
-            Err(ScopeError::UserManagerUnavailable)
-        }
-
-        fn start_scope(
-            &self,
-            _supervisor_pid: u32,
-            _kind: HelperScopeKind,
-        ) -> Result<VerifiedScope, ScopeError> {
-            Err(ScopeError::CreateFailed)
-        }
-
-        fn inspect_scope(&self, _scope: &VerifiedScope) -> Result<ScopeInspection, ScopeError> {
-            Err(ScopeError::QueryFailed)
-        }
-
-        fn terminate_scope(&self, _scope: &VerifiedScope, _signal: i32) -> Result<(), ScopeError> {
-            Err(ScopeError::StopFailed)
-        }
-
-        fn stop_scope(&self, _scope: &VerifiedScope) -> Result<(), ScopeError> {
-            Err(ScopeError::StopFailed)
-        }
-    }
 
     #[test]
     fn persisted_scope_debug_hides_scope_identifiers() {
@@ -632,17 +551,5 @@ mod tests {
             kind: HelperScopeKind::LauncherApp,
         };
         assert!(!format!("{identity:?}").contains(canary));
-    }
-
-    #[test]
-    fn hung_user_manager_operation_times_out_without_blocking_caller() {
-        let started = Instant::now();
-        let result = timed_manager_call_with_timeout(
-            Arc::new(HangingManager),
-            Duration::from_millis(5),
-            UserScopeManager::manager_environment,
-        );
-        assert!(matches!(result, Err(ScopeError::Timeout)));
-        assert!(started.elapsed() < Duration::from_millis(50));
     }
 }
