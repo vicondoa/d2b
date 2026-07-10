@@ -133,11 +133,10 @@ pkgs.testers.runNixOSTest {
         "  'workload':{'workloadId':'tools','realmId':'host',\n"
         "    'realmPath':['host'],'canonicalTarget':'tools.host.d2b'},\n"
         "  'itemId':'probe','argv':['sh','-c',\n"
-        "    'test \"$(readlink /proc/self/fd/1)\" = /dev/null && '\n"
-        "    'test \"$(readlink /proc/self/fd/2)\" = /dev/null && '\n"
-        "    'test \"$D2B_MANAGER_CANARY\" = manager-canary && '\n"
-        "    'test \"$PWD\" = /home/alice && '\n"
-        "    ': > /run/user/1000/d2b-helper-child-ok && sleep 60'],\n"
+        "    'printf \"stdout=%s\\\\nstderr=%s\\\\nenv=%s\\\\ncwd=%s\\\\n\" '\n"
+        "    '\"$(readlink /proc/self/fd/1)\" \"$(readlink /proc/self/fd/2)\" '\n"
+        "    '\"$D2B_MANAGER_CANARY\" \"$PWD\" '\n"
+        "    '> /run/user/1000/d2b-helper-child-state; sleep 60'],\n"
         "  'graphical':False}}\n"
         "send_frame(conn, request)\n"
         "response = recv_frame(conn)\n"
@@ -197,7 +196,19 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         alice_user + f" show -P InvocationID {scope} | grep -qx {invocation}"
     )
-    machine.wait_for_file("/run/user/1000/d2b-helper-child-ok", timeout=60)
+    machine.wait_for_file("/run/user/1000/d2b-helper-child-state", timeout=60)
+    machine.succeed(
+        "grep -qx 'stdout=/dev/null' /run/user/1000/d2b-helper-child-state"
+    )
+    machine.succeed(
+        "grep -qx 'stderr=/dev/null' /run/user/1000/d2b-helper-child-state"
+    )
+    machine.succeed(
+        "grep -qx 'env=manager-canary' /run/user/1000/d2b-helper-child-state"
+    )
+    machine.succeed(
+        "grep -qx 'cwd=/home/alice' /run/user/1000/d2b-helper-child-state"
+    )
     control_group = machine.succeed(
         alice_user + f" show -P ControlGroup {scope}"
     ).strip()
