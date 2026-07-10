@@ -774,7 +774,10 @@ let
                     && builtins.length row.item.argv <= 128
                     && row.argvBytes <= 16384
                     && lib.all
-                      (arg: builtins.stringLength arg <= 4096 && !(lib.hasInfix nul arg))
+                      (arg:
+                        builtins.stringLength arg <= 4096
+                        && builtins.stringLength (builtins.replaceStrings [ nul ] [ "" ] arg)
+                          == builtins.stringLength arg)
                       row.item.argv
                   else row.item.argv == [ ] && !row.item.graphical;
                 message = ''
