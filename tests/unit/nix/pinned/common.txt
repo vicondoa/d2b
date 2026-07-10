@@ -647,6 +647,7 @@ realm-workloads/unsafe-local-omitted-from-launcher-v1
 realm-workloads/unsafe-local-private-artifact-carries-argv
 realm-workloads/unsafe-local-rejects-legacy-shell-commands
 realm-workloads/unsafe-local-rejects-net-vm-port-forward
+realm-workloads/unsafe-local-rejects-small-helper-socket-maxima
 realm-workloads/unsafe-local-rejects-vm-paths-and-options
 realm-workloads/unsafe-local-requires-explicit-opt-in
 requested-vm-config/boot-selector-and-hotplug-source-coexist
