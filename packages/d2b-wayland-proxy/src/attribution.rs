@@ -1,85 +1,69 @@
-//! Exact guest-client attribution bookkeeping for the VM Wayland bridge.
+//! Exact client attribution bookkeeping for provider-neutral Wayland bridges.
 //!
-//! These types intentionally store the authenticated VM id separately from the
-//! host-visible app-id rewrite prefix. App ids and titles are guest metadata for
-//! policy/UI context; they are not authority.
+//! Canonical target and provider identity are stored separately from rewritten
+//! app-id/title metadata. Presentation metadata never grants clipboard authority.
 
 use std::collections::HashMap;
 
-const MAX_GUEST_METADATA_CHARS: usize = 256;
+use crate::identity::ProxyIdentity;
 
-/// Per-proxy client connection id assigned by `d2b-wayland-proxy`.
+const MAX_CLIENT_METADATA_CHARS: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GuestClientId(pub u64);
+pub struct ProxyClientId(pub u64);
 
-/// Authenticated d2b VM identity for this Wayland bridge session.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VmId(String);
-
-impl VmId {
-    pub fn new(value: impl Into<String>) -> Result<Self, AttributionError> {
-        let value = value.into();
-        if value.is_empty() || value.contains('/') || value.contains('\0') {
-            return Err(AttributionError::InvalidVmId);
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Metadata known for one guest client connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuestClientAttribution {
-    pub client_id: GuestClientId,
-    pub vm_id: VmId,
+pub struct ClientAttribution {
+    pub client_id: ProxyClientId,
+    pub identity: ProxyIdentity,
     pub app_id: Option<String>,
     pub title: Option<String>,
 }
 
-/// In-memory per-VM attribution table updated by Wayland object handlers.
 #[derive(Debug, Clone)]
 pub struct ClientAttributionBook {
-    vm_id: VmId,
-    clients: HashMap<GuestClientId, GuestClientAttribution>,
+    identity: ProxyIdentity,
+    clients: HashMap<ProxyClientId, ClientAttribution>,
 }
 
 impl ClientAttributionBook {
-    pub fn new(vm_id: VmId) -> Self {
+    pub fn new(identity: ProxyIdentity) -> Self {
         Self {
-            vm_id,
+            identity,
             clients: HashMap::new(),
         }
     }
 
-    pub fn ensure_client(&mut self, client_id: GuestClientId) -> &mut GuestClientAttribution {
+    pub fn ensure_client(&mut self, client_id: ProxyClientId) -> &mut ClientAttribution {
         self.clients
             .entry(client_id)
-            .or_insert_with(|| GuestClientAttribution {
+            .or_insert_with(|| ClientAttribution {
                 client_id,
-                vm_id: self.vm_id.clone(),
+                identity: self.identity.clone(),
                 app_id: None,
                 title: None,
             })
     }
 
-    pub fn update_app_id(&mut self, client_id: GuestClientId, app_id: impl Into<String>) {
-        self.ensure_client(client_id).app_id = Some(Self::bound_guest_metadata(app_id.into()));
+    pub fn update_app_id(&mut self, client_id: ProxyClientId, app_id: impl Into<String>) {
+        self.ensure_client(client_id).app_id = Some(Self::bound_metadata(app_id.into()));
     }
 
-    pub fn update_title(&mut self, client_id: GuestClientId, title: impl Into<String>) {
-        self.ensure_client(client_id).title = Some(Self::bound_guest_metadata(title.into()));
+    pub fn update_title(&mut self, client_id: ProxyClientId, title: impl Into<String>) {
+        self.ensure_client(client_id).title = Some(Self::bound_metadata(title.into()));
     }
 
-    pub fn snapshot(&self, client_id: GuestClientId) -> Option<GuestClientAttribution> {
+    pub fn snapshot(&self, client_id: ProxyClientId) -> Option<ClientAttribution> {
         self.clients.get(&client_id).cloned()
     }
 
-    fn bound_guest_metadata(value: String) -> String {
+    pub fn remove_client(&mut self, client_id: ProxyClientId) {
+        self.clients.remove(&client_id);
+    }
+
+    fn bound_metadata(value: String) -> String {
         let mut out = String::new();
-        for ch in value.chars().take(MAX_GUEST_METADATA_CHARS) {
+        for ch in value.chars().take(MAX_CLIENT_METADATA_CHARS) {
             if ch.is_control() {
                 out.push('�');
             } else {
@@ -88,77 +72,73 @@ impl ClientAttributionBook {
         }
         out
     }
-
-    pub fn remove_client(&mut self, client_id: GuestClientId) {
-        self.clients.remove(&client_id);
-    }
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum AttributionError {
-    #[error("invalid VM id")]
-    InvalidVmId,
 }
 
 #[cfg(test)]
 mod tests {
+    use d2b_core::workload_identity::WorkloadTarget;
+    use d2b_realm_core::WorkloadProviderKind;
+
     use super::*;
 
+    fn unsafe_local_identity() -> ProxyIdentity {
+        ProxyIdentity::canonical(
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+        )
+    }
+
     #[test]
-    fn attribution_is_exact_to_client_and_vm() {
-        let vm = VmId::new("work").expect("valid vm");
-        let mut book = ClientAttributionBook::new(vm.clone());
+    fn attribution_is_exact_to_client_target_and_provider() {
+        let identity = unsafe_local_identity();
+        let mut book = ClientAttributionBook::new(identity.clone());
 
-        book.update_app_id(GuestClientId(7), "org.example.Editor");
-        book.update_title(GuestClientId(7), "notes.txt");
+        book.update_app_id(ProxyClientId(7), "org.example.Editor");
+        book.update_title(ProxyClientId(7), "notes.txt");
 
-        let snapshot = book.snapshot(GuestClientId(7)).expect("client tracked");
-        assert_eq!(snapshot.client_id, GuestClientId(7));
-        assert_eq!(snapshot.vm_id, vm);
+        let snapshot = book.snapshot(ProxyClientId(7)).expect("client tracked");
+        assert_eq!(snapshot.client_id, ProxyClientId(7));
+        assert_eq!(snapshot.identity, identity);
         assert_eq!(snapshot.app_id.as_deref(), Some("org.example.Editor"));
         assert_eq!(snapshot.title.as_deref(), Some("notes.txt"));
     }
 
     #[test]
-    fn attribution_does_not_derive_vm_from_app_id_prefix() {
-        let vm = VmId::new("work").expect("valid vm");
-        let mut book = ClientAttributionBook::new(vm);
+    fn presentation_metadata_cannot_change_endpoint_identity() {
+        let mut book = ClientAttributionBook::new(unsafe_local_identity());
+        book.update_app_id(ProxyClientId(1), "d2b.other.realm.d2b.Terminal");
+        book.update_title(ProxyClientId(1), "[isolated] misleading");
 
-        book.update_app_id(GuestClientId(1), "d2b.personal.org.example.Terminal");
-
-        let snapshot = book.snapshot(GuestClientId(1)).expect("client tracked");
-        assert_eq!(snapshot.vm_id.as_str(), "work");
+        let snapshot = book.snapshot(ProxyClientId(1)).expect("client tracked");
+        assert_eq!(snapshot.identity.target().to_canonical(), "tools.host.d2b");
         assert_eq!(
-            snapshot.app_id.as_deref(),
-            Some("d2b.personal.org.example.Terminal")
+            snapshot.identity.provider_kind(),
+            WorkloadProviderKind::UnsafeLocal
         );
     }
 
     #[test]
     fn attribution_entries_are_per_client() {
-        let vm = VmId::new("work").expect("valid vm");
-        let mut book = ClientAttributionBook::new(vm);
-
-        book.update_app_id(GuestClientId(1), "app.one");
-        book.update_app_id(GuestClientId(2), "app.two");
-        book.update_title(GuestClientId(2), "second");
+        let mut book = ClientAttributionBook::new(unsafe_local_identity());
+        book.update_app_id(ProxyClientId(1), "app.one");
+        book.update_app_id(ProxyClientId(2), "app.two");
+        book.update_title(ProxyClientId(2), "second");
 
         assert_eq!(
-            book.snapshot(GuestClientId(1))
+            book.snapshot(ProxyClientId(1))
                 .expect("client one")
                 .app_id
                 .as_deref(),
             Some("app.one")
         );
-        assert_eq!(
-            book.snapshot(GuestClientId(1))
+        assert!(
+            book.snapshot(ProxyClientId(1))
                 .expect("client one")
                 .title
-                .as_deref(),
-            None
+                .is_none()
         );
         assert_eq!(
-            book.snapshot(GuestClientId(2))
+            book.snapshot(ProxyClientId(2))
                 .expect("client two")
                 .app_id
                 .as_deref(),
@@ -168,25 +148,23 @@ mod tests {
 
     #[test]
     fn removing_client_drops_attribution() {
-        let vm = VmId::new("work").expect("valid vm");
-        let mut book = ClientAttributionBook::new(vm);
-
-        book.update_app_id(GuestClientId(1), "app.one");
-        book.remove_client(GuestClientId(1));
-
-        assert!(book.snapshot(GuestClientId(1)).is_none());
+        let mut book = ClientAttributionBook::new(unsafe_local_identity());
+        book.update_app_id(ProxyClientId(1), "app.one");
+        book.remove_client(ProxyClientId(1));
+        assert!(book.snapshot(ProxyClientId(1)).is_none());
     }
 
     #[test]
     fn attribution_metadata_is_bounded() {
-        let vm = VmId::new("work").expect("valid vm");
-        let mut book = ClientAttributionBook::new(vm);
-
-        book.update_title(GuestClientId(1), "x".repeat(MAX_GUEST_METADATA_CHARS + 100));
-        let snapshot = book.snapshot(GuestClientId(1)).expect("client tracked");
+        let mut book = ClientAttributionBook::new(unsafe_local_identity());
+        book.update_title(
+            ProxyClientId(1),
+            "x".repeat(MAX_CLIENT_METADATA_CHARS + 100),
+        );
+        let snapshot = book.snapshot(ProxyClientId(1)).expect("client tracked");
         assert_eq!(
             snapshot.title.as_deref().unwrap().chars().count(),
-            MAX_GUEST_METADATA_CHARS
+            MAX_CLIENT_METADATA_CHARS
         );
     }
 }

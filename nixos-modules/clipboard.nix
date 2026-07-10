@@ -36,16 +36,51 @@ let
     ) (d2bLib.normalNixosVms config.d2b.vms))
     // (d2bLib.qemuMediaVms config.d2b.vms);
   bridgeVms = lib.attrNames bridgeVmSet;
+  indexedWorkloads = config.d2b._index.realms.workloads.enabled;
+  indexedWorkloadForVm = vm:
+    lib.findFirst (workload: workload.legacyVmName == vm) null indexedWorkloads;
+  bridgeVmEndpoint = vm:
+    let workload = indexedWorkloadForVm vm;
+    in {
+      canonicalTarget =
+        if workload == null then "${vm}.local.d2b" else workload.canonicalTarget;
+      providerKind =
+        if workload == null then "local-vm" else workload.providerKind;
+      legacyVmName = vm;
+      socketComponent = vm;
+      expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
+    };
+  unsafeLocalWorkloads = lib.filter
+    (workload:
+      workload.kind == "unsafe-local"
+      && site.waylandUser != null
+      && lib.elem site.waylandUser
+        config.d2b.realms.${workload.realmName}.allowedUsers)
+    indexedWorkloads;
+  unsafeLocalEndpoint = workload: {
+    canonicalTarget = workload.canonicalTarget;
+    providerKind = "unsafe-local";
+    legacyVmName = null;
+    socketComponent =
+      "endpoint-${builtins.substring 0 24 (builtins.hashString "sha256" workload.canonicalTarget)}";
+    expectedUid = config.users.users.${site.waylandUser}.uid;
+  };
+  bridgeEndpoints =
+    map bridgeVmEndpoint bridgeVms
+    ++ map unsafeLocalEndpoint unsafeLocalWorkloads;
   bridgePeers = map (vm: {
     vmName = vm;
     expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
   }) bridgeVms;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
+  waylandGroup = config.users.users.${site.waylandUser}.group;
   clipdBridgeRootTmpfiles =
-    lib.optionals (cfg.enable && bridgeVms != [ ]) (
+    lib.optionals (cfg.enable && bridgeEndpoints != [ ]) (
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
+        "a+ ${cfg.runtime.bridgeRoot} - - - - u:${site.waylandUser}:--x"
         "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${site.waylandUser}:--x"
@@ -61,6 +96,10 @@ let
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:d2b-${vm}-wlproxy:--x"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
       ]) bridgeVms
+      ++ lib.concatMap (workload: [
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+      ]) unsafeLocalWorkloads
     );
 
   configJson = builtins.toJSON {
@@ -81,9 +120,10 @@ let
     modes = cfg.modes;
     runtime = {
       bridgeRoot = cfg.runtime.bridgeRoot;
-      bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<vm>/${cfg.runtime.bridgeSocketName}";
+      bridgeSocketTemplate = "${cfg.runtime.bridgeRoot}/<uid>/bridge/<endpoint>/${cfg.runtime.bridgeSocketName}";
       inherit bridgeVms;
       inherit bridgePeers;
+      inherit bridgeEndpoints;
       parentProvisioning = "d2bd-broker-lifecycle";
       staticTmpfilesOnly = false;
     };
@@ -97,7 +137,7 @@ in
 {
   options.d2b.site.clipboard = {
     enable = lib.mkEnableOption ''
-      d2b host-session clipboard authority (`d2b-clipd`) and VM
+      d2b host-session clipboard authority (`d2b-clipd`) and workload
       clipboard bridge wiring
     '';
 
@@ -261,7 +301,7 @@ in
         perVm = lib.mkOption {
           type = lib.types.ints.between 1 512;
           default = 64;
-          description = "Per-VM cap on concurrently held transfer FDs.";
+          description = "Per-workload cap on concurrently held transfer FDs.";
         };
       };
       materializationPerMinute = lib.mkOption {
@@ -401,11 +441,12 @@ in
         type = lib.types.strMatching "^/run/d2b/clipd(/[A-Za-z0-9_-]+)*$";
         default = "/run/d2b/clipd";
         description = ''
-          Broker-provisioned root for per-user/per-VM clipboard bridge
+          Broker-provisioned root for per-user/per-workload clipboard bridge
           sockets. The effective template is
-          `<bridgeRoot>/<uid>/bridge/<vm>/<bridgeSocketName>`.
+          `<bridgeRoot>/<uid>/bridge/<endpoint>/<bridgeSocketName>`, where
+          canonical non-VM targets use a stable hash-shortened endpoint component.
           The user service must not create `/run/d2b` parents; d2bd and the
-          broker own parent creation, traversal ACLs, per-VM ACLs, and teardown.
+          broker own parent creation, traversal ACLs, endpoint ACLs, and teardown.
         '';
       };
       bridgeSocketName = lib.mkOption {

@@ -12,6 +12,11 @@
 
 use std::collections::HashMap;
 
+use d2b_core::workload_identity::WorkloadTarget;
+use d2b_realm_core::WorkloadProviderKind;
+
+use crate::identity::ProxyIdentity;
+
 const MAX_REWRITTEN_LABEL_CHARS: usize = 256;
 
 /// The action to apply for a Wayland global interface.
@@ -56,7 +61,7 @@ pub enum PolicyWarning {
     AcceleratedRenderingDisabled { interface: String },
     HighRiskGlobalEnabled { interface: String },
     ClipboardBoundaryOverrideIgnored { interface: String },
-    AppIdPrefixNotVmPrefix { vm: String, prefix: String },
+    AppIdPrefixNotIdentityPrefix { target: String, prefix: String },
     TitlePrefixDisabled,
     UnclassifiedGlobalAllowed { interface: String },
 }
@@ -68,7 +73,7 @@ impl PolicyWarning {
             Self::AcceleratedRenderingDisabled { .. } => "W-DENY-ACCEL",
             Self::HighRiskGlobalEnabled { .. } => "W-ALLOW-HIGH-RISK",
             Self::ClipboardBoundaryOverrideIgnored { .. } => "W-ALLOW-CLIPBOARD-BOUNDARY",
-            Self::AppIdPrefixNotVmPrefix { .. } => "W-APP-ID-PREFIX",
+            Self::AppIdPrefixNotIdentityPrefix { .. } => "W-APP-ID-PREFIX",
             Self::TitlePrefixDisabled => "W-TITLE-PREFIX",
             Self::UnclassifiedGlobalAllowed { .. } => "W-ALLOW-UNCLASSIFIED",
         }
@@ -81,7 +86,7 @@ impl PolicyWarning {
             | Self::HighRiskGlobalEnabled { interface }
             | Self::ClipboardBoundaryOverrideIgnored { interface }
             | Self::UnclassifiedGlobalAllowed { interface } => (self.code(), interface.as_str()),
-            Self::AppIdPrefixNotVmPrefix { prefix, .. } => (self.code(), prefix.as_str()),
+            Self::AppIdPrefixNotIdentityPrefix { prefix, .. } => (self.code(), prefix.as_str()),
             Self::TitlePrefixDisabled => (self.code(), ""),
         }
     }
@@ -108,15 +113,15 @@ impl PolicyWarning {
                  d2b enforces virtualized clipboard, primary-selection, and DND boundaries",
                 self.code()
             ),
-            Self::AppIdPrefixNotVmPrefix { vm, prefix } => format!(
+            Self::AppIdPrefixNotIdentityPrefix { target, prefix } => format!(
                 "waylandProxy: [{}] appIdPrefix is `{prefix}` rather than the default \
-                 `d2b.{vm}.`; generated niri border rules will not match unless \
+                 identity prefix for `{target}`; generated compositor rules will not match unless \
                  overridden too",
                 self.code()
             ),
             Self::TitlePrefixDisabled => {
                 format!(
-                    "waylandProxy: [{}] titlePrefix is empty; non-niri compositors lose VM \
+                    "waylandProxy: [{}] titlePrefix is empty; non-niri compositors lose workload \
                      disambiguation",
                     self.code()
                 )
@@ -141,7 +146,9 @@ pub struct GlobalOverride {
 /// Input configuration for policy construction.
 #[derive(Debug, Clone, Default)]
 pub struct PolicyInput {
-    /// VM name, e.g. `work`.
+    /// Typed canonical identity. New callers must set this.
+    pub identity: Option<ProxyIdentity>,
+    /// Legacy VM name retained for compatibility callers.
     pub vm_name: String,
     /// Prefix prepended to `xdg_toplevel.set_app_id` values.
     /// Default: `d2b.<vm>.`
@@ -172,6 +179,8 @@ pub struct FilterPolicy {
     pub app_id_prefix: String,
     pub realm_target: Option<String>,
     pub title_prefix: String,
+    pub identity: ProxyIdentity,
+    /// Compatibility/logging label. Canonical callers receive the full target.
     pub vm_name: String,
     pub dmabuf_filters: std::sync::Arc<crate::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
@@ -182,11 +191,26 @@ pub struct FilterPolicy {
 impl FilterPolicy {
     /// Build a policy from operator input layered on top of secure defaults.
     pub fn build(input: PolicyInput) -> Self {
-        let vm = &input.vm_name;
-
-        let app_id_prefix = input.app_id_prefix.unwrap_or_else(|| format!("d2b.{vm}."));
-        let realm_target = input.realm_target;
-        let title_prefix = input.title_prefix.unwrap_or_else(|| format!("[{vm}] "));
+        let identity = input.identity.unwrap_or_else(|| {
+            let target = input
+                .realm_target
+                .as_deref()
+                .and_then(|target| WorkloadTarget::parse(target).ok())
+                .unwrap_or_else(|| {
+                    WorkloadTarget::parse(&format!("{}.local.d2b", input.vm_name))
+                        .expect("legacy VM identity must form a canonical target")
+                });
+            ProxyIdentity::legacy_vm(input.vm_name.clone(), target, WorkloadProviderKind::LocalVm)
+                .expect("legacy VM identity must be valid")
+        });
+        let target_label = identity.log_label();
+        let app_id_prefix = input
+            .app_id_prefix
+            .unwrap_or_else(|| identity.default_app_id_prefix());
+        let realm_target = Some(identity.canonical_target());
+        let title_prefix = input
+            .title_prefix
+            .unwrap_or_else(|| identity.default_title_prefix());
 
         // Populate the default entries from the classified allowlist.
         let mut entries: HashMap<String, PolicyEntry> = default_classified_entries();
@@ -282,10 +306,10 @@ impl FilterPolicy {
             }
         }
 
-        let expected_app_id_prefix = format!("d2b.{vm}.");
+        let expected_app_id_prefix = identity.default_app_id_prefix();
         if app_id_prefix != expected_app_id_prefix && !app_id_prefix.is_empty() {
-            warnings.push(PolicyWarning::AppIdPrefixNotVmPrefix {
-                vm: vm.clone(),
+            warnings.push(PolicyWarning::AppIdPrefixNotIdentityPrefix {
+                target: target_label.clone(),
                 prefix: app_id_prefix.clone(),
             });
         }
@@ -299,7 +323,8 @@ impl FilterPolicy {
             app_id_prefix,
             realm_target,
             title_prefix,
-            vm_name: vm.clone(),
+            identity,
+            vm_name: target_label,
             dmabuf_filters: std::sync::Arc::new(crate::dmabuf::DmabufFilterList::new(
                 &input.dmabuf_allow,
                 &input.dmabuf_deny,
@@ -335,7 +360,7 @@ impl FilterPolicy {
     /// Rewrite an app-id value received from the guest.
     ///
     /// Rules:
-    /// - If the value already starts with our exact VM prefix, pass through unchanged.
+    /// - If the value already starts with our exact identity prefix, pass through unchanged.
     /// - If the value starts with `d2b.<other>.`, prepend our prefix so it becomes
     ///   `d2b.<this>.d2b.<other>....` — spoof prevention.
     /// - Otherwise prepend our prefix unconditionally.
@@ -348,7 +373,7 @@ impl FilterPolicy {
         if guest_value.starts_with(&self.app_id_prefix) {
             return guest_value;
         }
-        // Prepend our prefix (covers both plain values and cross-VM spoofs).
+        // Prepend our prefix (covers both plain values and cross-identity spoofs).
         format!("{}{}", self.app_id_prefix, guest_value)
     }
 
@@ -578,6 +603,32 @@ mod tests {
             p.rewrite_app_id("org.example.App"),
             "d2b.work.org.example.App"
         );
+    }
+
+    #[test]
+    fn unsafe_local_defaults_use_canonical_target_and_explicit_warning_title() {
+        let identity = ProxyIdentity::canonical(
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+        );
+        let p = FilterPolicy::build(PolicyInput {
+            identity: Some(identity.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(p.identity, identity);
+        assert_eq!(p.realm_target.as_deref(), Some("tools.host.d2b"));
+        assert_eq!(p.app_id_prefix, "d2b.tools.host.d2b.");
+        assert_eq!(p.title_prefix, "[unsafe-local tools.host.d2b] ");
+        assert_eq!(
+            p.rewrite_app_id("org.example.App"),
+            "d2b.tools.host.d2b.org.example.App"
+        );
+        assert_eq!(
+            p.rewrite_title("Browser"),
+            "[unsafe-local tools.host.d2b] Browser"
+        );
+        assert!(p.warnings.is_empty());
     }
 
     #[test]

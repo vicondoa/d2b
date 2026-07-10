@@ -1,8 +1,8 @@
-//! Host-app terminal launch helpers.
+//! Legacy host-terminal launch helpers.
 //!
 //! This path is intentionally per-invocation: it creates a randomized
-//! Wayland socket under a VM-scoped 0700 directory and points the foreground
-//! WezTerm child at a randomized mux socket so a VM-bound terminal never
+//! Wayland socket under an identity-scoped 0700 directory and points the foreground
+//! WezTerm child at a randomized mux socket so an identity-bound terminal never
 //! reuses the operator's global WezTerm daemon.
 
 use std::{
@@ -24,25 +24,26 @@ const DIR_MODE: u32 = 0o700;
 
 #[derive(Debug)]
 pub struct TerminalRuntime {
+    xdg_runtime_dir: PathBuf,
     root: PathBuf,
     listen_socket: PathBuf,
     mux_socket: PathBuf,
 }
 
 impl TerminalRuntime {
-    pub fn prepare(vm_name: &str) -> io::Result<Self> {
+    pub fn prepare(identity_component: &str) -> io::Result<Self> {
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 "XDG_RUNTIME_DIR is required for host-terminal proxy mode",
             )
         })?;
-        Self::prepare_in(Path::new(&runtime_dir), vm_name)
+        Self::prepare_in(Path::new(&runtime_dir), identity_component)
     }
 
-    pub fn prepare_in(runtime_dir: &Path, vm_name: &str) -> io::Result<Self> {
+    pub fn prepare_in(runtime_dir: &Path, identity_component: &str) -> io::Result<Self> {
         let token = random_token()?;
-        Self::prepare_in_with_token(runtime_dir, vm_name, &token)
+        Self::prepare_in_with_token(runtime_dir, identity_component, &token)
     }
 
     pub fn listen_socket(&self) -> &Path {
@@ -54,21 +55,24 @@ impl TerminalRuntime {
     }
 
     pub fn runtime_dir(&self) -> &Path {
-        &self.root
+        &self.xdg_runtime_dir
     }
 
     pub fn wayland_display_value(&self) -> OsString {
-        self.listen_socket
-            .file_name()
-            .expect("listen socket has a file name")
-            .to_owned()
+        self.listen_socket.as_os_str().to_owned()
     }
 
-    fn prepare_in_with_token(runtime_dir: &Path, vm_name: &str, token: &str) -> io::Result<Self> {
-        validate_vm_component(vm_name)?;
+    fn prepare_in_with_token(
+        runtime_dir: &Path,
+        identity_component: &str,
+        token: &str,
+    ) -> io::Result<Self> {
+        validate_identity_component(identity_component)?;
         validate_token(token)?;
         ensure_runtime_parent(runtime_dir)?;
-        let root = runtime_dir.join(TERMINAL_RUNTIME_DIR).join(vm_name);
+        let root = runtime_dir
+            .join(TERMINAL_RUNTIME_DIR)
+            .join(identity_component);
         ensure_private_dir(&root)?;
 
         let listen_socket = root.join(format!("wayland-{token}.sock"));
@@ -77,6 +81,7 @@ impl TerminalRuntime {
         unlink_stale_socket(&mux_socket)?;
 
         Ok(Self {
+            xdg_runtime_dir: runtime_dir.to_owned(),
             root,
             listen_socket,
             mux_socket,
@@ -163,6 +168,7 @@ pub fn terminal_command(program: &OsStr, args: &[OsString], runtime: &TerminalRu
         .args(args)
         .env("XDG_RUNTIME_DIR", runtime.runtime_dir())
         .env("WAYLAND_DISPLAY", runtime.wayland_display_value())
+        .env_remove("DISPLAY")
         .env("WEZTERM_UNIX_SOCKET", runtime.mux_socket())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -220,16 +226,16 @@ fn unlink_stale_socket(path: &Path) -> io::Result<()> {
     }
 }
 
-fn validate_vm_component(vm_name: &str) -> io::Result<()> {
-    if vm_name.is_empty()
-        || vm_name == "."
-        || vm_name == ".."
-        || vm_name.contains('/')
-        || vm_name.contains('\0')
+fn validate_identity_component(value: &str) -> io::Result<()> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\0')
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "invalid VM name for terminal runtime path",
+            "invalid identity component for terminal runtime path",
         ));
     }
     Ok(())
@@ -276,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_runtime_creates_private_vm_dir_and_random_socket_paths() {
+    fn terminal_runtime_creates_private_identity_dir_and_random_socket_paths() {
         let root = test_root("private-dir");
         let runtime =
             TerminalRuntime::prepare_in_with_token(&root, "work", "abc123").expect("runtime");
@@ -365,8 +371,12 @@ mod tests {
         }));
         assert!(env.iter().any(|(key, value)| {
             *key == OsStr::new("WAYLAND_DISPLAY")
-                && value == &Some(OsStr::new("wayland-abc123.sock"))
+                && value == &Some(runtime.listen_socket().as_os_str())
         }));
+        assert!(
+            env.iter()
+                .any(|(key, value)| { *key == OsStr::new("DISPLAY") && value.is_none() })
+        );
         assert!(env.iter().any(|(key, value)| {
             *key == OsStr::new("WEZTERM_UNIX_SOCKET")
                 && value == &Some(runtime.mux_socket().as_os_str())

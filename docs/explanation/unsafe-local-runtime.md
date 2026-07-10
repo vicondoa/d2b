@@ -34,6 +34,21 @@ operation and creates verified transient scopes. Graphical child setup removes
 preserving `XDG_RUNTIME_DIR`. The environment posture is reported, but keys and
 values are not returned or logged.
 
+## Graphical readiness and clipboard authority
+
+The Wayland proxy receives a validated canonical workload target and a closed
+provider kind. It reports typed upstream, listener, and first-client readiness
+events to the helper. The helper starts the graphical application only after the
+upstream and listener are ready, and considers launch successful only after the
+first client connects. An unsafe-local proxy requires an explicit compositor
+upstream; failure never retries the application against the compositor directly.
+
+The clipboard bridge attributes an unsafe-local endpoint from that canonical
+target and provider identity. Window app ids and titles remain presentation
+metadata and cannot authorize a transfer. Host, VM, and unsafe-local offers are
+discovery-only until the picker sends `Select`; `d2b-clipd` remains the sole
+component that publishes selected data or fulfills a transfer file descriptor.
+
 ## Generic items, not application schemas
 
 An exec item owns an id, name, icon, argv, and graphical flag. The model has no
@@ -58,4 +73,3 @@ preserved and reported degraded rather than killed.
 d2b does not enable user lingering. Helper and daemon restarts are continuation
 events while the user manager remains alive, but logout may end the scopes.
 Status names this `user-manager-lifetime`.
-

@@ -1,8 +1,8 @@
 //! Clipboard virtualization policy.
 //!
 //! d2b-wayland-proxy synthesizes the guest-visible standard
-//! `wl_data_device_manager` path locally. Guest `wl_data_*` objects are never
-//! bound into the host compositor clipboard namespace. Same-VM transfers are
+//! `wl_data_device_manager` path locally. Downstream `wl_data_*` objects are never
+//! bound into the host compositor clipboard namespace. Same-endpoint transfers are
 //! routed within the proxy; host and cross-realm materialization routes through
 //! d2b-clipd.
 
@@ -66,13 +66,13 @@ pub fn object_forwarding(interface: &str) -> ClipboardObjectForwarding {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardRoute {
-    SameVm,
+    SameEndpoint,
     HostOrCrossRealm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MimeDecision {
-    PreserveSameVmRichMime,
+    PreserveSameEndpointRichMime,
     MaterializeViaBridge,
     Deny,
 }
@@ -98,7 +98,7 @@ impl ClipboardMimePolicy {
 
     pub fn decide(&self, route: ClipboardRoute, mime: &str) -> MimeDecision {
         match route {
-            ClipboardRoute::SameVm => MimeDecision::PreserveSameVmRichMime,
+            ClipboardRoute::SameEndpoint => MimeDecision::PreserveSameEndpointRichMime,
             ClipboardRoute::HostOrCrossRealm if self.external_allowlist.contains(mime) => {
                 MimeDecision::MaterializeViaBridge
             }
@@ -159,15 +159,15 @@ mod tests {
     }
 
     #[test]
-    fn same_vm_custom_mime_placeholder_preserves_rich_semantics() {
+    fn same_endpoint_custom_mime_placeholder_preserves_rich_semantics() {
         let policy = ClipboardMimePolicy::v1_defaults();
 
         assert_eq!(
             policy.decide(
-                ClipboardRoute::SameVm,
+                ClipboardRoute::SameEndpoint,
                 "application/vnd.libreoffice.rich-text"
             ),
-            MimeDecision::PreserveSameVmRichMime
+            MimeDecision::PreserveSameEndpointRichMime
         );
     }
 

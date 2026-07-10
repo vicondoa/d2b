@@ -18,6 +18,8 @@
 //! d2b-wayland-proxy \
 //!   --listen /run/d2b-wlproxy/<vm>/wayland-0 \
 //!   --connect /run/d2b-wlproxy/<vm>/upstream \
+//!   --target <workload>.<realm>.d2b \
+//!   --provider-kind local-vm \
 //!   --vm-name <vm>
 //! ```
 //!
@@ -188,6 +190,11 @@ pub fn generate_wayland_proxy_argv(
     if let Some(realm_target) = &input.realm_target
         && !realm_target.is_empty()
     {
+        argv.push("--target".to_owned());
+        argv.push(realm_target.clone());
+        argv.push("--provider-kind".to_owned());
+        argv.push("local-vm".to_owned());
+        // Keep the old spelling during the compatibility window.
         argv.push("--realm-target".to_owned());
         argv.push(realm_target.clone());
     }
@@ -258,6 +265,8 @@ mod tests {
         let connect_idx = argv.iter().position(|a| a == "--connect").unwrap();
         assert_eq!(argv[connect_idx + 1], "/run/d2b-wlproxy/work/upstream");
         assert_eq!(flag_value(&argv, "--realm-target"), Some("work.local.d2b"));
+        assert_eq!(flag_value(&argv, "--target"), Some("work.local.d2b"));
+        assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
     }
 
     #[test]
@@ -304,6 +313,8 @@ mod tests {
         let input = WaylandProxyArgvInput::for_vm("dev");
         let argv = generate_wayland_proxy_argv(&input).expect("valid");
         assert_eq!(flag_value(&argv, "--realm-target"), Some("dev.local.d2b"));
+        assert_eq!(flag_value(&argv, "--target"), Some("dev.local.d2b"));
+        assert_eq!(flag_value(&argv, "--provider-kind"), Some("local-vm"));
     }
 
     #[test]
