@@ -229,6 +229,42 @@ mod tests {
     }
 
     #[test]
+    fn downstream_posture_fixture_covers_each_provider_family() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/workload-execution-posture-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schemaVersion"], "v1");
+
+        let unsafe_local: WorkloadExecutionPosture =
+            serde_json::from_value(fixture["postures"]["unsafeLocal"].clone()).unwrap();
+        assert_eq!(unsafe_local.isolation, IsolationPosture::UnsafeLocal);
+        assert_eq!(
+            unsafe_local.execution_identity,
+            ExecutionIdentityPosture::AuthenticatedRequesterUid
+        );
+
+        let local_vm: WorkloadExecutionPosture =
+            serde_json::from_value(fixture["postures"]["localVm"].clone()).unwrap();
+        assert_eq!(local_vm.isolation, IsolationPosture::VirtualMachine);
+        assert_eq!(
+            local_vm.execution_identity,
+            ExecutionIdentityPosture::WorkloadUser
+        );
+
+        let provider_managed: WorkloadExecutionPosture =
+            serde_json::from_value(fixture["postures"]["providerManaged"].clone()).unwrap();
+        assert_eq!(
+            provider_managed.isolation,
+            IsolationPosture::ProviderManaged
+        );
+        assert_eq!(
+            provider_managed.execution_identity,
+            ExecutionIdentityPosture::ProviderManaged
+        );
+    }
+
+    #[test]
     fn launcher_item_summary_contains_no_runtime_argv() {
         let item = LauncherItemSummary {
             id: ProtocolToken::parse("browser").unwrap(),

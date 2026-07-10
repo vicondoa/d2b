@@ -444,6 +444,7 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     assert_eq!(public.schema_version, "v2");
     assert_eq!(public.workloads.len(), 1);
     assert_eq!(private.workloads.len(), 1);
+    assert_eq!(public.workloads[0].realm_accent_color, "#cc3344");
 
     let public_json = serde_json::to_string(&public).unwrap();
     assert!(!public_json.contains("rendered-private-argv-canary"));
