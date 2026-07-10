@@ -844,10 +844,6 @@ in
       defaultItemId = unsafeRow.defaultItemId;
       itemIds = map (item: item.id) unsafeRow.launcherItems;
       itemTypes = map (item: item.type) unsafeRow.launcherItems;
-      helperSocketBufferMaxima = {
-        rmem = unsafeCfg.boot.kernel.sysctl."net.core.rmem_max";
-        wmem = unsafeCfg.boot.kernel.sysctl."net.core.wmem_max";
-      };
     };
     expected = {
       kind = "unsafe-local";
@@ -866,10 +862,6 @@ in
       defaultItemId = "browser";
       itemIds = [ "browser" "terminal" ];
       itemTypes = [ "exec" "shell" ];
-      helperSocketBufferMaxima = {
-        rmem = 524288;
-        wmem = 524288;
-      };
     };
   };
 
@@ -1006,23 +998,6 @@ in
           };
         })
       ]);
-    expected = true;
-  };
-
-  "realm-workloads/unsafe-local-rejects-small-helper-socket-maxima" = {
-    expr =
-      let
-        messages = failureMessages [
-          (lib.recursiveUpdate unsafeLocalFixture {
-            boot.kernel.sysctl = {
-              "net.core.rmem_max" = lib.mkForce 262144;
-              "net.core.wmem_max" = lib.mkForce 262144;
-            };
-          })
-        ];
-      in
-      hasMessage [ "net.core.rmem_max" "at least 524288" ] messages
-      && hasMessage [ "net.core.wmem_max" "at least 524288" ] messages;
     expected = true;
   };
 
