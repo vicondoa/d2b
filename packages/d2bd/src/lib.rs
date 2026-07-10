@@ -118,6 +118,7 @@ pub mod realm_access_resolver;
 pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
+pub mod unsafe_local_helper;
 pub mod wire;
 pub mod workload_target_index;
 use admission::{
@@ -342,6 +343,12 @@ pub struct DaemonConfig {
     pub daemon_group: String,
     pub public_socket_group: String,
     #[serde(default)]
+    pub unsafe_local_helper_socket_path: Option<PathBuf>,
+    #[serde(default)]
+    pub unsafe_local_helper_socket_group: Option<String>,
+    #[serde(default)]
+    pub unsafe_local_helper_users: Vec<String>,
+    #[serde(default)]
     pub launcher_users: Vec<String>,
     #[serde(default)]
     pub admin_users: Vec<String>,
@@ -404,6 +411,9 @@ impl Default for DaemonConfig {
             daemon_user: "d2bd".to_owned(),
             daemon_group: "d2bd".to_owned(),
             public_socket_group: "d2b".to_owned(),
+            unsafe_local_helper_socket_path: None,
+            unsafe_local_helper_socket_group: None,
+            unsafe_local_helper_users: Vec::new(),
             launcher_users: Vec::new(),
             admin_users: Vec::new(),
             server_version: default_server_version(),
@@ -524,6 +534,7 @@ struct RuntimeIdentity {
     daemon_uid: Uid,
     daemon_gid: Gid,
     public_socket_gid: Gid,
+    unsafe_local_helper_socket_gid: Option<Gid>,
     expect_root_owned_parent: bool,
 }
 
@@ -562,6 +573,8 @@ struct ServerState {
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
     security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
+    #[allow(dead_code)]
+    unsafe_local_helpers: Arc<unsafe_local_helper::HelperRegistry>,
 }
 
 struct GatewayDisplayRuntime {
@@ -1330,6 +1343,29 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     ensure_locks_dir(&config.locks_dir, &runtime_identity)?;
     let _lock_file = acquire_state_lock(&config.state_lock_path, &runtime_identity)?;
     let listener = bind_public_socket(&config.public_socket_path, &runtime_identity)?;
+    let unsafe_local_helper_uids =
+        resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
+    let unsafe_local_helper_listener =
+        if let Some(path) = config.unsafe_local_helper_socket_path.as_deref() {
+            let socket_gid = runtime_identity
+                .unsafe_local_helper_socket_gid
+                .ok_or_else(|| TypedError::InternalConfig {
+                    detail: "unsafe-local helper socket path requires a socket group".to_owned(),
+                })?;
+            Some(
+                unsafe_local_helper::bind_helper_socket(
+                    path,
+                    socket_gid,
+                    runtime_identity.expect_root_owned_parent,
+                )
+                .map_err(|error| TypedError::InternalIo {
+                    context: "bind unsafe-local helper socket".to_owned(),
+                    detail: format!("{error:?}"),
+                })?,
+            )
+        } else {
+            None
+        };
 
     if options.drop_privileges {
         drop_privileges_if_root(&runtime_identity)?;
@@ -1404,6 +1440,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         );
     }
 
+    let unsafe_local_helpers = Arc::new(unsafe_local_helper::HelperRegistry::new(
+        runtime_identity.daemon_uid.as_raw(),
+        unsafe_local_helper_uids,
+    ));
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
@@ -1425,7 +1465,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
         )),
+        unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
     };
+    if let Some(helper_listener) = unsafe_local_helper_listener {
+        std::thread::Builder::new()
+            .name("d2b-unsafe-local-listener".to_owned())
+            .spawn(move || unsafe_local_helpers.accept_loop(helper_listener))
+            .map_err(|error| TypedError::InternalIo {
+                context: "spawn unsafe-local helper listener".to_owned(),
+                detail: error.to_string(),
+            })?;
+    }
     refresh_activation_marker_metrics_on_startup(&state);
     refresh_broker_reap_log(&state, "startup");
 
@@ -2324,6 +2374,10 @@ fn resolve_runtime_identity(
             daemon_uid,
             daemon_gid,
             public_socket_gid: unistd::getgid(),
+            unsafe_local_helper_socket_gid: config
+                .unsafe_local_helper_socket_path
+                .as_ref()
+                .map(|_| unistd::getgid()),
             expect_root_owned_parent: false,
         });
     }
@@ -2345,12 +2399,56 @@ fn resolve_runtime_identity(
                 config.public_socket_group
             ),
         })?;
+    let unsafe_local_helper_socket_gid = match (
+        config.unsafe_local_helper_socket_path.as_ref(),
+        config.unsafe_local_helper_socket_group.as_ref(),
+    ) {
+        (Some(_), Some(group_name)) => Some(
+            Group::from_name(group_name)
+                .map_err(io_wrap("lookup unsafe-local helper socket group"))?
+                .ok_or_else(|| TypedError::InternalConfig {
+                    detail: format!("unsafe-local helper socket group {group_name} does not exist"),
+                })?
+                .gid,
+        ),
+        (None, None) => None,
+        _ => {
+            return Err(TypedError::InternalConfig {
+                detail: "unsafe-local helper socket path and group must be configured together"
+                    .to_owned(),
+            });
+        }
+    };
     Ok(RuntimeIdentity {
         daemon_uid: daemon_user.uid,
         daemon_gid: daemon_group.gid,
         public_socket_gid: public_group.gid,
+        unsafe_local_helper_socket_gid,
         expect_root_owned_parent: true,
     })
+}
+
+fn resolve_unsafe_local_helper_uids(
+    config: &DaemonConfig,
+    daemon_uid: Uid,
+) -> Result<Vec<u32>, TypedError> {
+    let mut uids = BTreeSet::new();
+    for username in &config.unsafe_local_helper_users {
+        let user = User::from_name(username)
+            .map_err(io_wrap("lookup unsafe-local helper user"))?
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "configured unsafe-local helper user does not exist".to_owned(),
+            })?;
+        let uid = user.uid.as_raw();
+        if uid == 0 || uid == daemon_uid.as_raw() {
+            return Err(TypedError::InternalConfig {
+                detail: "unsafe-local helper users must be non-root and distinct from d2bd"
+                    .to_owned(),
+            });
+        }
+        uids.insert(uid);
+    }
+    Ok(uids.into_iter().collect())
 }
 
 fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<(), TypedError> {
@@ -17514,6 +17612,7 @@ mod public_status_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
         (state, dir)
     }
@@ -20114,6 +20213,7 @@ mod runtime_acl_tests {
             daemon_uid: unistd::getuid(),
             daemon_gid: unistd::getgid(),
             public_socket_gid: unistd::getgid(),
+            unsafe_local_helper_socket_gid: None,
             expect_root_owned_parent,
         }
     }
@@ -20179,6 +20279,7 @@ mod runtime_acl_tests {
             daemon_uid: unistd::getuid(),
             daemon_gid: unistd::getgid(),
             public_socket_gid: supp_gid,
+            unsafe_local_helper_socket_gid: None,
             expect_root_owned_parent: true,
         };
         let _socket = bind_public_socket(&socket_path, &identity).expect("bind public socket");
@@ -20420,6 +20521,7 @@ mod detached_exec_routing_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         }
     }
 
@@ -21090,6 +21192,7 @@ mod accept_loop_concurrency_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
             console_sessions: Arc::new(Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
@@ -21625,6 +21728,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         }
     }
 
@@ -21662,6 +21766,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         }
     }
 
@@ -23753,6 +23858,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -23977,6 +24083,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
 
         let listener = socket(
@@ -24234,6 +24341,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -26127,6 +26235,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
 
         // Emit the same event that the timeout handler in
@@ -27036,6 +27145,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
 
         // Set a 0ms readiness timeout via the test-only config override so the
@@ -27160,6 +27270,7 @@ mod broker_dispatch_tests {
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
+            unsafe_local_helpers: Arc::new(crate::unsafe_local_helper::HelperRegistry::new(0, [])),
         };
 
         let response = dispatch_broker_vm_start(

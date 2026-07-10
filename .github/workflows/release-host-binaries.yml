@@ -77,6 +77,7 @@ jobs:
           cargo build --release --package d2bd --manifest-path packages/Cargo.toml
           cargo build --release --package d2b --manifest-path packages/Cargo.toml
           cargo build --release --package d2b-wayland-proxy --manifest-path packages/Cargo.toml
+          cargo build --release --package d2b-unsafe-local-helper --manifest-path packages/Cargo.toml
           cargo build --release --bin d2b-activation-helper --package d2b-host --manifest-path packages/Cargo.toml
           cargo build --release --package d2b-priv-broker --manifest-path packages/d2b-priv-broker/Cargo.toml
 
@@ -85,6 +86,7 @@ jobs:
           cp packages/target/release/d2bd dist/bin/
           cp packages/target/release/d2b dist/bin/
           cp packages/target/release/d2b-wayland-proxy dist/bin/
+          cp packages/target/release/d2b-unsafe-local-helper dist/bin/
           cp packages/target/release/d2b-activation-helper dist/bin/
           cp packages/d2b-priv-broker/target/release/d2b-priv-broker dist/bin/
 
@@ -92,6 +94,7 @@ jobs:
             d2bd \
             d2b \
             d2b-wayland-proxy \
+            d2b-unsafe-local-helper \
             d2b-activation-helper \
             d2b-priv-broker
           do

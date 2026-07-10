@@ -12,6 +12,14 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the same-UID unsafe-local runtime foundation: `d2bd` now owns the
+  bounded, peer-credential-authenticated helper socket and one-generation-per-
+  UID registry; eligible users receive a fail-closed global systemd user
+  service; and the new `d2b-unsafe-local-helper` copies the current user-manager
+  environment into verified transient scopes with bounded operation ledgers,
+  reconnect snapshots, exact InvocationID/cgroup adoption, and no graphical
+  direct-display fallback.
+
 - Added the provider-neutral launcher contract for realm workloads. Generic
   `launcher.items.<id>` entries can describe configured `exec` actions or
   persistent `shell` actions with item-owned names and icons; applications such

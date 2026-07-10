@@ -644,6 +644,7 @@ realm-workloads/persistent-shell-compatibility-item
 realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
 realm-workloads/unsafe-local-artifacts-and-bundle-v10
+realm-workloads/unsafe-local-helper-user-service-and-eligibility
 realm-workloads/unsafe-local-index-posture-and-items
 realm-workloads/unsafe-local-omitted-from-launcher-v1
 realm-workloads/unsafe-local-private-artifact-carries-argv

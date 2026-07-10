@@ -1141,6 +1141,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-unsafe-local-helper"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "clap",
+ "d2b-contracts",
+ "d2b-core",
+ "d2b-realm-core",
+ "getrandom 0.2.17",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "socket2 0.5.10",
+ "uzers",
+ "zbus",
+]
+
+[[package]]
 name = "d2b-userd"
 version = "0.0.0-bootstrap"
 dependencies = [
