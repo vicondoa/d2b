@@ -236,6 +236,17 @@ in
     ];
   };
 
+  "activation-runtime-tmpfiles/run-store-sync-pointer" = {
+    expr =
+      let
+        rules = rulesForPath "/run/d2b/corp-vm/next-generation";
+      in
+      builtins.length rules == 1
+      && lib.hasPrefix "L+ /run/d2b/corp-vm/next-generation - - - - /nix/store/" (lib.head rules)
+      && lib.hasSuffix "-d2b-corp-vm-generation" (lib.head rules);
+    expected = true;
+  };
+
   "activation-runtime-tmpfiles/gpu-dir" = {
     expr = !x86 || lib.all (rule: builtins.elem rule tmpfiles) [
       "d /run/d2b-gpu/corp-vm 0770 d2bd d2b -"
@@ -369,6 +380,18 @@ in
       && !(lib.hasInfix "chmod 0755 /run/d2b/corp-vm" storeSyncText)
       && !(lib.hasInfix "mkdir -p /run/d2b/corp-vm" storeSyncText)
       && !(lib.hasInfix "install -d -m 0755 -o root -g root /run/d2b/corp-vm" storeSyncText);
+    expected = true;
+  };
+
+  "activation-runtime-tmpfiles/store-sync-defers-missing-run-parent" = {
+    expr =
+      lib.hasInfix "if [ -L /run/d2b ]; then" storeSyncText
+      && lib.hasInfix "refusing symlinked runtime parent /run/d2b" storeSyncText
+      && lib.hasInfix "elif [ ! -e /run/d2b ]; then" storeSyncText
+      && lib.hasInfix "deferring pointer publication to systemd-tmpfiles" storeSyncText
+      && lib.hasInfix "elif [ ! -d /run/d2b ]; then" storeSyncText
+      && lib.hasInfix "refusing non-directory runtime parent /run/d2b" storeSyncText
+      && !(lib.hasInfix "parent missing; tmpfiles/host runtime posture did not run" storeSyncText);
     expected = true;
   };
 
