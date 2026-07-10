@@ -632,7 +632,7 @@ EOF
   # Runs as d2b-<vm>-wlproxy, listens on the per-VM proxy socket,
   # and connects upstream to the real host compositor socket. The broker
   # grants the wlproxy principal an ACL on exactly that socket.
-  waylandProxyRunner = name: vm:
+  waylandProxyRunner = providerKind: name: vm:
     let
       vmName = name;
       filterSock = "/run/d2b-wlproxy/${vmName}/wayland-0";
@@ -651,7 +651,6 @@ EOF
         if unambiguousRow != null
         then unambiguousRow.canonicalTarget
         else "${vmName}.local.d2b";
-      providerKind = if vm.kind == "qemu-media" then "qemu-media" else "local-vm";
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
@@ -1085,7 +1084,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [
           (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
-      } (waylandProxyRunner name vm))
+      } (waylandProxyRunner "local-vm" name vm))
       ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";
@@ -1250,7 +1249,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [
           (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
-      } // waylandProxyRunner name vm))
+      } // waylandProxyRunner "qemu-media" name vm))
       ++ [
         (hypervisorRunnerNode name hypervisorService {
           runner = {
