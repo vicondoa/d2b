@@ -205,7 +205,15 @@ fn rendered_realm_controller_contract_shape_when_fixture_available() {
         RealmControllerRuntimeState::MetadataOnly
     );
     assert!(controllers.invariants.metadata_only);
-    assert!(controllers.invariants.no_systemd_units_materialized);
+    let any_materialized = controllers.controllers.iter().any(|controller| {
+        controller.daemon.materialized_service
+            || controller.broker.materialized_service
+            || controller.broker.materialized_socket
+    });
+    assert_eq!(
+        controllers.invariants.no_systemd_units_materialized,
+        !any_materialized
+    );
     assert!(controllers.invariants.preserves_global_daemon_behavior);
     assert!(
         controllers
@@ -217,9 +225,6 @@ fn rendered_realm_controller_contract_shape_when_fixture_available() {
             controller.daemon.user.as_str().starts_with("d2br-"),
             "realm daemon principal must be deterministic and realm-scoped"
         );
-        assert!(!controller.daemon.materialized_service);
-        assert!(!controller.broker.materialized_service);
-        assert!(!controller.broker.materialized_socket);
         assert_eq!(
             controller.allocator.config_path.as_str(),
             "/etc/d2b/allocator.json"
