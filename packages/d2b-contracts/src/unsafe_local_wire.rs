@@ -15,6 +15,10 @@ pub const UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION: u32 = 1;
 /// Every terminal-ready frame carries exactly one connected Unix stream fd.
 pub const UNSAFE_LOCAL_TERMINAL_FD_COUNT: usize = 1;
 pub const MAX_HELPER_FRAME_SIZE: usize = 256 * 1024;
+/// Value requested through `SO_SNDBUF` and `SO_RCVBUF` on both control peers.
+pub const HELPER_SOCKET_BUFFER_REQUEST_BYTES: usize = MAX_HELPER_FRAME_SIZE;
+/// Minimum value that `getsockopt` must report after Linux doubles the request.
+pub const MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES: usize = MAX_HELPER_FRAME_SIZE * 2;
 pub const MAX_HELPER_QUEUE_DEPTH: usize = 128;
 pub const MAX_HELPER_SNAPSHOT_SCOPES: usize = 1024;
 pub const MAX_COMPLETED_OPERATIONS_PER_UID: usize = 1024;
@@ -239,7 +243,11 @@ pub struct HelperTerminalReady {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HelperTerminalTransport {
-    /// A connected `AF_UNIX` `SOCK_STREAM`; listeners and datagram sockets are invalid.
+    /// A connected `AF_UNIX` `SOCK_STREAM`.
+    ///
+    /// Receivers must require `SO_TYPE == SOCK_STREAM`, `SO_ACCEPTCONN == 0`,
+    /// and a successful `getpeername`; listeners, datagrams, and unconnected
+    /// sockets are invalid.
     ConnectedUnixStream,
 }
 
@@ -353,6 +361,11 @@ mod tests {
     #[test]
     fn terminal_ready_freezes_single_connected_stream_transport() {
         assert_eq!(UNSAFE_LOCAL_TERMINAL_FD_COUNT, 1);
+        assert_eq!(HELPER_SOCKET_BUFFER_REQUEST_BYTES, MAX_HELPER_FRAME_SIZE);
+        assert_eq!(
+            MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES,
+            MAX_HELPER_FRAME_SIZE * 2
+        );
         let ready = HelperTerminalReady {
             request_id: 1,
             operation_id: OperationId::parse("op-1").unwrap(),

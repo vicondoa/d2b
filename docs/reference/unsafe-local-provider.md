@@ -100,11 +100,19 @@ the normal bundle artifact hash.
 The separate helper protocol is version 1 on the daemon-owned
 `/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,
 not a uid field, establish identity. Frames contain no uid, environment, cwd,
-or public-supplied command. Terminal data uses exactly one connected `AF_UNIX`
+or public-supplied command. Both peers request at least 256 KiB for
+`SO_SNDBUF` and `SO_RCVBUF` before exchanging frames and verify that Linux
+reports effective buffers of at least 512 KiB. A smaller effective buffer makes
+the helper unavailable rather than allowing a valid 256 KiB frame to fail with
+`EMSGSIZE`.
+
+Terminal data uses exactly one connected `AF_UNIX`
 `SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,
-and multiple fds are rejected. The receiver also verifies the authenticated
-helper generation, request correlation, and terminal protocol version before
-accepting the fd. Terminal bytes do not share the helper control queue.
+and multiple fds are rejected. The receiver requires
+`getsockopt(SO_TYPE) == SOCK_STREAM`, `getsockopt(SO_ACCEPTCONN) == 0`, and a
+successful `getpeername`, then verifies the authenticated helper generation,
+request correlation, and terminal protocol version before accepting the fd.
+Terminal bytes do not share the helper control queue.
 
 Every socket is created with `SOCK_CLOEXEC`, every other control or PTY fd uses
 `O_CLOEXEC`, and rights are received with `MSG_CMSG_CLOEXEC`. Only descriptors
