@@ -435,6 +435,7 @@ fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
         "hostPath": "host.json",
         "processesPath": "processes.json",
         "privilegesPath": "privileges.json",
+        "realmWorkloadsLauncherV2Path": "realm-workloads-launcher-v2.json",
         "unsafeLocalWorkloadsPath": "unsafe-local-workloads.json",
         "closures": [],
         "minijailProfiles": [],
@@ -452,29 +453,50 @@ fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
     .expect("unsafe-local bundle pre-hash serializes")
 }
 
+fn minimal_realm_workloads_launcher_v2_json() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": "v2",
+        "runtimeState": "contract-only",
+        "workloads": [],
+        "invariants": {
+            "argvPrivate": true,
+            "providerNeutral": true,
+            "typedExecutionPosture": true,
+            "realmAccentColorOnly": true,
+            "noSecretsOrCredentials": true
+        }
+    }))
+    .expect("launcher v2 fixture serializes")
+}
+
 fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
     let host = minimal_host_json();
     let processes = minimal_processes_json();
+    let launcher_v2 = minimal_realm_workloads_launcher_v2_json();
     let unsafe_local = minimal_unsafe_local_workloads_json();
     let hashes = serde_json::json!({
         "host.json": sha256_hex(&host),
         "processes.json": sha256_hex(&processes),
+        "realm-workloads-launcher-v2.json": sha256_hex(&launcher_v2),
         "unsafe-local-workloads.json": sha256_hex(&unsafe_local)
     });
     let bundle = bundle_json_with_full_hashes(&unsafe_local_bundle_pre_hash(), hashes);
     let bundle_path = dir.join("bundle.json");
     let host_path = dir.join("host.json");
     let processes_path = dir.join("processes.json");
+    let launcher_v2_path = dir.join("realm-workloads-launcher-v2.json");
     let unsafe_local_path = dir.join("unsafe-local-workloads.json");
     write_private(&bundle_path, &bundle);
     write_private(&host_path, &host);
     write_private(&processes_path, &processes);
+    write_private(&launcher_v2_path, &launcher_v2);
     write_private(&unsafe_local_path, &unsafe_local);
     fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms.json");
     for path in [
         &bundle_path,
         &host_path,
         &processes_path,
+        &launcher_v2_path,
         &unsafe_local_path,
     ] {
         set_mode_to(path, policy.required_mode);
@@ -490,11 +512,26 @@ fn loads_hashed_unsafe_local_workloads_artifact() {
     let resolver =
         BundleResolver::load_with_policy(&bundle_path, &policy).expect("unsafe-local bundle loads");
     assert_eq!(resolver.bundle.bundle_version, 10);
+    assert!(resolver.realm_workloads_launcher_v2.is_some());
     assert!(
         resolver
             .find_unsafe_local_workload("tools.host.d2b")
             .is_some()
     );
+}
+
+#[test]
+fn rejects_tampered_realm_workloads_launcher_v2_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
+    write_private(
+        &dir.path().join("realm-workloads-launcher-v2.json"),
+        br#"{"schemaVersion":"v2","runtimeState":"contract-only","workloads":[],"invariants":{"argvPrivate":false,"providerNeutral":true,"typedExecutionPosture":true,"realmAccentColorOnly":true,"noSecretsOrCredentials":true}}"#,
+    );
+    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
+        .expect_err("tampered launcher-v2 artifact rejects");
+    assert_tampered(&error, "hash");
 }
 
 #[test]

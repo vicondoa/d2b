@@ -100,12 +100,12 @@ references below.
 | `storage.json` | [`schemas/v2/storage.md`](./schemas/v2/storage.md) | `schemas/v2/storage.json` |
 | `sync.json` | [`schemas/v2/sync.md`](./schemas/v2/sync.md) | `schemas/v2/sync.json` |
 | `allocator.json` | [`schemas/v2/allocator.md`](./schemas/v2/allocator.md) | `schemas/v2/allocator.json` |
-| `realm-workloads-launcher-v2.json` | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/realm-workloads-launcher-v2.json` |
-| `unsafe-local-workloads.json` | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/unsafe-local-workloads.json` |
+| `realm-workloads-launcher-v2.json` | [`schemas/v2/realm-workloads-launcher-v2.md`](./schemas/v2/realm-workloads-launcher-v2.md) | `schemas/v2/realm-workloads-launcher-v2.json` |
+| `unsafe-local-workloads.json` | [`schemas/v2/unsafe-local-workloads.md`](./schemas/v2/unsafe-local-workloads.md) | `schemas/v2/unsafe-local-workloads.json` |
 | `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
 | `closures/<vm>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
-| unsafe-local helper protocol | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/unsafe-local-helper-wire.json` |
+| unsafe-local helper protocol | [`schemas/v2/unsafe-local-helper-wire.md`](./schemas/v2/unsafe-local-helper-wire.md) | `schemas/v2/unsafe-local-helper-wire.json` |
 | guest-control protocol | [`schemas/v2/guest-control.md`](./schemas/v2/guest-control.md) | `schemas/v2/guest-control.json` |

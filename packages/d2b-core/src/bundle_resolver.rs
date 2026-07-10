@@ -79,6 +79,7 @@ use crate::processes::{
     RoleProfile, VmProcessDag,
 };
 use crate::realm_controller_config::RealmControllersJson;
+use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
@@ -101,6 +102,7 @@ pub struct BundleResolver {
     pub sync: Option<SyncJson>,
     pub realm_controllers: Option<RealmControllersJson>,
     pub realm_identity: Option<RealmIdentityConfigJson>,
+    pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     pub unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     pub manifest: ManifestV04,
     audit_bundle_version: String,
@@ -132,6 +134,7 @@ struct ParsedBundleArtifacts {
     sync: Option<SyncJson>,
     realm_controllers: Option<RealmControllersJson>,
     realm_identity: Option<RealmIdentityConfigJson>,
+    realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
     unsafe_local_workloads: Option<UnsafeLocalWorkloadsJson>,
     manifest: ManifestV04,
     closures: Vec<ClosureMetadata>,
@@ -990,6 +993,7 @@ impl BundleResolver {
                 sync: None,
                 realm_controllers: None,
                 realm_identity: None,
+                realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
                 manifest,
                 closures,
@@ -1009,6 +1013,7 @@ impl BundleResolver {
             sync,
             realm_controllers,
             realm_identity,
+            realm_workloads_launcher_v2,
             unsafe_local_workloads,
             manifest,
             closures,
@@ -1044,6 +1049,7 @@ impl BundleResolver {
             sync,
             realm_controllers,
             realm_identity,
+            realm_workloads_launcher_v2,
             unsafe_local_workloads,
             manifest,
             nft_intents,
@@ -1093,6 +1099,7 @@ impl BundleResolver {
                 sync,
                 realm_controllers,
                 realm_identity,
+                realm_workloads_launcher_v2: None,
                 unsafe_local_workloads: None,
                 manifest,
                 closures: Vec::new(),
@@ -1134,6 +1141,8 @@ impl BundleResolver {
         let realm_controllers =
             load_optional_realm_controllers_artifact(&bundle, bundle_root, policy)?;
         let realm_identity = load_optional_realm_identity_artifact(&bundle, bundle_root, policy)?;
+        let realm_workloads_launcher_v2 =
+            load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let unsafe_local_workloads =
             load_optional_unsafe_local_workloads_artifact(&bundle, bundle_root, policy)?;
         // The public manifest (vms.json) lives under /run/current-system/…
@@ -1150,6 +1159,7 @@ impl BundleResolver {
                 sync,
                 realm_controllers,
                 realm_identity,
+                realm_workloads_launcher_v2,
                 unsafe_local_workloads,
                 manifest,
                 closures,
@@ -2973,6 +2983,30 @@ fn load_optional_unsafe_local_workloads_artifact(
     Ok(Some(artifact))
 }
 
+fn load_optional_realm_workloads_launcher_v2_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<Option<RealmWorkloadsLauncherV2Json>, Error> {
+    let Some(launcher_ref) = bundle.realm_workloads_launcher_v2_path.as_deref() else {
+        return Ok(None);
+    };
+    let path = resolve_bundle_ref(bundle_root, launcher_ref);
+    let bytes = secure_open_and_read(&path, policy)?;
+    verify_artifact_hash(&path, &bytes, bundle.artifact_hashes.as_ref(), launcher_ref)?;
+    let artifact: RealmWorkloadsLauncherV2Json =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            Error::manifest_parse_error(
+                "realm-workloads-launcher-v2.json",
+                manifest_parse_reason(&error.to_string()),
+            )
+        })?;
+    artifact
+        .validate()
+        .map_err(|error| Error::manifest_parse_error("realm-workloads-launcher-v2.json", error))?;
+    Ok(Some(artifact))
+}
+
 // ---------------------------------------------------------------
 // Stable digest helper.
 // ---------------------------------------------------------------
@@ -3083,6 +3117,7 @@ mod tests {
                 allocator_path: None,
                 realm_controllers_path: None,
                 realm_identity_path: None,
+                realm_workloads_launcher_v2_path: None,
                 unsafe_local_workloads_path: None,
                 closures: Vec::new(),
                 minijail_profiles: Vec::new(),
@@ -3428,6 +3463,7 @@ mod tests {
             allocator_path: None,
             realm_controllers_path: None,
             realm_identity_path: None,
+            realm_workloads_launcher_v2_path: None,
             unsafe_local_workloads_path: None,
             closures: vec![BundleClosureRef {
                 vm: "personal-dev".to_owned(),

@@ -958,6 +958,8 @@ in
       unsafeInstalled =
         unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
       bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
+      launcherV2BundlePath =
+        unsafeCfg.d2b._bundle.bundle.data.realmWorkloadsLauncherV2Path;
       bundlePath = unsafeCfg.d2b._bundle.bundle.data.unsafeLocalWorkloadsPath;
     };
     expected = {
@@ -969,6 +971,7 @@ in
       launcherV2Mode = "0640";
       unsafeInstalled = true;
       bundleVersion = 10;
+      launcherV2BundlePath = "/etc/d2b/realm-workloads-launcher-v2.json";
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";
     };
   };
@@ -1003,6 +1006,23 @@ in
           };
         })
       ]);
+    expected = true;
+  };
+
+  "realm-workloads/unsafe-local-rejects-small-helper-socket-maxima" = {
+    expr =
+      let
+        messages = failureMessages [
+          (lib.recursiveUpdate unsafeLocalFixture {
+            boot.kernel.sysctl = {
+              "net.core.rmem_max" = lib.mkForce 262144;
+              "net.core.wmem_max" = lib.mkForce 262144;
+            };
+          })
+        ];
+      in
+      hasMessage [ "net.core.rmem_max" "at least 524288" ] messages
+      && hasMessage [ "net.core.wmem_max" "at least 524288" ] messages;
     expected = true;
   };
 

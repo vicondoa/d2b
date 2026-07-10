@@ -96,6 +96,7 @@ let
     allocatorPath = "/etc/d2b/allocator.json";
     realmControllersPath = "/etc/d2b/realm-controllers.json";
     realmIdentityPath = "/etc/d2b/realm-identity.json";
+    realmWorkloadsLauncherV2Path = "/etc/d2b/realm-workloads-launcher-v2.json";
     unsafeLocalWorkloadsPath = "/etc/d2b/unsafe-local-workloads.json";
     closures = closureRefs;
     minijailProfiles = profileRefs;

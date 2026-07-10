@@ -467,6 +467,10 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
             .any(|arg| arg == "rendered-private-argv-canary")
     );
     assert_eq!(
+        bundle.realm_workloads_launcher_v2_path.as_deref(),
+        Some("/etc/d2b/realm-workloads-launcher-v2.json")
+    );
+    assert_eq!(
         bundle.unsafe_local_workloads_path.as_deref(),
         Some("/etc/d2b/unsafe-local-workloads.json")
     );

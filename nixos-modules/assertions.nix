@@ -828,6 +828,36 @@ let
     }
   ];
 
+  hasUnsafeLocalWorkloads =
+    lib.any
+      (row: row.enable && row.kind == "unsafe-local")
+      realmWorkloadRows;
+
+  sysctlInt = name:
+    let value = config.boot.kernel.sysctl.${name} or 0;
+    in if builtins.isInt value
+       then value
+       else if builtins.isString value && builtins.match "^[0-9]+$" value != null
+       then lib.toInt value
+       else 0;
+
+  unsafeLocalSocketBufferAssertions = lib.optionals hasUnsafeLocalWorkloads [
+    {
+      assertion = sysctlInt "net.core.rmem_max" >= 524288;
+      message = ''
+        d2b unsafe-local requires boot.kernel.sysctl."net.core.rmem_max" to be
+        at least 524288 bytes so bounded helper frames cannot fail with EMSGSIZE.
+      '';
+    }
+    {
+      assertion = sysctlInt "net.core.wmem_max" >= 524288;
+      message = ''
+        d2b unsafe-local requires boot.kernel.sysctl."net.core.wmem_max" to be
+        at least 524288 bytes so bounded helper frames cannot fail with EMSGSIZE.
+      '';
+    }
+  ];
+
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
       (name: gw: {
@@ -2171,6 +2201,7 @@ in
     ++ realmWorkloadTargetAssertions
     ++ realmLauncherItemAssertions
     ++ unsafeLocalWorkloadCountAssertions
+    ++ unsafeLocalSocketBufferAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
