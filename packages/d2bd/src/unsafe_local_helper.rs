@@ -615,12 +615,15 @@ fn configure_socket_buffers(socket: &Socket) -> Result<(), HelperRegistryError> 
     let receive = socket
         .recv_buffer_size()
         .map_err(|_| HelperRegistryError::SocketBufferTooSmall)?;
-    if send < MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
-        || receive < MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
-    {
+    if !effective_socket_buffers_sufficient(send, receive) {
         return Err(HelperRegistryError::SocketBufferTooSmall);
     }
     Ok(())
+}
+
+fn effective_socket_buffers_sufficient(send: usize, receive: usize) -> bool {
+    send >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
+        && receive >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
 }
 
 fn send_frame<T: Serialize>(socket: &Socket, frame: &T) -> Result<(), HelperRegistryError> {
@@ -1077,6 +1080,14 @@ mod tests {
     }
 
     #[test]
+    fn socket_buffer_minimum_is_exact_and_two_sided() {
+        let minimum = MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES;
+        assert!(effective_socket_buffers_sufficient(minimum, minimum));
+        assert!(!effective_socket_buffers_sufficient(minimum - 1, minimum));
+        assert!(!effective_socket_buffers_sufficient(minimum, minimum - 1));
+    }
+
+    #[test]
     fn operation_ledger_rejects_reuse_with_new_fingerprint() {
         let mut ledger = OperationLedger::default();
         let first = launch(1, "op-1", "first");
@@ -1201,6 +1212,9 @@ mod tests {
         if unistd::getuid().is_root() {
             return;
         }
+        if !host_supports_helper_socket_buffers() {
+            return;
+        }
         let uid = unistd::getuid().as_raw();
         let registry = Arc::new(HelperRegistry::new(uid.wrapping_add(1), [uid]));
         let first = register_helper(Arc::clone(&registry), 11);
@@ -1229,6 +1243,9 @@ mod tests {
     #[test]
     fn registered_helper_dispatches_correlated_launch_without_uid_in_frame() {
         if unistd::getuid().is_root() {
+            return;
+        }
+        if !host_supports_helper_socket_buffers() {
             return;
         }
         let uid = unistd::getuid().as_raw();
@@ -1424,5 +1441,10 @@ mod tests {
         )
         .unwrap();
         (Socket::from(left), Socket::from(right))
+    }
+
+    fn host_supports_helper_socket_buffers() -> bool {
+        let (left, right) = seqpacket_pair();
+        configure_socket_buffers(&left).is_ok() && configure_socket_buffers(&right).is_ok()
     }
 }
