@@ -474,6 +474,19 @@ fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
         bundle.unsafe_local_workloads_path.as_deref(),
         Some("/etc/d2b/unsafe-local-workloads.json")
     );
+    let artifact_hashes = bundle
+        .artifact_hashes
+        .as_ref()
+        .expect("rendered bundle carries artifact hashes");
+    for path in [
+        "/etc/d2b/realm-workloads-launcher-v2.json",
+        "/etc/d2b/unsafe-local-workloads.json",
+    ] {
+        assert!(
+            artifact_hashes.contains_key(path),
+            "rendered bundle must hash {path}"
+        );
+    }
 }
 
 // ── realm-controller-config emitter: identity fields ─────────────────────────

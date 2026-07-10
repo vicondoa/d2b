@@ -64,6 +64,10 @@ let
         path = config.d2b._bundle.realmIdentityJson.path;
       }
       {
+        key = "/etc/d2b/realm-workloads-launcher-v2.json";
+        path = config.d2b._bundle.realmWorkloadsLauncherV2Json.path;
+      }
+      {
         key = "/etc/d2b/unsafe-local-workloads.json";
         path = config.d2b._bundle.unsafeLocalWorkloadsJson.path;
       }
