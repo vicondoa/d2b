@@ -429,35 +429,35 @@
                 uid = 1000;
               };
             };
+          };
 
-            d2b.realms.host = {
-              allowedUsers = [ "alice" ];
-              policy.allowUnsafeLocal = true;
-              network.ui.accentColor = "#cc3344";
-              workloads.tools = {
-                kind = "unsafe-local";
-                shell = {
-                  enable = true;
-                  defaultName = "host";
-                  maxSessions = 8;
-                };
-                launcher = {
-                  enable = true;
-                  label = "Local tools";
-                  defaultItem = "browser";
-                  items = {
-                    browser = {
-                      type = "exec";
-                      name = "Browser";
-                      icon.name = "firefox";
-                      argv = [ "firefox" "rendered-private-argv-canary" ];
-                      graphical = true;
-                    };
-                    terminal = {
-                      type = "shell";
-                      name = "Terminal";
-                      icon.name = "terminal";
-                    };
+          d2b.realms.host = {
+            allowedUsers = [ "alice" ];
+            policy.allowUnsafeLocal = true;
+            network.ui.accentColor = "#cc3344";
+            workloads.tools = {
+              kind = "unsafe-local";
+              shell = {
+                enable = true;
+                defaultName = "host";
+                maxSessions = 8;
+              };
+              launcher = {
+                enable = true;
+                label = "Local tools";
+                defaultItem = "browser";
+                items = {
+                  browser = {
+                    type = "exec";
+                    name = "Browser";
+                    icon.name = "firefox";
+                    argv = [ "firefox" "rendered-private-argv-canary" ];
+                    graphical = true;
+                  };
+                  terminal = {
+                    type = "shell";
+                    name = "Terminal";
+                    icon.name = "terminal";
                   };
                 };
               };
