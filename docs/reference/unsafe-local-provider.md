@@ -104,7 +104,9 @@ or public-supplied command. Both peers request at least 256 KiB for
 `SO_SNDBUF` and `SO_RCVBUF` before exchanging frames and verify that Linux
 reports effective buffers of at least 512 KiB. A smaller effective buffer makes
 the helper unavailable rather than allowing a valid 256 KiB frame to fail with
-`EMSGSIZE`.
+`EMSGSIZE`. When any unsafe-local workload is enabled, the NixOS module defaults
+`net.core.rmem_max` and `net.core.wmem_max` to 512 KiB so stock Linux limits do
+not clamp the request; operators may set higher maxima.
 
 Terminal data uses exactly one connected `AF_UNIX`
 `SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,

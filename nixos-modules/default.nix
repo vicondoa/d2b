@@ -66,6 +66,7 @@
     ./realm-workloads-launcher-json.nix
     ./realm-workloads-launcher-v2-json.nix
     ./unsafe-local-workloads-json.nix
+    ./unsafe-local-host.nix
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix

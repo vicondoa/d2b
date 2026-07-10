@@ -19,7 +19,8 @@ deprecations ship one minor release before removal.
   application-specific configuration. Added the explicit, default-denied
   `unsafe-local` provider option and typed no-isolation/environment/identity
   posture, argv-free launcher schema v2, private configured-item artifact,
-  private helper wire v1, protocol-v3 feature flags, and bundle format v10.
+  private helper wire v1, conditional host socket-buffer maxima for its bounded
+  seqpacket frames, protocol-v3 feature flags, and bundle format v10.
   Runtime dispatch remains feature-gated until the daemon/helper implementation
   lands.
 

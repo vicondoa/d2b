@@ -844,6 +844,10 @@ in
       defaultItemId = unsafeRow.defaultItemId;
       itemIds = map (item: item.id) unsafeRow.launcherItems;
       itemTypes = map (item: item.type) unsafeRow.launcherItems;
+      helperSocketBufferMaxima = {
+        rmem = unsafeCfg.boot.kernel.sysctl."net.core.rmem_max";
+        wmem = unsafeCfg.boot.kernel.sysctl."net.core.wmem_max";
+      };
     };
     expected = {
       kind = "unsafe-local";
@@ -862,6 +866,10 @@ in
       defaultItemId = "browser";
       itemIds = [ "browser" "terminal" ];
       itemTypes = [ "exec" "shell" ];
+      helperSocketBufferMaxima = {
+        rmem = 524288;
+        wmem = 524288;
+      };
     };
   };
 
