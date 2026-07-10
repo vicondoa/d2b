@@ -945,6 +945,8 @@ in
         unsafeCfg.d2b._bundle.unsafeLocalWorkloadsJson.classification;
       launcherV2Installed =
         unsafeCfg.environment.etc ? "d2b/realm-workloads-launcher-v2.json";
+      launcherV2Mode =
+        unsafeCfg.environment.etc."d2b/realm-workloads-launcher-v2.json".mode;
       unsafeInstalled =
         unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
       bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
@@ -956,6 +958,7 @@ in
       unsafeFile = "unsafe-local-workloads.json";
       unsafeClass = "contractPrivateNonSecret";
       launcherV2Installed = true;
+      launcherV2Mode = "0640";
       unsafeInstalled = true;
       bundleVersion = 10;
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";
