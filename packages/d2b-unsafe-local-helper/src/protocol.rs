@@ -309,12 +309,15 @@ pub fn configure_socket_buffers(socket: &Socket) -> Result<(), ProtocolError> {
     let recv_size = socket
         .recv_buffer_size()
         .map_err(|_| ProtocolError::BufferTooSmall)?;
-    if send_size < MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
-        || recv_size < MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
-    {
+    if !effective_socket_buffers_sufficient(send_size, recv_size) {
         return Err(ProtocolError::BufferTooSmall);
     }
     Ok(())
+}
+
+fn effective_socket_buffers_sufficient(send_size: usize, recv_size: usize) -> bool {
+    send_size >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
+        && recv_size >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
 }
 
 pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(), ProtocolError> {
@@ -463,10 +466,24 @@ mod tests {
         .unwrap();
         let left = socket_from_owned(left);
         let right = socket_from_owned(right);
-        configure_socket_buffers(&left).unwrap();
-        configure_socket_buffers(&right).unwrap();
-        assert!(left.send_buffer_size().unwrap() >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES);
-        assert!(right.recv_buffer_size().unwrap() >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES);
+        for socket in [&left, &right] {
+            let result = configure_socket_buffers(socket);
+            let send_size = socket.send_buffer_size().unwrap();
+            let recv_size = socket.recv_buffer_size().unwrap();
+            let sufficient = effective_socket_buffers_sufficient(send_size, recv_size);
+            assert_eq!(result.is_ok(), sufficient);
+            if !sufficient {
+                assert_eq!(result, Err(ProtocolError::BufferTooSmall));
+            }
+        }
+    }
+
+    #[test]
+    fn socket_buffer_minimum_is_exact_and_two_sided() {
+        let minimum = MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES;
+        assert!(effective_socket_buffers_sufficient(minimum, minimum));
+        assert!(!effective_socket_buffers_sufficient(minimum - 1, minimum));
+        assert!(!effective_socket_buffers_sufficient(minimum, minimum - 1));
     }
 
     fn socket_from_owned(fd: OwnedFd) -> Socket {
