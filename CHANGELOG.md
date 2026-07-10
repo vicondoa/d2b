@@ -111,6 +111,12 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed provider-neutral desktop readiness and bridge access. The Wayland proxy
+  reports its first accepted client even when no timeout is configured, and the
+  clipd bridge tmpfiles posture grants the configured Wayland user parent
+  traversal while preserving that user's declared primary group on same-UID
+  unsafe-local endpoint directories.
+
 - Fixed unsafe-local launches stalling behind an idle control-socket read or
   racing systemd's asynchronous transient-unit property publication. Completed
   operations now wake both bounded control loops immediately; sockets are

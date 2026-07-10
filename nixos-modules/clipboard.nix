@@ -73,11 +73,14 @@ let
     expectedUid = d2bLib.stablePrincipalId "d2b-${vm}-wlproxy";
   }) bridgeVms;
   waylandUid = toString config.users.users.${site.waylandUser}.uid;
+  waylandGroup = config.users.users.${site.waylandUser}.group;
   clipdBridgeRootTmpfiles =
     lib.optionals (cfg.enable && bridgeEndpoints != [ ]) (
       [
         "d ${cfg.runtime.bridgeRoot} 0750 root d2b -"
         "z ${cfg.runtime.bridgeRoot} 0750 root d2b -"
+        "a+ /run/d2b - - - - u:${site.waylandUser}:--x"
+        "a+ ${cfg.runtime.bridgeRoot} - - - - u:${site.waylandUser}:--x"
         "d ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "z ${cfg.runtime.bridgeRoot}/${waylandUid} 0710 root root -"
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid} - - - - u:${site.waylandUser}:--x"
@@ -94,8 +97,8 @@ let
         "a+ ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge - - - - u:d2b-${vm}-wlproxy:--x"
       ]) bridgeVms
       ++ lib.concatMap (workload: [
-        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} users -"
-        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} users -"
+        "d ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
+        "z ${cfg.runtime.bridgeRoot}/${waylandUid}/bridge/${(unsafeLocalEndpoint workload).socketComponent} 0700 ${site.waylandUser} ${waylandGroup} -"
       ]) unsafeLocalWorkloads
     );
 

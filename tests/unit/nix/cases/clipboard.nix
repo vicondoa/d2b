@@ -12,7 +12,12 @@ let
     fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
     environment.etc."machine-id".text = "00000000000000000000000000000000";
     system.stateVersion = "25.11";
-    users.users.alice = { isNormalUser = true; uid = 1000; };
+    users.groups.desktop = { };
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+      group = "desktop";
+    };
     d2b.site.waylandUser = "alice";
   };
 
@@ -231,8 +236,18 @@ in
   "clipboard/unsafe-local-bridge-dir-is-user-owned" = {
     expr = lib.any
       (rule:
-        lib.hasInfix "/bridge/endpoint-fc002cd9909aab17c2232e85 0700 alice users" rule)
+        lib.hasInfix "/bridge/endpoint-fc002cd9909aab17c2232e85 0700 alice desktop" rule)
       unsafeEnabled.config.systemd.tmpfiles.rules;
+    expected = true;
+  };
+
+  "clipboard/wayland-user-can-traverse-bridge-parents" = {
+    expr = lib.all
+      (rule: builtins.elem rule unsafeEnabled.config.systemd.tmpfiles.rules)
+      [
+        "a+ /run/d2b - - - - u:alice:--x"
+        "a+ /run/d2b/clipd - - - - u:alice:--x"
+      ];
     expected = true;
   };
 

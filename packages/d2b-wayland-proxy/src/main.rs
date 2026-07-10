@@ -606,6 +606,19 @@ struct AcceptLoopControl {
     first_client_timeout: Option<Duration>,
 }
 
+fn report_first_client_ready(
+    readiness: &mut ReadinessReporter,
+    pending: &mut bool,
+    deadline: &mut Option<Instant>,
+) -> io::Result<()> {
+    if !*pending {
+        return Ok(());
+    }
+    *pending = false;
+    *deadline = None;
+    readiness.ready(ProxyReadinessStage::FirstClient)
+}
+
 fn accept_loop(
     listener: UnixListener,
     upstream: String,
@@ -662,6 +675,7 @@ fn accept_loop(
     let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
     let mut listener_backoff_until: Option<Instant> = None;
+    let mut first_client_pending = true;
     let mut first_client_deadline = first_client_timeout.map(|timeout| Instant::now() + timeout);
     while state.is_not_destroyed() {
         if first_client_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -776,8 +790,12 @@ fn accept_loop(
                             clipboard.clone(),
                             decoration.clone(),
                         );
-                        if first_client_deadline.take().is_some()
-                            && readiness.ready(ProxyReadinessStage::FirstClient).is_err()
+                        if report_first_client_ready(
+                            &mut readiness,
+                            &mut first_client_pending,
+                            &mut first_client_deadline,
+                        )
+                        .is_err()
                         {
                             if let Some(child) = terminal_child.as_mut() {
                                 child.terminate();
@@ -1096,6 +1114,39 @@ mod tests {
             bound_poll_timeout_to_deadline(60_000, now + Duration::from_millis(25), now),
             25
         );
+    }
+
+    #[test]
+    fn first_client_readiness_is_reported_without_a_deadline() {
+        use std::io::BufRead;
+
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "local-vm",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+        let (stream, peer) = UnixStream::pair().unwrap();
+        let mut readiness = ReadinessReporter::from_stream(identity, stream);
+        let mut pending = true;
+        let mut deadline = None;
+
+        report_first_client_ready(&mut readiness, &mut pending, &mut deadline).unwrap();
+
+        let mut line = String::new();
+        std::io::BufReader::new(peer).read_line(&mut line).unwrap();
+        let event: readiness::ProxyReadinessEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(event.stage, ProxyReadinessStage::FirstClient);
+        assert_eq!(event.state, readiness::ProxyReadinessState::Ready);
+        assert!(!pending);
+        assert!(deadline.is_none());
     }
 
     #[test]
