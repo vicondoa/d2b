@@ -94,8 +94,24 @@ the normal bundle artifact hash.
 The separate helper protocol is version 1 on the daemon-owned
 `/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,
 not a uid field, establish identity. Frames contain no uid, environment, cwd,
-or public-supplied command. Terminal data uses a dedicated connected socket
-passed with `SCM_RIGHTS`; it does not share the helper control queue.
+or public-supplied command. Terminal data uses exactly one connected `AF_UNIX`
+`SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,
+and multiple fds are rejected. The receiver also verifies the authenticated
+helper generation, request correlation, and terminal protocol version before
+accepting the fd. Terminal bytes do not share the helper control queue.
+
+Every socket is created with `SOCK_CLOEXEC`, every other control or PTY fd uses
+`O_CLOEXEC`, and rights are received with `MSG_CMSG_CLOEXEC`. Only descriptors
+explicitly remapped for a child may survive `exec`.
+
+## Runtime observability staging
+
+This contract-only stage freezes DTO, schema, redaction, and cardinality rules;
+it does not emit runtime events or metrics. The helper registration, scope,
+proxy, launcher, and shell lifecycle signals are implemented with their owning
+runtime paths. Those implementations must use bounded event kinds and result
+classes and must never expose uid, argv, environment, cwd, paths, PIDs, unit
+names, shell names, transcripts, or terminal bytes.
 
 Generated schemas:
 
@@ -110,4 +126,3 @@ systemd scopes provide lifecycle ownership and restart adoption, not a security
 boundary from other processes running as that uid. The Wayland proxy provides
 identity rails and clipboard attribution, not same-uid compositor containment.
 No d2b path supplies or retries a direct compositor connection.
-

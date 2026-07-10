@@ -12,6 +12,8 @@ use std::fmt;
 
 pub const UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION: u32 = 1;
 pub const UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION: u32 = 1;
+/// Every terminal-ready frame carries exactly one connected Unix stream fd.
+pub const UNSAFE_LOCAL_TERMINAL_FD_COUNT: usize = 1;
 pub const MAX_HELPER_FRAME_SIZE: usize = 256 * 1024;
 pub const MAX_HELPER_QUEUE_DEPTH: usize = 128;
 pub const MAX_HELPER_SNAPSHOT_SCOPES: usize = 1024;
@@ -229,7 +231,16 @@ pub struct HelperTerminalReady {
     pub request_id: u64,
     pub operation_id: OperationId,
     pub terminal_protocol_version: u32,
+    pub transport: HelperTerminalTransport,
     pub scope: ScopeIdentity,
+}
+
+/// Transport represented by the single fd attached to a terminal-ready frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HelperTerminalTransport {
+    /// A connected `AF_UNIX` `SOCK_STREAM`; listeners and datagram sockets are invalid.
+    ConnectedUnixStream,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -337,5 +348,28 @@ mod tests {
             tty: true,
         };
         assert!(!format!("{request:?}").contains(canary));
+    }
+
+    #[test]
+    fn terminal_ready_freezes_single_connected_stream_transport() {
+        assert_eq!(UNSAFE_LOCAL_TERMINAL_FD_COUNT, 1);
+        let ready = HelperTerminalReady {
+            request_id: 1,
+            operation_id: OperationId::parse("op-1").unwrap(),
+            terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
+            transport: HelperTerminalTransport::ConnectedUnixStream,
+            scope: ScopeIdentity {
+                invocation_id: "opaque".to_owned(),
+                kind: HelperScopeKind::PersistentShell,
+            },
+        };
+        let json = serde_json::to_string(&ready).unwrap();
+        assert!(json.contains("\"transport\":\"connected-unix-stream\""));
+        assert!(
+            serde_json::from_str::<HelperTerminalReady>(
+                r#"{"requestId":1,"operationId":"op-1","terminalProtocolVersion":1,"transport":"unix-datagram","scope":{"invocationId":"opaque","kind":"persistent-shell"}}"#
+            )
+            .is_err()
+        );
     }
 }
