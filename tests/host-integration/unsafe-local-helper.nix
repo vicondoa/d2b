@@ -196,7 +196,10 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         alice_user + f" show -P InvocationID {scope} | grep -qx {invocation}"
     )
-    machine.wait_for_file("/run/user/1000/d2b-helper-child-state", timeout=60)
+    machine.wait_until_succeeds(
+        "grep -qx 'cwd=/home/alice' /run/user/1000/d2b-helper-child-state",
+        timeout=60,
+    )
     machine.succeed(
         "grep -qx 'stdout=/dev/null' /run/user/1000/d2b-helper-child-state"
     )
@@ -205,9 +208,6 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         "grep -qx 'env=manager-canary' /run/user/1000/d2b-helper-child-state"
-    )
-    machine.succeed(
-        "grep -qx 'cwd=/home/alice' /run/user/1000/d2b-helper-child-state"
     )
     control_group = machine.succeed(
         alice_user + f" show -P ControlGroup {scope}"
