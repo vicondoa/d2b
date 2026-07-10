@@ -97,6 +97,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed unsafe-local operation responses stalling behind an idle control-socket
+  read. Completed helper operations now wake the bounded control loop
+  immediately without delaying daemon heartbeats or polling continuously.
+
 - Fixed first boot with d2b enabled. Store-sync activation now defers
   next-generation pointer publication when `/run/d2b` has not yet been
   materialized, while systemd-tmpfiles owns boot-time pointer creation and

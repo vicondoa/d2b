@@ -15,7 +15,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 getrandom = "0.2"
-nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process"] }
+nix = { version = "0.29", features = ["fs", "poll", "socket", "uio", "user", "signal", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 socket2 = "0.5"

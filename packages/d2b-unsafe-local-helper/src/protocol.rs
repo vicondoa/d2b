@@ -11,21 +11,20 @@ use d2b_realm_core::ids::OperationId;
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::libc;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{
     ControlMessageOwned, MsgFlags, UnixAddr, getsockopt, recvmsg, send, sockopt::PeerCredentials,
 };
 use nix::unistd;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::fmt;
-use std::io::IoSliceMut;
-use std::os::fd::{AsRawFd, RawFd};
+use std::io::{IoSliceMut, Read, Write};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 use uzers::get_user_by_name;
-
-const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -117,22 +116,25 @@ impl<M: UserScopeManager> HelperClient<M> {
             .map_err(|_| ProtocolError::RuntimeUnavailable)?;
         send_frame(&socket, &UnsafeLocalHelperToDaemon::Snapshot(snapshot))?;
 
-        socket
-            .set_read_timeout(Some(CONTROL_READ_TIMEOUT))
+        let (response_wakeup_read, response_wakeup_write) =
+            UnixStream::pair().map_err(|_| ProtocolError::RuntimeUnavailable)?;
+        response_wakeup_read
+            .set_nonblocking(true)
             .map_err(|_| ProtocolError::ConnectFailed)?;
         let (responses_tx, responses_rx) =
             mpsc::sync_channel::<UnsafeLocalHelperToDaemon>(MAX_HELPER_QUEUE_DEPTH);
+        let response_wakeup_write = Arc::new(response_wakeup_write);
         let active = Arc::new(AtomicUsize::new(0));
 
         loop {
             while let Ok(response) = responses_rx.try_recv() {
                 send_frame(&socket, &response)?;
             }
-            let frame: DaemonToUnsafeLocalHelper = match receive_frame(&socket) {
-                Ok(frame) => frame,
-                Err(ProtocolError::ConnectFailed) => continue,
-                Err(error) => return Err(error),
-            };
+            match wait_for_control_or_response(&socket, &response_wakeup_read)? {
+                ControlEvent::Response => continue,
+                ControlEvent::Control => {}
+            }
+            let frame: DaemonToUnsafeLocalHelper = receive_frame(&socket)?;
             match frame {
                 DaemonToUnsafeLocalHelper::Heartbeat(heartbeat) => {
                     if heartbeat.generation != generation {
@@ -159,6 +161,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                     }
                     let runtime = Arc::clone(&self.runtime);
                     let responses = responses_tx.clone();
+                    let response_wakeup = Arc::clone(&response_wakeup_write);
                     let active = Arc::clone(&active);
                     std::thread::Builder::new()
                         .name("d2b-unsafe-local-operation".to_owned())
@@ -171,7 +174,9 @@ impl<M: UserScopeManager> HelperClient<M> {
                                     rejection(request_id, operation_id, failure_code(error))
                                 }
                             };
-                            let _ = responses.try_send(response);
+                            if responses.send(response).is_ok() {
+                                let _ = wake_response_loop(&response_wakeup);
+                            }
                             active.fetch_sub(1, Ordering::AcqRel);
                         })
                         .map_err(|_| ProtocolError::RuntimeUnavailable)?;
@@ -192,6 +197,69 @@ impl<M: UserScopeManager> HelperClient<M> {
                     return Err(ProtocolError::ProtocolMismatch);
                 }
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlEvent {
+    Control,
+    Response,
+}
+
+fn wait_for_control_or_response(
+    socket: &Socket,
+    response_wakeup: &UnixStream,
+) -> Result<ControlEvent, ProtocolError> {
+    let interests = PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP;
+    let mut fds = [
+        PollFd::new(socket.as_fd(), interests),
+        PollFd::new(response_wakeup.as_fd(), interests),
+    ];
+    loop {
+        match poll(&mut fds, PollTimeout::NONE) {
+            Ok(_) => break,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return Err(ProtocolError::ConnectFailed),
+        }
+    }
+
+    let response_events = fds[1].revents().unwrap_or(PollFlags::empty());
+    if response_events.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+        return Err(ProtocolError::QueueClosed);
+    }
+    if response_events.contains(PollFlags::POLLIN) {
+        drain_response_wakeup(response_wakeup)?;
+        return Ok(ControlEvent::Response);
+    }
+
+    let control_events = fds[0].revents().unwrap_or(PollFlags::empty());
+    if control_events.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+        return Err(ProtocolError::ConnectFailed);
+    }
+    if control_events.contains(PollFlags::POLLIN) {
+        return Ok(ControlEvent::Control);
+    }
+    Err(ProtocolError::ConnectFailed)
+}
+
+fn wake_response_loop(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
+    let mut response_wakeup = response_wakeup;
+    response_wakeup
+        .write_all(&[1])
+        .map_err(|_| ProtocolError::QueueClosed)
+}
+
+fn drain_response_wakeup(response_wakeup: &UnixStream) -> Result<(), ProtocolError> {
+    let mut response_wakeup = response_wakeup;
+    let mut buffer = [0u8; MAX_HELPER_QUEUE_DEPTH];
+    loop {
+        match response_wakeup.read(&mut buffer) {
+            Ok(0) => return Err(ProtocolError::QueueClosed),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(ProtocolError::QueueClosed),
         }
     }
 }
@@ -393,5 +461,26 @@ mod tests {
 
     fn socket_from_owned(fd: OwnedFd) -> Socket {
         Socket::from(fd)
+    }
+
+    #[test]
+    fn completed_operation_wakes_idle_control_loop() {
+        let (control, _peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let control = socket_from_owned(control);
+        let (wakeup_read, wakeup_write) = UnixStream::pair().unwrap();
+        wakeup_read.set_nonblocking(true).unwrap();
+
+        wake_response_loop(&wakeup_write).unwrap();
+
+        assert_eq!(
+            wait_for_control_or_response(&control, &wakeup_read).unwrap(),
+            ControlEvent::Response
+        );
     }
 }
