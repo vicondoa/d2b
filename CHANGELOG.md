@@ -12,6 +12,17 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the provider-neutral launcher contract for realm workloads. Generic
+  `launcher.items.<id>` entries can describe configured `exec` actions or
+  persistent `shell` actions with item-owned names and icons; applications such
+  as Firefox and OpenObserve are ordinary exec items rather than
+  application-specific configuration. Added the explicit, default-denied
+  `unsafe-local` provider option and typed no-isolation/environment/identity
+  posture, argv-free launcher schema v2, private configured-item artifact,
+  private helper wire v1, protocol-v3 feature flags, and bundle format v10.
+  Runtime dispatch remains feature-gated until the daemon/helper implementation
+  lands.
+
 - Added ADR 0044 for an explicit `unsafe-local` runtime provider that treats
   host user/session/network workloads as first-class realm workloads for
   desktop launch, Wayland-proxy identity rails, and host-local persistent shell

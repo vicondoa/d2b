@@ -1,0 +1,819 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UnsafeLocalHelperWireSchema",
+  "type": "object",
+  "required": [
+    "daemonToHelper",
+    "helperToDaemon",
+    "protocolVersion",
+    "terminalProtocolVersion"
+  ],
+  "properties": {
+    "daemonToHelper": {
+      "$ref": "#/definitions/DaemonToUnsafeLocalHelper"
+    },
+    "helperToDaemon": {
+      "$ref": "#/definitions/UnsafeLocalHelperToDaemon"
+    },
+    "protocolVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "terminalProtocolVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "DaemonToUnsafeLocalHelper": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperHelloAccepted"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "helloAccepted"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperHeartbeat"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "heartbeat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperLaunchRequest"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "launch"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperShellRequest"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "shell"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "HelperFailureCode": {
+      "type": "string",
+      "enum": [
+        "invalid-request",
+        "operation-id-conflict",
+        "queue-full",
+        "timeout",
+        "user-manager-unavailable",
+        "environment-invalid",
+        "executable-unavailable",
+        "scope-create-failed",
+        "scope-identity-mismatch",
+        "graphical-session-inactive",
+        "wayland-unavailable",
+        "proxy-unavailable",
+        "first-client-timeout",
+        "shell-unavailable",
+        "internal"
+      ]
+    },
+    "HelperHeartbeat": {
+      "type": "object",
+      "required": [
+        "generation",
+        "sequence"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperHello": {
+      "type": "object",
+      "required": [
+        "generation",
+        "protocolVersion"
+      ],
+      "properties": {
+        "features": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProtocolToken"
+          }
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperHelloAccepted": {
+      "type": "object",
+      "required": [
+        "generation",
+        "heartbeatIntervalSecs",
+        "operationTimeoutSecs",
+        "protocolVersion"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "heartbeatIntervalSecs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "operationTimeoutSecs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperLaunchRequest": {
+      "type": "object",
+      "required": [
+        "argv",
+        "graphical",
+        "itemId",
+        "operationId",
+        "requestId",
+        "workload"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "graphical": {
+          "type": "boolean"
+        },
+        "itemId": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "workload": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperOperationDisposition": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "already-committed",
+        "completed"
+      ]
+    },
+    "HelperOperationRejected": {
+      "type": "object",
+      "required": [
+        "code",
+        "operationId",
+        "requestId"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/HelperFailureCode"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperOperationResult": {
+      "type": "object",
+      "required": [
+        "disposition",
+        "operationId",
+        "requestId"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/definitions/HelperOperationDisposition"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ScopeIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperScopeKind": {
+      "type": "string",
+      "enum": [
+        "launcher-app",
+        "wayland-proxy",
+        "persistent-shell"
+      ]
+    },
+    "HelperScopeSnapshot": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "scope",
+        "state",
+        "workload"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeIdentity"
+        },
+        "state": {
+          "$ref": "#/definitions/HelperScopeState"
+        },
+        "workload": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperScopeState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "active",
+        "stopping",
+        "exited",
+        "degraded"
+      ]
+    },
+    "HelperShellRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "type": "object",
+              "required": [
+                "request_id",
+                "workload"
+              ],
+              "properties": {
+                "request_id": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0.0
+                },
+                "workload": {
+                  "$ref": "#/definitions/WorkloadIdentity"
+                }
+              }
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "type": "object",
+              "required": [
+                "operation_id",
+                "request_id",
+                "tty",
+                "workload"
+              ],
+              "properties": {
+                "name": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/ShellName"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "operation_id": {
+                  "$ref": "#/definitions/OperationId"
+                },
+                "request_id": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0.0
+                },
+                "tty": {
+                  "type": "boolean"
+                },
+                "workload": {
+                  "$ref": "#/definitions/WorkloadIdentity"
+                }
+              }
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "attach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "type": "object",
+              "required": [
+                "name",
+                "operation_id",
+                "request_id",
+                "workload"
+              ],
+              "properties": {
+                "name": {
+                  "$ref": "#/definitions/ShellName"
+                },
+                "operation_id": {
+                  "$ref": "#/definitions/OperationId"
+                },
+                "request_id": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0.0
+                },
+                "workload": {
+                  "$ref": "#/definitions/WorkloadIdentity"
+                }
+              }
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "detach"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "type": "object",
+              "required": [
+                "name",
+                "operation_id",
+                "request_id",
+                "workload"
+              ],
+              "properties": {
+                "name": {
+                  "$ref": "#/definitions/ShellName"
+                },
+                "operation_id": {
+                  "$ref": "#/definitions/OperationId"
+                },
+                "request_id": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0.0
+                },
+                "workload": {
+                  "$ref": "#/definitions/WorkloadIdentity"
+                }
+              }
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "HelperSnapshot": {
+      "type": "object",
+      "required": [
+        "generation",
+        "scopes"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HelperScopeSnapshot"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalReady": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "requestId",
+        "scope",
+        "terminalProtocolVersion"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "scope": {
+          "$ref": "#/definitions/ScopeIdentity"
+        },
+        "terminalProtocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OperationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
+    },
+    "ScopeIdentity": {
+      "type": "object",
+      "required": [
+        "invocationId",
+        "kind"
+      ],
+      "properties": {
+        "invocationId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/HelperScopeKind"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellName": {
+      "description": "Persistent shell session name.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
+    "UnsafeLocalHelperToDaemon": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperHello"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hello"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperSnapshot"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "snapshot"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperHeartbeat"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "heartbeat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperOperationResult"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "operation"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperTerminalReady"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "terminalReady"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperOperationRejected"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "rejected"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "WorkloadId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadIdentity": {
+      "description": "Universal workload identity, independent of any runtime or provider backend.\n\nSeparates the stable, realm-scoped identity of a workload from the backend configuration in [`WorkloadBackend`]. Any code that routes, logs, or audits a workload should carry a `WorkloadIdentity` rather than raw VM-name strings so the realm context is always available.\n\n# DTO version policy\n\nSee the [module-level note][crate::workload_identity] on additive vs. breaking changes. Adding new `Option<T>` fields here is additive; renaming or removing fields requires a `bundleVersion` + `schemaVersion` bump.",
+      "type": "object",
+      "required": [
+        "canonicalTarget",
+        "realmId",
+        "realmPath",
+        "workloadId"
+      ],
+      "properties": {
+        "canonicalTarget": {
+          "description": "Fully-qualified canonical target address, kept pre-rendered to avoid repeated formatting and to make it audit-log safe.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          ]
+        },
+        "legacyVmName": {
+          "description": "Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM entry while the realm-native model is being adopted. `None` for workloads declared directly inside a realm without a legacy VM entry.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmId": {
+          "description": "Realm identifier of the owning realm controller.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "realmPath": {
+          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "runtimeKind": {
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workloadId": {
+          "description": "Stable operator-facing workload identifier (the leading label of the canonical target address).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        },
+        "workloadName": {
+          "description": "Human-readable workload name if it differs from the id. Omitted when the workload name and id are identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

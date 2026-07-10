@@ -6,6 +6,7 @@ pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;
+pub mod configured_argv;
 pub mod console_ring;
 pub mod contract_id;
 pub mod error;
@@ -21,11 +22,13 @@ pub mod process_builder;
 pub mod processes;
 pub mod provider_capabilities;
 pub mod realm_controller_config;
+pub mod realm_workloads_launcher;
 pub mod runtime;
 pub mod static_invariants;
 pub mod storage;
 pub mod storage_lifecycle;
 pub mod sync;
+pub mod unsafe_local_workloads;
 pub mod workload_identity;
 
 // `test_support` is needed both by external crates (which opt in via the

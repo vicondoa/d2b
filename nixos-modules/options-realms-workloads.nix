@@ -15,6 +15,8 @@
 #              — Placeholder for a provider-managed workload whose
 #                runtime is not instantiated locally.  Schema foundation
 #                only; no daemon process is started.
+# "unsafe-local"— Host-user process runtime with no isolation boundary.
+#                Requires explicit realm policy opt-in.
 #
 # State path policy
 # -----------------
@@ -124,6 +126,61 @@ let
     };
   };
 
+  launcherItemType = lib.types.submodule ({ name, ... }: {
+    freeformType = null;
+    options = {
+        type = lib.mkOption {
+          type = lib.types.enum [ "exec" "shell" ];
+          default = "exec";
+          description = ''
+            Provider-neutral launcher item kind. `exec` dispatches configured
+            argv through the workload provider. `shell` opens the workload's
+            persistent-shell capability.
+          '';
+        };
+
+        name = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "Human-readable launcher item name.";
+        };
+
+        icon = {
+          id = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional XDG icon theme id for this launcher item.";
+          };
+
+          name = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional symbolic icon name for this launcher item.";
+          };
+        };
+
+        argv = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "firefox" "https://observe.example.test/" ];
+          description = ''
+            Configured argv for an `exec` item. This is encoded as an argv
+            vector, never as a shell command string. It remains private bundle
+            data and is never returned to public launcher clients.
+          '';
+        };
+
+        graphical = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Whether an `exec` item requires the d2b Wayland proxy. Graphical
+            items never fall back to the direct compositor path.
+          '';
+        };
+    };
+  });
+
   workloadSubmodule = lib.types.submodule ({ name, config, ... }:
     let
       workloadId = config.id;
@@ -132,10 +189,15 @@ let
       # workload wraps a legacy d2b.vms entry.  No activation-time migration
       # ever occurs; the path is purely a default override.
       defaultStateDir =
-        if config.legacyVmName != null
+        if config.kind == "unsafe-local"
+        then null
+        else if config.legacyVmName != null
         then "/var/lib/d2b/vms/${config.legacyVmName}"
         else "/var/lib/d2b/vms/${workloadId}";
-      defaultRunDir = "/run/d2b/vms/${workloadId}";
+      defaultRunDir =
+        if config.kind == "unsafe-local"
+        then null
+        else "/run/d2b/vms/${workloadId}";
     in
     {
       freeformType = null;
@@ -156,7 +218,7 @@ let
         };
 
         kind = lib.mkOption {
-          type = lib.types.enum [ "local-vm" "qemu-media" "provider-placeholder" ];
+          type = lib.types.enum [ "local-vm" "qemu-media" "provider-placeholder" "unsafe-local" ];
           default = "local-vm";
           description = ''
             Runtime family for this workload.
@@ -168,11 +230,14 @@ let
             `provider-placeholder`— Schema-only placeholder for a
                                     provider-managed workload; no local
                                     runtime process is started.
+            `unsafe-local`         — Host-user process runtime with no
+                                    isolation boundary. Requires explicit
+                                    realm policy opt-in.
           '';
         };
 
         legacyVmName = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
+          type = lib.types.nullOr (lib.types.strMatching "^[a-z][a-z0-9-]*$");
           default = null;
           example = "laptop";
           description = ''
@@ -185,7 +250,7 @@ let
         };
 
         stateDir = lib.mkOption {
-          type = lib.types.strMatching "^/.*$";
+          type = lib.types.nullOr (lib.types.strMatching "^/.*$");
           default = defaultStateDir;
           defaultText = lib.literalExpression
             "\"/var/lib/d2b/vms/<legacyVmName>\" or \"/var/lib/d2b/vms/<workload-id>\"";
@@ -195,15 +260,42 @@ let
             preserving existing on-disk state (TPM, store-view, audio state,
             guest-control token, …) without any activation-time migration.
             When `legacyVmName` is null the default is
-            `/var/lib/d2b/vms/<workload-id>`.
+            `/var/lib/d2b/vms/<workload-id>`. It is null for
+            `kind = "unsafe-local"` because the provider owns no host VM
+            state path.
           '';
         };
 
         runDir = lib.mkOption {
-          type = lib.types.strMatching "^/.*$";
+          type = lib.types.nullOr (lib.types.strMatching "^/.*$");
           default = defaultRunDir;
           defaultText = lib.literalExpression "\"/run/d2b/vms/<workload-id>\"";
-          description = "Runtime directory for this workload.";
+          description = ''
+            Runtime directory for this workload. It is null for
+            `kind = "unsafe-local"` because user scopes are owned by the
+            authenticated user's systemd manager.
+          '';
+        };
+
+        shell = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable persistent-shell semantics for this workload.";
+          };
+
+          defaultName = lib.mkOption {
+            type = lib.types.str;
+            default = "default";
+            example = "host";
+            description = "Default persistent-shell name.";
+          };
+
+          maxSessions = lib.mkOption {
+            type = lib.types.ints.between 1 64;
+            default = 8;
+            description = "Maximum persistent shell sessions for this workload.";
+          };
         };
 
         # ----------------------------------------------------------------
@@ -430,6 +522,43 @@ let
             '';
           };
 
+          defaultItem = lib.mkOption {
+            type = lib.types.nullOr (lib.types.strMatching "^[a-z][a-z0-9-]*$");
+            default = null;
+            example = "browser";
+            description = ''
+              Launcher item selected when `d2b launch` omits `--item`. When
+              null, a single declared item is selected automatically; multiple
+              items require an explicit item id.
+            '';
+          };
+
+          items = lib.mkOption {
+            type = lib.types.attrsOf launcherItemType;
+            default = { };
+            example = lib.literalExpression ''
+              {
+                browser = {
+                  type = "exec";
+                  name = "Firefox";
+                  icon.name = "firefox";
+                  argv = [ "firefox" ];
+                  graphical = true;
+                };
+                terminal = {
+                  type = "shell";
+                  name = "Terminal";
+                  icon.name = "terminal";
+                };
+              }
+            '';
+            description = ''
+              Generic provider-neutral launcher items keyed by stable item id.
+              Item presentation is independent of the executable: Firefox and
+              any URL-specific browser launch are ordinary `exec` items.
+            '';
+          };
+
           capabilities = lib.mkOption {
             type = lib.types.listOf lib.types.str;
             default = [ ];
@@ -455,8 +584,9 @@ in
     description = ''
       Realm-owned workload declarations.  Each workload maps to a runtime
       entity supervised by d2bd: a local NixOS VM (`kind = "local-vm"`),
-      an external-media QEMU runner (`kind = "qemu-media"`), or a
-      schema-only provider placeholder (`kind = "provider-placeholder"`).
+      an external-media QEMU runner (`kind = "qemu-media"`), a schema-only
+      provider placeholder (`kind = "provider-placeholder"`), or an explicit
+      same-UID host process provider (`kind = "unsafe-local"`).
 
       Workload state directories default to the legacy
       `/var/lib/d2b/vms/<workload-id>` path, preserving on-disk state

@@ -124,6 +124,44 @@ let
   wlIndex = wlCfg.d2b._index;
   workRealm = wlIndex.realms.byPath."work.home";
 
+  unsafeLocalFixture = lib.recursiveUpdate hostBase {
+    d2b.realms.host = {
+      allowedUsers = [ "alice" ];
+      policy.allowUnsafeLocal = true;
+      network.ui.accentColor = "#cc3344";
+      workloads.tools = {
+        kind = "unsafe-local";
+        shell = {
+          enable = true;
+          defaultName = "host";
+          maxSessions = 8;
+        };
+        launcher = {
+          enable = true;
+          label = "Local tools";
+          icon.name = "applications-system";
+          defaultItem = "browser";
+          items = {
+            browser = {
+              type = "exec";
+              name = "Firefox";
+              icon.name = "firefox";
+              argv = [ "firefox" "private-canary-argv" ];
+              graphical = true;
+            };
+            terminal = {
+              type = "shell";
+              name = "Terminal";
+              icon.name = "terminal";
+            };
+          };
+        };
+      };
+    };
+  };
+  unsafeCfg = (mkEval [ unsafeLocalFixture ]).config;
+  unsafeRow = builtins.head unsafeCfg.d2b._index.realms.workloads.enabled;
+
   # ── helpers ─────────────────────────────────────────────────────────────────
   failureMessages = modules:
     map (a: a.message)
@@ -769,6 +807,231 @@ in
             workloads.browser = {
               launcher.label = "Web Browser";
               launcher.icon.id = "web-browser";
+            };
+
+            "realm-workloads/unsafe-local-index-posture-and-items" = {
+              expr = {
+                kind = unsafeRow.kind;
+                providerKind = unsafeRow.providerKind;
+                stateDir = unsafeRow.stateDir;
+                runDir = unsafeRow.runDir;
+                posture = unsafeRow.executionPosture;
+                defaultItemId = unsafeRow.defaultItemId;
+                itemIds = map (item: item.id) unsafeRow.launcherItems;
+                itemTypes = map (item: item.type) unsafeRow.launcherItems;
+              };
+              expected = {
+                kind = "unsafe-local";
+                providerKind = "unsafe-local";
+                stateDir = null;
+                runDir = null;
+                posture = {
+                  isolation = "unsafe-local";
+                  environment = "systemd-user-manager-ambient";
+                  displayEnvironment = "wayland-proxy-only";
+                  executionIdentity = "authenticated-requester-uid";
+                  sessionPersistence = "user-manager-lifetime";
+                };
+                defaultItemId = "browser";
+                itemIds = [ "browser" "terminal" ];
+                itemTypes = [ "exec" "shell" ];
+              };
+            };
+
+            "realm-workloads/launcher-v2-public-metadata-hides-argv" = {
+              expr =
+                let
+                  data = unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.data;
+                  row = builtins.head data.workloads;
+                  browser = builtins.head row.items;
+                  encoded = builtins.toJSON data;
+                in {
+                  schemaVersion = data.schemaVersion;
+                  providerKind = row.providerKind;
+                  browserType = browser.type;
+                  browserName = browser.name;
+                  browserGraphical = browser.graphical;
+                  hasConfiguredLaunch = builtins.elem "configured-launch" browser.capabilities;
+                  hasWindowForwarding = builtins.elem "window-forwarding" browser.capabilities;
+                  realmAccentColor = row.realmAccentColor;
+                  argvCanaryAbsent = !(lib.hasInfix "private-canary-argv" encoded);
+                  argvFieldAbsent = !(lib.hasInfix "\"argv\"" encoded);
+                };
+              expected = {
+                schemaVersion = "v2";
+                providerKind = "unsafe-local";
+                browserType = "exec";
+                browserName = "Firefox";
+                browserGraphical = true;
+                hasConfiguredLaunch = true;
+                hasWindowForwarding = true;
+                realmAccentColor = "#cc3344";
+                argvCanaryAbsent = true;
+                argvFieldAbsent = true;
+              };
+            };
+
+            "realm-workloads/unsafe-local-private-artifact-carries-argv" = {
+              expr =
+                let
+                  data = unsafeCfg.d2b._bundle.unsafeLocalWorkloadsJson.data;
+                  row = builtins.head data.workloads;
+                  browser = builtins.head row.items;
+                in {
+                  schemaVersion = data.schemaVersion;
+                  target = row.identity.canonicalTarget;
+                  legacyVmNameAbsent = !(row.identity ? legacyVmName);
+                  defaultItemId = row.defaultItemId;
+                  browserType = browser.type;
+                  browserArgv = browser.argv;
+                  shellPolicy = row.shell;
+                };
+              expected = {
+                schemaVersion = "v2";
+                target = "tools.host.d2b";
+                legacyVmNameAbsent = true;
+                defaultItemId = "browser";
+                browserType = "exec";
+                browserArgv = [ "firefox" "private-canary-argv" ];
+                shellPolicy = {
+                  defaultName = "host";
+                  maxSessions = 8;
+                };
+              };
+            };
+
+            "realm-workloads/unsafe-local-omitted-from-launcher-v1" = {
+              expr =
+                unsafeCfg.d2b._bundle.realmWorkloadsLauncherJson.data.workloads == [ ];
+              expected = true;
+            };
+
+            "realm-workloads/unsafe-local-artifacts-and-bundle-v10" = {
+              expr = {
+                launcherV2File =
+                  unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
+                launcherV2Class =
+                  unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.classification;
+                unsafeFile =
+                  unsafeCfg.d2b._bundle.unsafeLocalWorkloadsJson.installFileName;
+                unsafeClass =
+                  unsafeCfg.d2b._bundle.unsafeLocalWorkloadsJson.classification;
+                launcherV2Installed =
+                  unsafeCfg.environment.etc ? "d2b/realm-workloads-launcher-v2.json";
+                unsafeInstalled =
+                  unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
+                bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
+                bundlePath = unsafeCfg.d2b._bundle.bundle.data.unsafeLocalWorkloadsPath;
+              };
+              expected = {
+                launcherV2File = "realm-workloads-launcher-v2.json";
+                launcherV2Class = "contractPublic";
+                unsafeFile = "unsafe-local-workloads.json";
+                unsafeClass = "contractPrivateNonSecret";
+                launcherV2Installed = true;
+                unsafeInstalled = true;
+                bundleVersion = 10;
+                bundlePath = "/etc/d2b/unsafe-local-workloads.json";
+              };
+            };
+
+            "realm-workloads/unsafe-local-requires-explicit-opt-in" = {
+              expr = hasMessage
+                [ "kind = \"unsafe-local\"" "allowUnsafeLocal is false" ]
+                (failureMessages [
+                  (lib.recursiveUpdate unsafeLocalFixture {
+                    d2b.realms.host.policy.allowUnsafeLocal = false;
+                  })
+                ]);
+              expected = true;
+            };
+
+            "realm-workloads/unsafe-local-rejects-vm-paths-and-options" = {
+              expr =
+                let
+                  messages = failureMessages [
+                    (lib.recursiveUpdate unsafeLocalFixture {
+                      d2b.realms.host.workloads.tools = {
+                        legacyVmName = "homebox";
+                        stateDir = "/var/lib/d2b/vms/homebox";
+                        runDir = "/run/d2b/vms/homebox";
+                        localVm.graphics.enable = true;
+                      };
+                    })
+                  ];
+                in
+                hasMessage [ "must not declare legacyVmName" ] messages
+                && hasMessage [ "must not configure localVm or qemuMedia" ] messages;
+              expected = true;
+            };
+
+            "realm-workloads/unsafe-local-rejects-legacy-shell-commands" = {
+              expr = hasMessage
+                [ "must use typed launcher.items" ]
+                (failureMessages [
+                  (lib.recursiveUpdate unsafeLocalFixture {
+                    d2b.realms.host.workloads.tools.launcher.app.command =
+                      "firefox private-canary-argv";
+                  })
+                ]);
+              expected = true;
+            };
+
+            "realm-workloads/launcher-item-shape-assertions" = {
+              expr =
+                let
+                  badExec = failureMessages [
+                    (lib.recursiveUpdate unsafeLocalFixture {
+                      d2b.realms.host.workloads.tools.launcher.items.browser.argv = [ ];
+                    })
+                  ];
+                  badShell = failureMessages [
+                    (lib.recursiveUpdate unsafeLocalFixture {
+                      d2b.realms.host.workloads.tools.shell.enable = false;
+                    })
+                  ];
+                  badDefault = failureMessages [
+                    (lib.recursiveUpdate unsafeLocalFixture {
+                      d2b.realms.host.workloads.tools.launcher.defaultItem = "missing";
+                    })
+                  ];
+                in {
+                  emptyExecRejected = hasMessage [ "invalid item shape" ] badExec;
+                  shellWithoutPolicyRejected =
+                    hasMessage [ "shell launcher item" "shell.enable is false" ] badShell;
+                  missingDefaultRejected =
+                    hasMessage [ "defaultItem must name" ] badDefault;
+                };
+              expected = {
+                emptyExecRejected = true;
+                shellWithoutPolicyRejected = true;
+                missingDefaultRejected = true;
+              };
+            };
+
+            "realm-workloads/persistent-shell-compatibility-item" = {
+              expr =
+                let
+                  cfg = (mkEval [
+                    (lib.recursiveUpdate workloadFixture {
+                      d2b.realms.work.workloads.corp-laptop.shell.enable = true;
+                    })
+                  ]).config;
+                  row = lib.findFirst
+                    (workload: workload.workloadName == "corp-laptop")
+                    null
+                    cfg.d2b._index.realms.workloads.enabled;
+                  shellItems = lib.filter (item: item.type == "shell") row.launcherItems;
+                in {
+                  count = builtins.length shellItems;
+                  id = (builtins.head shellItems).id;
+                  capabilities = (builtins.head shellItems).capabilityRefs;
+                };
+              expected = {
+                count = 1;
+                id = "terminal";
+                capabilities = [ "persistent-shell" "pty" ];
+              };
             };
           };
           d2b.realms.realm-b = {

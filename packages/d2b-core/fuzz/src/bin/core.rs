@@ -320,6 +320,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         allocator_path: None,
         realm_controllers_path: None,
         realm_identity_path: None,
+        unsafe_local_workloads_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),

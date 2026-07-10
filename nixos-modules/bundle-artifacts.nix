@@ -140,6 +140,8 @@ let
     "realmControllersJson"
     "realmIdentityJson"
     "realmWorkloadsLauncherJson"
+    "realmWorkloadsLauncherV2Json"
+    "unsafeLocalWorkloadsJson"
   ];
 
   shouldInstall = artifact:
@@ -239,6 +241,22 @@ in
       internal = true;
       visible = false;
       description = "Internal typed realm-workloads-launcher.json artifact metadata for desktop launcher consumers.";
+    };
+
+    realmWorkloadsLauncherV2Json = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed realm-workloads-launcher-v2.json public metadata artifact.";
+    };
+
+    unsafeLocalWorkloadsJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed unsafe-local-workloads.json private configured-item artifact.";
     };
 
     extraArtifacts = lib.mkOption {

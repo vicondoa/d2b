@@ -96,6 +96,8 @@ For reconnectable interactive shells, see
 [Use persistent guest shells](./docs/how-to/use-persistent-shells.md).
 For Waybar/terminal launcher integration around those shells, see
 [Configure desktop terminal integration](./docs/how-to/configure-desktop-terminal-integration.md).
+For the staged generic host-user provider contract, see
+[Configure generic unsafe-local launcher items](./docs/how-to/configure-unsafe-local-launchers.md).
 For browser WebAuthn with a host-attached YubiKey/security key, see
 [Use the USB security-key proxy](./docs/how-to/use-usb-security-key.md).
 

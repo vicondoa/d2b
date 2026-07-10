@@ -879,6 +879,7 @@ name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-core",
+ "d2b-realm-core",
  "protobuf",
  "schemars",
  "serde",

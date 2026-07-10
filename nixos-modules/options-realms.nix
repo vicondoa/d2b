@@ -343,6 +343,16 @@ in
           };
 
           policy = {
+            allowUnsafeLocal = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Explicitly permit `kind = "unsafe-local"` workloads in this
+                realm. These processes run as the authenticated requesting uid
+                and provide no VM or provider-managed isolation boundary.
+              '';
+            };
+
             bundleRef = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;

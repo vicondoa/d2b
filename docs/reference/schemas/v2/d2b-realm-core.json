@@ -1575,6 +1575,13 @@
           "enum": [
             "provider-managed-isolation"
           ]
+        },
+        {
+          "description": "Execute a configured launcher item. The caller supplies only the workload target and item id; runtime argv remains provider-private.",
+          "type": "string",
+          "enum": [
+            "configured-launch"
+          ]
         }
       ]
     },

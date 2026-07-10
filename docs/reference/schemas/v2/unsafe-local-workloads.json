@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UnsafeLocalWorkloadsJson",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "workloads"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string"
+    },
+    "workloads": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/UnsafeLocalWorkload"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "LauncherIcon": {
+      "description": "Presentation-only icon metadata.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
+    },
+    "UnsafeLocalLauncherItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "argv",
+            "id",
+            "name",
+            "type"
+          ],
+          "properties": {
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "graphical": {
+              "default": false,
+              "type": "boolean"
+            },
+            "icon": {
+              "default": {},
+              "allOf": [
+                {
+                  "$ref": "#/definitions/LauncherIcon"
+                }
+              ]
+            },
+            "id": {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "exec"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "name",
+            "type"
+          ],
+          "properties": {
+            "icon": {
+              "default": {},
+              "allOf": [
+                {
+                  "$ref": "#/definitions/LauncherIcon"
+                }
+              ]
+            },
+            "id": {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "shell"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "UnsafeLocalShellPolicy": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "maxSessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "type": "string"
+        },
+        "maxSessions": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "UnsafeLocalWorkload": {
+      "type": "object",
+      "required": [
+        "identity",
+        "items"
+      ],
+      "properties": {
+        "defaultItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UnsafeLocalLauncherItem"
+          }
+        },
+        "shell": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UnsafeLocalShellPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadIdentity": {
+      "description": "Universal workload identity, independent of any runtime or provider backend.\n\nSeparates the stable, realm-scoped identity of a workload from the backend configuration in [`WorkloadBackend`]. Any code that routes, logs, or audits a workload should carry a `WorkloadIdentity` rather than raw VM-name strings so the realm context is always available.\n\n# DTO version policy\n\nSee the [module-level note][crate::workload_identity] on additive vs. breaking changes. Adding new `Option<T>` fields here is additive; renaming or removing fields requires a `bundleVersion` + `schemaVersion` bump.",
+      "type": "object",
+      "required": [
+        "canonicalTarget",
+        "realmId",
+        "realmPath",
+        "workloadId"
+      ],
+      "properties": {
+        "canonicalTarget": {
+          "description": "Fully-qualified canonical target address, kept pre-rendered to avoid repeated formatting and to make it audit-log safe.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          ]
+        },
+        "legacyVmName": {
+          "description": "Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM entry while the realm-native model is being adopted. `None` for workloads declared directly inside a realm without a legacy VM entry.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmId": {
+          "description": "Realm identifier of the owning realm controller.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "realmPath": {
+          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "runtimeKind": {
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workloadId": {
+          "description": "Stable operator-facing workload identifier (the leading label of the canonical target address).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        },
+        "workloadName": {
+          "description": "Human-readable workload name if it differs from the id. Omitted when the workload name and id are identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

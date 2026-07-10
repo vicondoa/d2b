@@ -13,7 +13,9 @@
     "publicRequest",
     "publicResponse",
     "publicSocket",
-    "schemaVersion"
+    "schemaVersion",
+    "workloadOp",
+    "workloadOpResponse"
   ],
   "properties": {
     "brokerRequest": {
@@ -48,6 +50,12 @@
     },
     "schemaVersion": {
       "type": "string"
+    },
+    "workloadOp": {
+      "$ref": "#/definitions/WorkloadOp"
+    },
+    "workloadOpResponse": {
+      "$ref": "#/definitions/WorkloadOpResponse"
     }
   },
   "additionalProperties": false,
@@ -2965,6 +2973,14 @@
       },
       "additionalProperties": false
     },
+    "CapabilitySet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProtocolToken"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
     "ChildExitKind": {
       "description": "Exit status kind for a broker-reaped child.\n\n- `Exited`: child called `_exit(n)` / `exit(n)`. - `Signaled`: child was killed by a signal that is NOT SIGKILL. - `Killed`: child was killed specifically by SIGKILL (unexpected termination).",
       "type": "string",
@@ -3758,6 +3774,51 @@
         }
       },
       "additionalProperties": false
+    },
+    "DisplayEnvironmentPosture": {
+      "description": "Graphical display routing applied to a workload.",
+      "oneOf": [
+        {
+          "description": "Display routing is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "`DISPLAY` is removed and `WAYLAND_DISPLAY` points at the d2b proxy.",
+          "type": "string",
+          "enum": [
+            "wayland-proxy-only"
+          ]
+        },
+        {
+          "description": "The workload has no graphical display route.",
+          "type": "string",
+          "enum": [
+            "not-applicable"
+          ]
+        }
+      ]
+    },
+    "EnvironmentPosture": {
+      "description": "Environment source used for workload execution.",
+      "oneOf": [
+        {
+          "description": "Environment is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "Environment is copied from the systemd user manager.",
+          "type": "string",
+          "enum": [
+            "systemd-user-manager-ambient"
+          ]
+        }
+      ]
     },
     "Error": {
       "type": "object",
@@ -5126,6 +5187,32 @@
       },
       "additionalProperties": false
     },
+    "ExecutionIdentityPosture": {
+      "description": "OS identity under which a workload executes.",
+      "oneOf": [
+        {
+          "description": "Runtime-configured workload user.",
+          "type": "string",
+          "enum": [
+            "workload-user"
+          ]
+        },
+        {
+          "description": "Execution identity is owned by the provider.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "Exact authenticated local requester uid.",
+          "type": "string",
+          "enum": [
+            "authenticated-requester-uid"
+          ]
+        }
+      ]
+    },
     "ExportBrokerAuditRequest": {
       "type": "object",
       "properties": {
@@ -5698,6 +5785,17 @@
       },
       "additionalProperties": false
     },
+    "GraphicalLaunchPosture": {
+      "description": "Closed graphical launch posture.",
+      "type": "string",
+      "enum": [
+        "proxied",
+        "not-applicable",
+        "graphical-session-inactive",
+        "wayland-unavailable",
+        "proxy-unavailable"
+      ]
+    },
     "GuestBootIdWire": {
       "type": "string",
       "maxLength": 128,
@@ -6098,6 +6196,32 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+$"
     },
+    "IsolationPosture": {
+      "description": "Security boundary presented by a workload runtime.",
+      "oneOf": [
+        {
+          "description": "Hardware-virtualized VM boundary.",
+          "type": "string",
+          "enum": [
+            "virtual-machine"
+          ]
+        },
+        {
+          "description": "Isolation is owned and described by a provider adapter.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "No isolation boundary; the process runs as the host user.",
+          "type": "string",
+          "enum": [
+            "unsafe-local"
+          ]
+        }
+      ]
+    },
     "KeyEntry": {
       "type": "object",
       "required": [
@@ -6280,6 +6404,137 @@
         },
         "vmId": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherExecArgs": {
+      "description": "Launch one configured item. Runtime argv, uid, environment, cwd, and proxy paths are resolved by the daemon/provider and never cross the public wire.",
+      "type": "object",
+      "required": [
+        "itemId",
+        "operationId",
+        "target"
+      ],
+      "properties": {
+        "itemId": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherExecDisposition": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "already-committed"
+      ]
+    },
+    "LauncherExecResult": {
+      "type": "object",
+      "required": [
+        "disposition",
+        "itemId",
+        "operationId",
+        "target"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/definitions/LauncherExecDisposition"
+        },
+        "itemId": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherIcon": {
+      "description": "Presentation-only icon metadata.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherItemKind": {
+      "description": "Provider-neutral launcher item kind.",
+      "oneOf": [
+        {
+          "description": "Execute provider-private configured argv.",
+          "type": "string",
+          "enum": [
+            "exec"
+          ]
+        },
+        {
+          "description": "Open or attach to a persistent shell.",
+          "type": "string",
+          "enum": [
+            "shell"
+          ]
+        }
+      ]
+    },
+    "LauncherItemSummary": {
+      "description": "Public, argv-free launcher item metadata.",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "capabilities": {
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "graphical": {
+          "default": false,
+          "type": "boolean"
+        },
+        "icon": {
+          "default": {},
+          "allOf": [
+            {
+              "$ref": "#/definitions/LauncherIcon"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/LauncherItemKind"
         }
       },
       "additionalProperties": false
@@ -6765,6 +7020,12 @@
       },
       "additionalProperties": false
     },
+    "OperationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
     "OwnershipMatrixCheckRequest": {
       "description": "OwnershipMatrixCheck request. The broker walks the `/var/lib/d2b/vms/<vm>/` subtree and verifies each leaf against the ownership matrix.",
       "type": "object",
@@ -6862,6 +7123,12 @@
         }
       },
       "additionalProperties": false
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
     },
     "PublicReadModelMetadata": {
       "type": "object",
@@ -9689,6 +9956,25 @@
       "description": "Semantic version requirement string, for example `>=0.4.0, <0.5.0`.",
       "type": "string"
     },
+    "SessionPersistencePosture": {
+      "description": "Lifetime authority for persistent workload sessions.",
+      "oneOf": [
+        {
+          "description": "Session lifetime is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "Session survives helper/daemon reconnects but not user-manager exit.",
+          "type": "string",
+          "enum": [
+            "user-manager-lifetime"
+          ]
+        }
+      ]
+    },
     "SetBridgePortFlagsRequest": {
       "description": "The broker derives the bridge, port, isolated/neigh_suppress/learning/unicast_flood flags, and matching rule rationale from the trusted bundle row anchored by `vm_id` + `role_id`. The legacy wire carried caller-supplied `bridge: IfName`, `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; these violated the broker's own \"daemon never names raw ifnames or raw intent\" invariant, so the fields were removed. The broker reads the per-role `BridgePortFlags` row from `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and applies the documented flag set.",
       "type": "object",
@@ -12137,6 +12423,49 @@
       },
       "additionalProperties": false
     },
+    "WorkloadAvailability": {
+      "description": "Closed provider availability vocabulary.",
+      "type": "string",
+      "enum": [
+        "ready",
+        "helper-unavailable",
+        "helper-stale",
+        "user-manager-unavailable",
+        "graphical-session-inactive",
+        "wayland-unavailable",
+        "proxy-unavailable",
+        "degraded"
+      ]
+    },
+    "WorkloadExecutionPosture": {
+      "description": "Typed execution posture consumed by CLI and desktop clients.",
+      "type": "object",
+      "required": [
+        "displayEnvironment",
+        "environment",
+        "executionIdentity",
+        "isolation",
+        "sessionPersistence"
+      ],
+      "properties": {
+        "displayEnvironment": {
+          "$ref": "#/definitions/DisplayEnvironmentPosture"
+        },
+        "environment": {
+          "$ref": "#/definitions/EnvironmentPosture"
+        },
+        "executionIdentity": {
+          "$ref": "#/definitions/ExecutionIdentityPosture"
+        },
+        "isolation": {
+          "$ref": "#/definitions/IsolationPosture"
+        },
+        "sessionPersistence": {
+          "$ref": "#/definitions/SessionPersistencePosture"
+        }
+      },
+      "additionalProperties": false
+    },
     "WorkloadId": {
       "type": "string",
       "maxLength": 128,
@@ -12223,6 +12552,305 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadListArgs": {
+      "type": "object",
+      "properties": {
+        "realm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadListResult": {
+      "type": "object",
+      "required": [
+        "workloads"
+      ],
+      "properties": {
+        "workloads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkloadPublicSummary"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadOp": {
+      "description": "Provider-neutral workload operation family.\n\nThese DTOs are frozen independently from [`PublicRequest`] so version-3 peers can feature-negotiate the operation before the daemon begins advertising or dispatching it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/WorkloadListArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/WorkloadStatusArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/LauncherExecArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "launcherExec"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "WorkloadOpResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/WorkloadListResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/WorkloadStatusResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "launcherExec"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/LauncherExecResult"
+            }
+          }
+        }
+      ]
+    },
+    "WorkloadProviderKind": {
+      "description": "Runtime provider family exposed to provider-neutral clients.",
+      "oneOf": [
+        {
+          "description": "Locally supervised NixOS VM.",
+          "type": "string",
+          "enum": [
+            "local-vm"
+          ]
+        },
+        {
+          "description": "Locally supervised external-media QEMU runtime.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
+          "description": "Runtime owned by a provider adapter.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "Host-user runtime with no isolation boundary.",
+          "type": "string",
+          "enum": [
+            "unsafe-local"
+          ]
+        }
+      ]
+    },
+    "WorkloadPublicSummary": {
+      "description": "Public workload inventory row. Launcher metadata intentionally carries no argv; configured execution data remains in the private bundle artifact.",
+      "type": "object",
+      "required": [
+        "availability",
+        "executionPosture",
+        "graphicalPosture",
+        "identity",
+        "providerKind",
+        "state"
+      ],
+      "properties": {
+        "availability": {
+          "$ref": "#/definitions/WorkloadAvailability"
+        },
+        "capabilities": {
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "defaultItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionPosture": {
+          "$ref": "#/definitions/WorkloadExecutionPosture"
+        },
+        "graphicalPosture": {
+          "$ref": "#/definitions/GraphicalLaunchPosture"
+        },
+        "identity": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        },
+        "launcherItems": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LauncherItemSummary"
+          }
+        },
+        "providerKind": {
+          "$ref": "#/definitions/WorkloadProviderKind"
+        },
+        "state": {
+          "$ref": "#/definitions/WorkloadState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadState": {
+      "description": "Coarse workload lifecycle state.",
+      "oneOf": [
+        {
+          "description": "Declared/known but not running.",
+          "type": "string",
+          "enum": [
+            "stopped"
+          ]
+        },
+        {
+          "description": "Allocation/start in progress.",
+          "type": "string",
+          "enum": [
+            "starting"
+          ]
+        },
+        {
+          "description": "Running.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "Stop in progress.",
+          "type": "string",
+          "enum": [
+            "stopping"
+          ]
+        },
+        {
+          "description": "Terminal failure.",
+          "type": "string",
+          "enum": [
+            "failed"
+          ]
+        }
+      ]
+    },
+    "WorkloadStatusArgs": {
+      "type": "object",
+      "required": [
+        "target"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadStatusResult": {
+      "type": "object",
+      "required": [
+        "workload"
+      ],
+      "properties": {
+        "workload": {
+          "$ref": "#/definitions/WorkloadPublicSummary"
         }
       },
       "additionalProperties": false

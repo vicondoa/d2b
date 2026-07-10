@@ -90,7 +90,11 @@ let
     vsockCid = vsockCidFor workload.legacyVmName;
   };
 
-  launcherRows = map launcherRow realmWorkloads;
+  # v1 remains byte-shape compatible for one migration window and cannot
+  # represent provider posture. Unsafe-local rows are therefore omitted rather
+  # than being misrepresented as VM-like launch commands.
+  launcherRows = map launcherRow
+    (lib.filter (workload: workload.kind != "unsafe-local") realmWorkloads);
 
   data = {
     schemaVersion = "v1";

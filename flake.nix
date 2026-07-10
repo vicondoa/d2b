@@ -429,6 +429,39 @@
                 uid = 1000;
               };
             };
+
+            d2b.realms.host = {
+              allowedUsers = [ "alice" ];
+              policy.allowUnsafeLocal = true;
+              network.ui.accentColor = "#cc3344";
+              workloads.tools = {
+                kind = "unsafe-local";
+                shell = {
+                  enable = true;
+                  defaultName = "host";
+                  maxSessions = 8;
+                };
+                launcher = {
+                  enable = true;
+                  label = "Local tools";
+                  defaultItem = "browser";
+                  items = {
+                    browser = {
+                      type = "exec";
+                      name = "Browser";
+                      icon.name = "firefox";
+                      argv = [ "firefox" "rendered-private-argv-canary" ];
+                      graphical = true;
+                    };
+                    terminal = {
+                      type = "shell";
+                      name = "Terminal";
+                      icon.name = "terminal";
+                    };
+                  };
+                };
+              };
+            };
           };
         };
         smokeEval = mkEval [
@@ -454,6 +487,9 @@
           cp ${bundle.allocatorJson.path} $out/allocator.json
           cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
           cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
+          cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
+          cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
+          cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList

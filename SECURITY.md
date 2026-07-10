@@ -64,6 +64,15 @@ For the full threat model, see [`docs/explanation/design.md`](docs/explanation/d
 
 The short version: d2b defends against compromised-guest-userspace and cross-VM lateral movement. It does NOT defend against compromised host kernel, multi-user trust on a single host, or hardware-level adversaries.
 
+An explicitly configured `unsafe-local` workload is outside the
+compromised-guest isolation claim: it runs as the authenticated requesting host
+uid and has no VM or provider-managed isolation boundary. User systemd scopes
+provide exact lifecycle ownership, and the Wayland proxy provides presentation
+and clipboard attribution, but neither contains a malicious process running as
+that same uid. Unsafe-local is default-denied per realm, has no cross-uid
+execution path, and never receives a d2b-provided direct compositor fallback.
+See [the unsafe-local provider contract](docs/reference/unsafe-local-provider.md).
+
 ### Portability roadmap
 
 The portability work introduces a non-root `d2bd` daemon plus a
