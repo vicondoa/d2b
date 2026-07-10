@@ -204,7 +204,7 @@ pub enum WorkloadOp {
 #[serde(tag = "op", content = "result", rename_all = "camelCase")]
 pub enum WorkloadOpResponse {
     List(WorkloadListResult),
-    Status(WorkloadStatusResult),
+    Status(Box<WorkloadStatusResult>),
     LauncherExec(LauncherExecResult),
 }
 
