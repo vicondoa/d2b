@@ -207,7 +207,7 @@ mod tests {
         })
     }
 
-    fn workload() -> UnsafeLocalWorkload {
+    fn valid_workload() -> UnsafeLocalWorkload {
         UnsafeLocalWorkload {
             identity: identity(),
             default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
@@ -260,7 +260,7 @@ mod tests {
     fn artifact_rejects_wrong_schema_version() {
         let artifact = UnsafeLocalWorkloadsJson {
             schema_version: "v1".to_owned(),
-            workloads: vec![workload()],
+            workloads: vec![valid_workload()],
         };
         assert!(artifact.validate().is_err());
     }
@@ -269,18 +269,18 @@ mod tests {
     fn artifact_rejects_workload_and_item_count_overflow() {
         let artifact = UnsafeLocalWorkloadsJson {
             schema_version: "v2".to_owned(),
-            workloads: vec![workload(); MAX_UNSAFE_LOCAL_WORKLOADS + 1],
+            workloads: vec![valid_workload(); MAX_UNSAFE_LOCAL_WORKLOADS + 1],
         };
         assert!(artifact.validate().is_err());
 
-        let mut workload = workload();
-        workload.items = vec![exec_item(); MAX_UNSAFE_LOCAL_LAUNCHER_ITEMS + 1];
+        let mut workload = valid_workload();
+        workload.items = vec![exec_item(); MAX_LAUNCHER_ITEMS_PER_WORKLOAD + 1];
         assert!(workload.validate().is_err());
     }
 
     #[test]
     fn artifact_rejects_shell_quota_overflow() {
-        let mut workload = workload();
+        let mut workload = valid_workload();
         workload.shell = Some(UnsafeLocalShellPolicy {
             default_name: "host".to_owned(),
             max_sessions: (MAX_UNSAFE_LOCAL_SHELL_SESSIONS + 1) as u16,
@@ -290,12 +290,12 @@ mod tests {
 
     #[test]
     fn artifact_rejects_mismatched_runtime_identity() {
-        let mut workload = workload();
+        let mut workload = valid_workload();
         workload.identity.runtime_kind =
             Some(crate::contract_id::ContractId::parse("nixos").unwrap());
         assert!(workload.validate().is_err());
 
-        let mut workload = workload();
+        let mut workload = valid_workload();
         workload.identity.provider_id =
             Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
         assert!(workload.validate().is_err());
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn artifact_rejects_missing_default_item() {
-        let mut workload = workload();
+        let mut workload = valid_workload();
         workload.default_item_id = Some(ProtocolToken::parse("missing").unwrap());
         assert!(workload.validate().is_err());
     }
