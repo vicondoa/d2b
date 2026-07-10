@@ -158,6 +158,7 @@ clipboard/user-service-assert-environment
 clipboard/user-service-graphical-target
 clipboard/user-service-has-no-runtime-directory
 clipboard/user-service-restart-hardening
+clipboard/wayland-user-can-traverse-bridge-parents
 d2bd-startup-smoke/broker-after-tmpfiles
 d2bd-startup-smoke/broker-caps-exact-canonical-set
 d2bd-startup-smoke/broker-group
