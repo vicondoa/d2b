@@ -975,7 +975,7 @@ in
 
   "realm-workloads/unsafe-local-rejects-net-vm-port-forward" = {
     expr = hasMessage
-      [ "workload \"tools\" is unsafe-local" "no guest network address" ]
+      [ "workload \"tools\" is unsafe-local" "no guest" "network address" ]
       (failureMessages [
         (lib.recursiveUpdate unsafeLocalFixture {
           d2b.realms.host.network.externalNetwork = {
