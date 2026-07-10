@@ -107,4 +107,5 @@ references below.
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
+| unsafe-local helper protocol | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/unsafe-local-helper-wire.json` |
 | guest-control protocol | [`schemas/v2/guest-control.md`](./schemas/v2/guest-control.md) | `schemas/v2/guest-control.json` |
