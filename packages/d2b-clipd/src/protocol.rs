@@ -1,4 +1,60 @@
+use d2b_core::workload_identity::WorkloadTarget;
+use d2b_realm_core::WorkloadProviderKind;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Exact d2b endpoint identity authenticated by a dedicated bridge listener.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardEndpointIdentity {
+    pub canonical_target: WorkloadTarget,
+    pub provider_kind: WorkloadProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_vm_name: Option<String>,
+}
+
+impl ClipboardEndpointIdentity {
+    pub fn realm_kind(&self) -> RealmKind {
+        if self.provider_kind == WorkloadProviderKind::UnsafeLocal {
+            RealmKind::UnsafeLocal
+        } else {
+            RealmKind::Vm
+        }
+    }
+
+    pub fn realm_label(&self) -> String {
+        self.canonical_target.realm.target_form()
+    }
+
+    pub fn target_label(&self) -> String {
+        self.canonical_target.to_canonical()
+    }
+
+    pub fn provider_label(&self) -> &'static str {
+        match self.provider_kind {
+            WorkloadProviderKind::LocalVm => "local-vm",
+            WorkloadProviderKind::QemuMedia => "qemu-media",
+            WorkloadProviderKind::ProviderManaged => "provider-managed",
+            WorkloadProviderKind::UnsafeLocal => "unsafe-local",
+        }
+    }
+
+    pub fn app_id_prefix(&self) -> String {
+        format!("d2b.{}.", self.target_label())
+    }
+
+    pub fn bridge_component(&self) -> String {
+        self.legacy_vm_name.clone().unwrap_or_else(|| {
+            let digest = Sha256::digest(self.target_label().as_bytes());
+            let mut encoded = String::with_capacity(24);
+            for byte in &digest[..12] {
+                use std::fmt::Write as _;
+                let _ = write!(encoded, "{byte:02x}");
+            }
+            format!("endpoint-{encoded}")
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtocolVersionRange {
@@ -76,6 +132,8 @@ pub struct Candidate {
     pub source_realm_kind: RealmKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_canonical_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_provider_kind: Option<WorkloadProviderKind>,
     pub source_app: Option<String>,
     pub source_app_id: Option<String>,
     pub source_attribution: AttributionQuality,
@@ -95,6 +153,8 @@ pub struct DestinationMetadata {
     pub realm_kind: RealmKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<WorkloadProviderKind>,
     pub application: Option<String>,
     pub app_id: Option<String>,
     pub title: Option<String>,
@@ -144,6 +204,7 @@ pub struct PlacementHint {
 pub enum RealmKind {
     Host,
     Vm,
+    UnsafeLocal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +223,26 @@ pub fn negotiate_version(range: &ProtocolVersionRange, daemon_supported: u16) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_component_is_stable_and_provider_neutral() {
+        let unsafe_local = ClipboardEndpointIdentity {
+            canonical_target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            provider_kind: WorkloadProviderKind::UnsafeLocal,
+            legacy_vm_name: None,
+        };
+        assert_eq!(
+            unsafe_local.bridge_component(),
+            "endpoint-fc002cd9909aab17c2232e85"
+        );
+
+        let legacy_vm = ClipboardEndpointIdentity {
+            canonical_target: WorkloadTarget::parse("work.local.d2b").unwrap(),
+            provider_kind: WorkloadProviderKind::LocalVm,
+            legacy_vm_name: Some("work".to_owned()),
+        };
+        assert_eq!(legacy_vm.bridge_component(), "work");
+    }
 
     #[test]
     fn client_hello_contains_no_token_or_request_id() {
@@ -228,6 +309,7 @@ mod tests {
                 realm: "builder".to_owned(),
                 realm_kind: RealmKind::Vm,
                 canonical_target: Some("builder.local.d2b".to_owned()),
+                provider_kind: Some(WorkloadProviderKind::LocalVm),
                 application: None,
                 app_id: None,
                 title: None,
@@ -250,6 +332,7 @@ mod tests {
                 source_realm: "builder".to_owned(),
                 source_realm_kind: RealmKind::Vm,
                 source_canonical_target: Some("builder.local.d2b".to_owned()),
+                source_provider_kind: Some(WorkloadProviderKind::LocalVm),
                 source_app: None,
                 source_app_id: None,
                 source_attribution: AttributionQuality::ExactClient,

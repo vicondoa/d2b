@@ -89,6 +89,7 @@ use crate::{
     },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
+    identity::ProxyIdentity,
     policy::FilterPolicy,
 };
 
@@ -156,7 +157,10 @@ pub fn install_client_handlers(
         decoration,
     };
     client.display().set_handler(handler);
-    log::debug!("[d2b-wlproxy] vm={} new client connected", policy.vm_name);
+    log::debug!(
+        "[d2b-wlproxy] target={} new client connected",
+        policy.vm_name
+    );
 }
 
 /// Per-client display handler: intercepts `get_registry`.
@@ -184,6 +188,7 @@ impl WlDisplayHandler for FilterDisplayHandler {
 
 #[derive(Debug)]
 pub struct VirtualClipboardState {
+    identity: ProxyIdentity,
     vm_name: String,
     diag: Rc<RefCell<DiagRateLimiter>>,
     bridge_path: Option<PathBuf>,
@@ -284,11 +289,14 @@ enum PendingHandoffStep {
 
 impl VirtualClipboardState {
     pub fn new(
-        vm_name: String,
+        identity: impl Into<ProxyIdentity>,
         diag: Rc<RefCell<DiagRateLimiter>>,
         bridge_config: BridgeConfig,
     ) -> Self {
+        let identity = identity.into();
+        let vm_name = identity.log_label();
         Self {
+            identity,
             vm_name,
             diag,
             bridge_path: bridge_config.socket_path.clone(),
@@ -330,7 +338,9 @@ impl VirtualClipboardState {
                 self.diag
                     .borrow_mut()
                     .warn("clipboard-mime", "source-mime-cap", || {
-                        format!("[d2b-wlproxy] vm={vm} event=clipboard-mime reason=source-mime-cap")
+                        format!(
+                            "[d2b-wlproxy] target={vm} event=clipboard-mime reason=source-mime-cap"
+                        )
                     });
             }
         }
@@ -374,7 +384,7 @@ impl VirtualClipboardState {
         };
         let Some(offer_source) = offer_source else {
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: host-backed receive offer={} mime={}",
+                "[d2b-wlproxy] target={} clipboard: host-backed receive offer={} mime={}",
                 self.vm_name,
                 offer_source_id,
                 bounded_log_mime(mime_type)
@@ -387,7 +397,7 @@ impl VirtualClipboardState {
                 return;
             }
             let metadata = BridgeTransferMetadata {
-                vm_name: self.vm_name.clone(),
+                identity: self.identity.clone(),
                 mime_type: mime_type.to_owned(),
                 source_id: offer_source_id,
                 kind: BridgeTransferKind::PasteRequest,
@@ -399,17 +409,17 @@ impl VirtualClipboardState {
             // Source was already destroyed; the fd will drop and the receiver
             // will see EOF. Log so operators can see clipboard data loss events.
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: source gone at receive; returning EOF to requester mime={}",
+                "[d2b-wlproxy] target={} clipboard: source gone at receive; returning EOF to requester mime={}",
                 self.vm_name,
                 bounded_log_mime(mime_type),
             );
             return;
         };
         match self.mime_policy.decide(self.route(), mime_type) {
-            MimeDecision::PreserveSameVmRichMime => source.send_send(mime_type, fd),
+            MimeDecision::PreserveSameEndpointRichMime => source.send_send(mime_type, fd),
             MimeDecision::MaterializeViaBridge => {
                 let metadata = BridgeTransferMetadata {
-                    vm_name: self.vm_name.clone(),
+                    identity: self.identity.clone(),
                     mime_type: mime_type.to_owned(),
                     source_id: source.unique_id(),
                     kind: BridgeTransferKind::PasteRequest,
@@ -449,7 +459,7 @@ impl VirtualClipboardState {
         if self.bridge_path.is_some() {
             ClipboardRoute::HostOrCrossRealm
         } else {
-            ClipboardRoute::SameVm
+            ClipboardRoute::SameEndpoint
         }
     }
 
@@ -462,7 +472,7 @@ impl VirtualClipboardState {
         };
         let mime_types = stored.borrow().mime_types.clone();
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard: publish selection source={} mimes={}",
+            "[d2b-wlproxy] target={} clipboard: publish selection source={} mimes={}",
             self.vm_name,
             source.unique_id(),
             mime_types.len()
@@ -486,7 +496,7 @@ impl VirtualClipboardState {
                             "copy-pipe-failed",
                             || {
                                 format!(
-                                    "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=copy-pipe-failed error={error}"
+                                    "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=copy-pipe-failed error={error}"
                                 )
                             },
                         );
@@ -497,13 +507,13 @@ impl VirtualClipboardState {
             source.send_send(&mime_type, &write_fd);
             drop(write_fd);
             let metadata = BridgeTransferMetadata {
-                vm_name: self.vm_name.clone(),
+                identity: self.identity.clone(),
                 mime_type: mime_type.clone(),
                 source_id: source.unique_id(),
                 kind: BridgeTransferKind::CopySelection,
             };
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: handoff copy source={} mime={}",
+                "[d2b-wlproxy] target={} clipboard: handoff copy source={} mime={}",
                 self.vm_name,
                 source.unique_id(),
                 bounded_log_mime(&mime_type)
@@ -556,7 +566,7 @@ impl VirtualClipboardState {
                     .borrow_mut()
                     .warn("clipboard-bridge", "connect-failed", || {
                         format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=connect-failed error={error}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=connect-failed error={error}"
                         )
                     });
                 self.bridge_reconnect.connect_failed();
@@ -578,7 +588,7 @@ impl VirtualClipboardState {
                     .borrow_mut()
                     .warn("clipboard-bridge", "handoff-fd-dup-failed", || {
                         format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-fd-dup-failed error={error}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=handoff-fd-dup-failed error={error}"
                         )
                     });
                 return;
@@ -597,7 +607,7 @@ impl VirtualClipboardState {
             crate::bridge::HandoffStatus::Delivered => {
                 let _ = local_fd.close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
-                    "[d2b-wlproxy] vm={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
+                    "[d2b-wlproxy] target={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                     self.vm_name,
                     metadata.kind,
                     bounded_log_mime(&metadata.mime_type)
@@ -623,7 +633,7 @@ impl VirtualClipboardState {
                     .borrow_mut()
                     .warn("clipboard-bridge", "handoff-deferred", || {
                         format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-deferred kind={kind:?} mime={mime} error={error}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=handoff-deferred kind={kind:?} mime={mime} error={error}"
                         )
                     });
             }
@@ -639,7 +649,7 @@ impl VirtualClipboardState {
                 .borrow_mut()
                 .warn("clipboard-bridge", "handoff-queue-full", || {
                     format!(
-                        "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=handoff-queue-full kind={kind:?} mime={mime}"
+                        "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=handoff-queue-full kind={kind:?} mime={mime}"
                     )
                 });
             return;
@@ -678,7 +688,7 @@ impl VirtualClipboardState {
                     .fd
                     .close_after_handoff(crate::bridge::HandoffStatus::Delivered);
                 log::debug!(
-                    "[d2b-wlproxy] vm={} event=clipboard-bridge reason=queued-handoff-delivered kind={:?} mime={}",
+                    "[d2b-wlproxy] target={} event=clipboard-bridge reason=queued-handoff-delivered kind={:?} mime={}",
                     self.vm_name,
                     pending.metadata.kind,
                     bounded_log_mime(&pending.metadata.mime_type)
@@ -700,7 +710,7 @@ impl VirtualClipboardState {
                     .borrow_mut()
                     .warn("clipboard-bridge", "queued-handoff-failed", || {
                         format!(
-                            "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=queued-handoff-failed kind={kind:?} mime={mime} error={error}"
+                            "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=queued-handoff-failed kind={kind:?} mime={mime} error={error}"
                         )
                     });
                 PendingHandoffStep::Stop
@@ -779,7 +789,7 @@ impl VirtualClipboardState {
                                 "read-failed",
                                 || {
                                     format!(
-                                        "[d2b-wlproxy] vm={vm} event=clipboard-bridge reason=read-failed error={error}"
+                                        "[d2b-wlproxy] target={vm} event=clipboard-bridge reason=read-failed error={error}"
                                     )
                                 },
                             );
@@ -860,7 +870,7 @@ fn set_virtual_selection(
         // can release any associated resources (Wayland protocol requirement).
         let vm_name = clipboard.borrow().vm_name.clone();
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard: sending cancelled to superseded source id={}",
+            "[d2b-wlproxy] target={} clipboard: sending cancelled to superseded source id={}",
             vm_name,
             old.unique_id(),
         );
@@ -1055,7 +1065,7 @@ impl FilterRegistryHandler {
             },
         );
         log::debug!(
-            "[d2b-wlproxy] vm={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
+            "[d2b-wlproxy] target={} event=synthetic-clipboard-advertised interface=wl_data_device_manager registry-name={name} version={version}",
             self.policy.vm_name
         );
         Some(GlobalAdvertisement {
@@ -1206,7 +1216,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
                 .borrow_mut()
                 .warn("bind-denied", "version-cap", || {
                     format!(
-                        "[d2b-wlproxy] vm={vm} event=bind-denied reason=version-cap registry-name={name} interface={iface} requested-version={requested} advertised-version={advertised_version}"
+                        "[d2b-wlproxy] target={vm} event=bind-denied reason=version-cap registry-name={name} interface={iface} requested-version={requested} advertised-version={advertised_version}"
                     )
                 });
             if let Some(client) = id.client() {
@@ -1331,7 +1341,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().register_source(id);
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: source created id={}",
+                "[d2b-wlproxy] target={} clipboard: source created id={}",
                 self.vm_name,
                 id.unique_id(),
             );
@@ -1353,7 +1363,7 @@ impl WlDataDeviceManagerHandler for VirtualDataDeviceManagerHandler {
         if let Some(clipboard) = self.clipboard.upgrade() {
             register_virtual_device(&clipboard, id);
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: device registered id={}",
+                "[d2b-wlproxy] target={} clipboard: device registered id={}",
                 self.vm_name,
                 id.unique_id(),
             );
@@ -1375,7 +1385,7 @@ impl WlDataSourceHandler for VirtualDataSourceHandler {
         if let Some(clipboard) = self.clipboard.upgrade() {
             clipboard.borrow_mut().add_source_mime(slf, mime_type);
             log::debug!(
-                "[d2b-wlproxy] vm={} clipboard: source id={} announced mime={}",
+                "[d2b-wlproxy] target={} clipboard: source id={} announced mime={}",
                 self.vm_name,
                 slf.unique_id(),
                 bounded_log_mime(mime_type),
@@ -1385,7 +1395,7 @@ impl WlDataSourceHandler for VirtualDataSourceHandler {
 
     fn handle_destroy(&mut self, slf: &Rc<WlDataSource>) {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard: source destroyed id={}",
+            "[d2b-wlproxy] target={} clipboard: source destroyed id={}",
             self.vm_name,
             slf.unique_id(),
         );
@@ -1425,7 +1435,9 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
                 .diag
                 .borrow_mut()
                 .warn("clipboard-dnd", "start-drag-denied", || {
-                    format!("[d2b-wlproxy] vm={vm} event=clipboard-dnd reason=start-drag-denied")
+                    format!(
+                        "[d2b-wlproxy] target={vm} event=clipboard-dnd reason=start-drag-denied"
+                    )
                 });
         }
         if let Some(client) = slf.client() {
@@ -1440,7 +1452,7 @@ impl WlDataDeviceHandler for VirtualDataDeviceHandler {
         _serial: u32,
     ) {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard: set_selection source={}",
+            "[d2b-wlproxy] target={} clipboard: set_selection source={}",
             self.vm_name,
             source.map_or(0, |s| s.unique_id()),
         );
@@ -1463,7 +1475,7 @@ struct VirtualOfferHandler {
 impl WlDataOfferHandler for VirtualOfferHandler {
     fn handle_receive(&mut self, slf: &Rc<WlDataOffer>, mime_type: &str, fd: &Rc<OwnedFd>) {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard: receive offer id={} mime={}",
+            "[d2b-wlproxy] target={} clipboard: receive offer id={} mime={}",
             self.vm_name,
             slf.unique_id(),
             bounded_log_mime(mime_type),
@@ -2705,7 +2717,7 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
             .borrow_mut()
             .warn("eglstream", "create-stream-denied", || {
                 format!(
-                    "[d2b-wlproxy] vm={vm} event=eglstream reason=create-stream-denied handle-type={handle_type}"
+                    "[d2b-wlproxy] target={vm} event=eglstream reason=create-stream-denied handle-type={handle_type}"
                 )
             });
         if let Some(client) = id.client() {
@@ -2868,7 +2880,7 @@ impl ClientHandler for FilterClientHandler {
                 }
             }
         }
-        log::debug!("[d2b-wlproxy] vm={} client disconnected", self.vm);
+        log::debug!("[d2b-wlproxy] target={} client disconnected", self.vm);
     }
 }
 
@@ -3028,7 +3040,7 @@ mod tests {
         let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
         let fd: OwnedFd = fd.into();
         let metadata = BridgeTransferMetadata {
-            vm_name: "work".to_owned(),
+            identity: ProxyIdentity::from("work"),
             mime_type: "text/plain".to_owned(),
             source_id: 7,
             kind: BridgeTransferKind::PasteRequest,
@@ -3053,7 +3065,7 @@ mod tests {
             .push_back(PendingBridgeHandoff {
                 fd: fd.into(),
                 metadata: BridgeTransferMetadata {
-                    vm_name: "work".to_owned(),
+                    identity: ProxyIdentity::from("work"),
                     mime_type: "text/plain".to_owned(),
                     source_id: 7,
                     kind: BridgeTransferKind::PasteRequest,
@@ -3096,7 +3108,7 @@ mod tests {
         let pending = PendingBridgeHandoff {
             fd: fd.into(),
             metadata: BridgeTransferMetadata {
-                vm_name: "work".to_owned(),
+                identity: ProxyIdentity::from("work"),
                 mime_type: "text/plain".to_owned(),
                 source_id: 7,
                 kind: BridgeTransferKind::PasteRequest,
@@ -3154,7 +3166,7 @@ mod tests {
         clipboard.bridge_reconnect.start_connect();
         clipboard.bridge_reconnect.connect_succeeded();
         let metadata = BridgeTransferMetadata {
-            vm_name: "work".to_owned(),
+            identity: ProxyIdentity::from("work"),
             mime_type: "text/plain".to_owned(),
             source_id: 7,
             kind: BridgeTransferKind::PasteRequest,

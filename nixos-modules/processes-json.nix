@@ -649,8 +649,9 @@ EOF
       # else <vmName>.local.d2b for the transitional host-local realm.
       realmTarget =
         if unambiguousRow != null
-        then "${unambiguousRow.workloadName}.${unambiguousRow.realmPath}.d2b"
+        then unambiguousRow.canonicalTarget
         else "${vmName}.local.d2b";
+      providerKind = if vm.kind == "qemu-media" then "qemu-media" else "local-vm";
       titlePrefix = "[${vmName}] ";
       border = vm.graphics.waylandProxy.border;
       borderColors = cfg._uiColors.vms.${vmName}.border;
@@ -703,6 +704,8 @@ EOF
         "d2b-${vmName}-wlproxy"
         "--listen" filterSock
         "--connect" upstreamSock
+        "--target" realmTarget
+        "--provider-kind" providerKind
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--realm-target" realmTarget

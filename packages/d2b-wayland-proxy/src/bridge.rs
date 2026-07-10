@@ -1,6 +1,6 @@
 //! Internal bridge helpers between `d2b-wayland-proxy` and `d2b-clipd`.
 //!
-//! The bridge socket is d2b-internal and per user/per VM. It is not the picker
+//! The bridge socket is d2b-internal and per user/per workload endpoint. It is not the picker
 //! protocol, does not depend on `NIRI_SOCKET`, and may carry transfer FDs only
 //! between d2b components once the protocol is implemented.
 
@@ -13,6 +13,12 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+use d2b_core::workload_identity::WorkloadTarget;
+use d2b_realm_core::WorkloadProviderKind;
+use serde::Serialize;
+
+use crate::identity::ProxyIdentity;
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
 pub const SCM_RIGHTS_MIN_FDS: usize = 28;
@@ -40,6 +46,20 @@ impl BridgeConfig {
         vm_name: &str,
         reconnect: BridgeReconnectPolicy,
     ) -> Result<Self, BridgeConfigError> {
+        let target = WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
+            .map_err(|_| BridgeConfigError::InvalidEndpointComponent)?;
+        let identity = ProxyIdentity::legacy_vm(vm_name, target, WorkloadProviderKind::LocalVm)
+            .map_err(|_| BridgeConfigError::InvalidEndpointComponent)?;
+        Self::from_identity_parts(explicit_socket, root, user_uid, &identity, reconnect)
+    }
+
+    pub fn from_identity_parts(
+        explicit_socket: Option<PathBuf>,
+        root: &Path,
+        user_uid: Option<u32>,
+        identity: &ProxyIdentity,
+        reconnect: BridgeReconnectPolicy,
+    ) -> Result<Self, BridgeConfigError> {
         if reconnect.initial_delay > reconnect.max_delay {
             return Err(BridgeConfigError::InvalidReconnectPolicy);
         }
@@ -47,7 +67,9 @@ impl BridgeConfig {
         let socket_path = match explicit_socket {
             Some(path) => Some(validate_socket_path(path)?),
             None => match user_uid {
-                Some(uid) => Some(validate_socket_path(path_for_user_vm(root, uid, vm_name)?)?),
+                Some(uid) => Some(validate_socket_path(path_for_user_identity(
+                    root, uid, identity,
+                )?)?),
                 None => None,
             },
         };
@@ -91,14 +113,32 @@ pub fn path_for_user_vm(
         .join("clip.sock"))
 }
 
+pub fn path_for_user_identity(
+    root: &Path,
+    user_uid: u32,
+    identity: &ProxyIdentity,
+) -> Result<PathBuf, BridgeConfigError> {
+    let component = identity.bridge_component();
+    validate_bridge_path_component(&component)?;
+    Ok(root
+        .join(user_uid.to_string())
+        .join("bridge")
+        .join(component)
+        .join("clip.sock"))
+}
+
 fn validate_vm_path_component(vm_name: &str) -> Result<(), BridgeConfigError> {
-    if vm_name.is_empty()
-        || vm_name == "."
-        || vm_name == ".."
-        || vm_name.contains('/')
-        || vm_name.contains('\0')
+    validate_bridge_path_component(vm_name)
+}
+
+fn validate_bridge_path_component(value: &str) -> Result<(), BridgeConfigError> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\0')
     {
-        return Err(BridgeConfigError::InvalidVmName);
+        return Err(BridgeConfigError::InvalidEndpointComponent);
     }
     Ok(())
 }
@@ -112,8 +152,8 @@ fn validate_socket_path(path: PathBuf) -> Result<PathBuf, BridgeConfigError> {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BridgeConfigError {
-    #[error("invalid VM name for bridge path")]
-    InvalidVmName,
+    #[error("invalid workload endpoint component for bridge path")]
+    InvalidEndpointComponent,
     #[error("bridge socket path exceeds Linux sockaddr_un sun_path limit")]
     SocketPathTooLong,
     #[error("bridge reconnect initial delay must not exceed max delay")]
@@ -271,7 +311,7 @@ pub trait BridgeHandoff {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeTransferMetadata {
-    pub vm_name: String,
+    pub identity: ProxyIdentity,
     pub mime_type: String,
     pub source_id: u64,
     pub kind: BridgeTransferKind,
@@ -331,32 +371,57 @@ pub fn recv_flags_are_fail_closed(flags: nix::sys::socket::MsgFlags) -> bool {
 }
 
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
-    let frame_type = match metadata.kind {
-        BridgeTransferKind::PasteRequest => "vm_paste_request",
-        BridgeTransferKind::CopySelection => "vm_copy_selection",
-    };
-    format!(
-        "{{\"type\":\"{}\",\"vm_name\":\"{}\",\"mime_type\":\"{}\",\"source_id\":{},\"source_attribution\":\"exact_client\"}}\n",
-        frame_type,
-        json_escape(&metadata.vm_name),
-        json_escape(&metadata.mime_type),
-        metadata.source_id
-    )
-}
+    #[derive(Serialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum Frame<'a> {
+        WorkloadPasteRequest {
+            canonical_target: &'a WorkloadTarget,
+            provider_kind: WorkloadProviderKind,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            legacy_vm_name: Option<&'a str>,
+            mime_type: &'a str,
+            source_id: u64,
+            source_attribution: &'static str,
+        },
+        WorkloadCopySelection {
+            canonical_target: &'a WorkloadTarget,
+            provider_kind: WorkloadProviderKind,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            legacy_vm_name: Option<&'a str>,
+            mime_type: &'a str,
+            source_id: u64,
+            source_attribution: &'static str,
+        },
+    }
 
-fn json_escape(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| match ch {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect::<Vec<_>>(),
-            '\t' => "\\t".chars().collect::<Vec<_>>(),
-            ch if ch.is_control() => "?".chars().collect::<Vec<_>>(),
-            ch => vec![ch],
-        })
-        .collect()
+    let common = (
+        metadata.identity.target(),
+        metadata.identity.provider_kind(),
+        metadata.identity.legacy_vm_name(),
+        metadata.mime_type.as_str(),
+        metadata.source_id,
+    );
+    let frame = match metadata.kind {
+        BridgeTransferKind::PasteRequest => Frame::WorkloadPasteRequest {
+            canonical_target: common.0,
+            provider_kind: common.1,
+            legacy_vm_name: common.2,
+            mime_type: common.3,
+            source_id: common.4,
+            source_attribution: "exact_client",
+        },
+        BridgeTransferKind::CopySelection => Frame::WorkloadCopySelection {
+            canonical_target: common.0,
+            provider_kind: common.1,
+            legacy_vm_name: common.2,
+            mime_type: common.3,
+            source_id: common.4,
+            source_attribution: "exact_client",
+        },
+    };
+    let mut encoded = serde_json::to_string(&frame).expect("typed bridge frame serializes");
+    encoded.push('\n');
+    encoded
 }
 
 #[cfg(test)]
@@ -381,6 +446,21 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/run/d2b/clipd/1000/bridge/work/clip.sock")
+        );
+    }
+
+    #[test]
+    fn canonical_endpoint_bridge_path_is_stably_hash_shortened() {
+        let identity = ProxyIdentity::canonical(
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+        );
+        let path = path_for_user_identity(Path::new("/run/d2b/clipd"), 1000, &identity)
+            .expect("valid path");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/run/d2b/clipd/1000/bridge/endpoint-fc002cd9909aab17c2232e85/clip.sock")
         );
     }
 
@@ -419,15 +499,15 @@ mod tests {
     fn bridge_path_rejects_invalid_vm_component() {
         assert!(matches!(
             path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "bad/vm"),
-            Err(BridgeConfigError::InvalidVmName)
+            Err(BridgeConfigError::InvalidEndpointComponent)
         ));
         assert!(matches!(
             path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, "."),
-            Err(BridgeConfigError::InvalidVmName)
+            Err(BridgeConfigError::InvalidEndpointComponent)
         ));
         assert!(matches!(
             path_for_user_vm(Path::new("/run/d2b/clipd"), 1000, ".."),
-            Err(BridgeConfigError::InvalidVmName)
+            Err(BridgeConfigError::InvalidEndpointComponent)
         ));
     }
 
@@ -527,7 +607,7 @@ mod tests {
         let (local, mut local_peer) = UnixStream::pair().expect("transfer socket pair");
         let local = LocalTransferFd::new(local.into());
         let metadata = BridgeTransferMetadata {
-            vm_name: "work".to_owned(),
+            identity: ProxyIdentity::from("work"),
             mime_type: "text/plain".to_owned(),
             source_id: 7,
             kind: BridgeTransferKind::PasteRequest,
@@ -564,9 +644,11 @@ mod tests {
         }
         assert!(saw_fd, "bridge handoff must carry one SCM_RIGHTS fd");
         let frame = std::str::from_utf8(&frame[..bytes]).expect("utf8 frame");
-        assert!(frame.contains("\"type\":\"vm_paste_request\""));
+        assert!(frame.contains("\"type\":\"workload_paste_request\""));
         assert!(frame.contains("\"source_attribution\":\"exact_client\""));
-        assert!(frame.contains("\"vm_name\":\"work\""));
+        assert!(frame.contains("\"canonical_target\":\"work.local.d2b\""));
+        assert!(frame.contains("\"provider_kind\":\"local-vm\""));
+        assert!(frame.contains("\"legacy_vm_name\":\"work\""));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
     }
@@ -582,15 +664,21 @@ mod tests {
     }
 
     #[test]
-    fn bridge_handoff_can_encode_vm_copy_selection() {
+    fn bridge_handoff_encodes_provider_neutral_copy_selection() {
         let metadata = BridgeTransferMetadata {
-            vm_name: "work".to_owned(),
+            identity: ProxyIdentity::canonical(
+                WorkloadTarget::parse("tools.host.d2b").unwrap(),
+                WorkloadProviderKind::UnsafeLocal,
+            ),
             mime_type: "text/html".to_owned(),
             source_id: 9,
             kind: BridgeTransferKind::CopySelection,
         };
         let frame = bridge_frame(&metadata);
-        assert!(frame.contains("\"type\":\"vm_copy_selection\""));
+        assert!(frame.contains("\"type\":\"workload_copy_selection\""));
+        assert!(frame.contains("\"canonical_target\":\"tools.host.d2b\""));
+        assert!(frame.contains("\"provider_kind\":\"unsafe-local\""));
+        assert!(!frame.contains("legacy_vm_name"));
         assert!(frame.contains("\"mime_type\":\"text/html\""));
     }
 }

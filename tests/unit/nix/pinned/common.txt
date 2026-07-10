@@ -152,6 +152,8 @@ clipboard/missing-wayland-user-fails
 clipboard/niri-prerequisite-fails
 clipboard/no-static-clipd-tmpfiles
 clipboard/picker-required-fails-without-picker
+clipboard/unsafe-local-bridge-dir-is-user-owned
+clipboard/unsafe-local-endpoint-is-canonical-and-same-uid
 clipboard/user-service-assert-environment
 clipboard/user-service-graphical-target
 clipboard/user-service-has-no-runtime-directory

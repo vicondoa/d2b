@@ -20,6 +20,14 @@ deprecations ship one minor release before removal.
   reconnect snapshots, exact InvocationID/cgroup adoption, and no graphical
   direct-display fallback.
 
+- Added provider-neutral `d2b-wayland-proxy` identity and readiness contracts.
+  Canonical workload targets and typed provider kinds now drive app-id/title
+  rewriting, unsafe-local warning rails, clipboard bridge attribution, and
+  bounded upstream/listener/first-client readiness events while legacy VM
+  arguments remain available for compatibility. Unsafe-local graphical launches
+  require an explicit compositor upstream and never use the legacy direct-child
+  host-terminal path.
+
 - Added the provider-neutral launcher contract for realm workloads. Generic
   `launcher.items.<id>` entries can describe configured `exec` actions or
   persistent `shell` actions with item-owned names and icons; applications such
@@ -89,6 +97,12 @@ deprecations ship one minor release before removal.
   hermetic restart-invariant unit test is present.
 
 ### Changed
+
+- Extended `d2b-clipd` bridge configuration and attribution to canonical
+  workload endpoints, including explicit `unsafe-local` provider metadata.
+  App-id/title data remains presentation-only, direct endpoint offers remain
+  discovery-only, and payload fulfillment still requires picker `Select` and
+  remains exclusively owned by `d2b-clipd`.
 
 - Updated the consumer-facing realm/workload documentation to describe
   `d2b.realms.<realm>.workloads.<workload>` as the realm-native workload and

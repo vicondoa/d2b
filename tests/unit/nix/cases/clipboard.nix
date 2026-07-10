@@ -44,6 +44,31 @@ let
   unitConfig = service.unitConfig;
   clipboardEtc = enabled.config.environment.etc."d2b/clipboard.json";
   clipboardJson = builtins.fromJSON clipboardEtc.text;
+  unsafeEnabled = evalWith [
+    ({ ... }: {
+      d2b.site.clipboard = {
+        enable = true;
+        niri.external = true;
+        clipd.package = fakeClipd;
+        picker.package = fakePicker;
+      };
+      d2b.realms.host = {
+        allowedUsers = [ "alice" ];
+        policy.allowUnsafeLocal = true;
+        workloads.tools = {
+          kind = "unsafe-local";
+          launcher.items.browser = {
+            type = "exec";
+            name = "Browser";
+            argv = [ "firefox" ];
+            graphical = true;
+          };
+        };
+      };
+    })
+  ];
+  unsafeClipboardJson =
+    builtins.fromJSON unsafeEnabled.config.environment.etc."d2b/clipboard.json".text;
 in
 {
   "clipboard/disabled-no-user-service" = {
@@ -184,7 +209,31 @@ in
 
   "clipboard/config-records-bridge-template" = {
     expr = clipboardJson.runtime.bridgeSocketTemplate;
-    expected = "/run/d2b/clipd/<uid>/bridge/<vm>/clip.sock";
+    expected = "/run/d2b/clipd/<uid>/bridge/<endpoint>/clip.sock";
+  };
+
+  "clipboard/unsafe-local-endpoint-is-canonical-and-same-uid" = {
+    expr =
+      let endpoint = builtins.head unsafeClipboardJson.runtime.bridgeEndpoints;
+      in {
+        inherit (endpoint)
+          canonicalTarget providerKind legacyVmName socketComponent expectedUid;
+      };
+    expected = {
+      canonicalTarget = "tools.host.d2b";
+      providerKind = "unsafe-local";
+      legacyVmName = null;
+      socketComponent = "endpoint-fc002cd9909aab17c2232e85";
+      expectedUid = 1000;
+    };
+  };
+
+  "clipboard/unsafe-local-bridge-dir-is-user-owned" = {
+    expr = lib.any
+      (rule:
+        lib.hasInfix "/bridge/endpoint-fc002cd9909aab17c2232e85 0700 alice users" rule)
+      unsafeEnabled.config.systemd.tmpfiles.rules;
+    expected = true;
   };
 
   "clipboard/no-static-clipd-tmpfiles" = {

@@ -1,4 +1,4 @@
-//! Host-side Wayland proxy for d2b graphics VMs.
+//! Provider-neutral host-side Wayland proxy for d2b workloads.
 //!
 //! Startup sequence (fail-closed):
 //!   1. Parse CLI arguments.
@@ -22,6 +22,8 @@ use std::{
 };
 
 use clap::Parser;
+use d2b_core::workload_identity::WorkloadTarget;
+use d2b_realm_core::WorkloadProviderKind;
 use d2b_wayland_proxy::filter::{
     FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,
 };
@@ -30,7 +32,9 @@ use d2b_wayland_proxy::{
     decoration::{BorderConfig, Color, DecorationManager, LabelPosition, sanitize_label},
     diag::{DiagRateLimiter, bounded_error_detail},
     dmabuf::{DmabufFilter, parse_filter as parse_dmabuf_filter},
+    identity::ProxyIdentity,
     policy::{FilterPolicy, PolicyInput},
+    readiness::{ProxyReadinessFailure, ProxyReadinessStage, ReadinessReporter},
     terminal::{
         TerminalChild, TerminalRuntime, child_exit_code, chmod_socket_strict,
         unlink_stale_socket_path,
@@ -44,7 +48,7 @@ const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Parser, Debug)]
 #[command(name = "d2b-wayland-proxy")]
-#[command(about = "Host-side Wayland proxy for d2b graphics VMs")]
+#[command(about = "Provider-neutral host-side Wayland proxy for d2b workloads")]
 struct Args {
     /// Path of the Unix socket to create and accept client connections on.
     #[arg(long)]
@@ -54,9 +58,17 @@ struct Args {
     #[arg(long)]
     connect: Option<String>,
 
-    /// VM name, e.g. `work`. Used in app-id prefix, title prefix, and logs.
+    /// Legacy VM name retained during compatibility migration.
     #[arg(long, value_name = "VM")]
-    vm_name: String,
+    vm_name: Option<String>,
+
+    /// Canonical workload target, e.g. `tools.host.d2b`.
+    #[arg(long, value_name = "TARGET")]
+    target: Option<String>,
+
+    /// Provider kind for --target.
+    #[arg(long, value_name = "KIND")]
+    provider_kind: Option<String>,
 
     /// Override the xdg_toplevel app-id prefix (default: `d2b.<vm>.`).
     #[arg(long)]
@@ -94,7 +106,7 @@ struct Args {
     #[arg(long)]
     log_filtered_globals: bool,
 
-    /// Exact d2b-clipd bridge socket path for this per-user/per-VM proxy.
+    /// Exact d2b-clipd bridge socket path for this per-user/per-workload proxy.
     #[arg(long = "clipd-bridge-socket", value_name = "PATH")]
     clipd_bridge_socket: Option<PathBuf>,
 
@@ -118,11 +130,11 @@ struct Args {
     #[arg(long = "clipd-bridge-reconnect-max-ms", default_value_t = 5000)]
     clipd_bridge_reconnect_max_ms: u64,
 
-    /// Enable proxy-owned VM identity borders.
+    /// Enable proxy-owned workload identity rails.
     #[arg(long = "border-enable", default_value_t = false)]
     border_enable: bool,
 
-    /// Border color when the VM window is active.
+    /// Rail color when a workload window is active.
     #[arg(
         long = "border-color-active",
         value_name = "#rrggbb",
@@ -130,7 +142,7 @@ struct Args {
     )]
     border_color_active: Color,
 
-    /// Border color when the VM window is inactive.
+    /// Rail color when a workload window is inactive.
     #[arg(
         long = "border-color-inactive",
         value_name = "#rrggbb",
@@ -138,7 +150,7 @@ struct Args {
     )]
     border_color_inactive: Color,
 
-    /// Border color reserved for urgent VM windows.
+    /// Rail color reserved for urgent workload windows.
     #[arg(
         long = "border-color-urgent",
         value_name = "#rrggbb",
@@ -173,6 +185,14 @@ struct Args {
     /// Arguments passed to the terminal program after `--` in --host-terminal mode.
     #[arg(last = true, allow_hyphen_values = true)]
     terminal_args: Vec<OsString>,
+
+    /// Connected Unix stream used for typed readiness events.
+    #[arg(long = "readiness-socket", value_name = "PATH")]
+    readiness_socket: Option<PathBuf>,
+
+    /// Fail if the first proxied client does not connect before this deadline.
+    #[arg(long = "first-client-timeout-ms", value_parser = parse_positive_u64)]
+    first_client_timeout_ms: Option<u64>,
 }
 
 fn parse_max_version(s: &str) -> Result<(String, u32), String> {
@@ -203,10 +223,107 @@ fn parse_positive_u32(value: &str) -> Result<u32, String> {
     }
 }
 
+fn parse_positive_u64(value: &str) -> Result<u64, String> {
+    let parsed: u64 = value
+        .parse()
+        .map_err(|_| format!("expected positive u64, got `{value}`"))?;
+    if parsed == 0 {
+        Err("timeout must be positive".to_owned())
+    } else {
+        Ok(parsed)
+    }
+}
+
+fn parse_provider_kind(value: &str) -> Result<WorkloadProviderKind, String> {
+    match value {
+        "local-vm" => Ok(WorkloadProviderKind::LocalVm),
+        "qemu-media" => Ok(WorkloadProviderKind::QemuMedia),
+        "provider-managed" => Ok(WorkloadProviderKind::ProviderManaged),
+        "unsafe-local" => Ok(WorkloadProviderKind::UnsafeLocal),
+        _ => Err("unsupported provider kind".to_owned()),
+    }
+}
+
+fn resolve_identity(args: &Args) -> Result<ProxyIdentity, String> {
+    if let Some(raw_target) = &args.target {
+        let target = WorkloadTarget::parse(raw_target)
+            .map_err(|_| "--target must be a canonical workload target".to_owned())?;
+        let provider = args
+            .provider_kind
+            .as_deref()
+            .ok_or_else(|| "--provider-kind is required with --target".to_owned())
+            .and_then(parse_provider_kind)?;
+        return match &args.vm_name {
+            Some(vm_name) => ProxyIdentity::legacy_vm(vm_name, target, provider)
+                .map_err(|error| error.to_string()),
+            None => Ok(ProxyIdentity::canonical(target, provider)),
+        };
+    }
+
+    if args.provider_kind.is_some() {
+        return Err("--provider-kind requires --target".to_owned());
+    }
+    let vm_name = args
+        .vm_name
+        .as_deref()
+        .ok_or_else(|| "either --target or compatibility --vm-name is required".to_owned())?;
+    let target = match args.realm_target.as_deref() {
+        Some(target) => WorkloadTarget::parse(target)
+            .map_err(|_| "--realm-target must be a canonical workload target".to_owned())?,
+        None => WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
+            .map_err(|_| "--vm-name cannot form a canonical workload target".to_owned())?,
+    };
+    ProxyIdentity::legacy_vm(vm_name, target, WorkloadProviderKind::LocalVm)
+        .map_err(|error| error.to_string())
+}
+
+fn configured_first_client_timeout(args: &Args, identity: &ProxyIdentity) -> Option<Duration> {
+    args.first_client_timeout_ms
+        .map(Duration::from_millis)
+        .or_else(|| {
+            (identity.provider_kind() == WorkloadProviderKind::UnsafeLocal)
+                .then_some(Duration::from_secs(10))
+        })
+}
+
+fn validate_execution_mode(args: &Args, identity: &ProxyIdentity) -> Result<(), String> {
+    if identity.provider_kind() == WorkloadProviderKind::UnsafeLocal && args.host_terminal {
+        return Err(
+            "--host-terminal is compatibility-only; unsafe-local apps must be launched by the authenticated helper"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn bound_poll_timeout_to_deadline(base_ms: i32, deadline: Instant, now: Instant) -> i32 {
+    base_ms.min(
+        deadline
+            .saturating_duration_since(now)
+            .as_millis()
+            .min(i32::MAX as u128) as i32,
+    )
+}
+
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+    let identity = resolve_identity(&args).unwrap_or_else(|error| {
+        eprintln!("d2b-wayland-proxy: {error}");
+        std::process::exit(1);
+    });
+    if let Err(error) = validate_execution_mode(&args, &identity) {
+        eprintln!("d2b-wayland-proxy: {error}");
+        std::process::exit(1);
+    }
+    let mut readiness = match &args.readiness_socket {
+        Some(path) => ReadinessReporter::connect(identity.clone(), path).unwrap_or_else(|_| {
+            eprintln!("d2b-wayland-proxy: typed readiness channel unavailable");
+            std::process::exit(1);
+        }),
+        None => ReadinessReporter::disabled(identity.clone()),
+    };
 
     // Parse max-version overrides early so we can fail fast.
     let max_versions: Vec<(String, u32)> = args
@@ -228,11 +345,11 @@ fn main() {
         std::process::exit(1);
     });
 
-    let bridge_config = BridgeConfig::from_parts(
+    let bridge_config = BridgeConfig::from_identity_parts(
         args.clipd_bridge_socket.clone(),
         &args.clipd_bridge_root,
         args.clipd_bridge_user_uid,
-        &args.vm_name,
+        &identity,
         BridgeReconnectPolicy {
             initial_delay: Duration::from_millis(args.clipd_bridge_reconnect_initial_ms),
             max_delay: Duration::from_millis(args.clipd_bridge_reconnect_max_ms),
@@ -244,9 +361,10 @@ fn main() {
     });
 
     let input = PolicyInput {
-        vm_name: args.vm_name.clone(),
+        identity: Some(identity.clone()),
+        vm_name: identity.log_label(),
         app_id_prefix: args.app_id_prefix.clone(),
-        realm_target: args.realm_target.clone(),
+        realm_target: Some(identity.canonical_target()),
         title_prefix: args.title_prefix.clone(),
         deny_globals: args.deny_globals.clone(),
         allow_globals: args.allow_globals.clone(),
@@ -265,30 +383,42 @@ fn main() {
     }
     if let Some(path) = &bridge_config.socket_path {
         log::info!(
-            "[d2b-wlproxy] vm={} clipboard-bridge={} status=configured",
-            args.vm_name,
+            "[d2b-wlproxy] target={} provider={} clipboard-bridge={} status=configured",
+            identity.canonical_target(),
+            identity.provider_kind_label(),
             path.display()
         );
     } else {
         log::debug!(
-            "[d2b-wlproxy] vm={} clipboard-bridge=disabled status=configured",
-            args.vm_name
+            "[d2b-wlproxy] target={} provider={} clipboard-bridge=disabled status=configured",
+            identity.canonical_target(),
+            identity.provider_kind_label()
         );
     }
 
+    let border_label = args
+        .border_label
+        .as_deref()
+        .and_then(sanitize_label)
+        .or_else(|| {
+            (identity.provider_kind() == WorkloadProviderKind::UnsafeLocal)
+                .then(|| identity.default_warning_label())
+                .and_then(|label| sanitize_label(&label))
+        });
     let border_config = BorderConfig {
         enabled: args.border_enable,
         active: args.border_color_active,
         inactive: args.border_color_inactive,
         urgent: args.border_color_urgent,
         thickness: args.border_thickness,
-        label: args.border_label.as_deref().and_then(sanitize_label),
+        label: border_label,
         label_position: args.border_label_position,
     };
     if border_config.enabled() {
         log::info!(
-            "[d2b-wlproxy] vm={} wrapper-rail=enabled label={}",
-            args.vm_name,
+            "[d2b-wlproxy] target={} provider={} wrapper-rail=enabled label={}",
+            identity.canonical_target(),
+            identity.provider_kind_label(),
             border_config
                 .label
                 .as_ref()
@@ -296,16 +426,22 @@ fn main() {
         );
     }
 
-    let upstream = resolve_upstream(&args).unwrap_or_else(|e| {
+    let upstream = resolve_upstream(&args, &identity).unwrap_or_else(|e| {
+        let _ = readiness.failed(
+            ProxyReadinessStage::Upstream,
+            ProxyReadinessFailure::UpstreamUnavailable,
+        );
         eprintln!("d2b-wayland-proxy: {e}");
         std::process::exit(1);
     });
 
     let terminal_runtime = if args.host_terminal {
-        Some(TerminalRuntime::prepare(&args.vm_name).unwrap_or_else(|e| {
-            eprintln!("d2b-wayland-proxy: failed to prepare host-terminal runtime: {e}");
-            std::process::exit(1);
-        }))
+        Some(
+            TerminalRuntime::prepare(&identity.bridge_component()).unwrap_or_else(|e| {
+                eprintln!("d2b-wayland-proxy: failed to prepare host-terminal runtime: {e}");
+                std::process::exit(1);
+            }),
+        )
     } else {
         None
     };
@@ -319,12 +455,20 @@ fn main() {
     match build_state(&upstream) {
         Ok(_) => {}
         Err(e) => {
+            let _ = readiness.failed(
+                ProxyReadinessStage::Upstream,
+                ProxyReadinessFailure::UpstreamUnavailable,
+            );
             eprintln!(
                 "d2b-wayland-proxy: failed to connect to upstream compositor `{}`: {e}",
                 upstream
             );
             std::process::exit(1);
         }
+    }
+    if readiness.ready(ProxyReadinessStage::Upstream).is_err() {
+        eprintln!("d2b-wayland-proxy: typed readiness channel unavailable");
+        std::process::exit(1);
     }
 
     // Step 4: create the listen socket AFTER successful upstream connect.
@@ -336,6 +480,10 @@ fn main() {
             std::fs::remove_file(&listen_path)
         };
         if let Err(e) = stale_result {
+            let _ = readiness.failed(
+                ProxyReadinessStage::Listener,
+                ProxyReadinessFailure::ListenerUnavailable,
+            );
             eprintln!(
                 "d2b-wayland-proxy: failed to remove stale socket `{}`: {e}",
                 listen_path.display()
@@ -347,6 +495,10 @@ fn main() {
     let listener = match UnixListener::bind(&listen_path) {
         Ok(l) => l,
         Err(e) => {
+            let _ = readiness.failed(
+                ProxyReadinessStage::Listener,
+                ProxyReadinessFailure::ListenerUnavailable,
+            );
             eprintln!(
                 "d2b-wayland-proxy: failed to bind listen socket `{}`: {e}",
                 listen_path.display()
@@ -357,16 +509,25 @@ fn main() {
     if terminal_runtime.is_some()
         && let Err(e) = chmod_socket_strict(&listen_path)
     {
+        let _ = readiness.failed(
+            ProxyReadinessStage::Listener,
+            ProxyReadinessFailure::ListenerUnavailable,
+        );
         eprintln!(
             "d2b-wayland-proxy: failed to secure listen socket `{}`: {e}",
             listen_path.display()
         );
         std::process::exit(1);
     }
+    if readiness.ready(ProxyReadinessStage::Listener).is_err() {
+        eprintln!("d2b-wayland-proxy: typed readiness channel unavailable");
+        std::process::exit(1);
+    }
 
     log::info!(
-        "[d2b-wlproxy] vm={} listening on {} upstream={}",
-        args.vm_name,
+        "[d2b-wlproxy] target={} provider={} listening on {} upstream={}",
+        identity.canonical_target(),
+        identity.provider_kind_label(),
         listen_path.display(),
         upstream
     );
@@ -374,6 +535,10 @@ fn main() {
     let mut terminal_child = terminal_runtime.as_ref().map(|runtime| {
         TerminalChild::spawn(&args.terminal_program, &args.terminal_args, runtime).unwrap_or_else(
             |e| {
+                let _ = readiness.failed(
+                    ProxyReadinessStage::FirstClient,
+                    ProxyReadinessFailure::ClientRejected,
+                );
                 eprintln!("d2b-wayland-proxy: failed to launch host terminal child: {e}");
                 std::process::exit(1);
             },
@@ -381,10 +546,12 @@ fn main() {
     });
     if terminal_child.is_some() {
         log::info!(
-            "[d2b-wlproxy] vm={} event=host-terminal-launched mux=per-vm",
-            args.vm_name
+            "[d2b-wlproxy] target={} event=host-terminal-launched mux=per-target",
+            identity.canonical_target()
         );
     }
+
+    let first_client_timeout = configured_first_client_timeout(&args, &identity);
 
     // Step 5: dispatch loop.
     let exit_code = accept_loop(
@@ -394,6 +561,10 @@ fn main() {
         bridge_config,
         border_config,
         terminal_child.as_mut(),
+        AcceptLoopControl {
+            readiness,
+            first_client_timeout,
+        },
     );
     if let Some(child) = terminal_child.as_mut()
         && exit_code != 0
@@ -404,14 +575,16 @@ fn main() {
     std::process::exit(exit_code);
 }
 
-fn resolve_upstream(args: &Args) -> Result<String, String> {
+fn resolve_upstream(args: &Args, identity: &ProxyIdentity) -> Result<String, String> {
     if let Some(connect) = &args.connect {
         return Ok(connect.clone());
     }
-    if args.host_terminal {
-        return Ok(std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_owned()));
+    if args.host_terminal && identity.provider_kind() != WorkloadProviderKind::UnsafeLocal {
+        return std::env::var("WAYLAND_DISPLAY").map_err(|_| {
+            "WAYLAND_DISPLAY is required by compatibility host-terminal mode".to_owned()
+        });
     }
-    Err("--connect is required unless --host-terminal is used".to_owned())
+    Err("--connect is required; d2b never falls back to a direct compositor route".to_owned())
 }
 
 fn resolve_listen_path(
@@ -428,6 +601,11 @@ fn resolve_listen_path(
     }
 }
 
+struct AcceptLoopControl {
+    readiness: ReadinessReporter,
+    first_client_timeout: Option<Duration>,
+}
+
 fn accept_loop(
     listener: UnixListener,
     upstream: String,
@@ -435,7 +613,12 @@ fn accept_loop(
     bridge_config: BridgeConfig,
     border_config: BorderConfig,
     mut terminal_child: Option<&mut TerminalChild>,
+    control: AcceptLoopControl,
 ) -> i32 {
+    let AcceptLoopControl {
+        mut readiness,
+        first_client_timeout,
+    } = control;
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("d2b-wayland-proxy: failed to set listen socket nonblocking: {e}");
         std::process::exit(1);
@@ -445,7 +628,7 @@ fn accept_loop(
     let vm = policy.vm_name.clone();
     let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
     let clipboard = Rc::new(RefCell::new(VirtualClipboardState::new(
-        vm.clone(),
+        policy.identity.clone(),
         diag.clone(),
         bridge_config,
     )));
@@ -458,10 +641,14 @@ fn accept_loop(
     let state = match build_state(&upstream) {
         Ok(s) => s,
         Err(e) => {
+            let _ = readiness.failed(
+                ProxyReadinessStage::Upstream,
+                ProxyReadinessFailure::UpstreamUnavailable,
+            );
             eprintln!(
                 "d2b-wayland-proxy: failed to connect to upstream compositor `{upstream}`: {e}"
             );
-            std::process::exit(1);
+            return 1;
         }
     };
     state.set_handler(FilterStateHandler::new(
@@ -475,7 +662,20 @@ fn accept_loop(
     let mut next_client_id: u64 = 1;
     let mut last_diag_flush = Instant::now();
     let mut listener_backoff_until: Option<Instant> = None;
+    let mut first_client_deadline = first_client_timeout.map(|timeout| Instant::now() + timeout);
     while state.is_not_destroyed() {
+        if first_client_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let _ = readiness.failed(
+                ProxyReadinessStage::FirstClient,
+                ProxyReadinessFailure::FirstClientTimeout,
+            );
+            if let Some(child) = terminal_child.as_mut() {
+                child.terminate();
+            }
+            state.destroy();
+            diag.borrow_mut().flush_suppressed();
+            return 70;
+        }
         if let Some(child) = terminal_child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -485,7 +685,7 @@ fn accept_loop(
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    log::warn!("[d2b-wlproxy] vm={vm} event=host-terminal-wait error={error}");
+                    log::warn!("[d2b-wlproxy] target={vm} event=host-terminal-wait error={error}");
                     break;
                 }
             }
@@ -505,6 +705,9 @@ fn accept_loop(
                 now,
                 terminal_child.is_some(),
             );
+            let timeout = first_client_deadline
+                .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
+                .unwrap_or(timeout);
             let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
                 PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
@@ -517,7 +720,7 @@ fn accept_loop(
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(error) => {
-                    log::warn!("[d2b-wlproxy] vm={vm} poll error: {error}");
+                    log::warn!("[d2b-wlproxy] target={vm} poll error: {error}");
                     break;
                 }
             }
@@ -541,7 +744,7 @@ fn accept_loop(
                                 "client-nonblocking-failed",
                                 || {
                                     format!(
-                                        "[d2b-wlproxy] vm={vm} event=client-accept reason=client-nonblocking-failed error={error}"
+                                        "[d2b-wlproxy] target={vm} event=client-accept reason=client-nonblocking-failed error={error}"
                                     )
                                 },
                             );
@@ -559,7 +762,7 @@ fn accept_loop(
                                     "add-client-failed",
                                     || {
                                         format!(
-                                            "[d2b-wlproxy] vm={vm} event=client-accept reason=add-client-failed client={client_id} error={error}"
+                                            "[d2b-wlproxy] target={vm} event=client-accept reason=add-client-failed client={client_id} error={error}"
                                         )
                                     },
                                 );
@@ -573,6 +776,16 @@ fn accept_loop(
                             clipboard.clone(),
                             decoration.clone(),
                         );
+                        if first_client_deadline.take().is_some()
+                            && readiness.ready(ProxyReadinessStage::FirstClient).is_err()
+                        {
+                            if let Some(child) = terminal_child.as_mut() {
+                                child.terminate();
+                            }
+                            state.destroy();
+                            diag.borrow_mut().flush_suppressed();
+                            return 70;
+                        }
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) if is_recoverable_accept_error(&e) => {
@@ -582,7 +795,7 @@ fn accept_loop(
                             "recoverable-accept-error",
                             || {
                                 format!(
-                                    "[d2b-wlproxy] vm={vm} event=client-accept reason=recoverable-accept-error error={error}"
+                                    "[d2b-wlproxy] target={vm} event=client-accept reason=recoverable-accept-error error={error}"
                                 )
                             },
                         );
@@ -592,8 +805,14 @@ fn accept_loop(
                         break;
                     }
                     Err(e) => {
+                        let _ = readiness.failed(
+                            ProxyReadinessStage::FirstClient,
+                            ProxyReadinessFailure::ClientRejected,
+                        );
                         eprintln!("d2b-wayland-proxy: accept error: {e}");
-                        std::process::exit(1);
+                        state.destroy();
+                        diag.borrow_mut().flush_suppressed();
+                        return 1;
                     }
                 }
             }
@@ -603,7 +822,7 @@ fn accept_loop(
             Ok(_) => {}
             Err(e) => {
                 log::warn!(
-                    "[d2b-wlproxy] vm={vm} dispatch error: {}",
+                    "[d2b-wlproxy] target={vm} dispatch error: {}",
                     error_source_chain(&e)
                 );
                 break;
@@ -770,6 +989,7 @@ mod tests {
         .expect("parse args");
 
         assert!(args.host_terminal);
+        assert_eq!(args.vm_name.as_deref(), Some("work"));
         assert!(args.listen.is_none());
         assert!(args.connect.is_none());
         assert_eq!(
@@ -785,9 +1005,114 @@ mod tests {
     fn regular_proxy_still_requires_explicit_listen_and_connect() {
         let args = Args::try_parse_from(["d2b-wayland-proxy", "--vm-name", "work"])
             .expect("deferred validation keeps clap errors friendly");
+        let identity = resolve_identity(&args).expect("legacy identity");
 
         assert!(resolve_listen_path(&args, None).is_err());
-        assert!(resolve_upstream(&args).is_err());
+        assert!(resolve_upstream(&args, &identity).is_err());
+    }
+
+    #[test]
+    fn canonical_unsafe_local_cli_requires_explicit_upstream_and_has_no_vm_identity() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "unsafe-local",
+            "--listen",
+            "target/test.sock",
+        ])
+        .expect("parse canonical args");
+        let identity = resolve_identity(&args).expect("canonical identity");
+
+        assert_eq!(identity.canonical_target(), "browser.host.d2b");
+        assert_eq!(identity.provider_kind(), WorkloadProviderKind::UnsafeLocal);
+        assert!(identity.legacy_vm_name().is_none());
+        assert!(
+            resolve_upstream(&args, &identity)
+                .expect_err("unsafe-local never guesses a compositor")
+                .contains("never falls back")
+        );
+    }
+
+    #[test]
+    fn canonical_unsafe_local_rejects_vm_compatibility_identity() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "unsafe-local",
+            "--vm-name",
+            "browser",
+        ])
+        .expect("parse args");
+
+        assert!(resolve_identity(&args).is_err());
+    }
+
+    #[test]
+    fn unsafe_local_rejects_direct_child_mode_so_scope_lifecycles_stay_separate() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "unsafe-local",
+            "--host-terminal",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+
+        assert!(
+            validate_execution_mode(&args, &identity)
+                .expect_err("unsafe-local app must not be child-coupled to proxy")
+                .contains("authenticated helper")
+        );
+    }
+
+    #[test]
+    fn unsafe_local_has_bounded_first_client_deadline_by_default() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "unsafe-local",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+
+        assert_eq!(
+            configured_first_client_timeout(&args, &identity),
+            Some(Duration::from_secs(10))
+        );
+        let now = Instant::now();
+        assert_eq!(
+            bound_poll_timeout_to_deadline(60_000, now + Duration::from_millis(25), now),
+            25
+        );
+    }
+
+    #[test]
+    fn legacy_long_lived_vm_proxy_does_not_gain_an_initial_client_deadline() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--vm-name",
+            "work",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+
+        assert_eq!(configured_first_client_timeout(&args, &identity), None);
     }
 
     #[test]

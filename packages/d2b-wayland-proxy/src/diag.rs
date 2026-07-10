@@ -130,7 +130,7 @@ impl DiagRateLimiter {
             // Flush suppressed count if any.
             if bucket.suppressed > 0 {
                 log::warn!(
-                    "[d2b-wlproxy] vm={} event={event} label={label} \
+                    "[d2b-wlproxy] target={} event={event} label={label} \
                      suppressed={} in last window",
                     self.vm,
                     bucket.suppressed,
@@ -170,7 +170,7 @@ impl DiagRateLimiter {
         let interface = bounded_diag_label(interface);
         self.emit("bind-denied", &interface, || {
             format!(
-                "[d2b-wlproxy] vm={vm} event=bind-denied reason={reason_str} \
+                "[d2b-wlproxy] target={vm} event=bind-denied reason={reason_str} \
                  interface={interface} registry-name={registry_name}"
             )
         });
@@ -181,7 +181,7 @@ impl DiagRateLimiter {
         let vm = self.vm.clone();
         let interface = bounded_diag_label(interface);
         self.emit("global-filtered", &interface, || {
-            format!("[d2b-wlproxy] vm={vm} event=global-filtered interface={interface}")
+            format!("[d2b-wlproxy] target={vm} event=global-filtered interface={interface}")
         });
     }
 
@@ -195,7 +195,7 @@ impl DiagRateLimiter {
                 continue;
             }
             log::warn!(
-                "[d2b-wlproxy] vm={} event={} label={} suppressed={} in last window",
+                "[d2b-wlproxy] target={} event={} label={} suppressed={} in last window",
                 key.vm,
                 key.event,
                 key.label,

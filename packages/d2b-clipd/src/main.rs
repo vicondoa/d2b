@@ -43,10 +43,13 @@ use d2b_clipd::picker::{
 use d2b_clipd::policy::{ReasonCode, is_mime_allowed};
 use d2b_clipd::protocol::{
     AttributionQuality, Candidate, ClientHello, ClipboardCapabilityPreflight,
-    ClipboardCapabilityPreflightStatus, ClipboardTransferAuthority, DaemonToPickerMessage,
-    DestinationMetadata, OpenRequest, PickerToDaemonMessage, PlacementHint, RealmKind,
+    ClipboardCapabilityPreflightStatus, ClipboardEndpointIdentity, ClipboardTransferAuthority,
+    DaemonToPickerMessage, DestinationMetadata, OpenRequest, PickerToDaemonMessage, PlacementHint,
+    RealmKind,
 };
 use d2b_clipd::wayland::{DataControlClient, DataControlSource, HostClipboardEvent};
+use d2b_core::workload_identity::WorkloadTarget;
+use d2b_realm_core::WorkloadProviderKind;
 use rustix::event::{PollFd, PollFlags, poll};
 use serde::Deserialize;
 
@@ -54,7 +57,7 @@ const CONTROL_MAX_FRAME_BYTES: usize = 1024;
 const BRIDGE_MAX_FRAME_BYTES: usize = 4096;
 const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CURRENT_HOST_ENTRY_ID: &str = "current-host-selection";
-const CURRENT_BRIDGE_ENTRY_ID: &str = "current-vm-selection";
+const CURRENT_BRIDGE_ENTRY_ID: &str = "current-endpoint-selection";
 const HISTORY_MAX_ENTRIES: usize = 20;
 const MATERIALIZE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HELPER_THREADS: usize = 16;
@@ -235,6 +238,77 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
 }
 
 fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerConfig>, String> {
+    if let Some(value) = config_json.pointer("/runtime/bridgeEndpoints") {
+        let Some(items) = value.as_array() else {
+            return Err("runtime.bridgeEndpoints must be an array".to_owned());
+        };
+        return items
+            .iter()
+            .map(|item| {
+                let target = item
+                    .get("canonicalTarget")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        "runtime.bridgeEndpoints[].canonicalTarget must be a string".to_owned()
+                    })
+                    .and_then(|value| {
+                        WorkloadTarget::parse(value).map_err(|_| {
+                            "runtime.bridgeEndpoints[].canonicalTarget must be canonical".to_owned()
+                        })
+                    })?;
+                let provider_kind = item
+                    .get("providerKind")
+                    .cloned()
+                    .ok_or_else(|| "runtime.bridgeEndpoints[].providerKind is required".to_owned())
+                    .and_then(|value| {
+                        serde_json::from_value::<WorkloadProviderKind>(value).map_err(|_| {
+                            "runtime.bridgeEndpoints[].providerKind is invalid".to_owned()
+                        })
+                    })?;
+                let legacy_vm_name = item
+                    .get("legacyVmName")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                if provider_kind == WorkloadProviderKind::UnsafeLocal && legacy_vm_name.is_some() {
+                    return Err(
+                        "unsafe-local bridge endpoint must not carry legacyVmName".to_owned()
+                    );
+                }
+                let identity = ClipboardEndpointIdentity {
+                    canonical_target: target,
+                    provider_kind,
+                    legacy_vm_name,
+                };
+                let declared_socket_component = item
+                    .get("socketComponent")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                let socket_component = identity.bridge_component();
+                if declared_socket_component
+                    .as_deref()
+                    .is_some_and(|declared| declared != socket_component)
+                {
+                    return Err(
+                        "runtime.bridgeEndpoints[].socketComponent does not match canonical identity"
+                            .to_owned(),
+                    );
+                }
+                let expected_uid = item
+                    .get("expectedUid")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| {
+                        "runtime.bridgeEndpoints[].expectedUid must be an integer".to_owned()
+                    })?;
+                Ok(BridgePeerConfig {
+                    identity,
+                    socket_component,
+                    expected_uid: expected_uid.try_into().map_err(|_| {
+                        "runtime.bridgeEndpoints[].expectedUid too large".to_owned()
+                    })?,
+                })
+            })
+            .collect();
+    }
     if let Some(value) = config_json.pointer("/runtime/bridgePeers") {
         let Some(items) = value.as_array() else {
             return Err("runtime.bridgePeers must be an array".to_owned());
@@ -254,7 +328,8 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                         "runtime.bridgePeers[].expectedUid must be an integer".to_owned()
                     })?;
                 Ok(BridgePeerConfig {
-                    vm_name,
+                    identity: legacy_vm_endpoint(&vm_name)?,
+                    socket_component: vm_name,
                     expected_uid: expected_uid
                         .try_into()
                         .map_err(|_| "runtime.bridgePeers[].expectedUid too large".to_owned())?,
@@ -276,11 +351,22 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                 .map(str::to_owned)
                 .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())?;
             Ok(BridgePeerConfig {
-                vm_name,
+                identity: legacy_vm_endpoint(&vm_name)?,
+                socket_component: vm_name,
                 expected_uid: u32::MAX,
             })
         })
         .collect()
+}
+
+fn legacy_vm_endpoint(vm_name: &str) -> Result<ClipboardEndpointIdentity, String> {
+    let canonical_target = WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
+        .map_err(|_| "bridge VM name cannot form a canonical target".to_owned())?;
+    Ok(ClipboardEndpointIdentity {
+        canonical_target,
+        provider_kind: WorkloadProviderKind::LocalVm,
+        legacy_vm_name: Some(vm_name.to_owned()),
+    })
 }
 
 // ─── Event loop ───────────────────────────────────────────────────────────────
@@ -710,20 +796,21 @@ fn reap_idle_bridge_streams(streams: &mut Vec<BridgeStream>, now: Instant) -> us
 
 #[derive(Debug)]
 struct BridgePeerConfig {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
+    socket_component: String,
     expected_uid: u32,
 }
 
 #[derive(Debug)]
 struct BridgeListener {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     expected_uid: u32,
     listener: UnixListener,
 }
 
 #[derive(Debug)]
 struct BridgeStream {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     stream: UnixStream,
     read_buffer: Vec<u8>,
     received_fds: Vec<OwnedFd>,
@@ -782,6 +869,24 @@ impl AcceptDiagnostics {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum BridgeFrame {
+    WorkloadPasteRequest {
+        canonical_target: WorkloadTarget,
+        provider_kind: WorkloadProviderKind,
+        #[serde(default)]
+        legacy_vm_name: Option<String>,
+        mime_type: String,
+        source_id: u64,
+        source_attribution: BridgeAttribution,
+    },
+    WorkloadCopySelection {
+        canonical_target: WorkloadTarget,
+        provider_kind: WorkloadProviderKind,
+        #[serde(default)]
+        legacy_vm_name: Option<String>,
+        mime_type: String,
+        source_id: u64,
+        source_attribution: BridgeAttribution,
+    },
     VmPasteRequest {
         vm_name: String,
         mime_type: String,
@@ -798,8 +903,8 @@ enum BridgeFrame {
 
 #[derive(Debug)]
 struct BridgeSelectionState {
-    vm_name: String,
-    vm_source_id: u64,
+    identity: ClipboardEndpointIdentity,
+    source_id: u64,
     data_control_source_id: u64,
     history_entry_id: String,
     timestamp_unix_ms: u64,
@@ -831,6 +936,8 @@ struct ClipboardHistoryEntry {
     entry_id: String,
     source_realm: String,
     source_realm_kind: RealmKind,
+    source_canonical_target: Option<String>,
+    source_provider_kind: Option<WorkloadProviderKind>,
     source_app: Option<String>,
     source_app_id: Option<String>,
     source_attribution: AttributionQuality,
@@ -900,10 +1007,8 @@ impl ClipboardHistory {
                     entry_id: entry.entry_id.clone(),
                     source_realm: entry.source_realm.clone(),
                     source_realm_kind: entry.source_realm_kind,
-                    source_canonical_target: canonical_target_for_realm(
-                        &entry.source_realm,
-                        entry.source_realm_kind,
-                    ),
+                    source_canonical_target: entry.source_canonical_target.clone(),
+                    source_provider_kind: entry.source_provider_kind,
                     source_app: entry.source_app.clone(),
                     source_app_id: entry.source_app_id.clone(),
                     source_attribution: entry.source_attribution,
@@ -952,10 +1057,11 @@ fn compatible_mime_payload(
     None
 }
 
-fn bridge_history_entry_id(vm_name: &str, source_id: u64) -> String {
+fn bridge_history_entry_id(identity: &ClipboardEndpointIdentity, source_id: u64) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(vm_name.len().saturating_mul(2));
-    for byte in vm_name.as_bytes() {
+    let target = identity.target_label();
+    let mut encoded = String::with_capacity(target.len().saturating_mul(2));
+    for byte in target.as_bytes() {
         encoded.push(HEX[(byte >> 4) as usize] as char);
         encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
@@ -1013,7 +1119,7 @@ fn install_bridge_listeners(
     let uid = rustix::process::getuid().as_raw();
     let mut listeners = Vec::new();
     for peer in bridge_peers {
-        let path = bridge_socket_path(root, uid, &peer.vm_name)?;
+        let path = bridge_socket_path(root, uid, &peer.socket_component)?;
         let parent = path
             .parent()
             .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
@@ -1047,7 +1153,7 @@ fn install_bridge_listeners(
             .set_nonblocking(true)
             .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
         listeners.push(BridgeListener {
-            vm_name: peer.vm_name.clone(),
+            identity: peer.identity.clone(),
             expected_uid: peer.expected_uid,
             listener,
         });
@@ -1055,20 +1161,25 @@ fn install_bridge_listeners(
     Ok(listeners)
 }
 
-fn bridge_socket_path(root: &Path, uid: u32, vm: &str) -> Result<PathBuf, String> {
-    if vm.is_empty() || vm == "." || vm == ".." || vm.contains('/') || vm.contains('\0') {
-        return Err(format!("invalid bridge VM name: {vm:?}"));
+fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> Result<PathBuf, String> {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || component.contains('/')
+        || component.contains('\0')
+    {
+        return Err("invalid bridge endpoint component".to_owned());
     }
     Ok(root
         .join(uid.to_string())
         .join("bridge")
-        .join(vm)
+        .join(component)
         .join("clip.sock"))
 }
 
 #[derive(Debug)]
 struct BridgePasteRequest {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     mime_type: String,
     source_id: u64,
     fd: OwnedFd,
@@ -1076,7 +1187,7 @@ struct BridgePasteRequest {
 
 #[derive(Debug)]
 struct BridgeCopySelectionRequest {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     mime_type: String,
     source_id: u64,
     fd: OwnedFd,
@@ -1098,8 +1209,8 @@ fn accept_bridge_streams(
     {
         diag.warn("bridge", "stream-cap-exceeded", || {
             format!(
-                "d2b-clipd: bridge stream cap exceeded for vm={}",
-                bridge.vm_name
+                "d2b-clipd: bridge stream cap exceeded for target={}",
+                bridge.identity.target_label()
             )
         });
         return true;
@@ -1110,8 +1221,8 @@ fn accept_bridge_streams(
                 if let Err(error) = stream.set_nonblocking(true) {
                     diag.warn("bridge", "stream-nonblocking-failed", || {
                         format!(
-                            "d2b-clipd: bridge stream nonblocking failed for vm={}: {error}",
-                            bridge.vm_name
+                            "d2b-clipd: bridge stream nonblocking failed for target={}: {error}",
+                            bridge.identity.target_label()
                         )
                     });
                     continue;
@@ -1119,14 +1230,14 @@ fn accept_bridge_streams(
                 if let Err(error) = validate_bridge_peer(&stream, bridge.expected_uid) {
                     diag.warn("bridge", "peer-rejected", || {
                         format!(
-                            "d2b-clipd: bridge peer rejected for vm={}: {error}",
-                            bridge.vm_name
+                            "d2b-clipd: bridge peer rejected for target={}: {error}",
+                            bridge.identity.target_label()
                         )
                     });
                     continue;
                 }
                 let mut stream = BridgeStream {
-                    vm_name: bridge.vm_name.clone(),
+                    identity: bridge.identity.clone(),
                     stream,
                     read_buffer: Vec::new(),
                     received_fds: Vec::new(),
@@ -1151,8 +1262,8 @@ fn accept_bridge_streams(
             Err(error) if is_recoverable_accept_error(&error) => {
                 diag.warn("bridge", "recoverable-accept-error", || {
                     format!(
-                        "d2b-clipd: recoverable bridge accept error for vm={}: {error}",
-                        bridge.vm_name
+                        "d2b-clipd: recoverable bridge accept error for target={}: {error}",
+                        bridge.identity.target_label()
                     )
                 });
                 return is_resource_exhaustion_accept_error(&error);
@@ -1160,8 +1271,8 @@ fn accept_bridge_streams(
             Err(error) => {
                 diag.warn("bridge", "accept-failed", || {
                     format!(
-                        "d2b-clipd: bridge accept failed for vm={}: {error}",
-                        bridge.vm_name
+                        "d2b-clipd: bridge accept failed for target={}: {error}",
+                        bridge.identity.target_label()
                     )
                 });
                 break;
@@ -1227,7 +1338,7 @@ struct BridgeHandlerContext<'a> {
 }
 
 struct BridgeCopyReady {
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     mime_type: String,
     source_id: u64,
     result: Result<Vec<u8>, ReasonCode>,
@@ -1256,8 +1367,8 @@ fn handle_bridge_stream(
                     Err(error) => {
                         context.accept_diag.warn("bridge", "frame-failed", || {
                             format!(
-                                "d2b-clipd: bridge frame failed for vm={}: {}",
-                                bridge.vm_name,
+                                "d2b-clipd: bridge frame failed for target={}: {}",
+                                bridge.identity.target_label(),
                                 error.message()
                             )
                         });
@@ -1270,8 +1381,8 @@ fn handle_bridge_stream(
         Err(error) => {
             context.accept_diag.warn("bridge", "frame-failed", || {
                 format!(
-                    "d2b-clipd: bridge frame failed for vm={}: {}",
-                    bridge.vm_name,
+                    "d2b-clipd: bridge frame failed for target={}: {}",
+                    bridge.identity.target_label(),
                     error.message()
                 )
             });
@@ -1402,6 +1513,44 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
     let frame: BridgeFrame = serde_json::from_slice(&frame_bytes)
         .map_err(|e| BridgeReadError::Invalid(e.to_string()))?;
     match frame {
+        BridgeFrame::WorkloadPasteRequest {
+            canonical_target,
+            provider_kind,
+            legacy_vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+        } => parse_bridge_transfer(
+            stream,
+            ClipboardEndpointIdentity {
+                canonical_target,
+                provider_kind,
+                legacy_vm_name,
+            },
+            mime_type,
+            source_id,
+            source_attribution,
+            false,
+        ),
+        BridgeFrame::WorkloadCopySelection {
+            canonical_target,
+            provider_kind,
+            legacy_vm_name,
+            mime_type,
+            source_id,
+            source_attribution,
+        } => parse_bridge_transfer(
+            stream,
+            ClipboardEndpointIdentity {
+                canonical_target,
+                provider_kind,
+                legacy_vm_name,
+            },
+            mime_type,
+            source_id,
+            source_attribution,
+            true,
+        ),
         BridgeFrame::VmPasteRequest {
             vm_name,
             mime_type,
@@ -1409,7 +1558,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            vm_name,
+            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
             mime_type,
             source_id,
             source_attribution,
@@ -1422,7 +1571,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            vm_name,
+            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
             mime_type,
             source_id,
             source_attribution,
@@ -1433,7 +1582,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
 
 fn parse_bridge_transfer(
     stream: &mut BridgeStream,
-    vm_name: String,
+    identity: ClipboardEndpointIdentity,
     mime_type: String,
     source_id: u64,
     source_attribution: BridgeAttribution,
@@ -1445,12 +1594,11 @@ fn parse_bridge_transfer(
         ));
     };
     let fd = stream.received_fds.remove(0);
-    if vm_name != stream.vm_name {
+    if identity != stream.identity {
         drop(fd);
-        return Err(BridgeReadError::Invalid(format!(
-            "bridge vm mismatch: expected {}, got {vm_name}",
-            stream.vm_name
-        )));
+        return Err(BridgeReadError::Invalid(
+            "bridge endpoint identity mismatch".to_owned(),
+        ));
     }
     if source_attribution != BridgeAttribution::ExactClient {
         drop(fd);
@@ -1465,22 +1613,23 @@ fn parse_bridge_transfer(
         )));
     }
     log::debug!(
-        "d2b-clipd: received VM bridge paste request vm={} source_id:{} mime={}",
-        bounded_label(&stream.vm_name),
+        "d2b-clipd: received workload bridge request target={} provider={} source_id:{} mime={}",
+        bounded_label(&stream.identity.target_label()),
+        stream.identity.provider_label(),
         source_id,
         bounded_mime(&mime_type)
     );
     stream.frame_deadline = Instant::now() + STREAM_FRAME_IDLE_TIMEOUT;
     if copy_selection {
         Ok(BridgeRequest::Copy(BridgeCopySelectionRequest {
-            vm_name,
+            identity,
             mime_type,
             source_id,
             fd,
         }))
     } else {
         Ok(BridgeRequest::Paste(BridgePasteRequest {
-            vm_name,
+            identity,
             mime_type,
             source_id,
             fd,
@@ -1534,26 +1683,26 @@ fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
         Ok(n) if *n == bytes.len() => {}
         Ok(_) => {
             log::debug!(
-                "d2b-clipd: bridge refresh notify partial write for vm={}; closing stream",
-                bounded_label(&stream.vm_name)
+                "d2b-clipd: bridge refresh notify partial write for target={}; closing stream",
+                bounded_label(&stream.identity.target_label())
             );
         }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
             log::debug!(
-                "d2b-clipd: bridge refresh notify backpressured for vm={}; closing stream",
-                bounded_label(&stream.vm_name)
+                "d2b-clipd: bridge refresh notify backpressured for target={}; closing stream",
+                bounded_label(&stream.identity.target_label())
             );
         }
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
             log::debug!(
-                "d2b-clipd: bridge refresh notify interrupted for vm={}; closing stream",
-                bounded_label(&stream.vm_name)
+                "d2b-clipd: bridge refresh notify interrupted for target={}; closing stream",
+                bounded_label(&stream.identity.target_label())
             );
         }
         Err(error) => {
             log::debug!(
-                "d2b-clipd: bridge refresh notify failed for vm={}: {}",
-                bounded_label(&stream.vm_name),
+                "d2b-clipd: bridge refresh notify failed for target={}: {}",
+                bounded_label(&stream.identity.target_label()),
                 error
             );
         }
@@ -1566,7 +1715,7 @@ fn handle_bridge_copy_selection(
     context: &mut BridgeHandlerContext<'_>,
 ) {
     let BridgeCopySelectionRequest {
-        vm_name,
+        identity,
         mime_type,
         source_id,
         fd,
@@ -1580,7 +1729,7 @@ fn handle_bridge_copy_selection(
         Ok(permit) => permit,
         Err(reason) => {
             let _ = tx.send(BridgeCopyReady {
-                vm_name,
+                identity,
                 mime_type,
                 source_id,
                 result: Err(reason),
@@ -1595,7 +1744,7 @@ fn handle_bridge_copy_selection(
             let _permit = permit;
             let result = read_fd_to_vec(fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT);
             let _ = tx.send(BridgeCopyReady {
-                vm_name,
+                identity,
                 mime_type,
                 source_id,
                 result,
@@ -1608,7 +1757,7 @@ fn handle_bridge_copy_selection(
 
 fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyReadyContext<'_>) {
     let BridgeCopyReady {
-        vm_name,
+        identity,
         mime_type,
         source_id,
         result,
@@ -1620,8 +1769,8 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
                 .accept_diag
                 .warn("bridge", "copy-materialize-failed", || {
                     format!(
-                        "d2b-clipd: bridge copy materialize failed for vm={}: {}",
-                        bounded_label(&vm_name),
+                        "d2b-clipd: bridge copy materialize failed for target={}: {}",
+                        bounded_label(&identity.target_label()),
                         reason.as_str()
                     )
                 });
@@ -1629,22 +1778,24 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         }
     };
     log::debug!(
-        "d2b-clipd: bridge copy received vm={} source_id:{} mime={}",
-        bounded_label(&vm_name),
+        "d2b-clipd: bridge copy received target={} provider={} source_id:{} mime={}",
+        bounded_label(&identity.target_label()),
+        identity.provider_label(),
         source_id,
         bounded_mime(&mime_type)
     );
     *context.current_host_entry = None;
 
-    let replace = context.bridge_selection.as_ref().is_none_or(|selection| {
-        selection.vm_name != vm_name || selection.vm_source_id != source_id
-    });
+    let replace = context
+        .bridge_selection
+        .as_ref()
+        .is_none_or(|selection| selection.identity != identity || selection.source_id != source_id);
     if replace {
         *context.bridge_selection = Some(BridgeSelectionState {
-            vm_name: vm_name.clone(),
-            vm_source_id: source_id,
+            identity: identity.clone(),
+            source_id,
             data_control_source_id: 0,
-            history_entry_id: bridge_history_entry_id(&vm_name, source_id),
+            history_entry_id: bridge_history_entry_id(&identity, source_id),
             timestamp_unix_ms: unix_millis(),
             suppress_selection_echo: true,
             data_by_mime: BTreeMap::new(),
@@ -1658,10 +1809,12 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
     selection.data_by_mime.insert(mime_type, bytes);
     context.history.upsert(ClipboardHistoryEntry {
         entry_id: selection.history_entry_id.clone(),
-        source_realm: selection.vm_name.clone(),
-        source_realm_kind: RealmKind::Vm,
-        source_app: Some(format!("{} VM", selection.vm_name)),
-        source_app_id: Some(format!("d2b.{}", selection.vm_name)),
+        source_realm: selection.identity.realm_label(),
+        source_realm_kind: selection.identity.realm_kind(),
+        source_canonical_target: Some(selection.identity.target_label()),
+        source_provider_kind: Some(selection.identity.provider_kind),
+        source_app: Some(endpoint_source_app(&selection.identity)),
+        source_app_id: Some(format!("d2b.{}", selection.identity.target_label())),
         source_attribution: AttributionQuality::ExactClient,
         data_by_mime: selection.data_by_mime.clone(),
         timestamp_unix_ms: selection.timestamp_unix_ms,
@@ -1679,8 +1832,8 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
                 *context.published_selection = None;
                 context.accept_diag.warn("bridge", "copy-flush-failed", || {
                     format!(
-                        "d2b-clipd: bridge copy flush failed for vm={}: {error}",
-                        bounded_label(&selection.vm_name)
+                        "d2b-clipd: bridge copy flush failed for target={}: {error}",
+                        bounded_label(&selection.identity.target_label())
                     )
                 });
                 return;
@@ -1691,8 +1844,8 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
                 .accept_diag
                 .warn("bridge", "copy-source-create-failed", || {
                     format!(
-                        "d2b-clipd: bridge copy source create failed for vm={}: {}",
-                        bounded_label(&selection.vm_name),
+                        "d2b-clipd: bridge copy source create failed for target={}: {}",
+                        bounded_label(&selection.identity.target_label()),
                         reason.as_str()
                     )
                 });
@@ -1700,8 +1853,9 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         }
     }
     log::debug!(
-        "d2b-clipd: bridge copy discovery source recorded vm={} mimes={}",
-        bounded_label(&selection.vm_name),
+        "d2b-clipd: bridge copy discovery source recorded target={} provider={} mimes={}",
+        bounded_label(&selection.identity.target_label()),
+        selection.identity.provider_label(),
         selection.data_by_mime.len()
     );
 }
@@ -1711,23 +1865,24 @@ fn handle_bridge_paste_request(
     context: &mut BridgeHandlerContext<'_>,
 ) {
     let BridgePasteRequest {
-        vm_name,
+        identity,
         mime_type,
         source_id,
         fd,
     } = request;
-    let request_id = format!("bridge-{vm_name}-{source_id}");
+    let target = identity.target_label();
+    let request_id = format!("bridge-{target}-{source_id}");
     if !is_mime_allowed(&mime_type) {
         drop(fd);
         context.metrics_queue.enqueue_droppable(MetricEvent {
             name: MetricName::PolicyDenied,
             reason: Some(ReasonCode::MimeRejected),
         });
-        notify_bridge_paste_failure(context.notifier, ReasonCode::MimeRejected, "host", &vm_name);
+        notify_bridge_paste_failure(context.notifier, ReasonCode::MimeRejected, "host", &target);
         if let Err(reason) = context.audit_queue.enqueue_fail_closed(AuditEvent {
             request_id,
             source_realm: "host".to_owned(),
-            destination_realm: vm_name,
+            destination_realm: target,
             mime_type,
             byte_count: 0,
             decision: AuditDecision::Deny,
@@ -1758,15 +1913,15 @@ fn handle_bridge_paste_request(
         .refresh_focused_window_snapshot()
         .unwrap_or_else(|| FocusedWindowSnapshot {
             id: None,
-            app_id: Some(format!("d2b.{vm_name}")),
-            title: Some(format!("{vm_name} VM")),
+            app_id: Some(format!("d2b.{}", identity.target_label())),
+            title: Some(endpoint_source_app(&identity)),
             workspace_id: None,
             output_label: None,
         });
     if let Err(reason) = context.audit_queue.enqueue_fail_closed(AuditEvent {
         request_id: request_id.clone(),
         source_realm: "host".to_owned(),
-        destination_realm: vm_name.clone(),
+        destination_realm: identity.target_label(),
         mime_type: mime_type.clone(),
         byte_count: 0,
         decision: AuditDecision::Allow,
@@ -1783,12 +1938,12 @@ fn handle_bridge_paste_request(
             .accept_diag
             .warn("bridge", "audit-queue-failed", || {
                 format!(
-                    "d2b-clipd: bridge audit queue failed for vm={}: {}",
-                    bounded_label(&vm_name),
+                    "d2b-clipd: bridge audit queue failed for target={}: {}",
+                    bounded_label(&identity.target_label()),
                     reason.as_str()
                 )
             });
-        notify_bridge_paste_failure(context.notifier, reason, "host", &vm_name);
+        notify_bridge_paste_failure(context.notifier, reason, "host", &identity.target_label());
         return;
     }
 
@@ -1802,8 +1957,8 @@ fn handle_bridge_paste_request(
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
         log::debug!(
-            "d2b-clipd: bridge paste served from published selection vm={} mime={}",
-            bounded_label(&vm_name),
+            "d2b-clipd: bridge paste served from selected source target={} mime={}",
+            bounded_label(&identity.target_label()),
             bounded_mime(&mime_type)
         );
         spawn_write_bytes_to_fd(fd, mime_type, bytes);
@@ -1817,8 +1972,9 @@ fn handle_bridge_paste_request(
         &mime_type,
     );
     log::debug!(
-        "d2b-clipd: bridge paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
-        bounded_label(&vm_name),
+        "d2b-clipd: bridge paste request target={} provider={} source_id:{} mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
+        bounded_label(&identity.target_label()),
+        identity.provider_label(),
         source_id,
         bounded_mime(&mime_type),
         bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
@@ -1833,7 +1989,13 @@ fn handle_bridge_paste_request(
         picker_command: context.picker_command,
         accept_diag: &mut *context.accept_diag,
     };
-    open_picker_for_candidates(&mut picker_context, dest, &mime_type, candidates);
+    open_picker_for_candidates(
+        &mut picker_context,
+        dest,
+        Some(&identity),
+        &mime_type,
+        candidates,
+    );
 }
 
 fn notify_bridge_paste_failure<N: Notifier>(
@@ -1957,6 +2119,8 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     entry_id: String::new(),
                     source_realm: "Host".to_owned(),
                     source_realm_kind: RealmKind::Host,
+                    source_canonical_target: None,
+                    source_provider_kind: None,
                     source_app: focused_window
                         .as_ref()
                         .and_then(|window| window.title.clone())
@@ -2044,10 +2208,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             &selection.data_by_mime,
                             &mime_type,
                         );
-                        let current_vm = context
+                        let current_target = context
                             .bridge_selection
                             .as_ref()
-                            .map(|selection| selection.vm_name.as_str());
+                            .map(|selection| selection.identity.target_label());
                         candidates.extend(
                             context
                                 .history
@@ -2061,8 +2225,12 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                 .into_iter()
                                 .filter(|candidate| {
                                     !matches!(
-                                        (current_vm, candidate.source_realm_kind),
-                                        (Some(vm), RealmKind::Vm) if candidate.source_realm == vm
+                                        (
+                                            current_target.as_deref(),
+                                            candidate.source_canonical_target.as_deref()
+                                        ),
+                                        (Some(target), Some(candidate_target))
+                                            if candidate_target == target
                                     )
                                 }),
                         );
@@ -2081,10 +2249,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                     entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
                                     source_realm: current_host_entry.source_realm.clone(),
                                     source_realm_kind: current_host_entry.source_realm_kind,
-                                    source_canonical_target: canonical_target_for_realm(
-                                        &current_host_entry.source_realm,
-                                        current_host_entry.source_realm_kind,
-                                    ),
+                                    source_canonical_target: current_host_entry
+                                        .source_canonical_target
+                                        .clone(),
+                                    source_provider_kind: current_host_entry.source_provider_kind,
                                     source_app: current_host_entry.source_app.clone(),
                                     source_app_id: current_host_entry.source_app_id.clone(),
                                     source_attribution: current_host_entry.source_attribution,
@@ -2118,6 +2286,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         open_picker_for_candidates(
                             &mut picker_context,
                             dest,
+                            None,
                             &mime_type,
                             candidates,
                         );
@@ -2145,10 +2314,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     .refresh_focused_window_snapshot()
                     .unwrap_or_default();
                 drop(fd);
-                if focused_app_matches_vm(dest.app_id.as_deref(), &selection.vm_name) {
+                if focused_app_matches_endpoint(dest.app_id.as_deref(), &selection.identity) {
                     log::debug!(
-                        "d2b-clipd: ignored bridge source probe from source vm={} mime={}",
-                        bounded_label(&selection.vm_name),
+                        "d2b-clipd: ignored bridge source probe from source target={} mime={}",
+                        bounded_label(&selection.identity.target_label()),
                         bounded_mime(&mime_type)
                     );
                     return;
@@ -2160,14 +2329,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         .candidates_excluding(&mime_type, Some(&selection.history_entry_id))
                         .into_iter()
                         .filter(|candidate| {
-                            !(candidate.source_realm_kind == RealmKind::Vm
-                                && candidate.source_realm == selection.vm_name)
+                            candidate.source_canonical_target.as_deref()
+                                != Some(selection.identity.target_label().as_str())
                         }),
                 );
                 log::debug!(
-                    "d2b-clipd: bridge selection paste request vm={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
-                    bounded_label(&selection.vm_name),
-                    selection.vm_source_id,
+                    "d2b-clipd: bridge selection paste request target={} provider={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
+                    bounded_label(&selection.identity.target_label()),
+                    selection.identity.provider_label(),
+                    selection.source_id,
                     bounded_mime(&mime_type),
                     bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
                     bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
@@ -2181,7 +2351,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     picker_command: context.picker_command,
                     accept_diag: &mut *context.accept_diag,
                 };
-                open_picker_for_candidates(&mut picker_context, dest, &mime_type, candidates);
+                open_picker_for_candidates(&mut picker_context, dest, None, &mime_type, candidates);
                 return;
             }
             drop(fd);
@@ -2769,7 +2939,14 @@ fn handle_arm(
             // Drive picker handshake: read ClientHello, send OpenRequest.
             let requested_mime = "text/plain".to_owned();
             let candidates = picker_candidates(host_clipboard, None, history, &requested_mime);
-            match picker_handshake(socket, &request_id, &dest, &requested_mime, candidates) {
+            match picker_handshake(
+                socket,
+                &request_id,
+                &dest,
+                None,
+                &requested_mime,
+                candidates,
+            ) {
                 Ok(picker_version) => {
                     log::debug!("d2b-clipd: picker opened (version={picker_version})");
                     Ok("picker opened".to_owned())
@@ -2808,10 +2985,45 @@ fn handle_arm(
 
 /// Perform the picker ClientHello / OpenRequest handshake.
 /// Returns the picker version string on success.
+fn destination_metadata(
+    dest: &FocusedWindowSnapshot,
+    endpoint: Option<&ClipboardEndpointIdentity>,
+) -> DestinationMetadata {
+    match endpoint {
+        Some(identity) => DestinationMetadata {
+            realm: identity.realm_label(),
+            realm_kind: identity.realm_kind(),
+            canonical_target: Some(identity.target_label()),
+            provider_kind: Some(identity.provider_kind),
+            application: dest.app_id.clone(),
+            app_id: dest.app_id.clone(),
+            title: dest.title.clone(),
+            workspace: None,
+            output: dest.output_label.clone(),
+            attribution: AttributionQuality::ExactClient,
+            capability_preflight: Some(clipboard_capability_preflight()),
+        },
+        None => DestinationMetadata {
+            realm: "Host".to_owned(),
+            realm_kind: RealmKind::Host,
+            canonical_target: None,
+            provider_kind: None,
+            application: dest.app_id.clone(),
+            app_id: dest.app_id.clone(),
+            title: dest.title.clone(),
+            workspace: None,
+            output: dest.output_label.clone(),
+            attribution: AttributionQuality::FocusedWindowGuess,
+            capability_preflight: Some(clipboard_capability_preflight()),
+        },
+    }
+}
+
 fn picker_handshake(
     socket: &UnixStream,
     request_id: &str,
     dest: &FocusedWindowSnapshot,
+    endpoint: Option<&ClipboardEndpointIdentity>,
     requested_mime_type: &str,
     candidates: Vec<Candidate>,
 ) -> Result<String, String> {
@@ -2833,18 +3045,7 @@ fn picker_handshake(
         clipd_version: env!("CARGO_PKG_VERSION").to_owned(),
         picker_version: picker_version.clone(),
         request_id: request_id.to_owned(),
-        destination: DestinationMetadata {
-            realm: "Host".to_owned(),
-            realm_kind: RealmKind::Host,
-            canonical_target: None,
-            application: dest.app_id.clone(),
-            app_id: dest.app_id.clone(),
-            title: dest.title.clone(),
-            workspace: None,
-            output: dest.output_label.clone(),
-            attribution: AttributionQuality::FocusedWindowGuess,
-            capability_preflight: Some(clipboard_capability_preflight()),
-        },
+        destination: destination_metadata(dest, endpoint),
         requested_mime_type: requested_mime_type.to_owned(),
         expires_at_unix_ms: unix_millis().saturating_add(30_000),
         placement_hints: Some(PlacementHint {
@@ -2905,10 +3106,8 @@ fn picker_candidates(
                 entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
                 source_realm: entry.source_realm.clone(),
                 source_realm_kind: entry.source_realm_kind,
-                source_canonical_target: canonical_target_for_realm(
-                    &entry.source_realm,
-                    entry.source_realm_kind,
-                ),
+                source_canonical_target: entry.source_canonical_target.clone(),
+                source_provider_kind: entry.source_provider_kind,
                 source_app: entry.source_app.clone(),
                 source_app_id: entry.source_app_id.clone(),
                 source_attribution: entry.source_attribution,
@@ -2958,6 +3157,7 @@ fn insert_live_host_candidate(
             source_realm: "Host".to_owned(),
             source_realm_kind: RealmKind::Host,
             source_canonical_target: None,
+            source_provider_kind: None,
             source_app: window
                 .and_then(|window| window.title.clone())
                 .or_else(|| Some("Host clipboard".to_owned())),
@@ -2983,11 +3183,12 @@ fn picker_bridge_candidates(
     };
     vec![Candidate {
         entry_id: CURRENT_BRIDGE_ENTRY_ID.to_owned(),
-        source_realm: selection.vm_name.clone(),
-        source_realm_kind: RealmKind::Vm,
-        source_canonical_target: canonical_target_for_vm(&selection.vm_name),
-        source_app: Some(format!("{} VM", selection.vm_name)),
-        source_app_id: Some(format!("d2b.{}", selection.vm_name)),
+        source_realm: selection.identity.realm_label(),
+        source_realm_kind: selection.identity.realm_kind(),
+        source_canonical_target: Some(selection.identity.target_label()),
+        source_provider_kind: Some(selection.identity.provider_kind),
+        source_app: Some(endpoint_source_app(&selection.identity)),
+        source_app_id: Some(format!("d2b.{}", selection.identity.target_label())),
         source_attribution: AttributionQuality::ExactClient,
         preview_text: std::str::from_utf8(&bytes)
             .ok()
@@ -3009,29 +3210,44 @@ fn picker_bridge_candidates_for_published(
     let Some(bytes) = compatible_mime_payload(data_by_mime, requested_mime_type) else {
         return Vec::new();
     };
-    let (entry_id, source_realm, source_app, source_app_id, timestamp_unix_ms) =
-        if let Some(selection) = bridge_selection {
-            (
-                CURRENT_BRIDGE_ENTRY_ID.to_owned(),
-                selection.vm_name.clone(),
-                Some(format!("{} VM", selection.vm_name)),
-                Some(format!("d2b.{}", selection.vm_name)),
-                selection.timestamp_unix_ms,
-            )
-        } else {
-            (
-                "published-selection".to_owned(),
-                "d2b".to_owned(),
-                Some("d2b clipboard".to_owned()),
-                Some("d2b.clipboard".to_owned()),
-                unix_millis(),
-            )
-        };
+    let (
+        entry_id,
+        source_realm,
+        source_kind,
+        source_target,
+        source_provider_kind,
+        source_app,
+        source_app_id,
+        timestamp_unix_ms,
+    ) = if let Some(selection) = bridge_selection {
+        (
+            CURRENT_BRIDGE_ENTRY_ID.to_owned(),
+            selection.identity.realm_label(),
+            selection.identity.realm_kind(),
+            Some(selection.identity.target_label()),
+            Some(selection.identity.provider_kind),
+            Some(endpoint_source_app(&selection.identity)),
+            Some(format!("d2b.{}", selection.identity.target_label())),
+            selection.timestamp_unix_ms,
+        )
+    } else {
+        (
+            "published-selection".to_owned(),
+            "d2b".to_owned(),
+            RealmKind::Host,
+            None,
+            None,
+            Some("d2b clipboard".to_owned()),
+            Some("d2b.clipboard".to_owned()),
+            unix_millis(),
+        )
+    };
     vec![Candidate {
         entry_id,
-        source_realm: source_realm.clone(),
-        source_realm_kind: RealmKind::Vm,
-        source_canonical_target: canonical_target_for_vm(&source_realm),
+        source_realm,
+        source_realm_kind: source_kind,
+        source_canonical_target: source_target,
+        source_provider_kind,
         source_app,
         source_app_id,
         source_attribution: AttributionQuality::ExactClient,
@@ -3045,27 +3261,6 @@ fn picker_bridge_candidates_for_published(
         confirmation_required: false,
         capability_preflight: Some(clipboard_capability_preflight()),
     }]
-}
-
-fn canonical_target_for_realm(realm: &str, kind: RealmKind) -> Option<String> {
-    match kind {
-        RealmKind::Host => None,
-        RealmKind::Vm => canonical_target_for_vm(realm),
-    }
-}
-
-fn canonical_target_for_vm(vm: &str) -> Option<String> {
-    if is_canonical_vm_label(vm) {
-        Some(format!("{vm}.local.d2b"))
-    } else {
-        None
-    }
-}
-
-fn is_canonical_vm_label(value: &str) -> bool {
-    let mut chars = value.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn clipboard_capability_preflight() -> ClipboardCapabilityPreflight {
@@ -3123,6 +3318,7 @@ struct PickerOpenContext<'a> {
 fn open_picker_for_candidates(
     context: &mut PickerOpenContext<'_>,
     dest: FocusedWindowSnapshot,
+    endpoint: Option<&ClipboardEndpointIdentity>,
     requested_mime: &str,
     candidates: Vec<Candidate>,
 ) {
@@ -3139,9 +3335,14 @@ fn open_picker_for_candidates(
             Duration::from_secs(30),
         ) {
             Ok(socket) => {
-                if let Err(error) =
-                    picker_handshake(socket, &request_id, &dest, requested_mime, candidates)
-                {
+                if let Err(error) = picker_handshake(
+                    socket,
+                    &request_id,
+                    &dest,
+                    endpoint,
+                    requested_mime,
+                    candidates,
+                ) {
                     context.accept_diag.warn("picker", "handshake-failed", || {
                         format!("d2b-clipd: picker handshake failed: {error}")
                     });
@@ -3423,11 +3624,41 @@ fn bounded_label(label: &str) -> String {
     sanitize_notification_text(label, 80)
 }
 
+fn endpoint_source_app(identity: &ClipboardEndpointIdentity) -> String {
+    match identity.provider_kind {
+        WorkloadProviderKind::UnsafeLocal => {
+            format!("{} (unsafe-local)", identity.target_label())
+        }
+        _ => identity
+            .legacy_vm_name
+            .as_ref()
+            .map(|vm| format!("{vm} VM"))
+            .unwrap_or_else(|| identity.target_label()),
+    }
+}
+
 fn focused_app_matches_vm(app_id: Option<&str>, vm_name: &str) -> bool {
     let Some(app_id) = app_id else {
         return false;
     };
     app_id == format!("d2b.{vm_name}") || app_id.starts_with(&format!("d2b.{vm_name}."))
+}
+
+fn focused_app_matches_endpoint(
+    app_id: Option<&str>,
+    identity: &ClipboardEndpointIdentity,
+) -> bool {
+    let Some(app_id) = app_id else {
+        return false;
+    };
+    let canonical_prefix = identity.app_id_prefix();
+    if app_id == canonical_prefix.trim_end_matches('.') || app_id.starts_with(&canonical_prefix) {
+        return true;
+    }
+    identity
+        .legacy_vm_name
+        .as_deref()
+        .is_some_and(|vm| focused_app_matches_vm(Some(app_id), vm))
 }
 
 fn is_forwarded_vm_app_id(app_id: &str) -> bool {
@@ -3441,9 +3672,9 @@ fn focused_window_matches_bridge_source(
     let Some(selection) = bridge_selection else {
         return false;
     };
-    focused_app_matches_vm(
+    focused_app_matches_endpoint(
         window.and_then(|window| window.app_id.as_deref()),
-        &selection.vm_name,
+        &selection.identity,
     )
 }
 
@@ -3550,6 +3781,18 @@ mod tests {
     static UMASK_TEST_LOCK: Mutex<()> = Mutex::new(());
     static HELPER_THREAD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn vm_endpoint(vm: &str) -> ClipboardEndpointIdentity {
+        legacy_vm_endpoint(vm).expect("valid VM endpoint")
+    }
+
+    fn unsafe_local_endpoint() -> ClipboardEndpointIdentity {
+        ClipboardEndpointIdentity {
+            canonical_target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            provider_kind: WorkloadProviderKind::UnsafeLocal,
+            legacy_vm_name: None,
+        }
+    }
+
     #[test]
     fn helper_thread_permits_are_bounded() {
         let _guard = HELPER_THREAD_TEST_LOCK.lock().expect("helper thread lock");
@@ -3604,11 +3847,12 @@ mod tests {
 
     #[test]
     fn focused_window_matching_suppresses_source_vm_echoes_only() {
+        let identity = vm_endpoint("personal-dev");
         let selection = BridgeSelectionState {
-            vm_name: "personal-dev".to_owned(),
-            vm_source_id: 7,
+            identity: identity.clone(),
+            source_id: 7,
             data_control_source_id: 11,
-            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1,
             suppress_selection_echo: false,
             data_by_mime: BTreeMap::new(),
@@ -3638,11 +3882,12 @@ mod tests {
 
     #[test]
     fn bridge_selection_echo_suppression_persists_for_source_vm_or_unknown_focus() {
+        let identity = vm_endpoint("personal-dev");
         let mut selection = BridgeSelectionState {
-            vm_name: "personal-dev".to_owned(),
-            vm_source_id: 7,
+            identity: identity.clone(),
+            source_id: 7,
             data_control_source_id: 11,
-            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1,
             suppress_selection_echo: true,
             data_by_mime: BTreeMap::new(),
@@ -3754,6 +3999,7 @@ mod tests {
             source_realm: "Host".to_owned(),
             source_realm_kind: RealmKind::Host,
             source_canonical_target: None,
+            source_provider_kind: None,
             source_app: Some("old copy".to_owned()),
             source_app_id: Some("old.app".to_owned()),
             source_attribution: AttributionQuality::FocusedWindowGuess,
@@ -3792,6 +4038,8 @@ mod tests {
             entry_id: "bridge-vm-new".to_owned(),
             source_realm: "personal-dev".to_owned(),
             source_realm_kind: RealmKind::Vm,
+            source_canonical_target: Some("personal-dev.local.d2b".to_owned()),
+            source_provider_kind: Some(WorkloadProviderKind::LocalVm),
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
@@ -3805,6 +4053,8 @@ mod tests {
             entry_id: CURRENT_HOST_ENTRY_ID.to_owned(),
             source_realm: "Host".to_owned(),
             source_realm_kind: RealmKind::Host,
+            source_canonical_target: None,
+            source_provider_kind: None,
             source_app: Some("old host".to_owned()),
             source_app_id: Some("firefox".to_owned()),
             source_attribution: AttributionQuality::FocusedWindowGuess,
@@ -3826,11 +4076,12 @@ mod tests {
     fn current_vm_candidate_accepts_text_plain_aliases() {
         let mut data_by_mime = BTreeMap::new();
         data_by_mime.insert("text/plain".to_owned(), b"vm text".to_vec());
+        let identity = vm_endpoint("personal-dev");
         let selection = BridgeSelectionState {
-            vm_name: "personal-dev".to_owned(),
-            vm_source_id: 7,
+            identity: identity.clone(),
+            source_id: 7,
             data_control_source_id: 11,
-            history_entry_id: bridge_history_entry_id("personal-dev", 7),
+            history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1_700_000_000_000,
             suppress_selection_echo: false,
             data_by_mime,
@@ -3858,13 +4109,16 @@ mod tests {
     #[test]
     fn bridge_history_upsert_aggregates_mimes_without_duplicate_candidates() {
         let mut history = ClipboardHistory::default();
-        let entry_id = bridge_history_entry_id("personal-dev", 7);
+        let identity = vm_endpoint("personal-dev");
+        let entry_id = bridge_history_entry_id(&identity, 7);
         let mut first = BTreeMap::new();
         first.insert("text/plain".to_owned(), b"plain".to_vec());
         history.upsert(ClipboardHistoryEntry {
             entry_id: entry_id.clone(),
             source_realm: "personal-dev".to_owned(),
             source_realm_kind: RealmKind::Vm,
+            source_canonical_target: Some(identity.target_label()),
+            source_provider_kind: Some(WorkloadProviderKind::LocalVm),
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
@@ -3879,6 +4133,8 @@ mod tests {
             entry_id: entry_id.clone(),
             source_realm: "personal-dev".to_owned(),
             source_realm_kind: RealmKind::Vm,
+            source_canonical_target: Some(identity.target_label()),
+            source_provider_kind: Some(WorkloadProviderKind::LocalVm),
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
@@ -3903,10 +4159,112 @@ mod tests {
     }
 
     #[test]
-    fn bridge_history_entry_id_is_injective_for_punctuated_vm_names() {
+    fn bridge_history_entry_id_is_injective_for_canonical_targets() {
+        let first = vm_endpoint("work-vm");
+        let second = ClipboardEndpointIdentity {
+            canonical_target: WorkloadTarget::parse("work-vm.other.d2b").unwrap(),
+            provider_kind: WorkloadProviderKind::LocalVm,
+            legacy_vm_name: None,
+        };
         assert_ne!(
-            bridge_history_entry_id("work_vm", 7),
-            bridge_history_entry_id("work-vm", 7)
+            bridge_history_entry_id(&first, 7),
+            bridge_history_entry_id(&second, 7)
+        );
+    }
+
+    #[test]
+    fn unsafe_local_discovery_keeps_picker_only_transfer_authority() {
+        let identity = unsafe_local_endpoint();
+        let mut data_by_mime = BTreeMap::new();
+        data_by_mime.insert("text/plain".to_owned(), b"local".to_vec());
+        let selection = BridgeSelectionState {
+            identity: identity.clone(),
+            source_id: 9,
+            data_control_source_id: 11,
+            history_entry_id: bridge_history_entry_id(&identity, 9),
+            timestamp_unix_ms: 1,
+            suppress_selection_echo: true,
+            data_by_mime,
+        };
+
+        let candidates = picker_bridge_candidates(&selection, "text/plain");
+        assert_eq!(candidates[0].source_realm_kind, RealmKind::UnsafeLocal);
+        assert_eq!(
+            candidates[0].source_provider_kind,
+            Some(WorkloadProviderKind::UnsafeLocal)
+        );
+        assert_eq!(
+            candidates[0]
+                .capability_preflight
+                .as_ref()
+                .map(|preflight| preflight.authority),
+            Some(ClipboardTransferAuthority::PickerClipd)
+        );
+        assert!(!published_selection_can_serve_bridge_paste(
+            PublishedSelectionMode::Discovery
+        ));
+    }
+
+    #[test]
+    fn parses_typed_unsafe_local_bridge_endpoint_without_vm_identity() {
+        let config = serde_json::json!({
+            "runtime": {
+                "bridgeEndpoints": [{
+                    "canonicalTarget": "tools.host.d2b",
+                    "providerKind": "unsafe-local",
+                    "legacyVmName": null,
+                    "socketComponent": "endpoint-fc002cd9909aab17c2232e85",
+                    "expectedUid": 1000
+                }]
+            }
+        });
+
+        let peers = parse_bridge_peers(&config).expect("typed endpoints");
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].identity, unsafe_local_endpoint());
+        assert_eq!(
+            peers[0].socket_component,
+            "endpoint-fc002cd9909aab17c2232e85"
+        );
+        assert_eq!(peers[0].expected_uid, 1000);
+    }
+
+    #[test]
+    fn unsafe_local_destination_uses_exact_endpoint_not_window_metadata_for_authority() {
+        let dest = FocusedWindowSnapshot {
+            app_id: Some("d2b.spoofed.work.d2b.app".to_owned()),
+            title: Some("presentation only".to_owned()),
+            ..Default::default()
+        };
+        let metadata = destination_metadata(&dest, Some(&unsafe_local_endpoint()));
+
+        assert_eq!(metadata.realm, "host");
+        assert_eq!(metadata.realm_kind, RealmKind::UnsafeLocal);
+        assert_eq!(metadata.canonical_target.as_deref(), Some("tools.host.d2b"));
+        assert_eq!(
+            metadata.provider_kind,
+            Some(WorkloadProviderKind::UnsafeLocal)
+        );
+        assert_eq!(metadata.attribution, AttributionQuality::ExactClient);
+    }
+
+    #[test]
+    fn rejects_unsafe_local_bridge_endpoint_with_legacy_vm_name() {
+        let config = serde_json::json!({
+            "runtime": {
+                "bridgeEndpoints": [{
+                    "canonicalTarget": "tools.host.d2b",
+                    "providerKind": "unsafe-local",
+                    "legacyVmName": "tools",
+                    "expectedUid": 1000
+                }]
+            }
+        });
+
+        assert!(
+            parse_bridge_peers(&config)
+                .expect_err("unsafe-local must not be VM-shaped")
+                .contains("must not carry legacyVmName")
         );
     }
 
@@ -4000,7 +4358,7 @@ mod tests {
             frame_deadline: now - Duration::from_millis(1),
         }];
         let mut bridge_streams = vec![BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: bridge_reader,
             read_buffer: b"{".to_vec(),
             received_fds: Vec::new(),
@@ -4034,13 +4392,14 @@ mod tests {
     #[test]
     fn bridge_listener_socket_is_connectable_by_peer_group() {
         let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
-        let root = std::env::temp_dir().join(format!(
+        let root = PathBuf::from("target").join(format!(
             "d2b-clipd-bridge-test-{}-{}",
             std::process::id(),
             unix_millis()
         ));
         let peer = BridgePeerConfig {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
+            socket_component: "work".to_owned(),
             expected_uid: rustix::process::getuid().as_raw(),
         };
         let listeners = install_bridge_listeners(&root, &[peer]).expect("install bridge listener");
@@ -4060,13 +4419,14 @@ mod tests {
     #[test]
     fn bridge_listener_temporary_umask_is_restored() {
         let _guard = UMASK_TEST_LOCK.lock().expect("umask lock");
-        let root = std::env::temp_dir().join(format!(
+        let root = PathBuf::from("target").join(format!(
             "d2b-clipd-bridge-umask-test-{}-{}",
             std::process::id(),
             unix_millis()
         ));
         let peer = BridgePeerConfig {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
+            socket_component: "work".to_owned(),
             expected_uid: rustix::process::getuid().as_raw(),
         };
         let expected = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o027));
@@ -4196,11 +4556,11 @@ mod tests {
     }
 
     #[test]
-    fn bridge_frame_carries_exact_vm_metadata_and_fd() {
+    fn bridge_frame_carries_exact_unsafe_local_identity_and_fd() {
         let (sender, receiver) = UnixStream::pair().expect("bridge pair");
         let (read_fd, write_fd) =
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
-        let frame = br#"{"type":"vm_paste_request","vm_name":"work","mime_type":"text/plain","source_id":7,"source_attribution":"exact_client"}
+        let frame = br#"{"type":"workload_paste_request","canonical_target":"tools.host.d2b","provider_kind":"unsafe-local","mime_type":"text/plain","source_id":7,"source_attribution":"exact_client"}
 "#;
         let iov = [std::io::IoSlice::new(frame)];
         let raw_fd = write_fd.as_raw_fd();
@@ -4216,7 +4576,7 @@ mod tests {
         drop(write_fd);
 
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: unsafe_local_endpoint(),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
@@ -4224,7 +4584,7 @@ mod tests {
         };
         match recv_bridge_frame(&mut stream).expect("bridge frame") {
             BridgeRequest::Paste(request) => {
-                assert_eq!(request.vm_name, "work");
+                assert_eq!(request.identity, unsafe_local_endpoint());
                 assert_eq!(request.mime_type, "text/plain");
                 assert_eq!(request.source_id, 7);
                 drop(request.fd);
@@ -4255,7 +4615,7 @@ mod tests {
         drop(write_fd);
 
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
@@ -4292,7 +4652,7 @@ mod tests {
         drop(write_a);
         drop(write_b);
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
@@ -4311,7 +4671,7 @@ mod tests {
             .write_all(&vec![b'a'; BRIDGE_MAX_FRAME_BYTES + 1])
             .expect("write");
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
@@ -4348,7 +4708,7 @@ mod tests {
         drop(write_a);
         drop(write_b);
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: Vec::new(),
@@ -4378,7 +4738,7 @@ mod tests {
             received_fds.push(write);
         }
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds,
@@ -4397,7 +4757,7 @@ mod tests {
         let (read_fd, write_fd) =
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("pipe");
         let mut stream = BridgeStream {
-            vm_name: "work".to_owned(),
+            identity: vm_endpoint("work"),
             stream: receiver,
             read_buffer: Vec::new(),
             received_fds: vec![write_fd],
