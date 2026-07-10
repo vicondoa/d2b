@@ -134,7 +134,7 @@ pkgs.testers.runNixOSTest {
         "    'realmPath':['host'],'canonicalTarget':'tools.host.d2b'},\n"
         "  'itemId':'probe','argv':['sh','-c',\n"
         "    'printf \"stdout=%s\\\\nstderr=%s\\\\nenv=%s\\\\ncwd=%s\\\\n\" '\n"
-        "    '\"$(readlink /proc/self/fd/1)\" \"$(readlink /proc/self/fd/2)\" '\n"
+        "    '\"$(readlink /proc/$$/fd/1)\" \"$(readlink /proc/$$/fd/2)\" '\n"
         "    '\"$D2B_MANAGER_CANARY\" \"$PWD\" '\n"
         "    '> /run/user/1000/d2b-helper-child-state; sleep 60'],\n"
         "  'graphical':False}}\n"
