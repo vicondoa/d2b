@@ -524,12 +524,13 @@ running live guest activation.
 | `TerminalStream` | enum | [`TerminalStream`](../../packages/d2b-contracts/src/terminal_wire.rs#L19) | `Stdout`; `Stderr` |
 | `TerminalStatus` | enum | [`TerminalStatus`](../../packages/d2b-contracts/src/terminal_wire.rs#L197) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
 | `PathClass` | enum | [`PathClass`](../../packages/d2b-contracts/src/types.rs#L171) | `Vm`; `Runtime` |
-| `HelperScopeKind` | enum | [`HelperScopeKind`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L47) | `LauncherApp`; `WaylandProxy`; `PersistentShell` |
-| `HelperScopeState` | enum | [`HelperScopeState`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L71) | `Starting`; `Active`; `Stopping`; `Exited`; `Degraded` |
-| `HelperFailureCode` | enum | [`HelperFailureCode`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L190) | `InvalidRequest`; `OperationIdConflict`; `QueueFull`; `Timeout`; `UserManagerUnavailable`; `EnvironmentInvalid`; `ExecutableUnavailable`; `ScopeCreateFailed`; `ScopeIdentityMismatch`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `FirstClientTimeout`; `ShellUnavailable`; `Internal` |
-| `HelperOperationDisposition` | enum | [`HelperOperationDisposition`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L210) | `Committed`; `AlreadyCommitted`; `Completed` |
-| `DaemonToUnsafeLocalHelper` | enum | [`DaemonToUnsafeLocalHelper`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L245) | `HelloAccepted` — (HelperHelloAccepted); `Heartbeat` — (HelperHeartbeat); `Launch` — (HelperLaunchRequest); `Shell` — (HelperShellRequest) |
-| `UnsafeLocalHelperToDaemon` | enum | [`UnsafeLocalHelperToDaemon`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L254) | `Hello` — (HelperHello); `Snapshot` — (HelperSnapshot); `Heartbeat` — (HelperHeartbeat); `Operation` — (HelperOperationResult); `TerminalReady` — (HelperTerminalReady); `Rejected` — (HelperOperationRejected) |
+| `HelperScopeKind` | enum | [`HelperScopeKind`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L49) | `LauncherApp`; `WaylandProxy`; `PersistentShell` |
+| `HelperScopeState` | enum | [`HelperScopeState`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L73) | `Starting`; `Active`; `Stopping`; `Exited`; `Degraded` |
+| `HelperFailureCode` | enum | [`HelperFailureCode`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L192) | `InvalidRequest`; `OperationIdConflict`; `QueueFull`; `Timeout`; `UserManagerUnavailable`; `EnvironmentInvalid`; `ExecutableUnavailable`; `ScopeCreateFailed`; `ScopeIdentityMismatch`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `FirstClientTimeout`; `ShellUnavailable`; `Internal` |
+| `HelperOperationDisposition` | enum | [`HelperOperationDisposition`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L212) | `Committed`; `AlreadyCommitted`; `Completed` |
+| `HelperTerminalTransport` | enum | [`HelperTerminalTransport`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L241) | `ConnectedUnixStream` |
+| `DaemonToUnsafeLocalHelper` | enum | [`DaemonToUnsafeLocalHelper`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L256) | `HelloAccepted` — (HelperHelloAccepted); `Heartbeat` — (HelperHeartbeat); `Launch` — (HelperLaunchRequest); `Shell` — (HelperShellRequest) |
+| `UnsafeLocalHelperToDaemon` | enum | [`UnsafeLocalHelperToDaemon`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L265) | `Hello` — (HelperHello); `Snapshot` — (HelperSnapshot); `Heartbeat` — (HelperHeartbeat); `Operation` — (HelperOperationResult); `TerminalReady` — (HelperTerminalReady); `Rejected` — (HelperOperationRejected) |
 | `UsbipClaimSource` | enum | [`UsbipClaimSource`](../../packages/d2b-contracts/src/usbip.rs#L99) | `Declared` — struct { `firewall_ref`: `String`; `bind_ref`: `String` }; `Explicit` |
 <!-- END AUTO-GENERATED: enum-variants -->
 
