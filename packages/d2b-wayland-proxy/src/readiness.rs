@@ -102,14 +102,6 @@ impl ReadinessReporter {
         })
     }
 
-    #[cfg(test)]
-    pub fn from_stream(identity: ProxyIdentity, stream: UnixStream) -> Self {
-        Self {
-            identity,
-            stream: Some(stream),
-        }
-    }
-
     pub fn ready(&mut self, stage: ProxyReadinessStage) -> io::Result<()> {
         let event = ProxyReadinessEvent::ready(&self.identity, stage);
         self.emit(&event)

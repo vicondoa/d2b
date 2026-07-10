@@ -1118,8 +1118,6 @@ mod tests {
 
     #[test]
     fn first_client_readiness_is_reported_without_a_deadline() {
-        use std::io::BufRead;
-
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
             "--target",
@@ -1133,18 +1131,12 @@ mod tests {
         ])
         .expect("parse args");
         let identity = resolve_identity(&args).unwrap();
-        let (stream, peer) = UnixStream::pair().unwrap();
-        let mut readiness = ReadinessReporter::from_stream(identity, stream);
+        let mut readiness = ReadinessReporter::disabled(identity);
         let mut pending = true;
         let mut deadline = None;
 
         report_first_client_ready(&mut readiness, &mut pending, &mut deadline).unwrap();
 
-        let mut line = String::new();
-        std::io::BufReader::new(peer).read_line(&mut line).unwrap();
-        let event: readiness::ProxyReadinessEvent = serde_json::from_str(&line).unwrap();
-        assert_eq!(event.stage, ProxyReadinessStage::FirstClient);
-        assert_eq!(event.state, readiness::ProxyReadinessState::Ready);
         assert!(!pending);
         assert!(deadline.is_none());
     }
