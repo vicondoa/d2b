@@ -16,6 +16,7 @@ activation-runtime-tmpfiles/role-acl-script-no-raw-runtime-dir-mutation
 activation-runtime-tmpfiles/run-guest-control-dir
 activation-runtime-tmpfiles/run-parent-mask-after-traversal-acls
 activation-runtime-tmpfiles/run-store-sync-dir
+activation-runtime-tmpfiles/run-store-sync-pointer
 activation-runtime-tmpfiles/runtime-posture-no-store-view-mkdir
 activation-runtime-tmpfiles/run-vm-dir
 activation-runtime-tmpfiles/run-vms-parent
@@ -25,6 +26,7 @@ activation-runtime-tmpfiles/storage-json-has-audio-lock-in-locks-dir
 activation-runtime-tmpfiles/storage-json-has-audio-state-dir
 activation-runtime-tmpfiles/storage-json-has-audio-state-file
 activation-runtime-tmpfiles/store-sync-creates-only-run-leaf
+activation-runtime-tmpfiles/store-sync-defers-missing-run-parent
 activation-runtime-tmpfiles/store-view-live-dir
 activation-runtime-tmpfiles/tpm-state-perms-tmpfiles-owned
 activation-runtime-tmpfiles/video-dir

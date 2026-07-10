@@ -89,6 +89,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed first boot with d2b enabled. Store-sync activation now defers
+  next-generation pointer publication when `/run/d2b` has not yet been
+  materialized, while systemd-tmpfiles owns boot-time pointer creation and
+  activation continues to reject unsafe parent and leaf path types.
+
 - Fixed host-local realm daemon startup after `/etc/d2b` private bundle
   artifacts are materialized. Realm daemon users and services now carry the
   canonical `d2bd` supplementary group, preserving read access to

@@ -793,9 +793,12 @@ in
     environment.systemPackages = [ spectrumCh ];
 
     systemd.tmpfiles.rules =
-      lib.mapAttrsToList
-        (name: _: "d /run/d2b/${name} 0755 root root -")
-        normalNixosVms;
+      lib.concatLists (lib.mapAttrsToList
+        (name: gen: [
+          "d /run/d2b/${name} 0755 root root -"
+          "L+ /run/d2b/${name}/next-generation - - - - ${gen}"
+        ])
+        vmGenPaths);
 
     # Force every VM's nix-store share to point at its per-VM hardlink
     # farm instead of the host's full /nix/store. microvm.nix's
@@ -873,9 +876,11 @@ in
     # also tmpfiles-owned, but activation can run before tmpfiles has
     # materialised newly-declared VM leaves on the first switch that
     # introduces a VM, so this hook idempotently creates ONLY the leaf
-    # before updating the pointer. The daemon-native Rust StoreSync
-    # broker op is the canonical writer for store-view; activation must
-    # not build/sweep/activate per-VM store closures.
+    # before updating the pointer. On first boot, activation runs before
+    # tmpfiles and defers pointer publication to the matching L+ rule
+    # above. The daemon-native Rust StoreSync broker op is the canonical
+    # writer for store-view; activation must not build/sweep/activate
+    # per-VM store closures.
     #
     # /run/d2b is created by
     # host-daemon.nix tmpfiles (root:d2b 1770 with ACLs) under
@@ -885,26 +890,32 @@ in
     # ---------------------------------------------------------------------------
     system.activationScripts.d2bStoreSync = lib.stringAfter [ "specialfs" "users" ] ''
       set -u
-      ${lib.concatStringsSep "\n" (lib.mapAttrsToList
-        (name: gen: ''
-          if [ ! -d /run/d2b ]; then
-            echo "d2bStoreSync: /run/d2b parent missing; tmpfiles/host runtime posture did not run" >&2
-            exit 1
-          fi
-          if [ -L /run/d2b/${name} ]; then
-            echo "d2bStoreSync: refusing symlinked runtime leaf /run/d2b/${name}" >&2
-            exit 1
-          fi
-          if [ ! -e /run/d2b/${name} ]; then
-            mkdir /run/d2b/${name}
-          elif [ ! -d /run/d2b/${name} ]; then
-            echo "d2bStoreSync: refusing non-directory runtime leaf /run/d2b/${name}" >&2
-            exit 1
-          fi
-          ${activationHelper} enforce-dir-posture --path /run/d2b/${name} --uid 0 --gid 0 --mode 0755
-          ln -sfT ${gen} /run/d2b/${name}/next-generation
-        '')
-        vmGenPaths)}
+      if [ -L /run/d2b ]; then
+        echo "d2bStoreSync: refusing symlinked runtime parent /run/d2b" >&2
+        exit 1
+      elif [ ! -e /run/d2b ]; then
+        echo "d2bStoreSync: /run/d2b parent not materialized; deferring pointer publication to systemd-tmpfiles" >&2
+      elif [ ! -d /run/d2b ]; then
+        echo "d2bStoreSync: refusing non-directory runtime parent /run/d2b" >&2
+        exit 1
+      else
+        ${lib.concatStringsSep "\n" (lib.mapAttrsToList
+          (name: gen: ''
+            if [ -L /run/d2b/${name} ]; then
+              echo "d2bStoreSync: refusing symlinked runtime leaf /run/d2b/${name}" >&2
+              exit 1
+            fi
+            if [ ! -e /run/d2b/${name} ]; then
+              mkdir /run/d2b/${name}
+            elif [ ! -d /run/d2b/${name} ]; then
+              echo "d2bStoreSync: refusing non-directory runtime leaf /run/d2b/${name}" >&2
+              exit 1
+            fi
+            ${activationHelper} enforce-dir-posture --path /run/d2b/${name} --uid 0 --gid 0 --mode 0755
+            ln -sfT ${gen} /run/d2b/${name}/next-generation
+          '')
+          vmGenPaths)}
+      fi
     '';
 
     # ---------------------------------------------------------------------------
