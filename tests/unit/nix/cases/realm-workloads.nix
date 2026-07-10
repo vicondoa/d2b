@@ -984,7 +984,7 @@ in
         ];
       in
       hasMessage [ "must not declare legacyVmName" ] messages
-      && hasMessage [ "must not configure localVm or qemuMedia" ] messages;
+      && hasMessage [ "must not configure localVm" "qemuMedia runtime options" ] messages;
     expected = true;
   };
 
@@ -1025,10 +1025,11 @@ in
           })
         ];
       in {
-        emptyExecRejected = hasMessage [ "invalid item shape" ] badExec;
+        emptyExecRejected =
+          hasMessage [ "invalid item" "Exec argv must be non-empty" ] badExec;
         nulArgRejected = hasMessage [ "NUL-free" ] badNul;
         shellWithoutPolicyRejected =
-          hasMessage [ "shell launcher item" "shell.enable is false" ] badShell;
+          hasMessage [ "shell launcher item" "shell.enable is" ] badShell;
         missingDefaultRejected =
           hasMessage [ "defaultItem must name" ] badDefault;
       };
