@@ -624,6 +624,7 @@ realm-workloads/index-accepted-with-legacyvmname
 realm-workloads/index-all-includes-disabled
 realm-workloads/index-by-vm-accessor
 realm-workloads/index-flat-enabled-accessor
+realm-workloads/launcher-item-shape-assertions
 realm-workloads/launcher-json-bundle-artifact
 realm-workloads/launcher-json-canonical-target-override
 realm-workloads/launcher-json-duplicate-icon-group-key-matches
@@ -636,8 +637,17 @@ realm-workloads/launcher-json-invariants
 realm-workloads/launcher-json-no-implicit-dedup
 realm-workloads/launcher-json-shape
 realm-workloads/launcher-json-workload-id-field
+realm-workloads/launcher-v2-public-metadata-hides-argv
+realm-workloads/persistent-shell-compatibility-item
 realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
+realm-workloads/unsafe-local-artifacts-and-bundle-v10
+realm-workloads/unsafe-local-index-posture-and-items
+realm-workloads/unsafe-local-omitted-from-launcher-v1
+realm-workloads/unsafe-local-private-artifact-carries-argv
+realm-workloads/unsafe-local-rejects-legacy-shell-commands
+realm-workloads/unsafe-local-rejects-vm-paths-and-options
+realm-workloads/unsafe-local-requires-explicit-opt-in
 requested-vm-config/boot-selector-and-hotplug-source-coexist
 requested-vm-config/dark-env-declared
 requested-vm-config/dark-live-manual-qemu-media
