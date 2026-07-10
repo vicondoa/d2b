@@ -12,6 +12,14 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the same-UID unsafe-local runtime foundation: `d2bd` now owns the
+  bounded, peer-credential-authenticated helper socket and one-generation-per-
+  UID registry; eligible users receive a fail-closed global systemd user
+  service; and the new `d2b-unsafe-local-helper` copies the current user-manager
+  environment into verified transient scopes with bounded operation ledgers,
+  reconnect snapshots, exact InvocationID/cgroup adoption, and no graphical
+  direct-display fallback.
+
 - Added the provider-neutral launcher contract for realm workloads. Generic
   `launcher.items.<id>` entries can describe configured `exec` actions or
   persistent `shell` actions with item-owned names and icons; applications such
@@ -88,6 +96,14 @@ deprecations ship one minor release before removal.
   transition runtime substrate.
 
 ### Fixed
+
+- Fixed unsafe-local launches stalling behind an idle control-socket read or
+  racing systemd's asynchronous transient-unit property publication. Completed
+  operations now wake both bounded control loops immediately; sockets are
+  created close-on-exec, writes are time-bounded, and receive buffers are reused.
+  The helper reuses one D-Bus connection with bounded method calls, while scope
+  identity verification reads cgroup identity from the scope interface and
+  retries within a strict deadline without weakening mismatch rejection.
 
 - Fixed first boot with d2b enabled. Store-sync activation now defers
   next-generation pointer publication when `/run/d2b` has not yet been

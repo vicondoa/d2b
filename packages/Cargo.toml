@@ -18,6 +18,7 @@ members = [
     "d2b-host",
     "d2b-guestd",
     "d2b-userd",
+    "d2b-unsafe-local-helper",
     "d2b-exec-runner",
     "d2b-sk-frontend",
     "d2b-contracts",

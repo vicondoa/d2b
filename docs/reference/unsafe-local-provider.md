@@ -4,8 +4,9 @@
 
 `unsafe-local` is an explicit realm workload provider for commands and
 persistent shells that run as the authenticated host user. It provides **no
-isolation boundary**. The contract is staged behind protocol features until the
-daemon/helper runtime is enabled.
+isolation boundary**. The helper connection and user-scope runtime are enabled
+for configured eligible users. Public workload launch and shell dispatch remain
+feature-negotiated until their provider routes are enabled.
 
 ## Nix options
 
@@ -110,6 +111,29 @@ limits. Operators may raise restrictive host limits independently; helper
 registration remains fail-closed if the effective per-socket requirement is not
 met.
 
+The globally installed `d2b-unsafe-local-helper.service` is a systemd user
+service. `ConditionGroup=d2b-unsafe-local` prevents users who are not allowed to
+access an enabled unsafe-local realm from registering or entering a restart
+loop. The helper connects outward; `d2bd` does not discover a user bus or
+impersonate a user. Both peers verify `SO_PEERCRED`, and a valid reconnect
+atomically supersedes the prior generation for that UID.
+
+For each operation the helper reads
+`org.freedesktop.systemd1.Manager.Environment` from the current user manager.
+It rejects malformed or oversized data rather than trimming it, clears the
+child's inherited environment, and copies the complete manager environment.
+Graphical operations additionally remove `DISPLAY` and require a proxy-owned
+`WAYLAND_DISPLAY`; if no proxy endpoint is ready, launch fails without a direct
+display fallback.
+
+Every launched process begins behind a blocked supervisor. The helper calls
+`StartTransientUnit`, verifies the returned scope's `InvocationID` and exact
+control-group identity, and only then releases the supervisor to start the
+child. Reconnect snapshots re-query that identity. An ambiguous scope is
+preserved and reported degraded rather than killed by PID, name, or a broad
+cgroup sweep. These scopes last only for the systemd user-manager lifetime;
+d2b does not enable lingering.
+
 Terminal data uses exactly one connected `AF_UNIX`
 `SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,
 and multiple fds are rejected. The receiver requires
@@ -122,14 +146,13 @@ Every socket is created with `SOCK_CLOEXEC`, every other control or PTY fd uses
 `O_CLOEXEC`, and rights are received with `MSG_CMSG_CLOEXEC`. Only descriptors
 explicitly remapped for a child may survive `exec`.
 
-## Runtime observability staging
+## Runtime observability
 
-This contract-only stage freezes DTO, schema, redaction, and cardinality rules;
-it does not emit runtime events or metrics. The helper registration, scope,
-proxy, launcher, and shell lifecycle signals are implemented with their owning
-runtime paths. Those implementations must use bounded event kinds and result
-classes and must never expose uid, argv, environment, cwd, paths, PIDs, unit
-names, shell names, transcripts, or terminal bytes.
+Helper registration, reconnect, supersede, and stale events use bounded event
+kinds and result classes. Runtime signals never expose uid, argv, environment,
+cwd, paths, PIDs, unit names, shell names, transcripts, or terminal bytes.
+Scope, proxy, launcher, and shell signals follow the same rule as those provider
+routes become available.
 
 Generated schemas:
 
