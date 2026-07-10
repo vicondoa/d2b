@@ -9,6 +9,7 @@ use zbus::zvariant::{OwnedObjectPath, Value};
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const SYSTEMD_MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
+const SYSTEMD_SCOPE_INTERFACE: &str = "org.freedesktop.systemd1.Scope";
 const SYSTEMD_UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
 const SCOPE_IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCOPE_IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -116,7 +117,14 @@ impl SystemdUserScopeManager {
         if invocation.len() != 16 {
             return Err(ScopeError::IdentityMismatch);
         }
-        let control_group: String = unit
+        let scope_unit = Proxy::new(
+            connection,
+            SYSTEMD_DESTINATION,
+            unit_path.as_str(),
+            SYSTEMD_SCOPE_INTERFACE,
+        )
+        .map_err(|_| ScopeError::QueryFailed)?;
+        let control_group: String = scope_unit
             .get_property("ControlGroup")
             .map_err(|_| ScopeError::QueryFailed)?;
         if !control_group_matches_unit(&control_group, unit_name) {
