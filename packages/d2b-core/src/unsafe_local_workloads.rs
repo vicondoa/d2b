@@ -283,7 +283,7 @@ mod tests {
         let mut workload = valid_workload();
         workload.shell = Some(UnsafeLocalShellPolicy {
             default_name: "host".to_owned(),
-            max_sessions: (MAX_UNSAFE_LOCAL_SHELL_SESSIONS + 1) as u16,
+            max_sessions: MAX_UNSAFE_LOCAL_SHELL_SESSIONS + 1,
         });
         assert!(workload.validate().is_err());
     }
