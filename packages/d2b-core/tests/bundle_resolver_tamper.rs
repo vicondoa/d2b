@@ -183,6 +183,32 @@ fn minimal_vms_json() -> Vec<u8> {
     .expect("vms json serializes")
 }
 
+fn minimal_unsafe_local_workloads_json() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": "v2",
+        "workloads": [{
+            "identity": {
+                "workloadId": "tools",
+                "realmId": "host",
+                "realmPath": ["host"],
+                "canonicalTarget": "tools.host.d2b",
+                "runtimeKind": "unsafe-local",
+                "providerId": "unsafe-local"
+            },
+            "defaultItemId": "browser",
+            "items": [{
+                "type": "exec",
+                "id": "browser",
+                "name": "Browser",
+                "icon": {"name": "firefox"},
+                "argv": ["firefox"],
+                "graphical": true
+            }]
+        }]
+    }))
+    .expect("unsafe-local workloads json serializes")
+}
+
 /// Write all sibling artifacts the resolver needs into `dir`.
 /// `bundle_path` is the bundle.json path that has already been written;
 /// the relative references inside it (`host.json`, etc.) are resolved
@@ -398,6 +424,128 @@ fn bundle_json_with_full_hashes(
     obj.insert("bundleHash".to_owned(), serde_json::Value::String(hash));
     obj.insert("artifactHashes".to_owned(), artifact_hashes);
     serde_json::to_vec(&value).expect("bundle with full hashes serializes")
+}
+
+fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "artifactHashes": null,
+        "bundleVersion": 10,
+        "schemaVersion": "v2",
+        "publicManifestPath": "vms.json",
+        "hostPath": "host.json",
+        "processesPath": "processes.json",
+        "privilegesPath": "privileges.json",
+        "realmWorkloadsLauncherV2Path": "realm-workloads-launcher-v2.json",
+        "unsafeLocalWorkloadsPath": "unsafe-local-workloads.json",
+        "closures": [],
+        "minijailProfiles": [],
+        "managedKeys": {
+            "keysDir": "/var/lib/d2b/keys",
+            "knownHostsPath": "/var/lib/d2b/known_hosts.d2b",
+            "overrides": []
+        },
+        "generation": {
+            "generator": "test",
+            "sourceRevision": null,
+            "generatedAt": null
+        }
+    }))
+    .expect("unsafe-local bundle pre-hash serializes")
+}
+
+fn minimal_realm_workloads_launcher_v2_json() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": "v2",
+        "runtimeState": "contract-only",
+        "workloads": [],
+        "invariants": {
+            "argvPrivate": true,
+            "providerNeutral": true,
+            "typedExecutionPosture": true,
+            "realmAccentColorOnly": true,
+            "noSecretsOrCredentials": true
+        }
+    }))
+    .expect("launcher v2 fixture serializes")
+}
+
+fn write_unsafe_local_bundle(dir: &Path, policy: &BundleVerifyPolicy) -> std::path::PathBuf {
+    let host = minimal_host_json();
+    let processes = minimal_processes_json();
+    let launcher_v2 = minimal_realm_workloads_launcher_v2_json();
+    let unsafe_local = minimal_unsafe_local_workloads_json();
+    let hashes = serde_json::json!({
+        "host.json": sha256_hex(&host),
+        "processes.json": sha256_hex(&processes),
+        "realm-workloads-launcher-v2.json": sha256_hex(&launcher_v2),
+        "unsafe-local-workloads.json": sha256_hex(&unsafe_local)
+    });
+    let bundle = bundle_json_with_full_hashes(&unsafe_local_bundle_pre_hash(), hashes);
+    let bundle_path = dir.join("bundle.json");
+    let host_path = dir.join("host.json");
+    let processes_path = dir.join("processes.json");
+    let launcher_v2_path = dir.join("realm-workloads-launcher-v2.json");
+    let unsafe_local_path = dir.join("unsafe-local-workloads.json");
+    write_private(&bundle_path, &bundle);
+    write_private(&host_path, &host);
+    write_private(&processes_path, &processes);
+    write_private(&launcher_v2_path, &launcher_v2);
+    write_private(&unsafe_local_path, &unsafe_local);
+    fs::write(dir.join("vms.json"), minimal_vms_json()).expect("write vms.json");
+    for path in [
+        &bundle_path,
+        &host_path,
+        &processes_path,
+        &launcher_v2_path,
+        &unsafe_local_path,
+    ] {
+        set_mode_to(path, policy.required_mode);
+    }
+    bundle_path
+}
+
+#[test]
+fn loads_hashed_unsafe_local_workloads_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
+    let resolver =
+        BundleResolver::load_with_policy(&bundle_path, &policy).expect("unsafe-local bundle loads");
+    assert_eq!(resolver.bundle.bundle_version, 10);
+    assert!(resolver.realm_workloads_launcher_v2.is_some());
+    assert!(
+        resolver
+            .find_unsafe_local_workload("tools.host.d2b")
+            .is_some()
+    );
+}
+
+#[test]
+fn rejects_tampered_realm_workloads_launcher_v2_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
+    write_private(
+        &dir.path().join("realm-workloads-launcher-v2.json"),
+        br#"{"schemaVersion":"v2","runtimeState":"contract-only","workloads":[],"invariants":{"argvPrivate":false,"providerNeutral":true,"typedExecutionPosture":true,"realmAccentColorOnly":true,"noSecretsOrCredentials":true}}"#,
+    );
+    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
+        .expect_err("tampered launcher-v2 artifact rejects");
+    assert_tampered(&error, "hash");
+}
+
+#[test]
+fn rejects_tampered_unsafe_local_workloads_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy = current_user_policy();
+    let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
+    write_private(
+        &dir.path().join("unsafe-local-workloads.json"),
+        br#"{"schemaVersion":"v2","workloads":[]}"#,
+    );
+    let error = BundleResolver::load_with_policy(&bundle_path, &policy)
+        .expect_err("tampered unsafe-local artifact rejects");
+    assert_tampered(&error, "hash");
 }
 
 // ---------------------------------------------------------------

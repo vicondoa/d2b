@@ -63,6 +63,8 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
         allocator_path: None,
         realm_controllers_path: None,
         realm_identity_path: None,
+        realm_workloads_launcher_v2_path: None,
+        unsafe_local_workloads_path: None,
         closures: Vec::new(),
         minijail_profiles: Vec::new(),
         managed_keys: BundleManagedKeys::default(),

@@ -19,6 +19,8 @@ Canonical reference for host-visible d2b naming. AGENTS.md and the design doc ke
 | Auto-declared net VM | `d2b@sys-<env>-net.service` | Framework-reserved net VM per env (legacy wrapper-unit name; in v1.0 dispatched through `d2bd` → broker like every other VM). |
 | Legacy per-VM system users | `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `d2b.slice/<vm>/<role>`. Notable exceptions: `d2b-<vm>-store-sync` runs as root (no dedicated user) and `d2b-<vm>-gpu` is shared by the GPU and video runners. |
 | Launcher group | `d2b` | v1.2 Unix group allowed to talk to `d2bd` over `/run/d2b/public.sock` (mode 0660, group `d2b`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `d2b-launcher` / `d2b-launchers` groups are empty migration tombstones only. |
+| Unsafe-local helper group | `d2b-unsafe-local` | Narrow helper-socket access group populated only from users allowed to use an enabled unsafe-local realm. |
+| Unsafe-local helper socket | `/run/d2b/unsafe-local-helper.sock` | Daemon-owned private `SOCK_SEQPACKET` listener; not a systemd socket unit and not a fourth root service. |
 
 ## Broker caller-role audit labels
 
@@ -64,6 +66,14 @@ local `work-aad` VM for status and guest-control exec while preserving
 These constraints let the CLI, manifest, and host-side units resolve resources
 mechanically without collisions. When docs and code differ, the passing code is
 canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
+
+Launcher item ids also use `^[a-z][a-z0-9-]*$`. They are scoped to one workload
+and appear in `d2b launch <target> --item <id>`.
+
+Private configured unsafe-local data is installed as
+`/etc/d2b/unsafe-local-workloads.json`. Public provider-neutral launcher
+metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`; the compatibility
+schema remains `/etc/d2b/realm-workloads-launcher.json`.
 
 ## Persistent shell session names
 

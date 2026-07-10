@@ -10109,6 +10109,8 @@ mod tests {
             allocator_path: None,
             realm_controllers_path: None,
             realm_identity_path: None,
+            realm_workloads_launcher_v2_path: None,
+            unsafe_local_workloads_path: None,
             closures: vec![BundleClosureRef {
                 vm: "corp-vm".to_owned(),
                 path: "closures/corp-vm.json".to_owned(),

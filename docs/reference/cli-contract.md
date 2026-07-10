@@ -58,6 +58,26 @@ documents a realm-aware backend. The resolver contract is documentation and DTO
 shape for future routing; it does not make identity, relay, provider, or
 realm-local lifecycle behavior available in this release.
 
+### Configured launcher operation
+
+The staged provider-neutral command contract is:
+
+```text
+d2b launch <canonical-target> [--item <item-id>]
+```
+
+The public request carries only the canonical target, configured item id, and
+an idempotency operation id. It never carries argv, uid, environment, cwd, or
+display paths. An `exec` item dispatches through the selected provider; a
+`shell` item dispatches persistent-shell semantics. When `--item` is omitted,
+the daemon selects `defaultItem`, then an only item, otherwise returns the
+available item ids and names.
+
+The DTOs are frozen under protocol version 3 and gated by
+`configured-launch-v1`; the command is not advertised until the daemon runtime
+lands. Unsupported peers return a typed capability refusal and never fall back
+to unsafe-local. See [Unsafe-local provider contract](./unsafe-local-provider.md).
+
 ## Command reference
 
 ### `list`

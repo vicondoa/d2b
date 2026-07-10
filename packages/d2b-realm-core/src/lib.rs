@@ -147,4 +147,9 @@ pub use target::{
 };
 pub use token::ProtocolToken;
 pub use trace_context::TraceContext;
-pub use workload::{WorkloadSelector, WorkloadState, WorkloadSummary};
+pub use workload::{
+    DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture, IsolationPosture,
+    LauncherIcon, LauncherItemKind, LauncherItemSummary, SessionPersistencePosture,
+    WorkloadExecutionPosture, WorkloadProviderKind, WorkloadSelector, WorkloadState,
+    WorkloadSummary,
+};

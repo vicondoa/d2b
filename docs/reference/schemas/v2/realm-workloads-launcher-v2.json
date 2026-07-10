@@ -1,0 +1,510 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RealmWorkloadsLauncherV2Json",
+  "type": "object",
+  "required": [
+    "invariants",
+    "runtimeState",
+    "schemaVersion",
+    "workloads"
+  ],
+  "properties": {
+    "invariants": {
+      "$ref": "#/definitions/LauncherMetadataInvariants"
+    },
+    "runtimeState": {
+      "$ref": "#/definitions/LauncherMetadataRuntimeState"
+    },
+    "schemaVersion": {
+      "type": "string"
+    },
+    "workloads": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LauncherWorkloadSummary"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CapabilitySet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProtocolToken"
+      },
+      "maxItems": 64,
+      "uniqueItems": true
+    },
+    "ContractId": {
+      "description": "Bounded storage/synchronization contract identifier.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "DisplayEnvironmentPosture": {
+      "description": "Graphical display routing applied to a workload.",
+      "oneOf": [
+        {
+          "description": "Display routing is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "`DISPLAY` is removed and `WAYLAND_DISPLAY` points at the d2b proxy.",
+          "type": "string",
+          "enum": [
+            "wayland-proxy-only"
+          ]
+        },
+        {
+          "description": "The workload has no graphical display route.",
+          "type": "string",
+          "enum": [
+            "not-applicable"
+          ]
+        }
+      ]
+    },
+    "EnvironmentPosture": {
+      "description": "Environment source used for workload execution.",
+      "oneOf": [
+        {
+          "description": "Environment is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "Environment is copied from the systemd user manager.",
+          "type": "string",
+          "enum": [
+            "systemd-user-manager-ambient"
+          ]
+        }
+      ]
+    },
+    "ExecutionIdentityPosture": {
+      "description": "OS identity under which a workload executes.",
+      "oneOf": [
+        {
+          "description": "Runtime-configured workload user.",
+          "type": "string",
+          "enum": [
+            "workload-user"
+          ]
+        },
+        {
+          "description": "Execution identity is owned by the provider.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "Exact authenticated local requester uid.",
+          "type": "string",
+          "enum": [
+            "authenticated-requester-uid"
+          ]
+        }
+      ]
+    },
+    "IsolationPosture": {
+      "description": "Security boundary presented by a workload runtime.",
+      "oneOf": [
+        {
+          "description": "Hardware-virtualized VM boundary.",
+          "type": "string",
+          "enum": [
+            "virtual-machine"
+          ]
+        },
+        {
+          "description": "Isolation is owned and described by a provider adapter.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "No isolation boundary; the process runs as the host user.",
+          "type": "string",
+          "enum": [
+            "unsafe-local"
+          ]
+        }
+      ]
+    },
+    "LauncherIcon": {
+      "description": "Presentation-only icon metadata.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherItemKind": {
+      "description": "Provider-neutral launcher item kind.",
+      "oneOf": [
+        {
+          "description": "Execute provider-private configured argv.",
+          "type": "string",
+          "enum": [
+            "exec"
+          ]
+        },
+        {
+          "description": "Open or attach to a persistent shell.",
+          "type": "string",
+          "enum": [
+            "shell"
+          ]
+        }
+      ]
+    },
+    "LauncherItemSummary": {
+      "description": "Public, argv-free launcher item metadata.",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "capabilities": {
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "graphical": {
+          "default": false,
+          "type": "boolean"
+        },
+        "icon": {
+          "default": {},
+          "allOf": [
+            {
+              "$ref": "#/definitions/LauncherIcon"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/ProtocolToken"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/LauncherItemKind"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherMetadataInvariants": {
+      "type": "object",
+      "required": [
+        "argvPrivate",
+        "noSecretsOrCredentials",
+        "providerNeutral",
+        "realmAccentColorOnly",
+        "typedExecutionPosture"
+      ],
+      "properties": {
+        "argvPrivate": {
+          "type": "boolean"
+        },
+        "noSecretsOrCredentials": {
+          "type": "boolean"
+        },
+        "providerNeutral": {
+          "type": "boolean"
+        },
+        "realmAccentColorOnly": {
+          "type": "boolean"
+        },
+        "typedExecutionPosture": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LauncherMetadataRuntimeState": {
+      "type": "string",
+      "enum": [
+        "contract-only"
+      ]
+    },
+    "LauncherWorkloadSummary": {
+      "type": "object",
+      "required": [
+        "executionPosture",
+        "identity",
+        "items",
+        "label",
+        "launcherEnabled",
+        "providerKind",
+        "realmAccentColor"
+      ],
+      "properties": {
+        "capabilities": {
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilitySet"
+            }
+          ]
+        },
+        "defaultItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "executionPosture": {
+          "$ref": "#/definitions/WorkloadExecutionPosture"
+        },
+        "icon": {
+          "default": {},
+          "allOf": [
+            {
+              "$ref": "#/definitions/LauncherIcon"
+            }
+          ]
+        },
+        "identity": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LauncherItemSummary"
+          }
+        },
+        "label": {
+          "type": "string"
+        },
+        "launcherEnabled": {
+          "type": "boolean"
+        },
+        "providerKind": {
+          "$ref": "#/definitions/WorkloadProviderKind"
+        },
+        "realmAccentColor": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "RealmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
+    },
+    "SessionPersistencePosture": {
+      "description": "Lifetime authority for persistent workload sessions.",
+      "oneOf": [
+        {
+          "description": "Session lifetime is owned by the runtime/provider.",
+          "type": "string",
+          "enum": [
+            "runtime-managed"
+          ]
+        },
+        {
+          "description": "Session survives helper/daemon reconnects but not user-manager exit.",
+          "type": "string",
+          "enum": [
+            "user-manager-lifetime"
+          ]
+        }
+      ]
+    },
+    "WorkloadExecutionPosture": {
+      "description": "Typed execution posture consumed by CLI and desktop clients.",
+      "type": "object",
+      "required": [
+        "displayEnvironment",
+        "environment",
+        "executionIdentity",
+        "isolation",
+        "sessionPersistence"
+      ],
+      "properties": {
+        "displayEnvironment": {
+          "$ref": "#/definitions/DisplayEnvironmentPosture"
+        },
+        "environment": {
+          "$ref": "#/definitions/EnvironmentPosture"
+        },
+        "executionIdentity": {
+          "$ref": "#/definitions/ExecutionIdentityPosture"
+        },
+        "isolation": {
+          "$ref": "#/definitions/IsolationPosture"
+        },
+        "sessionPersistence": {
+          "$ref": "#/definitions/SessionPersistencePosture"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "WorkloadIdentity": {
+      "description": "Universal workload identity, independent of any runtime or provider backend.\n\nSeparates the stable, realm-scoped identity of a workload from the backend configuration in [`WorkloadBackend`]. Any code that routes, logs, or audits a workload should carry a `WorkloadIdentity` rather than raw VM-name strings so the realm context is always available.\n\n# DTO version policy\n\nSee the [module-level note][crate::workload_identity] on additive vs. breaking changes. Adding new `Option<T>` fields here is additive; renaming or removing fields requires a `bundleVersion` + `schemaVersion` bump.",
+      "type": "object",
+      "required": [
+        "canonicalTarget",
+        "realmId",
+        "realmPath",
+        "workloadId"
+      ],
+      "properties": {
+        "canonicalTarget": {
+          "description": "Fully-qualified canonical target address, kept pre-rendered to avoid repeated formatting and to make it audit-log safe.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmTarget"
+            }
+          ]
+        },
+        "legacyVmName": {
+          "description": "Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM entry while the realm-native model is being adopted. `None` for workloads declared directly inside a realm without a legacy VM entry.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "realmId": {
+          "description": "Realm identifier of the owning realm controller.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealmId"
+            }
+          ]
+        },
+        "realmPath": {
+          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RealmId"
+          }
+        },
+        "runtimeKind": {
+          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContractId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workloadId": {
+          "description": "Stable operator-facing workload identifier (the leading label of the canonical target address).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkloadId"
+            }
+          ]
+        },
+        "workloadName": {
+          "description": "Human-readable workload name if it differs from the id. Omitted when the workload name and id are identical.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkloadProviderKind": {
+      "description": "Runtime provider family exposed to provider-neutral clients.",
+      "oneOf": [
+        {
+          "description": "Locally supervised NixOS VM.",
+          "type": "string",
+          "enum": [
+            "local-vm"
+          ]
+        },
+        {
+          "description": "Locally supervised external-media QEMU runtime.",
+          "type": "string",
+          "enum": [
+            "qemu-media"
+          ]
+        },
+        {
+          "description": "Runtime owned by a provider adapter.",
+          "type": "string",
+          "enum": [
+            "provider-managed"
+          ]
+        },
+        {
+          "description": "Host-user runtime with no isolation boundary.",
+          "type": "string",
+          "enum": [
+            "unsafe-local"
+          ]
+        }
+      ]
+    }
+  }
+}

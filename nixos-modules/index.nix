@@ -119,6 +119,103 @@ let
   # Compute a single workload index row from a declared realm workload.
   # Does NOT reference cfg.manifest to avoid circular deps with manifest.nix;
   # vsockCid derivation lives in realm-workloads-launcher-json.nix.
+  launcherItemRow = itemId: item: {
+    id = itemId;
+    inherit (item) type name graphical;
+    icon = {
+      inherit (item.icon) id name;
+    };
+    argv = item.argv;
+    capabilityRefs =
+      if item.type == "shell"
+      then [ "persistent-shell" "pty" ]
+      else [ "configured-launch" ] ++ lib.optional item.graphical "window-forwarding";
+  };
+
+  legacyLauncherItemRows = workload:
+    let
+      appRows = lib.optional (workload.launcher.app.command != null) {
+        id = "app";
+        type = "exec";
+        name =
+          if workload.launcher.label != null
+          then workload.launcher.label
+          else workload.id;
+        icon = workload.launcher.icon;
+        argv = [ "/bin/sh" "-lc" workload.launcher.app.command ];
+        graphical = false;
+        capabilityRefs = [ "configured-launch" ];
+      };
+      actionRows = map
+        (action: {
+          id = action.id;
+          type = "exec";
+          name = action.label;
+          icon = {
+            id = null;
+            name = null;
+          };
+          argv = [ "/bin/sh" "-lc" action.command ];
+          graphical = false;
+          capabilityRefs = [ "configured-launch" ];
+        })
+        workload.launcher.actions;
+    in
+    appRows ++ actionRows;
+
+  normalizedLauncherItems = workload:
+    let
+      explicitRows = sortedMapAttrsToList launcherItemRow workload.launcher.items;
+      baseRows =
+        if explicitRows != [ ]
+        then explicitRows
+        else legacyLauncherItemRows workload;
+      hasShell = lib.any (item: item.type == "shell") baseRows;
+      usedIds = map (item: item.id) baseRows;
+      shellItemId =
+        if !(builtins.elem "terminal" usedIds) then "terminal"
+        else if !(builtins.elem "persistent-shell" usedIds) then "persistent-shell"
+        else "shell";
+      syntheticShell = {
+        id = shellItemId;
+        type = "shell";
+        name = "Terminal";
+        icon = {
+          id = null;
+          name = "terminal";
+        };
+        argv = [ ];
+        graphical = false;
+        capabilityRefs = [ "persistent-shell" "pty" ];
+      };
+    in
+    baseRows ++ lib.optional (workload.shell.enable && !hasShell) syntheticShell;
+
+  workloadExecutionPosture = kind:
+    if kind == "unsafe-local"
+    then {
+      isolation = "unsafe-local";
+      environment = "systemd-user-manager-ambient";
+      displayEnvironment = "wayland-proxy-only";
+      executionIdentity = "authenticated-requester-uid";
+      sessionPersistence = "user-manager-lifetime";
+    }
+    else if kind == "provider-placeholder"
+    then {
+      isolation = "provider-managed";
+      environment = "runtime-managed";
+      displayEnvironment = "runtime-managed";
+      executionIdentity = "provider-managed";
+      sessionPersistence = "runtime-managed";
+    }
+    else {
+      isolation = "virtual-machine";
+      environment = "runtime-managed";
+      displayEnvironment = "runtime-managed";
+      executionIdentity = "workload-user";
+      sessionPersistence = "runtime-managed";
+    };
+
   realmWorkloadRow = realmName: realm: workloadName: workload:
     let
       # legacyVmName references an existing d2b.vms entry for vsockCid
@@ -129,11 +226,19 @@ let
       runtimeKind =
         if workload.kind == "local-vm" then "nixos"
         else if workload.kind == "qemu-media" then "qemu-media"
+        else if workload.kind == "unsafe-local" then "unsafe-local"
         else null;  # provider-placeholder has no local runtime
       runtimeProviderId =
-        if runtimeKind != null
+        if workload.kind == "unsafe-local" then "unsafe-local"
+        else if runtimeKind != null
         then (d2bLib.runtimeProviderCatalog.${runtimeKind}).provider.id
         else null;
+      providerKind =
+        if workload.kind == "unsafe-local" then "unsafe-local"
+        else if workload.kind == "local-vm" then "local-vm"
+        else if workload.kind == "qemu-media" then "qemu-media"
+        else "provider-managed";
+      launcherItems = normalizedLauncherItems workload;
       # Display label: launcher.label when set, otherwise workload id.
       label =
         if workload.launcher.label != null
@@ -169,6 +274,13 @@ let
       inherit canonicalTarget;
       enable = workload.enable;
       kind = workload.kind;
+      inherit providerKind;
+      executionPosture = workloadExecutionPosture workload.kind;
+      stateDir = workload.stateDir;
+      runDir = workload.runDir;
+      shell = {
+        inherit (workload.shell) enable defaultName maxSessions;
+      };
       # actionId: stable launcher action identifier; defaults to workload id.
       actionId = workloadName;
       inherit label icon;
@@ -181,6 +293,9 @@ let
       iconName = workload.launcher.icon.name;
       inherit iconGroupKey;
       capabilityRefs = sortNames (lib.unique workload.launcher.capabilities);
+      launcherEnabled = workload.launcher.enable;
+      defaultItemId = workload.launcher.defaultItem;
+      inherit launcherItems;
       # appCommand: operator-declared primary launch command; null when not set.
       appCommand = workload.launcher.app.command;
       # actions: additional named launcher actions (id, label, command).

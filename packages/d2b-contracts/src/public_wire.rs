@@ -5,7 +5,11 @@ use d2b_core::{
     error::Error,
     host::IfName,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
-    workload_identity::WorkloadIdentity,
+    workload_identity::{WorkloadIdentity, WorkloadTarget},
+};
+use d2b_realm_core::{
+    CapabilitySet, LauncherItemSummary, ProtocolToken, WorkloadExecutionPosture,
+    WorkloadProviderKind, WorkloadState, ids::OperationId,
 };
 use schemars::{
     JsonSchema,
@@ -181,6 +185,122 @@ pub enum PublicResponse {
     UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelResponse),
     #[serde(rename = "error")]
     Error(Error),
+}
+
+/// Provider-neutral workload operation family.
+///
+/// These DTOs are frozen independently from [`PublicRequest`] so version-3
+/// peers can feature-negotiate the operation before the daemon begins
+/// advertising or dispatching it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum WorkloadOp {
+    List(WorkloadListArgs),
+    Status(WorkloadStatusArgs),
+    LauncherExec(LauncherExecArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum WorkloadOpResponse {
+    List(WorkloadListResult),
+    Status(Box<WorkloadStatusResult>),
+    LauncherExec(LauncherExecResult),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadListArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadStatusArgs {
+    pub target: WorkloadTarget,
+}
+
+/// Launch one configured item. Runtime argv, uid, environment, cwd, and proxy
+/// paths are resolved by the daemon/provider and never cross the public wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LauncherExecArgs {
+    pub target: WorkloadTarget,
+    pub item_id: ProtocolToken,
+    pub operation_id: OperationId,
+}
+
+/// Closed provider availability vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadAvailability {
+    Ready,
+    HelperUnavailable,
+    HelperStale,
+    UserManagerUnavailable,
+    GraphicalSessionInactive,
+    WaylandUnavailable,
+    ProxyUnavailable,
+    Degraded,
+}
+
+/// Closed graphical launch posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphicalLaunchPosture {
+    Proxied,
+    NotApplicable,
+    GraphicalSessionInactive,
+    WaylandUnavailable,
+    ProxyUnavailable,
+}
+
+/// Public workload inventory row. Launcher metadata intentionally carries no
+/// argv; configured execution data remains in the private bundle artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadPublicSummary {
+    pub identity: WorkloadIdentity,
+    pub provider_kind: WorkloadProviderKind,
+    pub state: WorkloadState,
+    pub execution_posture: WorkloadExecutionPosture,
+    pub availability: WorkloadAvailability,
+    pub graphical_posture: GraphicalLaunchPosture,
+    #[serde(default)]
+    pub capabilities: CapabilitySet,
+    #[serde(default)]
+    pub launcher_items: Vec<LauncherItemSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_item_id: Option<ProtocolToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadListResult {
+    pub workloads: Vec<WorkloadPublicSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadStatusResult {
+    pub workload: WorkloadPublicSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LauncherExecDisposition {
+    Committed,
+    AlreadyCommitted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LauncherExecResult {
+    pub target: WorkloadTarget,
+    pub item_id: ProtocolToken,
+    pub operation_id: OperationId,
+    pub disposition: LauncherExecDisposition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

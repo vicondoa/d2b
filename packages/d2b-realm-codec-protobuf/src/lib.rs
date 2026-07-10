@@ -1161,6 +1161,7 @@ fn encode_capability(capability: Capability) -> Result<i32, ConstellationError> 
         Capability::EphemeralSessions => 19,
         Capability::ProviderManagedIsolation => 20,
         Capability::PersistentShell => 21,
+        Capability::ConfiguredLaunch => 22,
     })
 }
 
@@ -1187,6 +1188,7 @@ fn decode_capability(raw: i32) -> Option<Capability> {
         19 => Some(Capability::EphemeralSessions),
         20 => Some(Capability::ProviderManagedIsolation),
         21 => Some(Capability::PersistentShell),
+        22 => Some(Capability::ConfiguredLaunch),
         _ => None,
     }
 }
@@ -1433,6 +1435,11 @@ mod tests {
         assert_eq!(
             decode_capability_strict(21).unwrap(),
             Capability::PersistentShell
+        );
+        assert_eq!(encode_capability(Capability::ConfiguredLaunch).unwrap(), 22);
+        assert_eq!(
+            decode_capability_strict(22).unwrap(),
+            Capability::ConfiguredLaunch
         );
     }
 

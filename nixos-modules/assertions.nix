@@ -236,6 +236,18 @@ let
          && !(builtins.hasAttr pf.workload realm.workloads))
     realmPortForwardPairs;
 
+  # (4) Unsafe-local workloads have no guest address behind the realm net VM.
+  portForwardUnsafeLocalRows = lib.filter
+    (entry:
+      let
+        pf = entry.pf;
+        realm = cfg.realms.${entry.realmName};
+        workload =
+          if pf.workload == null then null
+          else realm.workloads.${pf.workload} or null;
+      in workload != null && workload.kind == "unsafe-local")
+    realmPortForwardPairs;
+
   realmPortForwardAssertions =
     map
       (entry: {
@@ -272,7 +284,19 @@ let
           for an explicit IP destination.
         '';
       })
-      portForwardMissingWorkloadRows;
+      portForwardMissingWorkloadRows
+    ++ map
+      (entry: {
+        assertion = false;
+        message = ''
+          d2b.realms.${entry.realmName}.network.externalNetwork.portForwards:
+          workload "${entry.pf.workload}" is unsafe-local and has no guest
+          network address behind the realm net VM. Net-VM port forwards can
+          target VM-backed workloads or an explicit `targetIp`, not host-user
+          processes.
+        '';
+      })
+      portForwardUnsafeLocalRows;
 
 
   missingRealmParents = lib.filter
@@ -620,6 +644,17 @@ let
   # a bad target rather than silently ignoring it).
   validWorkloadTarget = s:
     builtins.match "[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b" s != null;
+  validLauncherItemId = s:
+    builtins.match "[a-z][a-z0-9-]*" s != null;
+  launcherArgNulFree = arg:
+    let
+      encoded = builtins.toJSON arg;
+      # JSON doubles literal backslashes, so remove those pairs before looking
+      # for the single-backslash escape that represents an actual NUL.
+      controlEscapes = builtins.replaceStrings [ "\\\\" ] [ "" ] encoded;
+      withoutNul = builtins.replaceStrings [ "\\u0000" ] [ "" ] controlEscapes;
+    in
+    builtins.stringLength withoutNul == builtins.stringLength controlEscapes;
 
   realmWorkloadTargetAssertions =
     lib.flatten (lib.mapAttrsToList
@@ -646,6 +681,159 @@ let
               })
           realm.workloads)
       (lib.filterAttrs (_: r: r.enable) cfg.realms));
+
+  realmLauncherItemAssertions =
+    lib.flatten (lib.mapAttrsToList
+      (realmName: realm:
+        lib.flatten (lib.mapAttrsToList
+          (workloadName: workload:
+            let
+              path = "d2b.realms.${realmName}.workloads.${workloadName}";
+              itemNames = lib.attrNames workload.launcher.items;
+              itemRows = lib.mapAttrsToList
+                (itemId: item: {
+                  inherit itemId item;
+                  argvBytes = lib.foldl' (total: arg: total + builtins.stringLength arg) 0 item.argv;
+                })
+                workload.launcher.items;
+              hasExecItem = lib.any (row: row.item.type == "exec") itemRows;
+              hasShellItem = lib.any (row: row.item.type == "shell") itemRows;
+              unsafeLocal = workload.kind == "unsafe-local";
+              localVmOptionsUnused =
+                workload.localVm.memoryMiB == null
+                && workload.localVm.vcpus == null
+                && workload.localVm.networkIndex == null
+                && workload.localVm.autostart == false
+                && workload.localVm.ssh.user == null
+                && workload.localVm.graphics.enable == false
+                && workload.localVm.tpm.enable == false;
+              qemuOptionsUnused =
+                workload.qemuMedia.source == null
+                && workload.qemuMedia.removableSlots == { }
+                && workload.qemuMedia.bootDrive.slot == "boot"
+                && workload.qemuMedia.resources.memoryMiB == 4096
+                && workload.qemuMedia.resources.vcpu == 2
+                && workload.qemuMedia.security.lockMemory == false
+                && workload.qemuMedia.security.excludeMemoryFromCoreDump
+                && workload.qemuMedia.security.disableMemoryMerge;
+            in
+            [
+              {
+                assertion = workload.launcher.defaultItem == null
+                  || builtins.hasAttr workload.launcher.defaultItem workload.launcher.items;
+                message = ''
+                  ${path}.launcher.defaultItem must name an explicitly declared
+                  launcher.items entry.
+                '';
+              }
+              {
+                assertion = !unsafeLocal || realm.policy.allowUnsafeLocal;
+                message = ''
+                  ${path} uses kind = "unsafe-local", but
+                  d2b.realms.${realmName}.policy.allowUnsafeLocal is false.
+                  Unsafe-local workloads require explicit realm opt-in because
+                  they run as the authenticated host uid without isolation.
+                '';
+              }
+              {
+                assertion = !unsafeLocal || realm.allowedUsers != [ ];
+                message = ''
+                  ${path} uses kind = "unsafe-local", but the realm has no
+                  allowedUsers. Declare at least one eligible host user.
+                '';
+              }
+              {
+                assertion = !unsafeLocal
+                  || (workload.legacyVmName == null
+                    && workload.stateDir == null
+                    && workload.runDir == null);
+                message = ''
+                  ${path} is unsafe-local and must not declare legacyVmName,
+                  stateDir, or runDir. The provider owns user scopes rather than
+                  VM state/runtime paths.
+                '';
+              }
+              {
+                assertion = !unsafeLocal || (localVmOptionsUnused && qemuOptionsUnused);
+                message = ''
+                  ${path} is unsafe-local and must not configure localVm or
+                  qemuMedia runtime options.
+                '';
+              }
+              {
+                assertion = !unsafeLocal
+                  || (workload.launcher.app.command == null
+                    && workload.launcher.actions == [ ]);
+                message = ''
+                  ${path} is unsafe-local and must use typed launcher.items.
+                  Legacy launcher.app.command and launcher.actions shell
+                  strings are not accepted for this provider.
+                '';
+              }
+              {
+                assertion = !unsafeLocal || hasExecItem || workload.shell.enable;
+                message = ''
+                  ${path} must declare at least one exec launcher item or enable
+                  persistent shell support.
+                '';
+              }
+              {
+                assertion = builtins.length itemNames <= 64;
+                message = ''
+                  ${path}.launcher.items declares more than the supported
+                  maximum of 64 configured items.
+                '';
+              }
+              {
+                assertion = !hasShellItem || workload.shell.enable;
+                message = ''
+                  ${path} declares a shell launcher item but shell.enable is
+                  false.
+                '';
+              }
+            ]
+            ++ map
+              (row: {
+                assertion = validLauncherItemId row.itemId;
+                message = "${path}.launcher.items.${row.itemId}: item ids must match ^[a-z][a-z0-9-]*$.";
+              })
+              itemRows
+            ++ map
+              (row: {
+                assertion =
+                  if row.item.type == "exec"
+                  then row.item.argv != [ ]
+                    && builtins.length row.item.argv <= 128
+                    && row.argvBytes <= 16384
+                    && lib.all
+                      (arg:
+                        builtins.stringLength arg <= 4096
+                        && launcherArgNulFree arg)
+                      row.item.argv
+                  else row.item.argv == [ ] && !row.item.graphical;
+                message = ''
+                  ${path}.launcher.items.${row.itemId} has an invalid item
+                  shape. Exec argv must be non-empty, at most 128 arguments /
+                  16384 bytes total / 4096 bytes per argument, and NUL-free.
+                  Shell items must have empty argv and graphical = false.
+                '';
+              })
+              itemRows)
+          realm.workloads))
+      (lib.filterAttrs (_: realm: realm.enable) cfg.realms));
+
+  unsafeLocalWorkloadCountAssertions = [
+    {
+      assertion =
+        builtins.length
+          (lib.filter (row: row.kind == "unsafe-local") realmWorkloadRows)
+        <= 256;
+      message = ''
+        d2b declares more than the supported maximum of 256 enabled
+        unsafe-local workloads.
+      '';
+    }
+  ];
 
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
@@ -1988,6 +2176,8 @@ in
     ++ realmAssertions
     ++ realmPortForwardAssertions
     ++ realmWorkloadTargetAssertions
+    ++ realmLauncherItemAssertions
+    ++ unsafeLocalWorkloadCountAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions

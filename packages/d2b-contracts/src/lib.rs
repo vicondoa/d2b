@@ -15,6 +15,7 @@ pub mod public_wire;
 pub mod security_key;
 pub mod terminal_wire;
 pub mod types;
+pub mod unsafe_local_wire;
 pub mod usbip;
 
 pub use d2b_core::error::{Error, SemverRange, Version};
@@ -23,6 +24,7 @@ pub use d2b_core::privileges_w3::W3BrokerOperation;
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 pub const BROKER_SOCKET_PATH: &str = "/run/d2b/priv.sock";
+pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.sock";
 
 /// Wire-protocol version. Earlier builds negotiated via [`SemverRange`];
 /// the current broker handshake layers an explicit `PROTOCOL_VERSION`
@@ -120,6 +122,8 @@ impl FeatureFlag {
             "manifest-v04" => Some(KnownFeatureFlag::ManifestV04),
             "status-check-bridges" => Some(KnownFeatureFlag::StatusCheckBridges),
             "export-broker-audit" => Some(KnownFeatureFlag::ExportBrokerAudit),
+            "configured-launch-v1" => Some(KnownFeatureFlag::ConfiguredLaunchV1),
+            "unsafe-local-provider-v1" => Some(KnownFeatureFlag::UnsafeLocalProviderV1),
             _ => None,
         }
     }
@@ -151,6 +155,8 @@ pub enum KnownFeatureFlag {
     ManifestV04,
     StatusCheckBridges,
     ExportBrokerAudit,
+    ConfiguredLaunchV1,
+    UnsafeLocalProviderV1,
 }
 
 impl KnownFeatureFlag {
@@ -160,6 +166,8 @@ impl KnownFeatureFlag {
             Self::ManifestV04 => "manifest-v04",
             Self::StatusCheckBridges => "status-check-bridges",
             Self::ExportBrokerAudit => "export-broker-audit",
+            Self::ConfiguredLaunchV1 => "configured-launch-v1",
+            Self::UnsafeLocalProviderV1 => "unsafe-local-provider-v1",
         }
     }
 
@@ -230,6 +238,8 @@ pub struct WireProtocolSchema {
     pub hello_rejected: HelloRejected,
     pub public_request: public_wire::PublicRequest,
     pub public_response: public_wire::PublicResponse,
+    pub workload_op: public_wire::WorkloadOp,
+    pub workload_op_response: public_wire::WorkloadOpResponse,
     pub broker_request: broker_wire::BrokerRequest,
     pub broker_response: broker_wire::BrokerResponse,
 }

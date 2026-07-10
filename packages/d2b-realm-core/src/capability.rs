@@ -69,6 +69,9 @@ pub enum Capability {
     EphemeralSessions,
     /// Provider-managed isolation boundary (not host-owned KVM).
     ProviderManagedIsolation,
+    /// Execute a configured launcher item. The caller supplies only the
+    /// workload target and item id; runtime argv remains provider-private.
+    ConfiguredLaunch,
 }
 
 impl Capability {
@@ -97,6 +100,7 @@ impl Capability {
             Capability::Hotplug => "hotplug",
             Capability::EphemeralSessions => "ephemeral-sessions",
             Capability::ProviderManagedIsolation => "provider-managed-isolation",
+            Capability::ConfiguredLaunch => "configured-launch",
         }
     }
 
@@ -127,6 +131,7 @@ impl Capability {
             "hotplug" => Some(Capability::Hotplug),
             "ephemeral-sessions" => Some(Capability::EphemeralSessions),
             "provider-managed-isolation" => Some(Capability::ProviderManagedIsolation),
+            "configured-launch" => Some(Capability::ConfiguredLaunch),
             _ => None,
         }
     }

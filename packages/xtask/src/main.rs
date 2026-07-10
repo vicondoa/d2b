@@ -10,6 +10,7 @@ use clap_complete::{
 };
 use clap_mangen::Man;
 use d2b_contracts::guest_wire::GuestControlSchema;
+use d2b_contracts::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts::{
     WireProtocolSchema,
     cli_output::{
@@ -25,8 +26,10 @@ use d2b_core::{
     allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
     closures::ClosureMetadata, error::Error, host::HostJson, manifest_v04::ManifestV04,
     minijail_profile::MinijailProfile, privileges::PrivilegesJson, processes::ProcessesJson,
-    realm_controller_config::RealmControllersJson, storage::StorageJson,
+    realm_controller_config::RealmControllersJson,
+    realm_workloads_launcher::RealmWorkloadsLauncherV2Json, storage::StorageJson,
     storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
+    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
 use d2b_realm_core::{
     AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
@@ -510,9 +513,21 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 17] = [
+    let schemas: [(&str, RootSchema); 20] = [
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
+        (
+            "realm-workloads-launcher-v2.json",
+            schemars::schema_for!(RealmWorkloadsLauncherV2Json),
+        ),
+        (
+            "unsafe-local-workloads.json",
+            schemars::schema_for!(UnsafeLocalWorkloadsJson),
+        ),
+        (
+            "unsafe-local-helper-wire.json",
+            schemars::schema_for!(UnsafeLocalHelperWireSchema),
+        ),
         (
             "d2b-realm-core.json",
             schemars::schema_for!(D2bRealmCoreSchema),

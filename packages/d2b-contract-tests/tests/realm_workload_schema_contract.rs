@@ -16,7 +16,19 @@
 //!  * `realm-controllers.json` contains no sensitive credential fields.
 
 use d2b_contract_tests::read_repo_file;
+use d2b_core::{
+    bundle::Bundle, realm_workloads_launcher::RealmWorkloadsLauncherV2Json,
+    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
+};
 use serde_json::Value;
+use std::{env, fs, path::Path};
+
+fn read_fixture_json<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> T {
+    let path = dir.join(name);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+}
 
 // ── schema loaders ────────────────────────────────────────────────────────────
 
@@ -374,6 +386,105 @@ fn realm_workloads_index_derives_grouping_fields() {
         assert!(
             index.contains(field),
             "nixos-modules/index.nix must derive {field} on the workload row"
+        );
+    }
+}
+
+#[test]
+fn provider_neutral_launcher_and_unsafe_local_artifacts_are_wired() {
+    let default_nix = read_repo_file("nixos-modules/default.nix");
+    for module in [
+        "./realm-workloads-launcher-v2-json.nix",
+        "./unsafe-local-workloads-json.nix",
+    ] {
+        assert!(
+            default_nix.contains(module),
+            "default.nix must import {module}"
+        );
+    }
+
+    let bundle_artifacts = read_repo_file("nixos-modules/bundle-artifacts.nix");
+    for artifact in ["realmWorkloadsLauncherV2Json", "unsafeLocalWorkloadsJson"] {
+        assert!(
+            bundle_artifacts.contains(artifact),
+            "bundle-artifacts.nix must declare {artifact}"
+        );
+    }
+}
+
+#[test]
+fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
+    let public_schema =
+        read_repo_file("docs/reference/schemas/v2/realm-workloads-launcher-v2.json");
+    let private_schema = read_repo_file("docs/reference/schemas/v2/unsafe-local-workloads.json");
+    let helper_schema = read_repo_file("docs/reference/schemas/v2/unsafe-local-helper-wire.json");
+
+    assert!(!public_schema.contains("\"argv\""));
+    assert!(public_schema.contains("\"providerKind\""));
+    assert!(public_schema.contains("\"executionPosture\""));
+    assert!(private_schema.contains("\"argv\""));
+    assert!(private_schema.contains("\"additionalProperties\": false"));
+    assert!(helper_schema.contains("\"protocolVersion\""));
+    assert!(helper_schema.contains("\"terminalProtocolVersion\""));
+}
+
+#[test]
+fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
+    let Some(dir) = env::var_os("D2B_FIXTURES").map(std::path::PathBuf::from) else {
+        eprintln!("  (skipping rendered unsafe-local contracts; D2B_FIXTURES unset)");
+        return;
+    };
+
+    let public: RealmWorkloadsLauncherV2Json =
+        read_fixture_json(&dir, "realm-workloads-launcher-v2.json");
+    let private: UnsafeLocalWorkloadsJson = read_fixture_json(&dir, "unsafe-local-workloads.json");
+    let bundle: Bundle = read_fixture_json(&dir, "bundle.json");
+
+    private.validate().expect("private artifact validates");
+    assert_eq!(public.schema_version, "v2");
+    assert_eq!(public.workloads.len(), 1);
+    assert_eq!(private.workloads.len(), 1);
+    assert_eq!(public.workloads[0].realm_accent_color, "#cc3344");
+
+    let public_json = serde_json::to_string(&public).unwrap();
+    assert!(!public_json.contains("rendered-private-argv-canary"));
+    assert!(!public_json.contains("\"argv\""));
+
+    let private_debug = format!("{private:?}");
+    assert!(!private_debug.contains("rendered-private-argv-canary"));
+    let exec = private.workloads[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            d2b_core::unsafe_local_workloads::UnsafeLocalLauncherItem::Exec(item) => Some(item),
+            d2b_core::unsafe_local_workloads::UnsafeLocalLauncherItem::Shell(_) => None,
+        })
+        .expect("configured exec item exists");
+    assert!(
+        exec.argv
+            .as_slice()
+            .iter()
+            .any(|arg| arg == "rendered-private-argv-canary")
+    );
+    assert_eq!(
+        bundle.realm_workloads_launcher_v2_path.as_deref(),
+        Some("/etc/d2b/realm-workloads-launcher-v2.json")
+    );
+    assert_eq!(
+        bundle.unsafe_local_workloads_path.as_deref(),
+        Some("/etc/d2b/unsafe-local-workloads.json")
+    );
+    let artifact_hashes = bundle
+        .artifact_hashes
+        .as_ref()
+        .expect("rendered bundle carries artifact hashes");
+    for path in [
+        "/etc/d2b/realm-workloads-launcher-v2.json",
+        "/etc/d2b/unsafe-local-workloads.json",
+    ] {
+        assert!(
+            artifact_hashes.contains_key(path),
+            "rendered bundle must hash {path}"
         );
     }
 }
