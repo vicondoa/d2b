@@ -646,7 +646,15 @@ let
     builtins.match "[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b" s != null;
   validLauncherItemId = s:
     builtins.match "[a-z][a-z0-9-]*" s != null;
-  nul = builtins.fromJSON ''"\u0000"'';
+  launcherArgNulFree = arg:
+    let
+      encoded = builtins.toJSON arg;
+      # JSON doubles literal backslashes, so remove those pairs before looking
+      # for the single-backslash escape that represents an actual NUL.
+      controlEscapes = builtins.replaceStrings [ "\\\\" ] [ "" ] encoded;
+      withoutNul = builtins.replaceStrings [ "\\u0000" ] [ "" ] controlEscapes;
+    in
+    builtins.stringLength withoutNul == builtins.stringLength controlEscapes;
 
   realmWorkloadTargetAssertions =
     lib.flatten (lib.mapAttrsToList
@@ -800,8 +808,7 @@ let
                     && lib.all
                       (arg:
                         builtins.stringLength arg <= 4096
-                        && builtins.stringLength (builtins.replaceStrings [ nul ] [ "" ] arg)
-                          == builtins.stringLength arg)
+                        && launcherArgNulFree arg)
                       row.item.argv
                   else row.item.argv == [ ] && !row.item.graphical;
                 message = ''
