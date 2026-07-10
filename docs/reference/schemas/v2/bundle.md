@@ -6,7 +6,7 @@ Schema: [`bundle.json`](./bundle.json)
 `vms.json` manifest. It gives the daemon and broker one stable place to
 find the current `host.json`, `processes.json`, `privileges.json`,
 `closures/*.json`, `storage.json`, `sync.json`, `allocator.json`,
-`realm-controllers.json`, `realm-identity.json`, and
+`realm-controllers.json`, `realm-identity.json`,
 `realm-workloads-launcher-v2.json`, `unsafe-local-workloads.json`, and
 `minijail-profile.json` artifacts.
 

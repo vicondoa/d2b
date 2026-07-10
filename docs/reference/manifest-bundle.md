@@ -20,6 +20,7 @@ world-readable system profile.
 | `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
 | `allocator.json` | private allocator metadata | root:`d2bd` `0640` | Metadata-only local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, and env bridges. |
 | `realm-controllers.json` | private realm controller metadata | root:`d2bd` `0640` | Metadata-only per-realm daemon, broker, socket, state, audit, allocator binding, provider placement, and direct-access plan rooted in `d2b.realms`. |
+| `realm-identity.json` | private realm identity metadata | root:`d2bd` `0640` | Realm identity, provider binding, policy, and capability metadata consumed by the daemon. |
 | `realm-workloads-launcher-v2.json` | public launcher metadata in the private bundle | root:`d2bd` `0640` | Argv-free provider, posture, realm color, and generic launcher-item metadata served to authorized clients through the public daemon API. |
 | `unsafe-local-workloads.json` | private unsafe-local execution intent | root:`d2bd` `0640` | Normalized configured argv, workload identity, default item, and persistent-shell policy resolved only by `d2bd`. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
@@ -100,6 +101,8 @@ references below.
 | `storage.json` | [`schemas/v2/storage.md`](./schemas/v2/storage.md) | `schemas/v2/storage.json` |
 | `sync.json` | [`schemas/v2/sync.md`](./schemas/v2/sync.md) | `schemas/v2/sync.json` |
 | `allocator.json` | [`schemas/v2/allocator.md`](./schemas/v2/allocator.md) | `schemas/v2/allocator.json` |
+| `realm-controllers.json` | [`schemas/v2/realm-controllers.md`](./schemas/v2/realm-controllers.md) | `schemas/v2/realm-controllers.json` |
+| `realm-identity.json` | [`schemas/v2/realm-identity.md`](./schemas/v2/realm-identity.md) | `schemas/v2/realm-identity.json` |
 | `realm-workloads-launcher-v2.json` | [`schemas/v2/realm-workloads-launcher-v2.md`](./schemas/v2/realm-workloads-launcher-v2.md) | `schemas/v2/realm-workloads-launcher-v2.json` |
 | `unsafe-local-workloads.json` | [`schemas/v2/unsafe-local-workloads.md`](./schemas/v2/unsafe-local-workloads.md) | `schemas/v2/unsafe-local-workloads.json` |
 | `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
