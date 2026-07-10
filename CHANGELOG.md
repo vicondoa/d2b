@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added ADR 0044 for an explicit `unsafe-local` runtime provider that treats
+  host user/session/network workloads as first-class realm workloads for
+  desktop launch, Wayland-proxy identity rails, and host-local persistent shell
+  UX while preserving the no-isolation security warning.
+
 - Wayland proxy rail now defaults to realm identity when a VM maps
   unambiguously to a single realm workload via `legacyVmName`. The active
   rail color defaults to the realm's resolved accent color (from
