@@ -20,12 +20,15 @@ world-readable system profile.
 | `sync.json` | private synchronization contract | root:`d2bd` `0640` | Lock inventory, OFD/fd-transfer policy, acquisition order, stale-owner policy, and lock degraded-state handling. |
 | `allocator.json` | private allocator metadata | root:`d2bd` `0640` | Metadata-only local-root allocator plan rooted in `d2b.realms`: enabled realms, resource requests, path/socket partitions, provider placement, and env bridges. |
 | `realm-controllers.json` | private realm controller metadata | root:`d2bd` `0640` | Metadata-only per-realm daemon, broker, socket, state, audit, allocator binding, provider placement, and direct-access plan rooted in `d2b.realms`. |
+| `realm-workloads-launcher-v2.json` | public launcher metadata in the private bundle | root:`d2bd` `0640` | Argv-free provider, posture, realm color, and generic launcher-item metadata served to authorized clients through the public daemon API. |
+| `unsafe-local-workloads.json` | private unsafe-local execution intent | root:`d2bd` `0640` | Normalized configured argv, workload identity, default item, and persistent-shell policy resolved only by `d2bd`. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
 | `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
 
-`vms.json` is the only public artifact. All other artifacts are trusted
-inputs to `d2bd` and the privileged broker described by
+`vms.json` is the only world-readable artifact. All other artifacts are
+daemon-owned bundle inputs, including public-safe launcher metadata that
+`d2bd` exposes through its authorized API. The privileged boundary is described by
 [ADR 0002](../adr/0002-non-root-daemon-and-privileged-broker.md).
 
 ## Versioning policy
@@ -41,8 +44,8 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 9`
-for the metadata-only realm identity configuration artifact.
+bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 10`
+for the unsafe-local workload execution artifact.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
@@ -71,6 +74,9 @@ The public boundary is intentionally narrow:
 - `vms.json` may contain VM names, public capability bits, public socket
   locations already required by the bash CLI, and non-secret topology
   metadata.
+- `realm-workloads-launcher-v2.json` contains public-safe, argv-free metadata
+  but remains daemon-owned `0640`; unprivileged consumers receive it through
+  the authorized public daemon API.
 - Private artifacts may contain command argv, broker-only paths,
   cgroup/device/fd requirements, sandbox profile internals, closure
   paths, qemu-media direct image-file paths authored in Nix config, and
@@ -94,6 +100,8 @@ references below.
 | `storage.json` | [`schemas/v2/storage.md`](./schemas/v2/storage.md) | `schemas/v2/storage.json` |
 | `sync.json` | [`schemas/v2/sync.md`](./schemas/v2/sync.md) | `schemas/v2/sync.json` |
 | `allocator.json` | [`schemas/v2/allocator.md`](./schemas/v2/allocator.md) | `schemas/v2/allocator.json` |
+| `realm-workloads-launcher-v2.json` | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/realm-workloads-launcher-v2.json` |
+| `unsafe-local-workloads.json` | [`unsafe-local-provider.md`](./unsafe-local-provider.md) | `schemas/v2/unsafe-local-workloads.json` |
 | `privileges.json` | [`schemas/v2/privileges.md`](./schemas/v2/privileges.md) | `schemas/v2/privileges.json` |
 | `closures/<vm>.json` | [`schemas/v2/closures.md`](./schemas/v2/closures.md) | `schemas/v2/closures.json` |
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
