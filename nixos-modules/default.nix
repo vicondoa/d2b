@@ -35,6 +35,7 @@
     ./network.nix
     ./gateway-vm.nix
     (import ./host.nix { inherit inputs; })
+    ./unsafe-local-helper.nix
     # host-otel-relay-acl.nix retired per ADR 0018.
     # The OTel host-bridge + per-VM relay ACL contract moved into the
     # broker pre-spawn pipeline (`SpawnRunner{role: OtelHostBridge}`

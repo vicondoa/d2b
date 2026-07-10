@@ -125,6 +125,8 @@ let
   workRealm = wlIndex.realms.byPath."work.home";
 
   unsafeLocalFixture = lib.recursiveUpdate hostBase {
+    users.users.bob = { isNormalUser = true; uid = 1001; };
+    d2b.daemonExperimental.enable = true;
     d2b.realms.host = {
       allowedUsers = [ "alice" ];
       policy.allowUnsafeLocal = true;
@@ -862,6 +864,50 @@ in
       defaultItemId = "browser";
       itemIds = [ "browser" "terminal" ];
       itemTypes = [ "exec" "shell" ];
+    };
+  };
+
+  "realm-workloads/unsafe-local-helper-user-service-and-eligibility" = {
+    expr =
+      let
+        service = unsafeCfg.systemd.user.services.d2b-unsafe-local-helper;
+        daemonConfig =
+          builtins.fromJSON unsafeCfg.environment.etc."d2b/daemon-config.json".text;
+        rootUnits =
+          lib.attrNames unsafeCfg.systemd.services
+          ++ lib.attrNames unsafeCfg.systemd.sockets;
+      in {
+        helperGroupDeclared = unsafeCfg.users.groups ? d2b-unsafe-local;
+        eligibleHasLifecycleGroup =
+          builtins.elem "d2b" unsafeCfg.users.users.alice.extraGroups;
+        eligibleHasHelperGroup =
+          builtins.elem "d2b-unsafe-local" unsafeCfg.users.users.alice.extraGroups;
+        ineligibleUserGroups = unsafeCfg.users.users.bob.extraGroups;
+        conditionGroup = service.unitConfig.ConditionGroup;
+        restart = service.serviceConfig.Restart;
+        execStartHasHelper =
+          lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
+        daemonSocketPath = daemonConfig.unsafeLocalHelperSocketPath;
+        daemonSocketGroup = daemonConfig.unsafeLocalHelperSocketGroup;
+        daemonAllowedUsers = daemonConfig.unsafeLocalHelperUsers;
+        helperRootUnitAbsent =
+          !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
+        noHelperBrokerSocketUnit =
+          !(builtins.elem "d2b-unsafe-local-helper" (lib.attrNames unsafeCfg.systemd.sockets));
+      };
+    expected = {
+      helperGroupDeclared = true;
+      eligibleHasLifecycleGroup = true;
+      eligibleHasHelperGroup = true;
+      ineligibleUserGroups = [ ];
+      conditionGroup = "d2b-unsafe-local";
+      restart = "on-failure";
+      execStartHasHelper = true;
+      daemonSocketPath = "/run/d2b/unsafe-local-helper.sock";
+      daemonSocketGroup = "d2b-unsafe-local";
+      daemonAllowedUsers = [ "alice" ];
+      helperRootUnitAbsent = true;
+      noHelperBrokerSocketUnit = true;
     };
   };
 

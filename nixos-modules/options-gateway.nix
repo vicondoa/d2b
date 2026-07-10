@@ -26,6 +26,13 @@ in
       description = "Internal: resolved host d2bd package.";
     };
 
+    d2bUnsafeLocalHelper = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved same-uid unsafe-local user helper package.";
+    };
+
     d2bGatewayRuntime = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;

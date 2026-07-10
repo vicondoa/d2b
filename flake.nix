@@ -259,6 +259,17 @@
           doCheck = false;
           meta.mainProgram = "d2b-wayland-proxy";
         };
+        d2b-unsafe-local-helper = rustWorkspace {
+          pname = "d2b-unsafe-local-helper";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-unsafe-local-helper"
+            "--bin"
+            "d2b-unsafe-local-helper"
+          ];
+          doCheck = false;
+          meta.mainProgram = "d2b-unsafe-local-helper";
+        };
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
