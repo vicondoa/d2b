@@ -11,8 +11,8 @@ workspace = true
 
 [dependencies]
 command-fds = "0.3"
-d2b-core = { path = "../d2b-core" }
-d2b-realm-core = { path = "../d2b-realm-core" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 env_logger = "0.11"
 html2text = "0.15.3"
 log = "0.4"
