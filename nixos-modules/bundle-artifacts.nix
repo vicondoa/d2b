@@ -81,7 +81,12 @@ let
         default = "contractPrivateNonSecret";
         internal = true;
         visible = false;
-        description = "Internal non-secret bundle artifact classification.";
+        description = ''
+          Internal payload exposure classification. This is independent of the
+          /etc installation ACL: contractPublic data may remain 0640 root:d2bd
+          when authorized unprivileged consumers receive it through the daemon
+          API rather than reading the bundle directly.
+        '';
       };
 
       sensitivity = lib.mkOption {
