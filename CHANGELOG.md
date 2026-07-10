@@ -97,9 +97,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Fixed unsafe-local operation responses stalling behind an idle control-socket
-  read. Completed helper operations now wake the bounded control loop
-  immediately without delaying daemon heartbeats or polling continuously.
+- Fixed unsafe-local launches stalling behind an idle control-socket read or
+  racing systemd's asynchronous transient-unit property publication. Completed
+  operations now wake the bounded control loop immediately, and scope identity
+  verification retries within a strict deadline without weakening mismatch
+  rejection.
 
 - Fixed first boot with d2b enabled. Store-sync activation now defers
   next-generation pointer publication when `/run/d2b` has not yet been

@@ -2,6 +2,7 @@ use crate::environment::{EnvironmentError, ManagerEnvironment};
 use d2b_contracts::unsafe_local_wire::{HelperScopeKind, HelperScopeState, ScopeIdentity};
 use std::fmt;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, Value};
 
@@ -9,6 +10,8 @@ const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const SYSTEMD_MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 const SYSTEMD_UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
+const SCOPE_IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(2);
+const SCOPE_IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeError {
@@ -176,11 +179,11 @@ impl UserScopeManager for SystemdUserScopeManager {
             )
             .map_err(|_| ScopeError::CreateFailed)?;
 
-        let (scope, state) = Self::query_scope(&connection, &unit_name, kind)?;
-        if !matches!(state, HelperScopeState::Starting | HelperScopeState::Active) {
-            return Err(ScopeError::IdentityMismatch);
-        }
-        Ok(scope)
+        await_scope_identity(
+            || Self::query_scope(&connection, &unit_name, kind),
+            SCOPE_IDENTITY_READY_TIMEOUT,
+            SCOPE_IDENTITY_RETRY_INTERVAL,
+        )
     }
 
     fn inspect_scope(&self, scope: &VerifiedScope) -> Result<ScopeInspection, ScopeError> {
@@ -224,6 +227,29 @@ impl UserScopeManager for SystemdUserScopeManager {
             .call("StopUnit", &(scope.unit_name.as_str(), "replace"))
             .map_err(|_| ScopeError::StopFailed)?;
         Ok(())
+    }
+}
+
+fn await_scope_identity<F>(
+    mut query: F,
+    timeout: Duration,
+    retry_interval: Duration,
+) -> Result<VerifiedScope, ScopeError>
+where
+    F: FnMut() -> Result<(VerifiedScope, HelperScopeState), ScopeError>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        match query() {
+            Ok((scope, HelperScopeState::Starting | HelperScopeState::Active)) => return Ok(scope),
+            Ok(_) => return Err(ScopeError::IdentityMismatch),
+            Err(ScopeError::QueryFailed | ScopeError::IdentityMismatch)
+                if Instant::now() < deadline =>
+            {
+                std::thread::sleep(retry_interval);
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -285,5 +311,35 @@ mod tests {
             kind: HelperScopeKind::LauncherApp,
         };
         assert!(!format!("{scope:?}").contains(canary));
+    }
+
+    #[test]
+    fn scope_identity_waits_for_transient_unit_properties() {
+        let expected = VerifiedScope {
+            unit_name: "d2b-unsafe-local-app-test.scope".to_owned(),
+            invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
+            control_group:
+                "/user.slice/user-1000.slice/user@1000.service/app.slice/d2b-unsafe-local-app-test.scope"
+                    .to_owned(),
+            kind: HelperScopeKind::LauncherApp,
+        };
+        let mut attempts = 0;
+
+        let observed = await_scope_identity(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(ScopeError::QueryFailed)
+                } else {
+                    Ok((expected.clone(), HelperScopeState::Active))
+                }
+            },
+            Duration::from_millis(50),
+            Duration::ZERO,
+        )
+        .unwrap();
+
+        assert_eq!(observed, expected);
+        assert_eq!(attempts, 2);
     }
 }
