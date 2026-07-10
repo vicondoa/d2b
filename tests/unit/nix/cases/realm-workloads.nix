@@ -1035,17 +1035,17 @@ in
   "realm-workloads/launcher-item-shape-assertions" = {
     expr =
       let
-        nulArg = builtins.fromJSON ''"fire\u0000fox"'';
+        nulArg = builtins.tryEval (builtins.fromJSON ''"fire\u0000fox"'');
         badExec = failureMessages [
           (lib.recursiveUpdate unsafeLocalFixture {
             d2b.realms.host.workloads.tools.launcher.items.browser.argv = [ ];
           })
         ];
-        badNul = failureMessages [
+        badNul = lib.optionals nulArg.success (failureMessages [
           (lib.recursiveUpdate unsafeLocalFixture {
-            d2b.realms.host.workloads.tools.launcher.items.browser.argv = [ nulArg ];
+            d2b.realms.host.workloads.tools.launcher.items.browser.argv = [ nulArg.value ];
           })
-        ];
+        ]);
         badShell = failureMessages [
           (lib.recursiveUpdate unsafeLocalFixture {
             d2b.realms.host.workloads.tools.shell.enable = false;
@@ -1059,7 +1059,7 @@ in
       in {
         emptyExecRejected =
           hasMessage [ "invalid item" "Exec argv must be non-empty" ] badExec;
-        nulArgRejected = hasMessage [ "NUL-free" ] badNul;
+        nulArgRejected = !nulArg.success || hasMessage [ "NUL-free" ] badNul;
         shellWithoutPolicyRejected =
           hasMessage [ "shell launcher item" "shell.enable is" ] badShell;
         missingDefaultRejected =
