@@ -226,9 +226,11 @@ let
       runtimeKind =
         if workload.kind == "local-vm" then "nixos"
         else if workload.kind == "qemu-media" then "qemu-media"
+        else if workload.kind == "unsafe-local" then "unsafe-local"
         else null;  # provider-placeholder has no local runtime
       runtimeProviderId =
-        if runtimeKind != null
+        if workload.kind == "unsafe-local" then "unsafe-local"
+        else if runtimeKind != null
         then (d2bLib.runtimeProviderCatalog.${runtimeKind}).provider.id
         else null;
       providerKind =

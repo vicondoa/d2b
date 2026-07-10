@@ -236,6 +236,18 @@ let
          && !(builtins.hasAttr pf.workload realm.workloads))
     realmPortForwardPairs;
 
+  # (4) Unsafe-local workloads have no guest address behind the realm net VM.
+  portForwardUnsafeLocalRows = lib.filter
+    (entry:
+      let
+        pf = entry.pf;
+        realm = cfg.realms.${entry.realmName};
+        workload =
+          if pf.workload == null then null
+          else realm.workloads.${pf.workload} or null;
+      in workload != null && workload.kind == "unsafe-local")
+    realmPortForwardPairs;
+
   realmPortForwardAssertions =
     map
       (entry: {
@@ -272,7 +284,19 @@ let
           for an explicit IP destination.
         '';
       })
-      portForwardMissingWorkloadRows;
+      portForwardMissingWorkloadRows
+    ++ map
+      (entry: {
+        assertion = false;
+        message = ''
+          d2b.realms.${entry.realmName}.network.externalNetwork.portForwards:
+          workload "${entry.pf.workload}" is unsafe-local and has no guest
+          network address behind the realm net VM. Net-VM port forwards can
+          target VM-backed workloads or an explicit `targetIp`, not host-user
+          processes.
+        '';
+      })
+      portForwardUnsafeLocalRows;
 
 
   missingRealmParents = lib.filter

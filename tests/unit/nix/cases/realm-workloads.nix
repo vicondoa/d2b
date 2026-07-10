@@ -836,6 +836,8 @@ in
     expr = {
       kind = unsafeRow.kind;
       providerKind = unsafeRow.providerKind;
+      runtimeKind = unsafeRow.runtimeKind;
+      runtimeProviderId = unsafeRow.runtimeProviderId;
       stateDir = unsafeRow.stateDir;
       runDir = unsafeRow.runDir;
       posture = unsafeRow.executionPosture;
@@ -846,6 +848,8 @@ in
     expected = {
       kind = "unsafe-local";
       providerKind = "unsafe-local";
+      runtimeKind = "unsafe-local";
+      runtimeProviderId = "unsafe-local";
       stateDir = null;
       runDir = null;
       posture = {
@@ -964,6 +968,28 @@ in
       (failureMessages [
         (lib.recursiveUpdate unsafeLocalFixture {
           d2b.realms.host.policy.allowUnsafeLocal = false;
+        })
+      ]);
+    expected = true;
+  };
+
+  "realm-workloads/unsafe-local-rejects-net-vm-port-forward" = {
+    expr = hasMessage
+      [ "workload \"tools\" is unsafe-local" "no guest network address" ]
+      (failureMessages [
+        (lib.recursiveUpdate unsafeLocalFixture {
+          d2b.realms.host.network.externalNetwork = {
+            attachment = {
+              enable = true;
+              interface = "eth0";
+            };
+            portForwards = [{
+              protocol = "tcp";
+              listenPort = 8443;
+              workload = "tools";
+              targetPort = 443;
+            }];
+          };
         })
       ]);
     expected = true;
