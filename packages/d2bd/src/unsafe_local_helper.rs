@@ -6,6 +6,7 @@ use d2b_contracts::unsafe_local_wire::{
     MAX_HELPER_QUEUE_DEPTH, MAX_HELPER_SNAPSHOT_SCOPES, MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES,
     UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, UNSAFE_LOCAL_TERMINAL_FD_COUNT,
     UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
+    unsafe_local_helper_protocol_supported,
 };
 use nix::cmsg_space;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -444,7 +445,8 @@ impl HelperRegistry {
         let UnsafeLocalHelperToDaemon::Hello(hello) = hello else {
             return Err(HelperRegistryError::ProtocolMismatch);
         };
-        if hello.protocol_version != UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION || hello.generation == 0 {
+        if !unsafe_local_helper_protocol_supported(hello.protocol_version) || hello.generation == 0
+        {
             return Err(HelperRegistryError::ProtocolMismatch);
         }
         send_frame(
@@ -667,6 +669,10 @@ impl HelperRegistry {
                     HelperReply::Terminal { ready, fd },
                 )
                 .map(|_| ())
+            }
+            UnsafeLocalHelperToDaemon::Shell(_) => {
+                reject_unexpected_fds(fds)?;
+                Err(HelperRegistryError::ProtocolMismatch)
             }
             UnsafeLocalHelperToDaemon::Hello(_) | UnsafeLocalHelperToDaemon::Snapshot(_) => {
                 reject_unexpected_fds(fds)?;
@@ -1435,6 +1441,7 @@ mod tests {
                         kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::LauncherApp,
                     },
                     state: d2b_contracts::unsafe_local_wire::HelperScopeState::Active,
+                    persistent_shell: None,
                 }],
             },
             2,
@@ -1647,6 +1654,11 @@ mod tests {
                 invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
                 kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
             },
+            result: d2b_contracts::unsafe_local_wire::HelperShellAttachResult {
+                resolved_name: d2b_contracts::public_wire::ShellName::new("default").unwrap(),
+                state: d2b_contracts::public_wire::ShellSessionState::Attached,
+                force_evicted: false,
+            },
         };
         let validated = validate_terminal_fd(&ready, vec![ReceivedFd(raw)]).unwrap();
         let flags = fcntl(validated.as_raw_fd(), FcntlArg::F_GETFD).unwrap();
@@ -1688,6 +1700,11 @@ mod tests {
             scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
                 invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
                 kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+            },
+            result: d2b_contracts::unsafe_local_wire::HelperShellAttachResult {
+                resolved_name: d2b_contracts::public_wire::ShellName::new("default").unwrap(),
+                state: d2b_contracts::public_wire::ShellSessionState::Attached,
+                force_evicted: false,
             },
         };
 

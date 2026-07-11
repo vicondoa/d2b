@@ -442,6 +442,72 @@ fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
 }
 
 #[test]
+fn helper_shell_schema_is_correlated_bounded_and_authority_free() {
+    let helper_schema = read_repo_file("docs/reference/schemas/v2/unsafe-local-helper-wire.json");
+    let helper_schema: serde_json::Value = serde_json::from_str(&helper_schema).unwrap();
+    for root_field in [
+        "daemonToHelper",
+        "helperToDaemon",
+        "protocolVersion",
+        "terminalProtocolVersion",
+        "terminalRequest",
+        "terminalResponse",
+    ] {
+        assert!(
+            helper_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == root_field),
+            "helper schema must require {root_field}"
+        );
+    }
+
+    let definitions = helper_schema["definitions"].as_object().unwrap();
+    let shell_request = serde_json::to_string(&definitions["HelperShellRequest"]).unwrap();
+    for field in ["requestId", "operationId", "initialTerminalSize"] {
+        assert!(
+            shell_request.contains(field),
+            "helper shell request schema must use wire field {field}"
+        );
+    }
+    for forbidden in ["request_id", "operation_id", "initial_terminal_size"] {
+        assert!(
+            !shell_request.contains(forbidden),
+            "helper shell request schema must not expose Rust field {forbidden}"
+        );
+    }
+
+    let shell_and_terminal = definitions
+        .iter()
+        .filter(|(name, _)| {
+            name.starts_with("HelperShell")
+                || name.starts_with("HelperTerminal")
+                || *name == "HelperPersistentShellSnapshot"
+        })
+        .map(|(_, definition)| definition)
+        .collect::<Vec<_>>();
+    let shell_and_terminal = serde_json::to_string(&shell_and_terminal).unwrap();
+    for forbidden in [
+        "\"uid\"",
+        "\"argv\"",
+        "\"environment\"",
+        "\"cwd\"",
+        "\"path\"",
+        "\"transcript\"",
+        "\"pid\"",
+        "\"unitName\"",
+        "\"compositor\"",
+        "\"session\"",
+    ] {
+        assert!(
+            !shell_and_terminal.contains(forbidden),
+            "helper shell/terminal schema must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn rendered_launcher_metadata_hides_argv_and_private_bundle_resolves_it() {
     let Some(dir) = env::var_os("D2B_FIXTURES").map(std::path::PathBuf::from) else {
         eprintln!("  (skipping rendered unsafe-local contracts; D2B_FIXTURES unset)");

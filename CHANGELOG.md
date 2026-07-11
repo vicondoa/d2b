@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Prepared unsafe-local persistent shells with private helper protocol v2,
+  correlated management results, bounded dedicated terminal-stream frames,
+  restart snapshot metadata, typed shell failures, and the public
+  `unsafe-local-shell-v1` feature token. Runtime dispatch remains unavailable.
+
 - Added proposed ADR 0045, defining parent-owned workload-hosted realm
   controllers, explicit runtime/infrastructure/relay provider responsibilities,
   type-first sortable provider crate names with mandatory standard interfaces

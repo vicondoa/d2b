@@ -88,9 +88,11 @@ The closed unsafe-local posture is:
 | `executionIdentity` | `authenticated-requester-uid` |
 | `sessionPersistence` | `user-manager-lifetime` |
 
-`configured-launch-v1` and `unsafe-local-provider-v1` are additive protocol-v3
-feature flags. Clients must hide or refuse unsupported operations; they must
-never fall back to unsafe-local.
+`configured-launch-v1`, `unsafe-local-provider-v1`, and
+`unsafe-local-shell-v1` are additive protocol-v3 feature flags. The shell token
+identifies contract support only until the later runtime slices enable
+dispatch. Clients must hide or refuse unsupported operations; they must never
+fall back to unsafe-local.
 
 Availability values are directly actionable: `helper-unavailable` and
 `helper-stale` require restarting the caller's user helper;
@@ -117,10 +119,12 @@ host-local Unix binding. The helper lookup is keyed by the requester's
 remote, stale-helper, cross-UID, direct-compositor, root, SSH, and arbitrary
 command fallbacks are not available.
 
-The separate helper protocol is version 1 on the daemon-owned
+The separate helper protocol is version 2 on the daemon-owned
 `/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,
-not a uid field, establish identity. Frames contain no uid, environment, cwd,
-or public-supplied command. Both peers request at least 256 KiB for
+not a uid field, establish identity. Version 1 is rejected without a
+compatibility fallback because the daemon and helper are installed together.
+Frames contain no uid, environment, cwd, or public-supplied command. Both peers
+request at least 256 KiB for
 `SO_SNDBUF` and `SO_RCVBUF` before exchanging frames and verify that Linux
 reports effective buffers of at least 512 KiB. A smaller effective buffer makes
 the helper unavailable rather than allowing a valid 256 KiB frame to fail with
@@ -159,7 +163,14 @@ and multiple fds are rejected. The receiver requires
 `getsockopt(SO_TYPE) == SOCK_STREAM`, `getsockopt(SO_ACCEPTCONN) == 0`, and a
 successful `getpeername`, then verifies the authenticated helper generation,
 request correlation, and terminal protocol version before accepting the fd.
-Terminal bytes do not share the helper control queue.
+Terminal protocol version 1 uses bounded JSON frames with a four-byte
+little-endian body-length prefix for stdin writes, output reads, resize, wait,
+stdin close, attachment close, and typed rejections. The connected socket binds
+one attachment, so these frames never accept a client-supplied session handle.
+Frames are limited to 128 KiB, decoded chunks to 64 KiB, per-stream output rings
+to 8 MiB, and waits to 1000 ms.
+Terminal bytes do not share the helper control queue. This contract does not
+make unsafe-local persistent-shell runtime dispatch available yet.
 
 Every socket is created with `SOCK_CLOEXEC`, every other control or PTY fd uses
 `O_CLOEXEC`, and rights are received with `MSG_CMSG_CLOEXEC`. Only descriptors

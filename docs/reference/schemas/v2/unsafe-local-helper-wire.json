@@ -6,7 +6,9 @@
     "daemonToHelper",
     "helperToDaemon",
     "protocolVersion",
-    "terminalProtocolVersion"
+    "terminalProtocolVersion",
+    "terminalRequest",
+    "terminalResponse"
   ],
   "properties": {
     "daemonToHelper": {
@@ -24,6 +26,12 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
+    },
+    "terminalRequest": {
+      "$ref": "#/definitions/HelperTerminalRequest"
+    },
+    "terminalResponse": {
+      "$ref": "#/definitions/HelperTerminalResponse"
     }
   },
   "additionalProperties": false,
@@ -128,6 +136,12 @@
         "proxy-unavailable",
         "first-client-timeout",
         "shell-unavailable",
+        "shell-not-found",
+        "shell-already-attached",
+        "terminal-output-gap",
+        "terminal-offset-mismatch",
+        "terminal-closed",
+        "invalid-terminal-size",
         "internal"
       ]
     },
@@ -309,6 +323,30 @@
       },
       "additionalProperties": false
     },
+    "HelperPersistentShellSnapshot": {
+      "type": "object",
+      "required": [
+        "attached",
+        "name",
+        "state",
+        "supervisorId"
+      ],
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        },
+        "supervisorId": {
+          "$ref": "#/definitions/HelperSupervisorId"
+        }
+      },
+      "additionalProperties": false
+    },
     "HelperScopeKind": {
       "type": "string",
       "enum": [
@@ -328,6 +366,16 @@
       "properties": {
         "operationId": {
           "$ref": "#/definitions/OperationId"
+        },
+        "persistentShell": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HelperPersistentShellSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "scope": {
           "$ref": "#/definitions/ScopeIdentity"
@@ -351,6 +399,92 @@
         "degraded"
       ]
     },
+    "HelperShellAttachResult": {
+      "type": "object",
+      "required": [
+        "resolvedName",
+        "state"
+      ],
+      "properties": {
+        "forceEvicted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperShellDetachResponse": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/ShellDetachResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperShellKillResponse": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/ShellKillResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperShellListResponse": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/definitions/OperationId"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/ShellListResult"
+        }
+      },
+      "additionalProperties": false
+    },
     "HelperShellRequest": {
       "oneOf": [
         {
@@ -363,11 +497,15 @@
             "args": {
               "type": "object",
               "required": [
-                "request_id",
+                "operationId",
+                "requestId",
                 "workload"
               ],
               "properties": {
-                "request_id": {
+                "operationId": {
+                  "$ref": "#/definitions/OperationId"
+                },
+                "requestId": {
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0.0
@@ -375,7 +513,8 @@
                 "workload": {
                   "$ref": "#/definitions/WorkloadIdentity"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "op": {
               "type": "string",
@@ -383,7 +522,8 @@
                 "list"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -395,12 +535,38 @@
             "args": {
               "type": "object",
               "required": [
-                "operation_id",
-                "request_id",
-                "tty",
+                "initialTerminalSize",
+                "operationId",
+                "requestId",
                 "workload"
               ],
               "properties": {
+                "force": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "initialTerminalSize": {
+                  "type": "object",
+                  "required": [
+                    "cols",
+                    "rows"
+                  ],
+                  "properties": {
+                    "cols": {
+                      "type": "integer",
+                      "format": "uint32",
+                      "maximum": 65535.0,
+                      "minimum": 1.0
+                    },
+                    "rows": {
+                      "type": "integer",
+                      "format": "uint32",
+                      "maximum": 65535.0,
+                      "minimum": 1.0
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "name": {
                   "anyOf": [
                     {
@@ -411,21 +577,19 @@
                     }
                   ]
                 },
-                "operation_id": {
+                "operationId": {
                   "$ref": "#/definitions/OperationId"
                 },
-                "request_id": {
+                "requestId": {
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0.0
                 },
-                "tty": {
-                  "type": "boolean"
-                },
                 "workload": {
                   "$ref": "#/definitions/WorkloadIdentity"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "op": {
               "type": "string",
@@ -433,7 +597,8 @@
                 "attach"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -446,18 +611,18 @@
               "type": "object",
               "required": [
                 "name",
-                "operation_id",
-                "request_id",
+                "operationId",
+                "requestId",
                 "workload"
               ],
               "properties": {
                 "name": {
                   "$ref": "#/definitions/ShellName"
                 },
-                "operation_id": {
+                "operationId": {
                   "$ref": "#/definitions/OperationId"
                 },
-                "request_id": {
+                "requestId": {
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0.0
@@ -465,7 +630,8 @@
                 "workload": {
                   "$ref": "#/definitions/WorkloadIdentity"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "op": {
               "type": "string",
@@ -473,7 +639,8 @@
                 "detach"
               ]
             }
-          }
+          },
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -486,18 +653,18 @@
               "type": "object",
               "required": [
                 "name",
-                "operation_id",
-                "request_id",
+                "operationId",
+                "requestId",
                 "workload"
               ],
               "properties": {
                 "name": {
                   "$ref": "#/definitions/ShellName"
                 },
-                "operation_id": {
+                "operationId": {
                   "$ref": "#/definitions/OperationId"
                 },
-                "request_id": {
+                "requestId": {
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0.0
@@ -505,7 +672,8 @@
                 "workload": {
                   "$ref": "#/definitions/WorkloadIdentity"
                 }
-              }
+              },
+              "additionalProperties": false
             },
             "op": {
               "type": "string",
@@ -513,7 +681,69 @@
                 "kill"
               ]
             }
-          }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HelperShellResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperShellListResponse"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "detach"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperShellDetachResponse"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "kill"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperShellKillResponse"
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -538,11 +768,272 @@
       },
       "additionalProperties": false
     },
+    "HelperSupervisorId": {
+      "description": "Opaque persistent-shell supervisor identity.",
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "HelperTerminalAttachmentClosed": {
+      "type": "object",
+      "required": [
+        "detached"
+      ],
+      "properties": {
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellCloseCause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalChunkBase64": {
+      "description": "Bounded standard padded base64 terminal bytes.",
+      "type": "string",
+      "maxLength": 87384,
+      "minLength": 0,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "HelperTerminalControl": {
+      "type": "object",
+      "required": [
+        "controlSequence",
+        "requestId"
+      ],
+      "properties": {
+        "controlSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalControlResponse_for_HelperTerminalAttachmentClosed": {
+      "type": "object",
+      "required": [
+        "controlSequence",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "controlSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/HelperTerminalAttachmentClosed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalControlResponse_for_TerminalCloseResult": {
+      "type": "object",
+      "required": [
+        "controlSequence",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "controlSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/TerminalCloseResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalControlResponse_for_TerminalControlResult": {
+      "type": "object",
+      "required": [
+        "controlSequence",
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "controlSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/TerminalControlResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalOperationResult_for_HelperTerminalReadOutputResult": {
+      "type": "object",
+      "required": [
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/HelperTerminalReadOutputResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalOperationResult_for_TerminalWaitResult": {
+      "type": "object",
+      "required": [
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/TerminalWaitResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalOperationResult_for_TerminalWriteStdinResult": {
+      "type": "object",
+      "required": [
+        "requestId",
+        "result"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/TerminalWriteStdinResult"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalReadOutput": {
+      "type": "object",
+      "required": [
+        "cursor",
+        "maxLen",
+        "requestId",
+        "stream"
+      ],
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 65536.0,
+          "minimum": 1.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/TerminalStream"
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1000.0,
+          "minimum": 0.0
+        },
+        "wait": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalReadOutputResult": {
+      "type": "object",
+      "required": [
+        "dataBase64",
+        "nextCursor"
+      ],
+      "properties": {
+        "dataBase64": {
+          "$ref": "#/definitions/HelperTerminalChunkBase64"
+        },
+        "droppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timedOut": {
+          "default": false,
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "HelperTerminalReady": {
       "type": "object",
       "required": [
         "operationId",
         "requestId",
+        "result",
         "scope",
         "terminalProtocolVersion",
         "transport"
@@ -555,6 +1046,9 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "result": {
+          "$ref": "#/definitions/HelperShellAttachResult"
         },
         "scope": {
           "$ref": "#/definitions/ScopeIdentity"
@@ -570,6 +1064,313 @@
       },
       "additionalProperties": false
     },
+    "HelperTerminalRejected": {
+      "type": "object",
+      "required": [
+        "code",
+        "requestId"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/HelperFailureCode"
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalWriteStdin"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalReadOutput"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalResize"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalWait"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalControl"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeStdin"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/HelperTerminalControl"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeAttachment"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HelperTerminalResize": {
+      "type": "object",
+      "required": [
+        "cols",
+        "controlSequence",
+        "requestId",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        },
+        "controlSequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalOperationResult_for_TerminalWriteStdinResult"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalOperationResult_for_HelperTerminalReadOutputResult"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalControlResponse_for_TerminalControlResult"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalOperationResult_for_TerminalWaitResult"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalControlResponse_for_TerminalCloseResult"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "closeAttachment"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalControlResponse_for_HelperTerminalAttachmentClosed"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "rejected"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/HelperTerminalRejected"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "HelperTerminalTransport": {
       "description": "Transport represented by the single fd attached to a terminal-ready frame.",
       "oneOf": [
@@ -581,6 +1382,55 @@
           ]
         }
       ]
+    },
+    "HelperTerminalWait": {
+      "type": "object",
+      "required": [
+        "requestId"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1000.0,
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelperTerminalWriteStdin": {
+      "type": "object",
+      "required": [
+        "chunkBase64",
+        "offset",
+        "requestId"
+      ],
+      "properties": {
+        "chunkBase64": {
+          "$ref": "#/definitions/HelperTerminalChunkBase64"
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "OperationId": {
       "type": "string",
@@ -622,12 +1472,283 @@
       },
       "additionalProperties": false
     },
+    "ShellCloseCause": {
+      "type": "string",
+      "enum": [
+        "client-detach",
+        "evicted-by-force",
+        "evicted-by-admin-detach",
+        "killed-by-admin",
+        "pool-unavailable",
+        "output-gap"
+      ]
+    },
+    "ShellDetachResult": {
+      "type": "object",
+      "required": [
+        "detached",
+        "resolvedName"
+      ],
+      "properties": {
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ShellCloseCause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "resolvedName": {
+          "$ref": "#/definitions/ShellName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellKillResult": {
+      "type": "object",
+      "required": [
+        "killed",
+        "name",
+        "state"
+      ],
+      "properties": {
+        "killed": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "state"
+      ],
+      "properties": {
+        "attached": {
+          "default": false,
+          "type": "boolean"
+        },
+        "isDefault": {
+          "default": false,
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "state": {
+          "$ref": "#/definitions/ShellSessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ShellListResult": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "sessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShellListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "ShellName": {
       "description": "Persistent shell session name.",
       "type": "string",
       "maxLength": 64,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"
+    },
+    "ShellSessionState": {
+      "type": "string",
+      "enum": [
+        "attached",
+        "detached",
+        "killed",
+        "pool-unavailable",
+        "feature-disabled",
+        "output-gap"
+      ]
+    },
+    "TerminalCloseResult": {
+      "type": "object",
+      "properties": {
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalControlResult": {
+      "type": "object",
+      "properties": {
+        "delivered": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "exited"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "code"
+              ],
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "signaled"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "signal"
+              ],
+              "properties": {
+                "signal": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "slug"
+              ],
+              "properties": {
+                "slug": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TerminalStream": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "TerminalWaitResult": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "default": false,
+          "type": "boolean"
+        },
+        "terminalStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalWriteStdinResult": {
+      "type": "object",
+      "required": [
+        "acceptedLen",
+        "nextOffset"
+      ],
+      "properties": {
+        "acceptedLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "backpressured": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "UnsafeLocalHelperToDaemon": {
       "oneOf": [
@@ -717,6 +1838,24 @@
               "type": "string",
               "enum": [
                 "terminalReady"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/HelperShellResponse"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "shell"
               ]
             }
           }

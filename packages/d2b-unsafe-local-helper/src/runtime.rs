@@ -404,6 +404,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
                 workload: entry.workload,
                 scope,
                 state,
+                persistent_shell: None,
             });
         }
         Ok(HelperSnapshot { generation, scopes })
