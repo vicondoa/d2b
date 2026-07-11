@@ -500,10 +500,14 @@ The declaration has these invariants:
    `forRealm`.
 2. A workload cannot control its owning realm, an ancestor, a sibling, or an
    unrelated realm.
-3. Exactly one active workload/controller generation controls a realm.
-4. One controller workload controls one realm by default. Multi-realm
-   credential collapse requires a future explicit decision and is not enabled
-   by a list-valued shortcut.
+3. Exactly one controller workload is declared for a realm. At runtime, at most
+   one authenticated controller generation is authoritative. If competing,
+   partitioned, or otherwise ambiguous generations are observed, no new route
+   is published and the realm is reported degraded until parent-authorized
+   reconciliation selects a generation.
+4. `roles.realmController.forRealm` is a scalar realm path. Lists are rejected
+   at evaluation, so one declaration cannot collapse multiple realm credential
+   domains.
 5. The workload runtime provider must advertise full realm-controller support.
    The provider must also advertise `realm-controller-host-v1` and its
    persistent identity protection. Host-user and host-process sandbox providers
@@ -532,9 +536,11 @@ Parent ownership does not make the controller dual-homed. A local controller VM
 has one data-plane NIC on the child realm network; parent control uses the
 authenticated vsock bootstrap/control channel. It is not attached to the
 parent's L2 bridge. If a future provider requires more than one interface, the
-runtime must disable IP forwarding, install default-deny cross-interface
-firewall policy, and prove that no bridge, route, or network namespace joins the
-parent and child realm networks.
+runtime must set `net.ipv4.ip_forward = 0`,
+`net.ipv6.conf.all.forwarding = 0`, and per-interface
+`net.ipv6.conf.<if>.accept_ra = 0`; disable proxy ARP and proxy NDP; install
+default-deny cross-interface firewall policy; and prove that no bridge, route,
+or network namespace joins the parent and child realm networks.
 
 Controller enrollment material must be available before authenticated guestd
 or realm protocol traffic can begin. For local Cloud Hypervisor controllers,
@@ -678,13 +684,12 @@ controller workload is preferred.
 Relay placement is configured from `d2b.realms.<realm>.relay`; a separate
 gateway or realm-entrypoint object is not introduced.
 
-The relay schema is extended conceptually as follows:
+The relay schema is extended conceptually as follows. `relay.provider` is a
+reference to a typed `relayProviders` instance, not an inline provider kind:
 
 ```nix
-d2b.realms.work.relay = {
-  enable = true;
-  provider = "azure-relay";
-  fabricRef = "work-relay";
+d2b.realms.work.relayProviders.azure-work = {
+  kind = "azure-relay";
 
   connector = {
     workload = "work-connector.local-root.d2b";
@@ -693,6 +698,12 @@ d2b.realms.work.relay = {
   };
 
   controllerAuthentication = "managed-identity";
+};
+
+d2b.realms.work.relay = {
+  enable = true;
+  provider = "azure-work";
+  fabricRef = "work-relay";
   descendantAccess = "delegated";
   peerShortcuts.enable = true;
 };
@@ -780,6 +791,12 @@ lease at grant expiry or route/policy revocation and records an
 converted into a successful completion. Participating peers always retain their
 own local establishment and teardown records.
 
+The endpoint-reported byte-count class is diagnostic and untrusted. It cannot
+prove how much data crossed the relay and must not drive security policy,
+billing, exfiltration detection, or compliance conclusions. A relay provider
+may expose separate provider-attested counters when available, but those are a
+distinct typed observation with an explicit trust posture.
+
 ### Existing direct-shortcut contracts are generalized
 
 The route engine already contains `DirectShortcutAuthorizationMetadata`,
@@ -802,6 +819,15 @@ STUN/ICE, NAT traversal, a VPN, or an overlay. A `shared-relay` shortcut is
 allowed only when both peers already participate in the same configured relay
 fabric and the relay provider advertises shortcut support. It does not discover
 or construct a new network path.
+
+Policy or route revocation applies to established streams, not only future
+rendezvous. A relay provider advertising `active-shortcut-revoke-v1` must close
+the established relay binding when the authorizing ancestor revokes it, while
+both peer muxes close the named stream. Providers without active revocation may
+support shared-relay shortcuts only with a maximum 60-second session grant and
+policy-authorized renewal; expiration closes the stream before renewal. Relay
+token or listener revocation that affects only future connections is
+insufficient by itself.
 
 If a shortcut cannot be established, the operation follows an explicitly
 authorized parent relay path or fails with a typed transport error. There is no
@@ -1018,7 +1044,9 @@ Implementation is incomplete without:
 - contract tests proving `ProviderOperationContext` remains serializable and
   runtime cancellation/deadline state exists only in `ProviderCallContext`;
 - Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
-  cycle rejection, provider capability gating, and derived placement;
+  cycle rejection, scalar-only `forRealm`, provider capability gating, typed
+  relay-provider references, ancestor-only relay inheritance, and derived
+  placement;
 - Nix evaluation tests proving obsolete `unsafe-local` provider-kind values,
   inert provider records, old gateway declarations, and compatibility aliases
   fail with the documented actionable migration errors;
@@ -1027,8 +1055,9 @@ Implementation is incomplete without:
   relay rendezvous carry only bounded operation-bound enrollment material, are
   replay protected, and are withdrawn before route publication;
 - network tests proving parent-owned controller VMs are not parent/child
-  dual-homed, IP forwarding is disabled, and any explicit multi-interface
-  provider installs default-deny cross-interface policy;
+  dual-homed; IPv4/IPv6 forwarding, IPv6 RA acceptance, proxy ARP, and proxy NDP
+  are disabled; and any explicit multi-interface provider installs
+  default-deny cross-interface policy;
 - sandbox runtime tests covering `host-shared`, `none`, and
   `isolated-namespace` networking plus broker-preestablished and unprivileged
   self-managed user namespace modes;
@@ -1038,7 +1067,8 @@ Implementation is incomplete without:
   no copied credential references;
 - route-engine tests for shared-relay shortcut authorization, replay,
   expiration, policy epoch changes, route revocation, signed endpoint-close
-  reports, missing-report expiry, and teardown;
+  reports, untrusted endpoint byte counts, missing-report expiry, active relay
+  termination, maximum-lifetime fallback, and teardown;
 - end-to-end tests proving shortcut bytes bypass intermediate controllers while
   every policy boundary records the decision;
 - negative end-to-end tests proving shortcut failure either uses the already
