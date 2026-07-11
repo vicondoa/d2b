@@ -608,7 +608,7 @@ impl DetachedRegistry {
         command: &ValidatedCommand,
         caps: &DetachedCaps,
     ) -> Result<(String, ExecSnapshot), ExecError> {
-        let spec = match build_spec(&command, &caps, &self.config, slot) {
+        let spec = match build_spec(command, caps, &self.config, slot) {
             Ok(spec) => spec,
             Err(error) => {
                 self.abort_create(slot).await;
@@ -634,7 +634,7 @@ impl DetachedRegistry {
         }
 
         // Step 5: await the runner's first phase marker, bounded by CREATE_TIMEOUT.
-        self.await_create_resolution(slot, &exec_id).await
+        self.await_create_resolution(slot, exec_id).await
     }
 
     fn persist_dispatch(&self, slot: u32, spec: &ExecSpec) -> Result<(), ExecError> {
