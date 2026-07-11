@@ -233,7 +233,7 @@ Helper registration, reconnect, supersede, and stale events use bounded event
 kinds and result classes. Provider-neutral shell audit records cover create,
 attach, list, detach, kill, close, and failure boundaries with only the
 configured canonical target, peer uid, closed provider/action/result values,
-and fixed correlation digests. The
+optional force-takeover intent, and fixed correlation digests. The
 `d2b_daemon_shell_lifecycle_total` metric uses only closed
 provider/component/operation/outcome/error labels. Neither surface includes
 argv, environment, cwd, paths, PIDs, unit names, helper diagnostics, shell

@@ -70,6 +70,7 @@ fn overview_dashboard_covers_redacted_shell_lifecycle() {
 #[test]
 fn runtime_emits_only_provider_neutral_shell_audit_events() {
     let daemon = include_str!("../../d2bd/src/lib.rs");
+    let audit = include_str!("../../d2bd/src/daemon_audit.rs");
     assert!(
         !daemon.contains("DaemonEvent::GuestControlShellAttached"),
         "runtime must not dual-emit legacy shell attach audit"
@@ -79,4 +80,6 @@ fn runtime_emits_only_provider_neutral_shell_audit_events() {
         "runtime must not dual-emit legacy shell detach audit"
     );
     assert!(daemon.contains("DaemonEvent::ShellLifecycle"));
+    assert!(!audit.contains("GuestControlShellAttached"));
+    assert!(!audit.contains("GuestControlShellDetached"));
 }

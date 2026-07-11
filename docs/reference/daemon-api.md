@@ -735,12 +735,13 @@ helper reports tampering explicitly; the write path remains best-effort so
 an audit sink outage does not abort an already-authorized local operation.
 
 Persistent shell daemon events are in this daemon-owned stream, not the broker
-audit log. Existing guest-control variants remain unchanged. The
-provider-neutral lifecycle variant records only a configured canonical target
-or local VM id, admin peer uid, closed provider/action/result enums, and optional
-fixed operation/session correlation digests. It covers create, attach, list,
-detach, kill, close, and failure boundaries for unsafe-local. Raw shell names,
-public handles, supervisor ids, terminal bytes, helper diagnostics, argv, env,
+audit log. The provider-neutral `ShellLifecycle` variant is the sole runtime
+shell audit event for both `guest-control` and `unsafe-local`. It records only a
+configured canonical target or local VM id, admin peer uid, closed
+provider/action/result enums, optional force-takeover intent, and optional fixed
+operation/session correlation digests. It covers create, attach, list, detach,
+kill, close, and failure boundaries. Raw shell names, public handles,
+supervisor ids, terminal bytes, helper diagnostics, argv, env,
 cwd, PIDs, unit names, and paths are never written. Abrupt owner disconnects,
 close timeouts, stale helper generations, and malformed terminal frames are
 represented by closed results or typed-error buckets rather than free-form

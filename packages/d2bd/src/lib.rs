@@ -3052,23 +3052,16 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
-            if shell_request_targets_unsafe_local(state, op).unwrap_or(false)
-                && !capabilities
-                    .iter()
-                    .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
+            if !unsafe_local_shell_feature_negotiated(&capabilities)
+                && let Some((target, operation, resolved)) =
+                    resolve_negotiated_unsafe_local_shell(state, op)
             {
                 let error = shell_backend::unsafe_shell_failed(
                     typed_error::UnsafeLocalShellErrorKind::FeatureUnavailable,
                 );
-                let _ = write_json_frame(&stream, &wire::error_frame(&error));
-                continue;
-            }
-            if shell_op_targets_unsafe_local(state, op)
-                && !unsafe_local_shell_feature_negotiated(&capabilities)
-            {
-                let error = TypedError::WireUnsupportedRequest {
-                    request_type: "unsafe-local-shell".to_owned(),
-                };
+                record_resolved_shell_failure(
+                    state, peer.uid, &resolved, target, operation, None, &error,
+                );
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
@@ -3139,30 +3132,6 @@ fn handle_connection_authorized(
         };
         write_json_frame(&stream, &response)?;
     }
-}
-
-fn shell_request_targets_unsafe_local(
-    state: &ServerState,
-    op: &public_wire::ShellOp,
-) -> Result<bool, TypedError> {
-    use workload_dispatch::WorkloadRoute;
-    let target = match op {
-        public_wire::ShellOp::Attach(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::List(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::Detach(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::Kill(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::WriteStdin(_)
-        | public_wire::ShellOp::ReadOutput(_)
-        | public_wire::ShellOp::Resize(_)
-        | public_wire::ShellOp::Wait(_)
-        | public_wire::ShellOp::CloseStdin(_)
-        | public_wire::ShellOp::CloseAttach(_) => None,
-    };
-    let Some(target) = target else {
-        return Ok(false);
-    };
-    resolve_shell_target(state, target)
-        .map(|resolved| matches!(resolved.route, WorkloadRoute::UnsafeLocal))
 }
 
 fn run_gateway_display_owner(
@@ -8247,25 +8216,26 @@ fn unsafe_local_shell_feature_negotiated(capabilities: &[d2b_contracts::FeatureF
         .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
 }
 
-fn shell_op_targets_unsafe_local(state: &ServerState, op: &public_wire::ShellOp) -> bool {
+fn resolve_negotiated_unsafe_local_shell<'a>(
+    state: &ServerState,
+    op: &'a public_wire::ShellOp,
+) -> Option<(&'a str, &'static str, workload_dispatch::ResolvedShell)> {
     use workload_dispatch::WorkloadRoute;
 
-    let target = match op {
-        public_wire::ShellOp::Attach(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::List(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::Detach(args) => Some(args.vm.as_str()),
-        public_wire::ShellOp::Kill(args) => Some(args.vm.as_str()),
+    let (target, operation) = match op {
+        public_wire::ShellOp::Attach(args) => Some((args.vm.as_str(), "attach")),
+        public_wire::ShellOp::List(args) => Some((args.vm.as_str(), "list")),
+        public_wire::ShellOp::Detach(args) => Some((args.vm.as_str(), "detach")),
+        public_wire::ShellOp::Kill(args) => Some((args.vm.as_str(), "kill")),
         public_wire::ShellOp::WriteStdin(_)
         | public_wire::ShellOp::ReadOutput(_)
         | public_wire::ShellOp::Resize(_)
         | public_wire::ShellOp::Wait(_)
         | public_wire::ShellOp::CloseStdin(_)
         | public_wire::ShellOp::CloseAttach(_) => None,
-    };
-    target.is_some_and(|target| {
-        resolve_shell_target(state, target)
-            .is_ok_and(|resolved| matches!(resolved.route, WorkloadRoute::UnsafeLocal))
-    })
+    }?;
+    let resolved = resolve_shell_target(state, target).ok()?;
+    matches!(resolved.route, WorkloadRoute::UnsafeLocal).then_some((target, operation, resolved))
 }
 
 fn dispatch_shell_management(

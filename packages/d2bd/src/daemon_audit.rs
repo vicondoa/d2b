@@ -184,44 +184,6 @@ pub enum DaemonEvent {
         /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
         peer_uid: u32,
     },
-    /// Emitted when an authenticated persistent shell owner attachment is
-    /// established.
-    ///
-    /// Leak-safe: carries ONLY the VM name, admin peer uid, and whether a force
-    /// takeover was requested. Shell names, session handles, and terminal bytes
-    /// are never recorded.
-    GuestControlShellAttached {
-        /// VM name the shell attachment targets.
-        vm: String,
-        /// Admin peer uid (from `SO_PEERCRED`) that opened the attachment.
-        peer_uid: u32,
-        /// Closed shell action.
-        action: ShellAuditAction,
-        /// Closed shell result.
-        result: ShellAuditResult,
-        /// Fixed-length non-raw correlation digest for the targeted shell. This
-        /// is safe to record; raw shell names/session ids are never written.
-        shell_ref_digest: String,
-        /// Whether the caller requested force takeover.
-        force: bool,
-    },
-    /// Emitted when a persistent shell owner attachment ends.
-    ///
-    /// Leak-safe: carries ONLY the VM name, admin peer uid, and a closed result
-    /// enum. No shell name, session handle, or terminal bytes.
-    GuestControlShellDetached {
-        /// VM name the shell attachment targeted.
-        vm: String,
-        /// Admin peer uid (from `SO_PEERCRED`) that owned the attachment.
-        peer_uid: u32,
-        /// Closed shell action.
-        action: ShellAuditAction,
-        /// Closed teardown result.
-        result: ShellAuditResult,
-        /// Fixed-length non-raw correlation digest for the targeted shell. This
-        /// is safe to record; raw shell names/session ids are never written.
-        shell_ref_digest: String,
-    },
     /// Provider-neutral persistent-shell lifecycle boundary. `target` is either
     /// a configured canonical workload target or a local VM identifier.
     /// Operation/session values are fixed-length digests; raw shell names,
@@ -1616,27 +1578,10 @@ mod tests {
         const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::GuestControlShellAttached {
-            vm: "corp-vm".to_owned(),
-            peer_uid: 1000,
-            action: ShellAuditAction::Attach,
-            result: ShellAuditResult::Attached,
-            shell_ref_digest: "0123456789abcdef".to_owned(),
-            force: true,
-        })
-        .expect("write shell attached event");
-        log.write_event(&DaemonEvent::GuestControlShellDetached {
-            vm: "corp-vm".to_owned(),
-            peer_uid: 1000,
-            action: ShellAuditAction::Detach,
-            result: ShellAuditResult::Closed,
-            shell_ref_digest: "0123456789abcdef".to_owned(),
-        })
-        .expect("write shell detached event");
         log.write_event(&DaemonEvent::ShellLifecycle {
-            target: "tools.host.d2b".to_owned(),
+            target: "corp-vm".to_owned(),
             peer_uid: 1000,
-            provider: ShellAuditProvider::UnsafeLocal,
+            provider: ShellAuditProvider::GuestControl,
             action: ShellAuditAction::Attach,
             result: ShellAuditResult::Attached,
             force: Some(true),
@@ -1646,7 +1591,7 @@ mod tests {
         .expect("write provider-neutral shell event");
 
         let records = log.captured.lock().expect("lock captured");
-        assert_eq!(records.len(), 3, "expected three captured shell records");
+        assert_eq!(records.len(), 1, "expected one unified shell record");
         for line in records.iter() {
             assert!(
                 !line.contains(SENTINEL),
@@ -1663,18 +1608,8 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&records[0]).unwrap()["event"]["result"]
-                .as_str(),
-            Some("attached")
-        );
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&records[1]).unwrap()["event"]["result"]
-                .as_str(),
-            Some("closed")
-        );
         let provider =
-            serde_json::from_str::<serde_json::Value>(&records[2]).expect("provider shell event");
+            serde_json::from_str::<serde_json::Value>(&records[0]).expect("provider shell event");
         assert_eq!(provider["event"]["force"].as_bool(), Some(true));
         let keys = provider["event"]
             .as_object()
