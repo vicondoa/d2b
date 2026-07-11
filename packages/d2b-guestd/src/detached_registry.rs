@@ -289,6 +289,13 @@ impl RegistryState {
             .map(|(slot, _)| *slot)
     }
 
+    fn find_any_by_id(&self, exec_id: &str) -> Option<u32> {
+        self.slots
+            .iter()
+            .find(|(_, entry)| entry.record.exec_id == exec_id)
+            .map(|(slot, _)| *slot)
+    }
+
     fn push_tombstone(&mut self, exec_id: String) {
         if self.tombstones.len() >= DETACHED_RETAINED_PER_VM {
             self.tombstones.pop_front();
@@ -401,13 +408,61 @@ impl DetachedRegistry {
         command: ValidatedCommand,
         caps: DetachedCaps,
     ) -> Result<(String, ExecSnapshot), ExecError> {
+        self.create_inner(boot_id, command, caps, None).await
+    }
+
+    pub async fn create_with_exec_id(
+        &self,
+        boot_id: &str,
+        command: ValidatedCommand,
+        caps: DetachedCaps,
+        exec_id: String,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
+        self.create_inner(boot_id, command, caps, Some(exec_id))
+            .await
+    }
+
+    async fn create_inner(
+        &self,
+        boot_id: &str,
+        command: ValidatedCommand,
+        caps: DetachedCaps,
+        requested_exec_id: Option<String>,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
         Self::assert_quota_invariant();
         if boot_id != self.config.boot_id {
             return Err(ExecError::StaleSession);
         }
 
         let argv_sha256 = argv_hash(&command);
-        let exec_id = self.ids.next_exec_id()?;
+        let exec_id = if let Some(exec_id) = requested_exec_id {
+            if !is_valid_exec_id(&exec_id) {
+                return Err(ExecError::InvalidArgv);
+            }
+            let existing = {
+                let state = self.lock();
+                if state.is_tombstoned(&exec_id) {
+                    return Err(ExecError::ExecExpired);
+                }
+                state.find_any_by_id(&exec_id).map(|slot| {
+                    let entry = state.slots.get(&slot).expect("slot found by id");
+                    (slot, entry.record.argv_sha256.clone(), entry.hidden())
+                })
+            };
+            if let Some((_slot, existing_hash, hidden)) = existing {
+                if existing_hash != argv_sha256 {
+                    return Err(ExecError::InvalidArgv);
+                }
+                if hidden {
+                    return Err(ExecError::ExecClosing);
+                }
+                let snapshot = self.inspect(&exec_id, boot_id).await?;
+                return Ok((exec_id, snapshot));
+            }
+            exec_id
+        } else {
+            self.ids.next_exec_id()?
+        };
         let now = self.clock.now_ms();
 
         // Step 1: reserve slot + active + quota under the Creating guard.
@@ -2782,6 +2837,50 @@ mod tests {
             .expect("create");
         assert_eq!(id, format!("{:032x}", 1));
         assert_eq!(snapshot.state, ExecState::Running);
+    }
+
+    #[tokio::test]
+    async fn requested_exec_id_replays_without_duplicate_spawn() {
+        let h = harness();
+        h.units.set_live(0, true);
+        h.store.set_status(0, StatusPhase::Started);
+        let requested = "0123456789abcdef0123456789abcdef".to_owned();
+        let (first_id, first) = h
+            .registry
+            .create_with_exec_id(
+                "boot-A",
+                command(),
+                DetachedCaps::standard(0),
+                requested.clone(),
+            )
+            .await
+            .unwrap();
+        let (second_id, second) = h
+            .registry
+            .create_with_exec_id(
+                "boot-A",
+                command(),
+                DetachedCaps::standard(0),
+                requested.clone(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first_id, requested);
+        assert_eq!(second_id, first_id);
+        assert_eq!(second.state, first.state);
+        assert_eq!(h.registry.list("boot-A").await.unwrap().len(), 1);
+        assert_eq!(
+            h.registry
+                .create_with_exec_id(
+                    "boot-A",
+                    command_with_program("/bin/false"),
+                    DetachedCaps::standard(0),
+                    requested,
+                )
+                .await,
+            Err(ExecError::InvalidArgv)
+        );
         // Now listable.
         let list = h.registry.list("boot-A").await.unwrap();
         assert_eq!(list.len(), 1);

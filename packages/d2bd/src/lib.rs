@@ -3383,7 +3383,7 @@ fn dispatch_workload(
                     dispatch_unsafe_local_launcher(state, peer.uid, &args.operation_id, &resolved)
                 }
                 WorkloadRoute::LocalVm { vm } => {
-                    dispatch_local_vm_launcher(state, vm, &resolved.argv)
+                    dispatch_local_vm_launcher(state, peer.uid, vm, &args.operation_id, &resolved)
                 }
                 WorkloadRoute::CapabilityUnavailable { provider } => {
                     Err(TypedError::RuntimeCapabilityUnsupported {
@@ -3564,20 +3564,31 @@ fn dispatch_unsafe_local_launcher(
 
 fn dispatch_local_vm_launcher(
     state: &ServerState,
+    requester_uid: u32,
     vm: &str,
-    argv: &d2b_core::configured_argv::ConfiguredArgv,
+    operation_id: &d2b_realm_core::OperationId,
+    resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
     let request = public_wire::ExecStartArgs {
         vm: vm.to_owned(),
-        argv: argv.as_slice().to_vec(),
+        argv: resolved.argv.as_slice().to_vec(),
         tty: false,
         detached: true,
         env: None,
         cwd: None,
         term_size: None,
     };
-    exec_detached::create(state, &request)?;
+    let mut fingerprint = Sha256::new();
+    fingerprint.update(requester_uid.to_le_bytes());
+    fingerprint.update(operation_id.as_str().as_bytes());
+    fingerprint.update(resolved.identity.canonical_target.to_canonical().as_bytes());
+    fingerprint.update(resolved.item_id.as_str().as_bytes());
+    let request_id = format!(
+        "workload-launch:{}",
+        hex_bytes(&fingerprint.finalize()[..16])
+    );
+    exec_detached::create_idempotent(state, &request, request_id)?;
     Ok(public_wire::LauncherExecDisposition::Committed)
 }
 
@@ -8709,6 +8720,7 @@ fn run_exec_owner(
 
     let spec = exec_session::ExecStartSpec {
         vm: start.vm.clone(),
+        request_id: None,
         argv: start.argv.clone(),
         tty: start.tty,
         detached: start.detached,

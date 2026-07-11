@@ -360,10 +360,23 @@ impl HelperRegistry {
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Ok(HelperReply::Terminal { .. })) => {
+                self.operations
+                    .lock()
+                    .abort_active(requester_uid, &operation_key);
                 Err(HelperRegistryError::RequestCorrelationMismatch)
             }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(HelperRegistryError::Timeout),
+            Ok(Err(error)) => {
+                self.operations
+                    .lock()
+                    .abort_active(requester_uid, &operation_key);
+                Err(error)
+            }
+            Err(_) => {
+                self.operations
+                    .lock()
+                    .abort_active(requester_uid, &operation_key);
+                Err(HelperRegistryError::Timeout)
+            }
         }
     }
 
@@ -1198,6 +1211,26 @@ mod tests {
                 .count()
                 <= MAX_COMPLETED_OPERATIONS_PER_UID
         );
+    }
+
+    #[test]
+    fn aborted_helper_operation_can_retry_same_id() {
+        let mut ledger = OperationLedger::default();
+        let request = launch(1, "retry-op", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        assert!(matches!(
+            ledger
+                .begin(1000, "retry-op".to_owned(), fingerprint, 1)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
+        ledger.abort_active(1000, "retry-op");
+        assert!(matches!(
+            ledger
+                .begin(1000, "retry-op".to_owned(), fingerprint, 2)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
     }
 
     #[test]

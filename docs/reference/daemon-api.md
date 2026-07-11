@@ -101,6 +101,11 @@ guest-control or the exact requester-UID unsafe-local helper. Remote/relay
 principals, UID fields, argv, environment, cwd, proxy paths, process ids, unit
 names, and fallback transports are not accepted.
 
+Local-VM launcher execution uses a deterministic opaque guest exec id derived
+from the local peer uid and public operation identity. Guestd's durable detached
+record is the restart-stable idempotency authority; the same id and argv hash
+replay the existing exec, while a hash mismatch is rejected.
+
 - transport: non-abstract Unix-domain `SOCK_SEQPACKET`
 - path: `/run/d2b/public.sock`
 - mode: `0660`

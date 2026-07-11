@@ -73,6 +73,12 @@ semantics; unsafe-local shell execution remains unavailable until its dedicated
 backend exists. When `--item` is omitted, the CLI selects `defaultItem`, then an
 only item, otherwise returns the available item ids and names.
 
+For local-VM exec items, d2bd derives an opaque guest exec id from the
+authenticated requester, operation id, target, and item id. Guestd persists that
+id with the detached exec record, so replay after a daemon restart returns the
+existing exec instead of spawning a duplicate. A replay whose trusted argv hash
+does not match fails closed.
+
 The DTOs remain protocol version 3 and are gated by `configured-launch-v1`.
 Unsafe-local additionally requires `unsafe-local-provider-v1`. Unsupported peers
 return a typed capability refusal and never fall back.

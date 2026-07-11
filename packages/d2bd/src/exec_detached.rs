@@ -171,6 +171,22 @@ pub(crate) fn create(
     state: &ServerState,
     start: &public_wire::ExecStartArgs,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, None)
+}
+
+pub(crate) fn create_idempotent(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    request_id: String,
+) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, Some(request_id))
+}
+
+fn create_with_request_id(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    request_id: Option<String>,
+) -> Result<ExecDetachedCreateResult, TypedError> {
     #[cfg(test)]
     if let Some(result) = test_hook(DetachedTestRequest::Create {
         vm: start.vm.clone(),
@@ -188,6 +204,7 @@ pub(crate) fn create(
 
     let spec = ExecStartSpec {
         vm: start.vm.clone(),
+        request_id,
         argv: start.argv.clone(),
         tty: start.tty,
         detached: true,
@@ -1249,6 +1266,7 @@ mod tests {
     fn start_spec() -> ExecStartSpec {
         ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: None,
             argv: vec!["true".to_owned()],
             tty: false,
             detached: true,
