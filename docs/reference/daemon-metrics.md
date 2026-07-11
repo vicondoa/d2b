@@ -246,7 +246,7 @@ declared schema; see "Cardinality bounds" below.
 | `provider` (workload) | closed runtime-provider enum | 4 |
 | `component` (workload) | closed prerequisite enum | 5 |
 | `operation` (workload) | closed lifecycle-operation enum | 2 |
-| `state` (workload) | closed availability enum | 8 |
+| `state` (workload) | closed availability enum plus `not-applicable` | 9 |
 | `outcome` (workload) | closed lifecycle-result enum | 3 |
 | `vmm` | closed VM shutdown runtime enum | 3 |
 | `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
