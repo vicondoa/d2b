@@ -173,8 +173,8 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Workload provider prerequisites",
-      "description": "Current bounded helper, scope, proxy, launcher, and shell availability by provider.",
+      "title": "Observed workload inventory",
+      "description": "Workload counts from the latest list/status inventory refresh by bounded provider, prerequisite component, and state.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},

@@ -12,7 +12,7 @@ use d2b_core::{
     configured_argv::ConfiguredArgv,
     realm_controller_config::RealmControllerPlacement,
     realm_workloads_launcher::LauncherWorkloadSummary,
-    unsafe_local_workloads::UnsafeLocalLauncherItem,
+    unsafe_local_workloads::{UnsafeLocalLauncherItem, UnsafeLocalWorkloadsJson},
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState};
@@ -185,6 +185,21 @@ impl WorkloadCatalog {
         self.entries.values()
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_entries(entries: impl IntoIterator<Item = CatalogEntry>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry.metadata.identity.canonical_target.to_canonical(),
+                        entry,
+                    )
+                })
+                .collect(),
+        }
+    }
+
     pub(crate) fn resolve(&self, target: &WorkloadTarget) -> Result<&CatalogEntry, CatalogError> {
         self.entries
             .get(&target.to_canonical())
@@ -225,7 +240,7 @@ impl WorkloadCatalog {
 
     pub(crate) fn resolve_exec(
         &self,
-        resolver: &BundleResolver,
+        private: Option<&UnsafeLocalWorkloadsJson>,
         target: &WorkloadTarget,
         item_id: &ProtocolToken,
     ) -> Result<ResolvedExec, CatalogError> {
@@ -242,24 +257,25 @@ impl WorkloadCatalog {
         if public_item.kind != LauncherItemKind::Exec {
             return Err(CatalogError::ConfiguredItemMismatch);
         }
-        let private = resolver
-            .unsafe_local_workloads
-            .as_ref()
-            .ok_or(CatalogError::ArtifactsUnavailable)?;
-        let items = match &entry.route {
+        let private = private.ok_or(CatalogError::ArtifactsUnavailable)?;
+        let private_workload = match &entry.route {
             WorkloadRoute::UnsafeLocal => private
                 .workloads
                 .iter()
                 .find(|workload| workload.identity.canonical_target == *target)
-                .map(|workload| workload.items.as_slice()),
+                .map(|workload| (&workload.identity, workload.items.as_slice())),
             WorkloadRoute::LocalVm { .. } => private
                 .local_vm_workloads
                 .iter()
                 .find(|workload| workload.identity.canonical_target == *target)
-                .map(|workload| workload.items.as_slice()),
+                .map(|workload| (&workload.identity, workload.items.as_slice())),
             WorkloadRoute::CapabilityUnavailable { .. } => None,
         }
         .ok_or(CatalogError::ConfiguredItemMissing)?;
+        if private_workload.0 != &entry.metadata.identity {
+            return Err(CatalogError::ConfiguredItemMismatch);
+        }
+        let items = private_workload.1;
         let private_item = items
             .iter()
             .find(|item| item.id() == item_id)
@@ -267,7 +283,10 @@ impl WorkloadCatalog {
         let UnsafeLocalLauncherItem::Exec(private_exec) = private_item else {
             return Err(CatalogError::ConfiguredItemMismatch);
         };
-        if private_exec.graphical != public_item.graphical {
+        if private_exec.name != public_item.name
+            || private_exec.icon != public_item.icon
+            || private_exec.graphical != public_item.graphical
+        {
             return Err(CatalogError::ConfiguredItemMismatch);
         }
         Ok(ResolvedExec {
@@ -321,7 +340,18 @@ fn controller_matches_direct_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_core::{
+        configured_argv::ConfiguredArgv,
+        contract_id::ContractId,
+        unsafe_local_workloads::{
+            LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
+            UnsafeLocalWorkload, UnsafeLocalWorkloadsJson,
+        },
+    };
     use d2b_realm_core::{
+        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+        IsolationPosture, LauncherIcon, LauncherItemSummary, SessionPersistencePosture,
+        WorkloadExecutionPosture,
         ids::{RealmId, WorkloadId},
         realm::RealmPath,
     };
@@ -336,6 +366,117 @@ mod tests {
         )
     }
 
+    fn catalog_entry(provider: WorkloadProviderKind) -> CatalogEntry {
+        let mut identity = workload_identity("work");
+        match provider {
+            WorkloadProviderKind::LocalVm => {
+                identity.legacy_vm_name = Some(ContractId::parse("corp-vm").unwrap());
+                identity.runtime_kind = Some(ContractId::parse("nixos").unwrap());
+                identity.provider_id = Some(ContractId::parse("local-cloud-hypervisor").unwrap());
+            }
+            WorkloadProviderKind::UnsafeLocal => {
+                identity.runtime_kind = Some(ContractId::parse("unsafe-local").unwrap());
+                identity.provider_id = Some(ContractId::parse("unsafe-local").unwrap());
+            }
+            _ => {}
+        }
+        let unsafe_local = provider == WorkloadProviderKind::UnsafeLocal;
+        CatalogEntry {
+            metadata: LauncherWorkloadSummary {
+                identity,
+                provider_kind: provider,
+                execution_posture: WorkloadExecutionPosture {
+                    isolation: if unsafe_local {
+                        IsolationPosture::UnsafeLocal
+                    } else {
+                        IsolationPosture::VirtualMachine
+                    },
+                    environment: if unsafe_local {
+                        EnvironmentPosture::SystemdUserManagerAmbient
+                    } else {
+                        EnvironmentPosture::RuntimeManaged
+                    },
+                    display_environment: if unsafe_local {
+                        DisplayEnvironmentPosture::WaylandProxyOnly
+                    } else {
+                        DisplayEnvironmentPosture::RuntimeManaged
+                    },
+                    execution_identity: if unsafe_local {
+                        ExecutionIdentityPosture::AuthenticatedRequesterUid
+                    } else {
+                        ExecutionIdentityPosture::WorkloadUser
+                    },
+                    session_persistence: if unsafe_local {
+                        SessionPersistencePosture::UserManagerLifetime
+                    } else {
+                        SessionPersistencePosture::RuntimeManaged
+                    },
+                },
+                label: "Browser".to_owned(),
+                icon: LauncherIcon::default(),
+                realm_accent_color: "#336699".to_owned(),
+                launcher_enabled: true,
+                default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+                capabilities: CapabilitySet::default(),
+                items: vec![LauncherItemSummary {
+                    id: ProtocolToken::parse("browser").unwrap(),
+                    name: "Browser".to_owned(),
+                    icon: LauncherIcon::default(),
+                    kind: LauncherItemKind::Exec,
+                    graphical: true,
+                    capabilities: CapabilitySet::default(),
+                }],
+            },
+            route: route_for_provider(
+                provider,
+                if provider == WorkloadProviderKind::LocalVm {
+                    Some("corp-vm")
+                } else {
+                    None
+                },
+                "browser",
+            ),
+        }
+    }
+
+    fn private_artifact(entries: &[CatalogEntry]) -> UnsafeLocalWorkloadsJson {
+        let exec = || {
+            UnsafeLocalLauncherItem::Exec(UnsafeLocalExecItem {
+                id: ProtocolToken::parse("browser").unwrap(),
+                name: "Browser".to_owned(),
+                icon: LauncherIcon::default(),
+                argv: ConfiguredArgv::new(vec![
+                    "browser-bin".to_owned(),
+                    "--configured".to_owned(),
+                ])
+                .unwrap(),
+                graphical: true,
+            })
+        };
+        UnsafeLocalWorkloadsJson {
+            schema_version: UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION.to_owned(),
+            workloads: entries
+                .iter()
+                .filter(|entry| matches!(entry.route, WorkloadRoute::UnsafeLocal))
+                .map(|entry| UnsafeLocalWorkload {
+                    identity: entry.metadata.identity.clone(),
+                    default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+                    items: vec![exec()],
+                    shell: None,
+                })
+                .collect(),
+            local_vm_workloads: entries
+                .iter()
+                .filter(|entry| matches!(entry.route, WorkloadRoute::LocalVm { .. }))
+                .map(|entry| LocalVmConfiguredWorkload {
+                    identity: entry.metadata.identity.clone(),
+                    default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+                    items: vec![exec()],
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn launch_ledger_is_idempotent_and_rejects_changed_fingerprint() {
         let target = WorkloadTarget::parse("browser.host.d2b").unwrap();
@@ -346,6 +487,10 @@ mod tests {
         assert_eq!(
             begin_launch(65001, operation, &target, &item).unwrap(),
             LaunchLedgerBegin::New
+        );
+        assert_eq!(
+            begin_launch(65001, operation, &target, &item),
+            Err(CatalogError::OperationInProgress)
         );
         complete_launch(65001, operation);
         assert_eq!(
@@ -420,5 +565,120 @@ mod tests {
             RealmControllerPlacement::HostLocal,
             &identity
         ));
+    }
+
+    #[test]
+    fn resolve_exec_returns_only_trusted_local_vm_and_unsafe_local_descriptors() {
+        for provider in [
+            WorkloadProviderKind::LocalVm,
+            WorkloadProviderKind::UnsafeLocal,
+        ] {
+            let entry = catalog_entry(provider);
+            let target = entry.metadata.identity.canonical_target.clone();
+            let catalog = WorkloadCatalog::from_test_entries([entry.clone()]);
+            let private = private_artifact(&[entry]);
+            let resolved = catalog
+                .resolve_exec(
+                    Some(&private),
+                    &target,
+                    &ProtocolToken::parse("browser").unwrap(),
+                )
+                .expect("matching configured descriptor resolves");
+            assert_eq!(
+                resolved.argv.as_slice(),
+                ["browser-bin", "--configured"],
+                "argv comes from the private artifact"
+            );
+            assert!(resolved.graphical);
+            assert!(
+                matches!(
+                    (&resolved.route, provider),
+                    (WorkloadRoute::LocalVm { vm }, WorkloadProviderKind::LocalVm)
+                        if vm == "corp-vm"
+                ) || matches!(
+                    (&resolved.route, provider),
+                    (
+                        WorkloadRoute::UnsafeLocal,
+                        WorkloadProviderKind::UnsafeLocal
+                    )
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_exec_rejects_missing_mismatch_tamper_and_graphical_drift() {
+        let entry = catalog_entry(WorkloadProviderKind::UnsafeLocal);
+        let target = entry.metadata.identity.canonical_target.clone();
+        let item = ProtocolToken::parse("browser").unwrap();
+
+        let mut disabled = entry.clone();
+        disabled.metadata.launcher_enabled = false;
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([disabled])
+                .resolve_exec(
+                    Some(&private_artifact(std::slice::from_ref(&entry))),
+                    &target,
+                    &item,
+                )
+                .unwrap_err(),
+            CatalogError::LauncherDisabled
+        );
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([entry.clone()])
+                .resolve_exec(
+                    Some(&private_artifact(std::slice::from_ref(&entry))),
+                    &target,
+                    &ProtocolToken::parse("missing").unwrap(),
+                )
+                .unwrap_err(),
+            CatalogError::ItemNotFound
+        );
+
+        let mut missing = private_artifact(std::slice::from_ref(&entry));
+        missing.workloads[0].items.clear();
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([entry.clone()])
+                .resolve_exec(Some(&missing), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMissing
+        );
+
+        let mut kind_mismatch = private_artifact(std::slice::from_ref(&entry));
+        kind_mismatch.workloads[0].items[0] = UnsafeLocalLauncherItem::Shell(
+            d2b_core::unsafe_local_workloads::UnsafeLocalShellItem {
+                id: item.clone(),
+                name: "Browser".to_owned(),
+                icon: LauncherIcon::default(),
+            },
+        );
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([entry.clone()])
+                .resolve_exec(Some(&kind_mismatch), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
+
+        let mut tampered = private_artifact(std::slice::from_ref(&entry));
+        tampered.workloads[0].identity.provider_id =
+            Some(ContractId::parse("tampered-provider").unwrap());
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([entry.clone()])
+                .resolve_exec(Some(&tampered), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
+
+        let mut graphical_drift = private_artifact(std::slice::from_ref(&entry));
+        let UnsafeLocalLauncherItem::Exec(exec) = &mut graphical_drift.workloads[0].items[0] else {
+            unreachable!()
+        };
+        exec.graphical = false;
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([entry])
+                .resolve_exec(Some(&graphical_drift), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
     }
 }

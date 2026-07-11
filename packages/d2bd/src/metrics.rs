@@ -269,6 +269,32 @@ impl Registry {
         entry.value = value;
     }
 
+    /// Atomically replace one bounded gauge family. Existing series in the
+    /// family are zeroed before the supplied snapshot is applied so a scrape
+    /// cannot observe a partially refreshed inventory or retain a stale value.
+    pub fn gauge_family_replace(&self, name: &'static str, samples: &[(Vec<(&str, &str)>, f64)]) {
+        let owned = samples
+            .iter()
+            .map(|(labels, value)| {
+                let labels = labels
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect::<LabelSet>();
+                Self::validate(name, MetricKind::Gauge, &labels);
+                (labels, *value)
+            })
+            .collect::<Vec<_>>();
+        let mut registry = self.inner.lock().expect("metrics registry poisoned");
+        for ((metric_name, _), sample) in &mut registry.gauges {
+            if *metric_name == name {
+                sample.value = 0.0;
+            }
+        }
+        for (labels, value) in owned {
+            registry.gauges.entry((name, labels)).or_default().value = value;
+        }
+    }
+
     pub fn histogram_observe(
         &self,
         name: &'static str,
@@ -420,7 +446,7 @@ fn help_text(name: &str) -> &'static str {
             "Cumulative count of guest-control shell session/op outcomes by error_kind."
         }
         "d2b_daemon_workload_availability" => {
-            "Provider workload prerequisite availability by bounded component and state."
+            "Observed workload inventory count by bounded provider, component, and state."
         }
         "d2b_daemon_workload_lifecycle_total" => {
             "Configured workload lifecycle outcomes by provider and operation."
