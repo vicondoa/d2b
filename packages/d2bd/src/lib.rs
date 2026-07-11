@@ -21128,6 +21128,7 @@ mod detached_exec_routing_tests {
                 request,
                 exec_detached::DetachedTestRequest::Create {
                     vm: "work".to_owned(),
+                    request_id: None,
                     argv_len: 1,
                     env_len: 1,
                     has_cwd: true,
@@ -21182,6 +21183,48 @@ mod detached_exec_routing_tests {
         assert_eq!(record["event"]["action"].as_str(), Some("create"));
         assert_eq!(record["event"]["result"].as_str(), Some("created"));
         assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-detached-1"));
+    }
+
+    #[test]
+    fn idempotent_detached_create_forwards_guest_request_id() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let expected = "workload-launch:0123456789abcdef0123456789abcdef";
+        let hook = Arc::new(move |request| {
+            let exec_detached::DetachedTestRequest::Create { request_id, .. } = request else {
+                panic!("idempotent create hook received management request");
+            };
+            assert_eq!(request_id.as_deref(), Some(expected));
+            Ok(exec_detached::DetachedTestResponse::Create(
+                public_wire::ExecDetachedCreateResult {
+                    exec_id: "0123456789abcdef0123456789abcdef".to_owned(),
+                    state: ExecState::Running,
+                },
+            ))
+        });
+        let _guard = exec_detached::set_test_hook(hook);
+        let ExecOp::Start(start) = detached_start("true") else {
+            unreachable!("detached_start always returns ExecOp::Start")
+        };
+
+        let result = exec_detached::create_idempotent(&state, &start, expected.to_owned()).unwrap();
+        assert_eq!(result.exec_id, "0123456789abcdef0123456789abcdef");
+    }
+
+    #[test]
+    fn local_workload_launcher_wires_detached_create_audit() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("fn dispatch_local_vm_launcher(")
+            .expect("local VM launcher function");
+        let end = source[start..]
+            .find("\nfn map_workload_catalog_error(")
+            .map(|offset| start + offset)
+            .expect("local VM launcher function end");
+        let body = &source[start..end];
+
+        assert!(body.contains("exec_detached::create_idempotent"));
+        assert!(body.contains("emit_detached_create_audit"));
+        assert!(body.contains("&result.exec_id"));
     }
 
     #[test]

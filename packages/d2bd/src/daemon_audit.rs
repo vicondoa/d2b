@@ -2030,4 +2030,20 @@ mod tests {
             assert!(!rendered.contains(canary));
         }
     }
+
+    #[test]
+    fn local_vm_workload_launch_provider_serializes_canonically() {
+        let event = DaemonEvent::WorkloadLauncher {
+            target: "browser.work.d2b".to_owned(),
+            item_id: "browser".to_owned(),
+            peer_uid: 1000,
+            provider: WorkloadLaunchProvider::LocalVm,
+            result: WorkloadLaunchResult::Committed,
+        };
+        let rendered = serde_json::to_string(&event).unwrap();
+        assert!(rendered.contains("\"provider\":\"local-vm\""));
+        assert!(!rendered.contains("argv"));
+        assert!(!rendered.contains("environment"));
+        assert!(!rendered.contains("cwd"));
+    }
 }

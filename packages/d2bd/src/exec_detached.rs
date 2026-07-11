@@ -80,6 +80,7 @@ enum DetachedRealResponse {
 pub(crate) enum DetachedTestRequest {
     Create {
         vm: String,
+        request_id: Option<String>,
         argv_len: usize,
         env_len: usize,
         has_cwd: bool,
@@ -190,6 +191,7 @@ fn create_with_request_id(
     #[cfg(test)]
     if let Some(result) = test_hook(DetachedTestRequest::Create {
         vm: start.vm.clone(),
+        request_id: request_id.clone(),
         argv_len: start.argv.len(),
         env_len: start.env.as_ref().map_or(0, Vec::len),
         has_cwd: start.cwd.is_some(),
