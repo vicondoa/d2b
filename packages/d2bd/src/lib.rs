@@ -3582,8 +3582,7 @@ fn map_workload_catalog_error(error: workload_dispatch::CatalogError) -> TypedEr
     use typed_error::WorkloadLaunchErrorKind as Kind;
     use workload_dispatch::CatalogError;
     let kind = match error {
-        CatalogError::TargetNotFound | CatalogError::TargetAmbiguous => Kind::ItemNotFound,
-        CatalogError::RealmNotDirectLocal => Kind::RealmNotDirectLocal,
+        CatalogError::TargetNotFound => Kind::ItemNotFound,
         CatalogError::LauncherDisabled => Kind::LauncherDisabled,
         CatalogError::ItemNotFound => Kind::ItemNotFound,
         CatalogError::ArtifactsUnavailable

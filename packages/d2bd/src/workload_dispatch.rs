@@ -28,8 +28,6 @@ pub(crate) enum WorkloadRoute {
 pub(crate) enum CatalogError {
     ArtifactsUnavailable,
     TargetNotFound,
-    TargetAmbiguous,
-    RealmNotDirectLocal,
     LauncherDisabled,
     ItemNotFound,
     ConfiguredItemMissing,
@@ -149,7 +147,6 @@ pub(crate) struct ResolvedExec {
 #[derive(Debug, Clone)]
 pub(crate) struct WorkloadCatalog {
     entries: BTreeMap<String, CatalogEntry>,
-    aliases: BTreeMap<String, Vec<String>>,
 }
 
 impl WorkloadCatalog {
@@ -159,34 +156,19 @@ impl WorkloadCatalog {
             .as_ref()
             .ok_or(CatalogError::ArtifactsUnavailable)?;
         let mut entries = BTreeMap::new();
-        let mut aliases: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for metadata in public
-            .workloads
-            .iter()
-            .filter(|workload| workload.launcher_enabled)
-        {
+        for metadata in &public.workloads {
             if !realm_is_direct_local(resolver, &metadata.identity) {
                 continue;
             }
             let canonical = metadata.identity.canonical_target.to_canonical();
-            aliases
-                .entry(metadata.identity.workload_id.as_str().to_owned())
-                .or_default()
-                .push(canonical.clone());
-            let route = match metadata.provider_kind {
-                WorkloadProviderKind::LocalVm => metadata
+            let route = route_for_provider(
+                metadata.provider_kind,
+                metadata
                     .identity
                     .legacy_vm_name
                     .as_ref()
-                    .map(|vm| WorkloadRoute::LocalVm {
-                        vm: vm.as_str().to_owned(),
-                    })
-                    .unwrap_or(WorkloadRoute::CapabilityUnavailable {
-                        provider: metadata.provider_kind,
-                    }),
-                WorkloadProviderKind::UnsafeLocal => WorkloadRoute::UnsafeLocal,
-                provider => WorkloadRoute::CapabilityUnavailable { provider },
-            };
+                    .map(|vm| vm.as_str()),
+            );
             entries.insert(
                 canonical,
                 CatalogEntry {
@@ -195,7 +177,7 @@ impl WorkloadCatalog {
                 },
             );
         }
-        Ok(Self { entries, aliases })
+        Ok(Self { entries })
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
@@ -206,20 +188,6 @@ impl WorkloadCatalog {
         self.entries
             .get(&target.to_canonical())
             .ok_or(CatalogError::TargetNotFound)
-    }
-
-    pub(crate) fn resolve_text(&self, raw: &str) -> Result<&CatalogEntry, CatalogError> {
-        if let Ok(target) = WorkloadTarget::parse(raw) {
-            return self.resolve(&target);
-        }
-        match self.aliases.get(raw).map(Vec::as_slice) {
-            Some([canonical]) => self
-                .entries
-                .get(canonical)
-                .ok_or(CatalogError::TargetNotFound),
-            Some([_, _, ..]) => Err(CatalogError::TargetAmbiguous),
-            _ => Err(CatalogError::TargetNotFound),
-        }
     }
 
     pub(crate) fn public_summary(
@@ -261,6 +229,9 @@ impl WorkloadCatalog {
         item_id: &ProtocolToken,
     ) -> Result<ResolvedExec, CatalogError> {
         let entry = self.resolve(target)?;
+        if !entry.metadata.launcher_enabled {
+            return Err(CatalogError::LauncherDisabled);
+        }
         let public_item = entry
             .metadata
             .items
@@ -305,6 +276,19 @@ impl WorkloadCatalog {
             argv: private_exec.argv.clone(),
             graphical: private_exec.graphical,
         })
+    }
+}
+
+fn route_for_provider(
+    provider: WorkloadProviderKind,
+    legacy_vm_name: Option<&str>,
+) -> WorkloadRoute {
+    match provider {
+        WorkloadProviderKind::LocalVm => legacy_vm_name
+            .map(|vm| WorkloadRoute::LocalVm { vm: vm.to_owned() })
+            .unwrap_or(WorkloadRoute::CapabilityUnavailable { provider }),
+        WorkloadProviderKind::UnsafeLocal => WorkloadRoute::UnsafeLocal,
+        provider => WorkloadRoute::CapabilityUnavailable { provider },
     }
 }
 
@@ -368,5 +352,25 @@ mod tests {
             abort_launch(saturated_uid, &format!("capacity-{index}"));
         }
         abort_launch(other_uid, "other-user");
+    }
+
+    #[test]
+    fn provider_routes_never_coerce_unsafe_local_to_vm() {
+        assert_eq!(
+            route_for_provider(WorkloadProviderKind::UnsafeLocal, Some("host")),
+            WorkloadRoute::UnsafeLocal
+        );
+        assert_eq!(
+            route_for_provider(WorkloadProviderKind::LocalVm, Some("corp-vm")),
+            WorkloadRoute::LocalVm {
+                vm: "corp-vm".to_owned()
+            }
+        );
+        assert!(matches!(
+            route_for_provider(WorkloadProviderKind::LocalVm, None),
+            WorkloadRoute::CapabilityUnavailable {
+                provider: WorkloadProviderKind::LocalVm
+            }
+        ));
     }
 }
