@@ -2,7 +2,8 @@
 
 - Status: Proposed
 - Date: 2026-07-10
-- Refines: [ADR 0043](0043-realm-native-control-plane.md)
+- Refines: [ADR 0035](0035-efficiency-and-simplification-roadmap.md)
+  (provider naming and workspace simplification), [ADR 0043](0043-realm-native-control-plane.md)
   (realm-native control plane), [ADR 0044](0044-unsafe-local-runtime-provider.md)
   (unsafe-local runtime provider)
 - Related: [ADR 0010](0010-wire-protocol-and-typed-errors.md)
@@ -94,6 +95,229 @@ Provider identifiers describe adapters, not security claims. Isolation,
 execution identity, environment source, display routing, networking, device
 access, and persistence remain typed execution-posture fields.
 
+### Provider crates use a type-first sortable namespace
+
+Every provider implementation crate uses this grammar:
+
+```text
+d2b-provider-<provider-type>-<implementation>
+```
+
+The provider type immediately follows `d2b-provider-` so workspace listings,
+dependency graphs, generated inventories, and code search group all
+implementations of the same authority together.
+
+The selected provider crate namespaces are:
+
+| Crate prefix | Standard interface | Responsibility |
+| --- | --- | --- |
+| `d2b-provider-api` | Interface crate | Provider descriptors, typed errors, operation context, capability DTOs, and provider traits. Contains no provider SDK or runtime implementation. |
+| `d2b-provider-runtime-<implementation>` | `RuntimeProvider` | Plans, starts, stops, adopts, and inspects workloads. |
+| `d2b-provider-infrastructure-<implementation>` | `InfrastructureProvider` | Provisions, adopts, inspects, and deletes infrastructure that hosts workloads or realm controllers. |
+| `d2b-provider-relay-<implementation>` | `RelayProvider` | Opens relay sessions and creates or revokes scoped rendezvous bindings. |
+| `d2b-provider-substrate-<implementation>` | `SubstrateProvider` | Checks and prepares a full-host OS substrate such as NixOS or generic Linux. |
+| `d2b-provider-credential-<implementation>` | `CredentialProvider` | Acquires or reports credentials inside the configured credential-owning workload without exporting them to the host. |
+| `d2b-provider-display-<implementation>` | `DisplayProvider` | Implements a reusable display/session adapter independent of one runtime backend. |
+| `d2b-provider-testkit` | Conformance harness | Provider mocks, deterministic fixtures, and reusable conformance suites. It is not linked into production binaries. |
+
+The words after the provider type name the canonical implementation, not a
+configured instance. The provider type is not repeated in that segment:
+
+- `d2b-provider-runtime-cloud-hypervisor`;
+- `d2b-provider-runtime-qemu-media`;
+- `d2b-provider-runtime-systemd-user`;
+- `d2b-provider-runtime-bubblewrap`;
+- `d2b-provider-runtime-azure-container-apps`;
+- `d2b-provider-infrastructure-azure-vm`;
+- `d2b-provider-relay-azure`;
+- `d2b-provider-credential-entra`;
+- `d2b-provider-substrate-nixos`;
+- `d2b-provider-display-wayland`.
+
+For example, `d2b-provider-relay-azure` has
+`ProviderType::Relay` and implementation id `azure`; its complete public
+provider kind may still render as `azure-relay`. A configured deployment may
+then assign instance ids such as `work-relay` or `payments-relay` without
+changing the crate or implementation id.
+
+Abbreviated or axis-free crate names such as `d2b-provider-aca`,
+`d2b-provider-relay`, `d2b-provider-azure`, and
+`d2b-host-providers` are forbidden after the cutover. A vendor with multiple
+provider types gets one crate per authority boundary. For example, ordinary
+Azure VM workload lifecycle and Azure VM infrastructure provisioning sort
+separately:
+
+```text
+d2b-provider-runtime-azure-vm
+d2b-provider-infrastructure-azure-vm
+```
+
+Vendor SDK plumbing shared by those implementations stays in a private module
+of one implementation until two real consumers justify a narrow shared crate.
+If a shared crate is required, its name must describe the specific SDK
+capability; `common`, `util`, `manager`, and an axis-free
+`d2b-provider-azure` remain disallowed.
+
+This type-first grammar supersedes ADR 0035's examples
+`d2b-provider-hypervisor-<name>`, `d2b-provider-<name>`, and
+`d2b-constellation-transport-<name>`. Hypervisors are runtime providers and
+relay transports are relay providers, so they sort under the same type axes as
+their peers.
+
+### Every provider implements a standard base interface
+
+`d2b-provider-api` replaces `d2b-realm-provider` as the narrow,
+implementation-free interface crate. It depends only on codec-neutral realm
+DTOs and the minimum async/I/O traits needed by the interfaces. It must not
+depend on:
+
+- `d2bd`, the privileged broker, or host mutation implementations;
+- a cloud SDK, HTTP client, TLS implementation, or concrete transport;
+- a protocol codec;
+- a provider implementation crate;
+- test mocks or live-provider fixtures.
+
+Every registered provider implements the common base interface:
+
+```rust
+#[async_trait]
+pub trait Provider: Send + Sync {
+    fn descriptor(&self) -> ProviderDescriptor;
+    async fn health(&self) -> ProviderResult<ProviderHealth>;
+}
+```
+
+`ProviderDescriptor` is bounded, non-secret data containing:
+
+- the configured `ProviderId`;
+- one closed `ProviderType`;
+- the canonical implementation id;
+- the provider API version;
+- positive capability assertions;
+- the implementation's configuration-schema fingerprint.
+
+It never contains credentials, token subjects, endpoints, resource ids, command
+arguments, host paths, or provider response bodies.
+
+The closed primary provider types are:
+
+```rust
+pub enum ProviderType {
+    Runtime,
+    Infrastructure,
+    Relay,
+    Substrate,
+    Credential,
+    Display,
+}
+```
+
+Each configured provider instance has exactly one primary provider type and is
+registered in the matching typed registry. Implementations may additionally
+implement optional capability interfaces such as persistent shell, durable
+execution, console, audio, guest-control endpoint, or observability export.
+Those capabilities do not change the provider's primary authority type.
+
+The specialized interfaces extend `Provider`:
+
+| Interface | Required semantic surface |
+| --- | --- |
+| `RuntimeProvider` | Capability description; plan; idempotent ensure/start; stop; inspect/adopt; destroy when the runtime owns durable workload state. |
+| `InfrastructureProvider` | Capability description; plan; apply; adopt; inspect; bootstrap binding; destroy. |
+| `RelayProvider` | Capability description; connect/listen; issue scoped rendezvous binding; revoke binding; inspect transport health. |
+| `SubstrateProvider` | Capability description; check; plan remediation; apply only through the authorized substrate owner. |
+| `CredentialProvider` | Non-secret status; interaction requirement; acquire or refresh only for a co-located typed consumer; revoke. |
+| `DisplayProvider` | Capability description; open and close an already-authorized display session. |
+
+The existing local-only `RuntimeProvider` and provider-managed
+`WorkloadProvider` split is retired. Local VMMs, host-user runtimes, container
+sandboxes, provider-managed sandboxes, and remote VM runtimes implement one
+`RuntimeProvider` lifecycle contract. Exec, persistent shell, display, console,
+audio, and guest-control remain optional capability interfaces rather than
+being folded into runtime lifecycle.
+
+Every mutating specialized-provider method receives a bounded
+`ProviderOperationContext` containing:
+
+- the stable operation id and idempotency key;
+- the already-authorized realm and workload/controller identity;
+- the required capability;
+- deadline and cancellation state;
+- a redacted trace correlation id.
+
+The provider does not reinterpret local users, authorize a principal, or choose
+another realm. The realm controller performs authorization before dispatch.
+The provider verifies that the operation context matches its configured scope,
+then performs only its typed action.
+
+All provider interfaces share these semantics:
+
+1. Unsupported behavior returns a typed capability denial. It never falls back
+   to SSH, a shell command, generic TCP, ambient developer credentials, or
+   another provider.
+2. Mutations are idempotent by operation id and return typed observed state.
+3. Plans and handles contain opaque provider refs, not raw credentials or
+   unbounded provider responses.
+4. `Debug`, tracing, audit, and metrics redact credentials, endpoints, resource
+   ids, user identities, and provider payloads.
+5. Timeouts, cancellation, retry classification, and degraded state are part of
+   the interface contract.
+6. Restart adoption verifies provider identity and operation binding before
+   accepting observed state.
+7. A provider implementation cannot call the broker directly. Host mutations
+   are re-originated by the owning daemon through typed broker operations.
+
+### Conformance is mandatory
+
+`d2b-provider-testkit` owns reusable conformance suites for every primary
+provider interface. An implementation crate is not registered or advertised as
+supported until it passes the suite for its primary type and every optional
+capability it advertises.
+
+The suites prove at minimum:
+
+- descriptor type and implementation id match the crate axis;
+- capability advertisement is positive and unsupported operations fail closed;
+- operation ids make retries idempotent;
+- cancellation and deadlines are bounded;
+- inspect/adopt rejects identity or generation mismatch;
+- no secret-shaped value appears in debug, error, audit, or metric output;
+- handles and plans survive their documented serialization boundary;
+- provider-specific errors map to stable `ProviderError` kinds and retry hints;
+- a provider cannot widen the authorized realm, workload, operation, or
+  capability from `ProviderOperationContext`.
+
+Cloud implementation crates keep live tests explicitly opt-in. Hermetic
+conformance uses fake SDK clients and transports supplied by the implementation
+crate, while shared mocks and assertions remain in `d2b-provider-testkit`.
+
+### Existing provider crates migrate explicitly
+
+The implementation cutover uses this map:
+
+| Current crate | Selected replacement |
+| --- | --- |
+| `d2b-realm-provider` | `d2b-provider-api` |
+| `d2b-host-providers` | Split into `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`, `d2b-provider-substrate-nixos`, `d2b-provider-substrate-linux`, and `d2b-provider-display-wayland`. |
+| `d2b-provider-aca` | `d2b-provider-runtime-azure-container-apps` |
+| `d2b-provider-relay` | `d2b-provider-relay-azure` |
+| Provider conformance code in production crates | `d2b-provider-testkit` |
+| Loopback relay implementation used only by tests | `d2b-provider-testkit` |
+| Provider implementations in `d2b-realm-transport` | Move to the matching `d2b-provider-relay-<implementation>` crate; protocol-neutral session DTOs remain in realm-core. |
+| `d2b-gateway` | Move generic authorization, ledger, and session state into the realm controller/router crates; move provider-specific behavior into typed provider implementations; delete the gateway-named crate. |
+| `d2b-gateway-runtime` | Delete after the realm controller composes typed provider registries directly. |
+
+Protocol-neutral realm routing and stream DTOs stay in realm-core crates.
+Provider interfaces and descriptors move to `d2b-provider-api`. Concrete
+provider dependencies stay in their type-first implementation crates. A
+provider implementation depends inward on the API and realm DTO crates; the API
+and realm crates never depend outward on implementations.
+
+The rename is one coordinated workspace cutover. No compatibility wrapper crates
+or re-export-only packages preserve the old names. Cargo manifests, lockfiles,
+Nix package construction, source policy, docs, tests, and dependency-direction
+gates move together.
+
 ADR 0044's no-isolation warning remains mandatory, but this ADR separates that
 warning from the runtime-provider identifier:
 
@@ -119,7 +343,7 @@ identifier here does not claim current support.
 | --- | --- |
 | Host process | `systemd-user`, `systemd-user-sandbox`, `bubblewrap`, `minijail` |
 | Local container | `podman`, `docker`, `systemd-nspawn`, `lxc`, `kata-containers`, `gvisor` |
-| Hypervisor or VMM | `cloud-hypervisor`, `qemu-kvm`, `firecracker`, `crosvm`, `libkrun`, `xen`, `bhyve`, `hyper-v`, `vmware-vsphere`, `virtualbox`, `apple-virtualization`, `nutanix-ahv` |
+| Hypervisor or VMM | `cloud-hypervisor`, `qemu-kvm`, `qemu-media`, `firecracker`, `crosvm`, `libkrun`, `xen`, `bhyve`, `hyper-v`, `vmware-vsphere`, `virtualbox`, `apple-virtualization`, `nutanix-ahv` |
 | Virtualization control plane | `libvirt`, `proxmox`, `kubevirt` |
 | Cloud VM | `aws-ec2`, `azure-vm`, `gcp-compute-engine`, `openstack-nova`, `oracle-compute`, `alibaba-ecs`, `ibm-vpc`, `digitalocean-droplet`, `hetzner-cloud`, `akamai-linode`, `vultr`, `scaleway-instance` |
 | Managed cloud sandbox | `aws-fargate`, `azure-container-apps`, `azure-container-apps-sessions`, `gcp-cloud-run`, `fly-machines`, `e2b`, `modal`, `daytona`, `codesandbox`, `github-codespaces` |
@@ -154,7 +378,7 @@ d2b.realms.local-root.workloads.work-controller = {
 };
 
 d2b.realms.work = {
-  parent = "local";
+  parent = "local-root";
 };
 ```
 
@@ -514,6 +738,9 @@ Implementation must preserve all of the following:
 
 Implementation requires coordinated changes across:
 
+- the `d2b-provider-api` base and specialized provider interfaces;
+- type-first provider implementation crates and typed registries;
+- `d2b-provider-testkit` conformance suites and provider naming policy;
 - `d2b.realms.<realm>.workloads.<workload>.roles.realmController`;
 - typed runtime and infrastructure provider bindings replacing the ambiguous
   inert provider record;
@@ -536,6 +763,12 @@ success-shaped compatibility fallback is added.
 
 Implementation is incomplete without:
 
+- source-policy tests proving provider crate names use a recognized type-first
+  axis and the implementation id matches the descriptor;
+- dependency-direction tests proving `d2b-provider-api` does not depend on an
+  implementation, cloud SDK, daemon, broker, codec, or concrete transport;
+- conformance tests for every registered provider's primary interface and
+  advertised optional capabilities;
 - Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
   cycle rejection, provider capability gating, and derived placement;
 - tests proving a controller cannot control its own substrate;
@@ -561,6 +794,8 @@ Implementation is incomplete without:
 ### Positive
 
 - Gateway VMs become ordinary workloads with a precise role.
+- Provider crates sort by authority type and expose one recognizable interface
+  and conformance contract.
 - Local and remote realm controllers use one configuration and protocol model.
 - Controller hosting lifecycle cannot become self-referential.
 - Provider, Relay, and controller responsibilities have explicit credential and
@@ -576,6 +811,8 @@ Implementation is incomplete without:
 
 - Provider configuration becomes more explicit and requires migration from the
   current inert `providers` records.
+- The workspace-wide provider rename is intentionally disruptive and must update
+  every manifest, Nix build, policy gate, and documentation reference together.
 - Remote controllers need a parent-owned provider executor even after
   enrollment.
 - Direct workload shortcuts require relay-capable guest agents and scoped
@@ -586,6 +823,21 @@ Implementation is incomplete without:
   provider operations even while the realm itself remains reachable.
 
 ## Alternatives considered
+
+### Keep provider crates named by vendor or product only
+
+Rejected. Names such as `d2b-provider-aca`, `d2b-provider-relay`, and
+`d2b-provider-azure` do not reveal whether the crate executes workloads,
+provisions infrastructure, owns credentials, or transports bytes. Type-first
+names make authority visible in workspace listings and dependency review.
+
+### Use one universal provider trait with optional methods
+
+Rejected. A catch-all interface would allow unsupported methods to accumulate,
+blur authority boundaries, and make capability claims difficult to verify. A
+small common `Provider` base plus mandatory primary-type interfaces preserves
+shared status/error semantics without pretending every provider can perform
+every operation.
 
 ### Keep gateway VMs as a separate object
 

@@ -14,8 +14,10 @@ deprecations ship one minor release before removal.
 
 - Added proposed ADR 0045, defining parent-owned workload-hosted realm
   controllers, explicit runtime/infrastructure/relay provider responsibilities,
-  Entra and YubiKey credential placement, and policy-authorized peer shortcuts
-  over inherited shared relay fabrics for nested realms.
+  type-first sortable provider crate names with mandatory standard interfaces
+  and conformance suites, Entra and YubiKey credential placement, and
+  policy-authorized peer shortcuts over inherited shared relay fabrics for
+  nested realms.
 
 - Added the same-UID unsafe-local runtime foundation: `d2bd` now owns the
   bounded, peer-credential-authenticated helper socket and one-generation-per-
