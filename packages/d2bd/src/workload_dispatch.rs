@@ -410,7 +410,7 @@ mod tests {
         ));
         assert!(!controller_matches_direct_local(
             "work",
-            RealmControllerPlacement::GatewayBacked,
+            RealmControllerPlacement::GatewayVm,
             &identity
         ));
         assert!(!controller_matches_direct_local(
