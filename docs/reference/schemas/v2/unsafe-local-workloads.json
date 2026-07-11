@@ -23,7 +23,7 @@
       "items": {
         "$ref": "#/definitions/UnsafeLocalWorkload"
       },
-      "maxItems": 16
+      "maxItems": 256
     }
   },
   "additionalProperties": false,

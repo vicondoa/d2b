@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION: &str = "v2";
-pub const MAX_UNSAFE_LOCAL_WORKLOADS: usize = 16;
+pub const MAX_UNSAFE_LOCAL_WORKLOADS: usize = 256;
 pub const MAX_LOCAL_VM_CONFIGURED_WORKLOADS: usize = 256;
 pub const MAX_PRIVATE_CONFIGURED_WORKLOADS: usize =
     MAX_UNSAFE_LOCAL_WORKLOADS + MAX_LOCAL_VM_CONFIGURED_WORKLOADS;
@@ -18,7 +18,7 @@ pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnsafeLocalWorkloadsJson {
     pub schema_version: String,
-    #[schemars(length(max = 16))]
+    #[schemars(length(max = 256))]
     pub workloads: Vec<UnsafeLocalWorkload>,
     /// Configured launcher items for local VM workloads. They share this
     /// private, bundle-hashed artifact so argv never enters public launcher

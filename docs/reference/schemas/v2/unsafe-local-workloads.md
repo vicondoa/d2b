@@ -10,9 +10,9 @@ public requests never supply argv.
 ## Contract notes
 
 - `schemaVersion` is `v2`.
-- Unsafe-local workloads are bounded to 16 entries; configured local-VM
+- Unsafe-local workloads are bounded to 256 entries; configured local-VM
   workloads are bounded to 256 entries. The combined private artifact is
-  therefore bounded to 272 workload rows.
+  therefore bounded to 512 workload rows.
 - Every unsafe-local identity names `runtimeKind` and `providerId` as
   `unsafe-local`.
 - `localVmWorkloads` entries require `runtimeKind = "nixos"`.

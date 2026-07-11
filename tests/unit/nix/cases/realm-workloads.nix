@@ -251,7 +251,7 @@ let
     d2b.realms.host = {
       allowedUsers = [ "alice" ];
       policy.allowUnsafeLocal = true;
-      workloads = lib.genAttrs (workloadNames "unsafe" 17) (_: {
+      workloads = lib.genAttrs (workloadNames "unsafe" 257) (_: {
         kind = "unsafe-local";
         launcher.items.run = {
           type = "exec";
@@ -462,7 +462,7 @@ in
   "realm-workloads/private-configured-workload-bounds" = {
     expr = {
       unsafeOverflow = hasMessage
-        [ "maximum of 16" "unsafe-local workloads" ]
+        [ "maximum of 256" "unsafe-local workloads" ]
         (failureMessages [ unsafeBoundFixture ]);
       localVmOverflow = hasMessage
         [ "maximum of 256" "local-vm" "configured launch" ]

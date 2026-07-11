@@ -870,9 +870,9 @@ let
         (lib.filter hasConfiguredLocalVmLaunch realmWorkloadRows);
     in [
       {
-        assertion = unsafeLocalCount <= 16;
+        assertion = unsafeLocalCount <= 256;
         message = ''
-          d2b declares more than the supported maximum of 16 enabled
+          d2b declares more than the supported maximum of 256 enabled
           unsafe-local workloads.
         '';
       }
@@ -884,9 +884,9 @@ let
         '';
       }
       {
-        assertion = unsafeLocalCount + localVmConfiguredCount <= 272;
+        assertion = unsafeLocalCount + localVmConfiguredCount <= 512;
         message = ''
-          d2b declares more than the supported maximum of 272 private configured
+          d2b declares more than the supported maximum of 512 private configured
           workloads.
         '';
       }
