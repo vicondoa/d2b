@@ -16,9 +16,10 @@ use d2b_contracts::unsafe_local_wire::{
     MAX_UNSAFE_LOCAL_TERMINAL_FRAME_SIZE, MAX_UNSAFE_LOCAL_TERMINAL_WAIT_TIMEOUT_MS,
     decode_unsafe_local_terminal_frame, encode_unsafe_local_terminal_frame,
 };
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use rustix::fs::{Mode, OFlags};
-use rustix::io::{Errno, ioctl_fionbio, read as fd_read, write as fd_write};
+use rustix::io::{Errno, fcntl_dupfd_cloexec, ioctl_fionbio, read as fd_read, write as fd_write};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -48,7 +49,7 @@ const _: () = {
 const MAX_SUPERVISOR_SPEC_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TERMINAL_WORKERS: usize = 16;
 const MAX_CONTROL_CONNECTIONS: usize = 32;
-const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const SUPERVISOR_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellSupervisorError {
@@ -469,32 +470,35 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
     write_ready(1)?;
 
     while !state.kill_requested.load(Ordering::Acquire) {
-        match listener.listener().accept() {
-            Ok((stream, _)) => {
-                if state.control_connections.fetch_add(1, Ordering::AcqRel)
-                    >= MAX_CONTROL_CONNECTIONS
-                {
-                    state.control_connections.fetch_sub(1, Ordering::AcqRel);
-                    drop(stream);
-                    continue;
+        let listener_ready = poll_readable(listener.listener().as_fd())?;
+        if listener_ready {
+            match listener.listener().accept() {
+                Ok((stream, _)) => {
+                    if state.control_connections.fetch_add(1, Ordering::AcqRel)
+                        >= MAX_CONTROL_CONNECTIONS
+                    {
+                        state.control_connections.fetch_sub(1, Ordering::AcqRel);
+                        drop(stream);
+                        continue;
+                    }
+                    let worker_state = Arc::clone(&state);
+                    if std::thread::Builder::new()
+                        .name("d2b-shell-control".to_owned())
+                        .spawn(move || {
+                            handle_supervisor_connection(stream, Arc::clone(&worker_state));
+                            worker_state
+                                .control_connections
+                                .fetch_sub(1, Ordering::AcqRel);
+                        })
+                        .is_err()
+                    {
+                        state.control_connections.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
-                let worker_state = Arc::clone(&state);
-                if std::thread::Builder::new()
-                    .name("d2b-shell-control".to_owned())
-                    .spawn(move || {
-                        handle_supervisor_connection(stream, Arc::clone(&worker_state));
-                        worker_state
-                            .control_connections
-                            .fetch_sub(1, Ordering::AcqRel);
-                    })
-                    .is_err()
-                {
-                    state.control_connections.fetch_sub(1, Ordering::AcqRel);
-                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return Err(ShellSupervisorError::RuntimeUnavailable),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return Err(ShellSupervisorError::RuntimeUnavailable),
         }
         match child.try_wait() {
             Ok(Some(status)) => state.set_terminal_status(exit_status(status)),
@@ -503,7 +507,6 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
                 slug: "wait-failed".to_owned(),
             }),
         }
-        std::thread::sleep(SUPERVISOR_POLL_INTERVAL);
     }
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
@@ -512,12 +515,71 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
                 state.set_terminal_status(exit_status(status));
                 break;
             }
-            Ok(None) => std::thread::sleep(SUPERVISOR_POLL_INTERVAL),
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             Err(_) => break,
         }
     }
     drop(listener);
     Ok(())
+}
+
+fn poll_readable(fd: std::os::fd::BorrowedFd<'_>) -> Result<bool, ShellSupervisorError> {
+    let timeout = PollTimeout::try_from(SUPERVISOR_POLL_TIMEOUT)
+        .map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
+    let mut fds = [PollFd::new(
+        fd,
+        PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP,
+    )];
+    loop {
+        match poll(&mut fds, timeout) {
+            Ok(_) => break,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return Err(ShellSupervisorError::RuntimeUnavailable),
+        }
+    }
+    let events = fds[0].revents().unwrap_or(PollFlags::empty());
+    if events.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL) {
+        return Err(ShellSupervisorError::RuntimeUnavailable);
+    }
+    Ok(events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP))
+}
+
+fn start_pty_reader(state: Arc<SupervisorState>) {
+    let reader = {
+        let master = state
+            .master
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        master
+            .as_ref()
+            .and_then(|master| fcntl_dupfd_cloexec(master, 3).ok())
+    };
+    let Some(reader) = reader else {
+        state.ring.close();
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("d2b-shell-pty-reader".to_owned())
+        .spawn(move || {
+            let mut buffer = [0u8; 16 * 1024];
+            loop {
+                if state.kill_requested.load(Ordering::Acquire) {
+                    break;
+                }
+                match poll_readable(reader.as_fd()) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(_) => break,
+                }
+                match fd_read(&reader, &mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => state.ring.append(&buffer[..count]),
+                    Err(Errno::AGAIN) | Err(Errno::INTR) => {}
+                    Err(_) => break,
+                }
+            }
+            state.ring.close();
+        });
 }
 
 fn read_supervisor_spec() -> Result<ShellSupervisorSpec, ShellSupervisorError> {
@@ -602,39 +664,6 @@ fn spawn_login_shell(spec: &ShellSupervisorSpec) -> Result<(OwnedFd, Child), She
             Err(ShellSupervisorError::SpawnFailed)
         }
     }
-}
-
-fn start_pty_reader(state: Arc<SupervisorState>) {
-    let _ = std::thread::Builder::new()
-        .name("d2b-shell-pty-reader".to_owned())
-        .spawn(move || {
-            let mut buffer = [0u8; 16 * 1024];
-            loop {
-                let result = {
-                    let master = state
-                        .master
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let Some(master) = master.as_ref() else {
-                        break;
-                    };
-                    fd_read(master, &mut buffer)
-                };
-                match result {
-                    Ok(0) => {
-                        state.ring.close();
-                        break;
-                    }
-                    Ok(count) => state.ring.append(&buffer[..count]),
-                    Err(Errno::AGAIN) => std::thread::sleep(SUPERVISOR_POLL_INTERVAL),
-                    Err(Errno::INTR) => {}
-                    Err(_) => {
-                        state.ring.close();
-                        break;
-                    }
-                }
-            }
-        });
 }
 
 fn handle_supervisor_connection(mut stream: UnixStream, state: Arc<SupervisorState>) {

@@ -249,6 +249,68 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
         "python3 /run/d2b/shell-client.py"
     )
+    machine.succeed(r"""
+      cat > /run/d2b/cli-shell-e2e.py <<'PY'
+import errno
+import os
+import pty
+import select
+import time
+
+pid, master = pty.fork()
+if pid == 0:
+    os.execv(
+        "/run/current-system/sw/bin/d2b",
+        ["d2b", "shell", "tools.host.d2b", "--name", "cli-e2e"],
+    )
+
+os.write(master, b"printf cli-shell-canary\\n")
+deadline = time.monotonic() + 30
+output = bytearray()
+while b"cli-shell-canary" not in output and time.monotonic() < deadline:
+    readable, _, _ = select.select([master], [], [], 1)
+    if not readable:
+        continue
+    try:
+        chunk = os.read(master, 65536)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
+    if not chunk:
+        break
+    output.extend(chunk)
+
+if b"cli-shell-canary" not in output:
+    raise SystemExit("real d2b shell CLI did not round-trip terminal output")
+
+os.write(master, b"\\x00\\x11")
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    waited, status = os.waitpid(pid, os.WNOHANG)
+    if waited == pid:
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            raise SystemExit(f"real d2b shell CLI exited with status {status}")
+        break
+    time.sleep(0.05)
+else:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    raise SystemExit("real d2b shell CLI did not detach")
+PY
+      chmod 0755 /run/d2b/cli-shell-e2e.py
+    """)
+    machine.succeed(
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/cli-shell-e2e.py"
+    )
+    machine.succeed(
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "d2b shell tools.host.d2b kill --name cli-e2e --json "
+        "| jq -e '.result == \"killed\"'"
+    )
     machine.succeed(
         "runuser -u alice -- sh -c 'setsid sleep 300 >/dev/null 2>&1 & "
         "echo $! > /run/user/1000/unrelated-same-uid.pid'"

@@ -50,6 +50,7 @@ type PendingSender = mpsc::SyncSender<Result<HelperTerminalResponse, UnsafeLocal
 struct ClientState {
     pending: Mutex<HashMap<u64, PendingSender>>,
     abandoned: Mutex<VecDeque<u64>>,
+    abandoned_evicted_through: AtomicU64,
     closed: AtomicBool,
 }
 
@@ -67,7 +68,10 @@ impl ClientState {
     fn abandon(&self, request_id: u64) {
         let mut abandoned = self.abandoned.lock();
         if abandoned.len() >= MAX_ABANDONED_TERMINAL_REQUESTS {
-            abandoned.pop_front();
+            if let Some(evicted) = abandoned.pop_front() {
+                self.abandoned_evicted_through
+                    .fetch_max(evicted, Ordering::AcqRel);
+            }
         }
         abandoned.push_back(request_id);
     }
@@ -79,6 +83,10 @@ impl ClientState {
         };
         abandoned.remove(index);
         true
+    }
+
+    fn was_evicted_abandoned(&self, request_id: u64) -> bool {
+        request_id <= self.abandoned_evicted_through.load(Ordering::Acquire)
     }
 }
 
@@ -110,6 +118,7 @@ impl UnsafeLocalTerminalClient {
         let state = Arc::new(ClientState {
             pending: Mutex::new(HashMap::new()),
             abandoned: Mutex::new(VecDeque::new()),
+            abandoned_evicted_through: AtomicU64::new(0),
             closed: AtomicBool::new(false),
         });
         let reader_state = Arc::clone(&state);
@@ -232,7 +241,7 @@ fn terminal_reader(mut stream: UnixStream, state: Arc<ClientState>) {
         let request_id = response.request_id();
         if let Some(sender) = state.pending.lock().remove(&request_id) {
             let _ = sender.try_send(Ok(response));
-        } else if !state.consume_abandoned(request_id) {
+        } else if !state.consume_abandoned(request_id) && !state.was_evicted_abandoned(request_id) {
             state.close(UnsafeLocalTerminalError::Protocol);
             let _ = stream.shutdown(std::net::Shutdown::Both);
             return;
@@ -680,6 +689,43 @@ mod tests {
             wait.join().unwrap(),
             Err(UnsafeLocalTerminalError::Protocol)
         );
+    }
+
+    #[test]
+    fn response_for_evicted_abandoned_id_does_not_close_session() {
+        let (client, mut peer) = client_pair();
+        for request_id in 1..=(MAX_ABANDONED_TERMINAL_REQUESTS as u64 + 1) {
+            client.state.abandon(request_id);
+        }
+        write_response(
+            &mut peer,
+            &HelperTerminalResponse::Wait(HelperTerminalOperationResult {
+                request_id: 1,
+                result: d2b_contracts::terminal_wire::TerminalWaitResult {
+                    running: true,
+                    terminal_status: None,
+                },
+            }),
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!client.state.closed.load(Ordering::Acquire));
+
+        let next_client = Arc::clone(&client);
+        let next = std::thread::spawn(move || {
+            futures_lite_block_on(next_client.wait(0, Duration::from_secs(2)))
+        });
+        let request = read_request(&mut peer);
+        write_response(
+            &mut peer,
+            &HelperTerminalResponse::Wait(HelperTerminalOperationResult {
+                request_id: request.request_id(),
+                result: d2b_contracts::terminal_wire::TerminalWaitResult {
+                    running: true,
+                    terminal_status: None,
+                },
+            }),
+        );
+        assert!(next.join().unwrap().unwrap().running);
     }
 
     fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
