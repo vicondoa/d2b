@@ -126,6 +126,9 @@ pub enum DaemonEvent {
     WorkloadLauncher {
         target: String,
         item_id: String,
+        operation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exec_id: Option<String>,
         peer_uid: u32,
         provider: WorkloadLaunchProvider,
         result: WorkloadLaunchResult,
@@ -2010,6 +2013,8 @@ mod tests {
         let event = DaemonEvent::WorkloadLauncher {
             target: "browser.host.d2b".to_owned(),
             item_id: "browser".to_owned(),
+            operation_id: "launch-1".to_owned(),
+            exec_id: None,
             peer_uid: 1000,
             provider: WorkloadLaunchProvider::UnsafeLocal,
             result: WorkloadLaunchResult::Committed,
@@ -2036,12 +2041,16 @@ mod tests {
         let event = DaemonEvent::WorkloadLauncher {
             target: "browser.work.d2b".to_owned(),
             item_id: "browser".to_owned(),
+            operation_id: "launch-2".to_owned(),
+            exec_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
             peer_uid: 1000,
             provider: WorkloadLaunchProvider::LocalVm,
             result: WorkloadLaunchResult::Committed,
         };
         let rendered = serde_json::to_string(&event).unwrap();
         assert!(rendered.contains("\"provider\":\"local-vm\""));
+        assert!(rendered.contains("\"operation_id\":\"launch-2\""));
+        assert!(rendered.contains("\"exec_id\":\"0123456789abcdef0123456789abcdef\""));
         assert!(!rendered.contains("argv"));
         assert!(!rendered.contains("environment"));
         assert!(!rendered.contains("cwd"));

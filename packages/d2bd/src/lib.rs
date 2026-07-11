@@ -3366,6 +3366,8 @@ fn dispatch_workload(
                     state,
                     peer.uid,
                     &resolved,
+                    &args.operation_id,
+                    None,
                     daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
                 );
                 return Ok(wire::workload_response(
@@ -3382,6 +3384,7 @@ fn dispatch_workload(
             let dispatch_result = match &resolved.route {
                 WorkloadRoute::UnsafeLocal => {
                     dispatch_unsafe_local_launcher(state, peer.uid, &args.operation_id, &resolved)
+                        .map(|disposition| (disposition, None))
                 }
                 WorkloadRoute::LocalVm { vm } => {
                     dispatch_local_vm_launcher(state, peer.uid, vm, &args.operation_id, &resolved)
@@ -3395,8 +3398,8 @@ fn dispatch_workload(
                     })
                 }
             };
-            let disposition = match dispatch_result {
-                Ok(disposition) => disposition,
+            let (disposition, exec_id) = match dispatch_result {
+                Ok(result) => result,
                 Err(error) => {
                     workload_dispatch::abort_launch(peer.uid, &operation_id);
                     workload_lifecycle_metric(state, provider_label, "launcher-exec", "failed");
@@ -3404,6 +3407,8 @@ fn dispatch_workload(
                         state,
                         peer.uid,
                         &resolved,
+                        &args.operation_id,
+                        None,
                         daemon_audit::WorkloadLaunchResult::Failed,
                     );
                     return Err(error);
@@ -3417,6 +3422,8 @@ fn dispatch_workload(
                         state,
                         peer.uid,
                         &resolved,
+                        &args.operation_id,
+                        exec_id.as_deref(),
                         daemon_audit::WorkloadLaunchResult::Committed,
                     );
                     public_wire::LauncherExecDisposition::Committed
@@ -3432,6 +3439,8 @@ fn dispatch_workload(
                         state,
                         peer.uid,
                         &resolved,
+                        &args.operation_id,
+                        exec_id.as_deref(),
                         daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
                     );
                     public_wire::LauncherExecDisposition::AlreadyCommitted
@@ -3541,7 +3550,7 @@ fn dispatch_unsafe_local_launcher(
     requester_uid: u32,
     operation_id: &d2b_realm_core::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
-) -> Result<public_wire::LauncherExecDisposition, TypedError> {
+) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     let request = HelperLaunchRequest {
@@ -3594,7 +3603,10 @@ fn dispatch_local_vm_launcher(
     );
     let result = exec_detached::create_idempotent(state, &request, request_id)?;
     emit_detached_create_audit(state, requester_uid, vm, &result.exec_id);
-    Ok(public_wire::LauncherExecDisposition::Committed)
+    Ok((
+        public_wire::LauncherExecDisposition::Committed,
+        Some(result.exec_id),
+    ))
 }
 
 fn map_workload_catalog_error(error: workload_dispatch::CatalogError) -> TypedError {
@@ -3722,6 +3734,8 @@ fn emit_workload_launch_audit(
     state: &ServerState,
     peer_uid: u32,
     resolved: &workload_dispatch::ResolvedExec,
+    operation_id: &d2b_realm_core::OperationId,
+    exec_id: Option<&str>,
     result: daemon_audit::WorkloadLaunchResult,
 ) {
     let provider = match resolved.route {
@@ -3738,6 +3752,8 @@ fn emit_workload_launch_audit(
         .write_event(&daemon_audit::DaemonEvent::WorkloadLauncher {
             target: resolved.identity.canonical_target.to_canonical(),
             item_id: resolved.item_id.as_str().to_owned(),
+            operation_id: operation_id.to_string(),
+            exec_id: exec_id.map(str::to_owned),
             peer_uid,
             provider,
             result,

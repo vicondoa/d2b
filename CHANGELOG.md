@@ -126,8 +126,8 @@ deprecations ship one minor release before removal.
   Unsafe-local helper timeouts release their active operation reservation, and
   local-VM launches use a deterministic opaque guest exec id backed by guestd's
   durable detached record so daemon restart retries cannot spawn duplicates.
-  Audit records now correlate the authenticated peer and local-VM detached exec
-  without recording execution details.
+  Audit records now correlate the authenticated peer, public operation id, and
+  local-VM detached exec without recording execution details.
 
 - Fixed provider-neutral desktop readiness and bridge access. The Wayland proxy
   reports its first accepted client even when no timeout is configured, and the
