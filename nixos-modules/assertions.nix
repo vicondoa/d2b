@@ -161,6 +161,15 @@ let
   # (Same-VM references across realms share a CID by design and are not
   # flagged here; the global vmVsockCidCollisions check covers per-VM uniqueness.)
   realmWorkloadRows = realmIndex.workloads.enabled;
+  hasConfiguredLocalVmLaunch = row:
+    let
+      declared = cfg.realms.${row.realmName}.workloads.${row.workloadName};
+    in
+    row.kind == "local-vm"
+    && row.launcherEnabled
+    && (declared.launcher.items != { }
+      || declared.launcher.defaultItem != null
+      || declared.shell.enable);
   nixosWorkloadRows =
     lib.filter
       (row:
@@ -698,7 +707,22 @@ let
                 workload.launcher.items;
               hasExecItem = lib.any (row: row.item.type == "exec") itemRows;
               hasShellItem = lib.any (row: row.item.type == "shell") itemRows;
+              hasPrivateItem = lib.any
+                (row: builtins.elem row.item.type [ "exec" "shell" ])
+                itemRows;
+              privateItemNames = map
+                (row: row.itemId)
+                (lib.filter
+                  (row: builtins.elem row.item.type [ "exec" "shell" ])
+                  itemRows);
               unsafeLocal = workload.kind == "unsafe-local";
+              configuredLocalVm =
+                workload.enable
+                && workload.kind == "local-vm"
+                && workload.launcher.enable
+                && (workload.launcher.items != { }
+                  || workload.launcher.defaultItem != null
+                  || workload.shell.enable);
               localVmOptionsUnused =
                 workload.localVm.memoryMiB == null
                 && workload.localVm.vcpus == null
@@ -778,6 +802,22 @@ let
                 '';
               }
               {
+                assertion = !configuredLocalVm || hasPrivateItem;
+                message = ''
+                  ${path} enables configured launch for a local-vm workload but
+                  declares no supported exec or shell launcher item.
+                '';
+              }
+              {
+                assertion = !configuredLocalVm
+                  || workload.launcher.defaultItem == null
+                  || builtins.elem workload.launcher.defaultItem privateItemNames;
+                message = ''
+                  ${path}.launcher.defaultItem must name a supported exec or
+                  shell item when local-vm configured launch is enabled.
+                '';
+              }
+              {
                 assertion = builtins.length itemNames <= 64;
                 message = ''
                   ${path}.launcher.items declares more than the supported
@@ -822,18 +862,35 @@ let
           realm.workloads))
       (lib.filterAttrs (_: realm: realm.enable) cfg.realms));
 
-  unsafeLocalWorkloadCountAssertions = [
-    {
-      assertion =
-        builtins.length
-          (lib.filter (row: row.kind == "unsafe-local") realmWorkloadRows)
-        <= 256;
-      message = ''
-        d2b declares more than the supported maximum of 256 enabled
-        unsafe-local workloads.
-      '';
-    }
-  ];
+  privateConfiguredWorkloadCountAssertions =
+    let
+      unsafeLocalCount = builtins.length
+        (lib.filter (row: row.kind == "unsafe-local") realmWorkloadRows);
+      localVmConfiguredCount = builtins.length
+        (lib.filter hasConfiguredLocalVmLaunch realmWorkloadRows);
+    in [
+      {
+        assertion = unsafeLocalCount <= 16;
+        message = ''
+          d2b declares more than the supported maximum of 16 enabled
+          unsafe-local workloads.
+        '';
+      }
+      {
+        assertion = localVmConfiguredCount <= 256;
+        message = ''
+          d2b declares more than the supported maximum of 256 enabled local-vm
+          workloads with configured launch.
+        '';
+      }
+      {
+        assertion = unsafeLocalCount + localVmConfiguredCount <= 272;
+        message = ''
+          d2b declares more than the supported maximum of 272 private configured
+          workloads.
+        '';
+      }
+    ];
 
   gatewayStateBoundaryAssertions =
     lib.mapAttrsToList
@@ -2177,7 +2234,7 @@ in
     ++ realmPortForwardAssertions
     ++ realmWorkloadTargetAssertions
     ++ realmLauncherItemAssertions
-    ++ unsafeLocalWorkloadCountAssertions
+    ++ privateConfiguredWorkloadCountAssertions
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions

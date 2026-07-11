@@ -12,7 +12,8 @@
       "type": "array",
       "items": {
         "$ref": "#/definitions/LocalVmConfiguredWorkload"
-      }
+      },
+      "maxItems": 256
     },
     "schemaVersion": {
       "type": "string"
@@ -21,7 +22,8 @@
       "type": "array",
       "items": {
         "$ref": "#/definitions/UnsafeLocalWorkload"
-      }
+      },
+      "maxItems": 16
     }
   },
   "additionalProperties": false,
@@ -76,7 +78,9 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/UnsafeLocalLauncherItem"
-          }
+          },
+          "maxItems": 64,
+          "minItems": 1
         }
       },
       "additionalProperties": false
@@ -216,7 +220,9 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/UnsafeLocalLauncherItem"
-          }
+          },
+          "maxItems": 64,
+          "minItems": 1
         },
         "shell": {
           "anyOf": [
