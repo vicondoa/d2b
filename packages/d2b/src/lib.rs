@@ -2015,7 +2015,7 @@ fn cmd_shell_attach(
     })?;
     let mut transport = shell_owner_transport(context)?;
     let size = exec_client::current_window_size()
-        .map(|(rows, cols)| d2b_contracts::terminal_wire::TerminalSize { rows, cols })
+        .and_then(shell_terminal_size)
         .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
     let start = transport.round_trip(&ShellOp::Attach(public_wire::ShellAttachArgs {
         vm: vm.to_owned(),
@@ -2038,6 +2038,13 @@ fn cmd_shell_attach(
         attach.session.as_str(),
     )?;
     Ok(0)
+}
+
+fn shell_terminal_size(
+    (rows, cols): (u32, u32),
+) -> Option<d2b_contracts::terminal_wire::TerminalSize> {
+    ((1..=65_535).contains(&rows) && (1..=65_535).contains(&cols))
+        .then_some(d2b_contracts::terminal_wire::TerminalSize { rows, cols })
 }
 
 struct ShellOwnerTransport {
@@ -12869,6 +12876,17 @@ mod host_install_dispatch_tests {
         assert!(message.contains("forced detach of existing client"));
         assert!(message.contains("detach with Ctrl-Space Ctrl-q"));
         assert!(message.contains("exit or Ctrl-D ends the session"));
+    }
+
+    #[test]
+    fn shell_terminal_size_rejects_zero_and_out_of_range_pty_geometry() {
+        assert!(super::shell_terminal_size((0, 0)).is_none());
+        assert!(super::shell_terminal_size((24, 0)).is_none());
+        assert!(super::shell_terminal_size((65_536, 80)).is_none());
+        assert_eq!(
+            super::shell_terminal_size((24, 80)),
+            Some(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 })
+        );
     }
 
     #[test]
