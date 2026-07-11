@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::public_wire::{
@@ -53,8 +54,12 @@ pub(crate) enum LaunchLedgerBegin {
 struct LaunchLedgerEntry {
     fingerprint: String,
     committed: bool,
-    sequence: u64,
+    updated_at: Instant,
 }
+
+const MAX_LAUNCH_OPERATIONS_PER_UID: usize = 64;
+const ACTIVE_LAUNCH_RETENTION: Duration = Duration::from_secs(45);
+const COMMITTED_LAUNCH_RETENTION: Duration = Duration::from_secs(300);
 
 fn launch_ledger() -> &'static Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>> {
     static LEDGER: OnceLock<Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>>> = OnceLock::new();
@@ -70,6 +75,15 @@ pub(crate) fn begin_launch(
     let key = (requester_uid, operation_id.to_owned());
     let fingerprint = format!("{}:{}", target.to_canonical(), item_id.as_str());
     let mut ledger = launch_ledger().lock().expect("workload launch ledger");
+    let now = Instant::now();
+    ledger.retain(|_, entry| {
+        entry.updated_at.elapsed()
+            < if entry.committed {
+                COMMITTED_LAUNCH_RETENTION
+            } else {
+                ACTIVE_LAUNCH_RETENTION
+            }
+    });
     if let Some(entry) = ledger.get(&key) {
         if entry.fingerprint != fingerprint {
             return Err(CatalogError::OperationConflict);
@@ -80,22 +94,26 @@ pub(crate) fn begin_launch(
             Err(CatalogError::OperationInProgress)
         };
     }
-    if ledger.len() >= 1024 {
+    if ledger
+        .keys()
+        .filter(|(uid, _)| *uid == requester_uid)
+        .count()
+        >= MAX_LAUNCH_OPERATIONS_PER_UID
+    {
         let oldest = ledger
             .iter()
-            .filter(|(_, entry)| entry.committed)
-            .min_by_key(|(_, entry)| entry.sequence)
+            .filter(|((uid, _), entry)| *uid == requester_uid && entry.committed)
+            .min_by_key(|(_, entry)| entry.updated_at)
             .map(|(key, _)| key.clone())
             .ok_or(CatalogError::OperationInProgress)?;
         ledger.remove(&oldest);
     }
-    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     ledger.insert(
         key,
         LaunchLedgerEntry {
             fingerprint,
             committed: false,
-            sequence: SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            updated_at: now,
         },
     );
     Ok(LaunchLedgerBegin::New)
@@ -108,6 +126,7 @@ pub(crate) fn complete_launch(requester_uid: u32, operation_id: &str) {
         .get_mut(&(requester_uid, operation_id.to_owned()))
     {
         entry.committed = true;
+        entry.updated_at = Instant::now();
     }
 }
 
@@ -326,5 +345,28 @@ mod tests {
             Err(CatalogError::OperationConflict)
         );
         abort_launch(65001, operation);
+    }
+
+    #[test]
+    fn active_launch_capacity_isolated_per_uid() {
+        let target = WorkloadTarget::parse("browser.host.d2b").unwrap();
+        let item = ProtocolToken::parse("browser").unwrap();
+        let saturated_uid = 65002;
+        let other_uid = 65003;
+        for index in 0..MAX_LAUNCH_OPERATIONS_PER_UID {
+            begin_launch(saturated_uid, &format!("capacity-{index}"), &target, &item).unwrap();
+        }
+        assert_eq!(
+            begin_launch(saturated_uid, "capacity-overflow", &target, &item),
+            Err(CatalogError::OperationInProgress)
+        );
+        assert_eq!(
+            begin_launch(other_uid, "other-user", &target, &item),
+            Ok(LaunchLedgerBegin::New)
+        );
+        for index in 0..MAX_LAUNCH_OPERATIONS_PER_UID {
+            abort_launch(saturated_uid, &format!("capacity-{index}"));
+        }
+        abort_launch(other_uid, "other-user");
     }
 }
