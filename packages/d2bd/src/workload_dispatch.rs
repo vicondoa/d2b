@@ -298,15 +298,41 @@ fn realm_is_direct_local(resolver: &BundleResolver, identity: &WorkloadIdentity)
         .as_ref()
         .is_some_and(|controllers| {
             controllers.controllers.iter().any(|controller| {
-                controller.realm_path.as_str() == identity.realm_path.target_form()
-                    && controller.placement == RealmControllerPlacement::HostLocal
+                controller_matches_direct_local(
+                    controller.realm_path.as_str(),
+                    controller.placement,
+                    identity,
+                )
             })
         })
+}
+
+fn controller_matches_direct_local(
+    controller_realm_path: &str,
+    placement: RealmControllerPlacement,
+    identity: &WorkloadIdentity,
+) -> bool {
+    controller_realm_path == identity.realm_path.target_form()
+        && placement == RealmControllerPlacement::HostLocal
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_realm_core::{
+        ids::{RealmId, WorkloadId},
+        realm::RealmPath,
+    };
+
+    fn workload_identity(realm: &str) -> WorkloadIdentity {
+        let realm_id = RealmId::parse(realm).unwrap();
+        WorkloadIdentity::new(
+            WorkloadId::parse("browser").unwrap(),
+            realm_id.clone(),
+            RealmPath::new(vec![realm_id]).unwrap(),
+            WorkloadTarget::parse(format!("browser.{realm}.d2b")).unwrap(),
+        )
+    }
 
     #[test]
     fn launch_ledger_is_idempotent_and_rejects_changed_fingerprint() {
@@ -371,6 +397,26 @@ mod tests {
             WorkloadRoute::CapabilityUnavailable {
                 provider: WorkloadProviderKind::LocalVm
             }
+        ));
+    }
+
+    #[test]
+    fn only_matching_host_local_realm_is_direct() {
+        let identity = workload_identity("work");
+        assert!(controller_matches_direct_local(
+            "work",
+            RealmControllerPlacement::HostLocal,
+            &identity
+        ));
+        assert!(!controller_matches_direct_local(
+            "work",
+            RealmControllerPlacement::GatewayBacked,
+            &identity
+        ));
+        assert!(!controller_matches_direct_local(
+            "home",
+            RealmControllerPlacement::HostLocal,
+            &identity
         ));
     }
 }

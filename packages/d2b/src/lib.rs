@@ -3609,16 +3609,7 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
         .recv_frame()
         .map_err(|error| CliFailure::new(69, format!("failed to receive hello reply: {error}")))?;
     let negotiated = parse_hello_reply(&hello)?;
-    if !negotiated
-        .capabilities
-        .iter()
-        .any(|feature| feature.known() == Some(KnownFeatureFlag::ConfiguredLaunchV1))
-    {
-        return Err(CliFailure::new(
-            70,
-            "daemon does not negotiate configured-launch-v1; update d2b and d2bd together",
-        ));
-    }
+    require_launch_features(&negotiated.capabilities, None)?;
 
     let list = public_wire::WorkloadOp::List(public_wire::WorkloadListArgs::default());
     let list_response = workload_socket_exchange(&mut socket, &list, "workload list")?;
@@ -3628,94 +3619,9 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
             "daemon returned the wrong workload response to list",
         ));
     };
-    let mut candidates = list_result
-        .workloads
-        .into_iter()
-        .filter(|workload| {
-            workload.identity.canonical_target.to_canonical() == args.target
-                || workload.identity.workload_id.as_str() == args.target
-        })
-        .collect::<Vec<_>>();
-    let workload = match candidates.len() {
-        1 => candidates.remove(0),
-        0 => {
-            return Err(CliFailure::new(
-                2,
-                format!("workload target `{}` was not found", args.target),
-            ));
-        }
-        _ => {
-            let targets = candidates
-                .iter()
-                .map(|workload| workload.identity.canonical_target.to_canonical())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(CliFailure::new(
-                2,
-                format!(
-                    "workload id `{}` is ambiguous; use one of: {targets}",
-                    args.target
-                ),
-            ));
-        }
-    };
-    if workload.provider_kind == WorkloadProviderKind::UnsafeLocal
-        && !negotiated
-            .capabilities
-            .iter()
-            .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalProviderV1))
-    {
-        return Err(CliFailure::new(
-            70,
-            "daemon does not negotiate unsafe-local-provider-v1; no local execution fallback is permitted",
-        ));
-    }
-
-    let item = if let Some(item) = args.item.as_deref() {
-        workload
-            .launcher_items
-            .iter()
-            .find(|candidate| candidate.id.as_str() == item)
-            .cloned()
-            .ok_or_else(|| {
-                CliFailure::new(
-                    2,
-                    format!(
-                        "launcher item `{item}` is not configured for `{}`",
-                        workload.identity.canonical_target.to_canonical()
-                    ),
-                )
-            })?
-    } else if let Some(default_item) = workload.default_item_id.as_ref() {
-        workload
-            .launcher_items
-            .iter()
-            .find(|candidate| &candidate.id == default_item)
-            .cloned()
-            .ok_or_else(|| {
-                CliFailure::new(
-                    70,
-                    "trusted launcher metadata names a missing default item; rebuild the bundle",
-                )
-            })?
-    } else if let [only] = workload.launcher_items.as_slice() {
-        only.clone()
-    } else {
-        let choices = workload
-            .launcher_items
-            .iter()
-            .map(|item| format!("{} ({})", item.id.as_str(), item.name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(CliFailure::new(
-            2,
-            if choices.is_empty() {
-                "workload has no configured launcher items".to_owned()
-            } else {
-                format!("launcher item is ambiguous; choose one with --item: {choices}")
-            },
-        ));
-    };
+    let workload = select_launch_workload(list_result.workloads, &args.target)?;
+    require_launch_features(&negotiated.capabilities, Some(workload.provider_kind))?;
+    let item = select_launcher_item(&workload, args.item.as_deref())?;
 
     if item.kind == LauncherItemKind::Shell {
         if workload.provider_kind == WorkloadProviderKind::UnsafeLocal {
@@ -3724,10 +3630,22 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
                 "unsafe-local persistent shell launch is unavailable; no host-shell fallback is permitted",
             ));
         }
+        let vm = workload
+            .identity
+            .legacy_vm_name
+            .as_ref()
+            .ok_or_else(|| {
+                CliFailure::new(
+                    70,
+                    "trusted local-VM workload metadata has no backing VM name",
+                )
+            })?
+            .as_str()
+            .to_owned();
         return cmd_shell(
             context,
             &ShellArgs {
-                vm: workload.identity.canonical_target.to_canonical(),
+                vm,
                 action: Some(ShellAction::Attach),
                 name: None,
                 force: false,
@@ -3774,6 +3692,222 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
         ));
     }
     Ok(0)
+}
+
+fn require_launch_features(
+    capabilities: &[d2b_contracts::FeatureFlag],
+    provider: Option<d2b_realm_core::WorkloadProviderKind>,
+) -> Result<(), CliFailure> {
+    let has_feature = |expected| {
+        capabilities
+            .iter()
+            .any(|feature| feature.known() == Some(expected))
+    };
+    if !has_feature(KnownFeatureFlag::ConfiguredLaunchV1) {
+        return Err(CliFailure::new(
+            70,
+            "daemon does not negotiate configured-launch-v1; update d2b and d2bd together",
+        ));
+    }
+    if provider == Some(d2b_realm_core::WorkloadProviderKind::UnsafeLocal)
+        && !has_feature(KnownFeatureFlag::UnsafeLocalProviderV1)
+    {
+        return Err(CliFailure::new(
+            70,
+            "daemon does not negotiate unsafe-local-provider-v1; no local execution fallback is permitted",
+        ));
+    }
+    Ok(())
+}
+
+fn select_launch_workload(
+    workloads: Vec<public_wire::WorkloadPublicSummary>,
+    target: &str,
+) -> Result<public_wire::WorkloadPublicSummary, CliFailure> {
+    let mut candidates = workloads
+        .into_iter()
+        .filter(|workload| {
+            workload.identity.canonical_target.to_canonical() == target
+                || workload.identity.workload_id.as_str() == target
+        })
+        .collect::<Vec<_>>();
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(CliFailure::new(
+            2,
+            format!("workload target `{target}` was not found"),
+        )),
+        _ => {
+            let targets = candidates
+                .iter()
+                .map(|workload| workload.identity.canonical_target.to_canonical())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(CliFailure::new(
+                2,
+                format!("workload id `{target}` is ambiguous; use one of: {targets}"),
+            ))
+        }
+    }
+}
+
+fn select_launcher_item(
+    workload: &public_wire::WorkloadPublicSummary,
+    requested: Option<&str>,
+) -> Result<d2b_realm_core::LauncherItemSummary, CliFailure> {
+    if let Some(item) = requested {
+        return workload
+            .launcher_items
+            .iter()
+            .find(|candidate| candidate.id.as_str() == item)
+            .cloned()
+            .ok_or_else(|| {
+                CliFailure::new(
+                    2,
+                    format!(
+                        "launcher item `{item}` is not configured for `{}`",
+                        workload.identity.canonical_target.to_canonical()
+                    ),
+                )
+            });
+    }
+    if let Some(default_item) = workload.default_item_id.as_ref() {
+        return workload
+            .launcher_items
+            .iter()
+            .find(|candidate| &candidate.id == default_item)
+            .cloned()
+            .ok_or_else(|| {
+                CliFailure::new(
+                    70,
+                    "trusted launcher metadata names a missing default item; rebuild the bundle",
+                )
+            });
+    }
+    if let [only] = workload.launcher_items.as_slice() {
+        return Ok(only.clone());
+    }
+    let choices = workload
+        .launcher_items
+        .iter()
+        .map(|item| format!("{} ({})", item.id.as_str(), item.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CliFailure::new(
+        2,
+        if choices.is_empty() {
+            "workload has no configured launcher items".to_owned()
+        } else {
+            format!("launcher item is ambiguous; choose one with --item: {choices}")
+        },
+    ))
+}
+
+#[cfg(test)]
+mod workload_launch_tests {
+    use super::*;
+    use d2b_contracts::public_wire::{
+        GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary,
+    };
+    use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
+    use d2b_realm_core::{
+        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+        IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, ProtocolToken,
+        SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
+        ids::{RealmId, WorkloadId},
+        realm::RealmPath,
+    };
+
+    fn item(id: &str) -> LauncherItemSummary {
+        LauncherItemSummary {
+            id: ProtocolToken::parse(id).unwrap(),
+            name: id.to_owned(),
+            icon: LauncherIcon::default(),
+            kind: LauncherItemKind::Exec,
+            graphical: false,
+            capabilities: CapabilitySet::default(),
+        }
+    }
+
+    fn workload(
+        workload_id: &str,
+        realm: &str,
+        items: Vec<LauncherItemSummary>,
+        default_item: Option<&str>,
+    ) -> WorkloadPublicSummary {
+        let realm_id = RealmId::parse(realm).unwrap();
+        let identity = WorkloadIdentity::new(
+            WorkloadId::parse(workload_id).unwrap(),
+            realm_id.clone(),
+            RealmPath::new(vec![realm_id]).unwrap(),
+            WorkloadTarget::parse(format!("{workload_id}.{realm}.d2b")).unwrap(),
+        );
+        WorkloadPublicSummary {
+            identity,
+            provider_kind: WorkloadProviderKind::UnsafeLocal,
+            state: WorkloadState::Stopped,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: IsolationPosture::UnsafeLocal,
+                environment: EnvironmentPosture::SystemdUserManagerAmbient,
+                display_environment: DisplayEnvironmentPosture::NotApplicable,
+                execution_identity: ExecutionIdentityPosture::AuthenticatedRequesterUid,
+                session_persistence: SessionPersistencePosture::UserManagerLifetime,
+            },
+            availability: WorkloadAvailability::Ready,
+            graphical_posture: GraphicalLaunchPosture::NotApplicable,
+            capabilities: CapabilitySet::default(),
+            launcher_items: items,
+            default_item_id: default_item.map(|id| ProtocolToken::parse(id).unwrap()),
+        }
+    }
+
+    #[test]
+    fn target_alias_ambiguity_lists_canonical_choices() {
+        let error = select_launch_workload(
+            vec![
+                workload("browser", "work", vec![item("open")], None),
+                workload("browser", "home", vec![item("open")], None),
+            ],
+            "browser",
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("browser.work.d2b"));
+        assert!(error.message.contains("browser.home.d2b"));
+    }
+
+    #[test]
+    fn item_selection_covers_sole_ambiguous_and_missing_default() {
+        let sole = workload("tools", "host", vec![item("only")], None);
+        assert_eq!(
+            select_launcher_item(&sole, None).unwrap().id.as_str(),
+            "only"
+        );
+
+        let ambiguous = workload("tools", "host", vec![item("browser"), item("editor")], None);
+        let error = select_launcher_item(&ambiguous, None).unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("--item"));
+
+        let missing_default = workload("tools", "host", vec![item("browser")], Some("missing"));
+        let error = select_launcher_item(&missing_default, None).unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("rebuild the bundle"));
+    }
+
+    #[test]
+    fn launch_feature_skew_fails_closed() {
+        let error = require_launch_features(&[], None).unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("configured-launch-v1"));
+
+        let configured_only = [KnownFeatureFlag::ConfiguredLaunchV1.wire_value()];
+        let error =
+            require_launch_features(&configured_only, Some(WorkloadProviderKind::UnsafeLocal))
+                .unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("unsafe-local-provider-v1"));
+    }
 }
 
 fn workload_socket_exchange(
@@ -5834,9 +5968,7 @@ fn route_vm_target_with_table(
         }
         let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
         return match target_routing::route(raw, &table) {
-            Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local {
-                vm: preserve_unresolved_canonical_target(raw, vm),
-            }),
+            Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
             Ok(target_routing::Route::Gateway { gateway, target }) => {
                 let realm = d2b_realm_core::TargetName::parse(&target)
                     .map(|target| target.realm.target_form())
@@ -5856,9 +5988,7 @@ fn route_vm_target_with_table(
 
     let manifest = context.load_manifest()?;
     match target_routing::route(raw, table.as_ref().expect("checked above")) {
-        Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local {
-            vm: preserve_unresolved_canonical_target(raw, vm),
-        }),
+        Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
             let realm = d2b_realm_core::TargetName::parse(&target)
                 .map(|target| target.realm.target_form())
@@ -10406,14 +10536,6 @@ fn try_vm_for_canonical_target(bundle_path: &Path, raw_target: &str) -> Option<S
         }
     }
     None
-}
-
-fn preserve_unresolved_canonical_target(raw: &str, resolved_vm: String) -> String {
-    if raw.ends_with(".d2b") || raw.starts_with("d2b://") {
-        raw.to_owned()
-    } else {
-        resolved_vm
-    }
 }
 
 fn resolve_vm_selector_from_bundle(context: &Context, selector: &str) -> String {

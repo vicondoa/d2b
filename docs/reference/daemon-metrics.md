@@ -243,6 +243,11 @@ declared schema; see "Cardinality bounds" below.
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
 | `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
 | `outcome` (broker) | closed enum | 3 |
+| `provider` (workload) | closed runtime-provider enum | 4 |
+| `component` (workload) | closed prerequisite enum | 5 |
+| `operation` (workload) | closed lifecycle-operation enum | 2 |
+| `state` (workload) | closed availability enum | 8 |
+| `outcome` (workload) | closed lifecycle-result enum | 3 |
 | `vmm` | closed VM shutdown runtime enum | 3 |
 | `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
 | `phase` | closed activation orchestration enum | 5 |

@@ -979,7 +979,7 @@ in
     expected = true;
   };
 
-  "realm-workloads/unsafe-local-artifacts-and-bundle-v10" = {
+  "realm-workloads/unsafe-local-artifacts-and-bundle-v11" = {
     expr = {
       launcherV2File =
         unsafeCfg.d2b._bundle.realmWorkloadsLauncherV2Json.installFileName;
@@ -995,6 +995,8 @@ in
         unsafeCfg.environment.etc."d2b/realm-workloads-launcher-v2.json".mode;
       unsafeInstalled =
         unsafeCfg.environment.etc ? "d2b/unsafe-local-workloads.json";
+      unsafeMode =
+        unsafeCfg.environment.etc."d2b/unsafe-local-workloads.json".mode;
       bundleVersion = unsafeCfg.d2b._bundle.bundle.data.bundleVersion;
       launcherV2BundlePath =
         unsafeCfg.d2b._bundle.bundle.data.realmWorkloadsLauncherV2Path;
@@ -1008,6 +1010,7 @@ in
       launcherV2Installed = true;
       launcherV2Mode = "0640";
       unsafeInstalled = true;
+      unsafeMode = "0640";
       bundleVersion = 11;
       launcherV2BundlePath = "/etc/d2b/realm-workloads-launcher-v2.json";
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";

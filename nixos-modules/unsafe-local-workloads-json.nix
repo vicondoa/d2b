@@ -48,7 +48,8 @@ let
         else null;
     };
 
-  privateLocalVmWorkload = workload: {
+  privateLocalVmWorkload = workload:
+    lib.filterAttrs (_: value: value != null) {
     identity = lib.filterAttrs (_: value: value != null) {
       workloadId = workload.workloadId;
       workloadName =
@@ -61,7 +62,7 @@ let
       legacyVmName = workload.legacyVmName;
       runtimeKind = workload.runtimeKind;
       providerId = workload.runtimeProviderId;
-    };
+      };
     defaultItemId = workload.defaultItemId;
     items = map privateItem workload.launcherItems;
   };

@@ -337,7 +337,7 @@ impl WorkloadLaunchErrorKind {
                 "enable the workload launcher in the Nix configuration and rebuild"
             }
             Self::ItemNotFound => {
-                "run `d2b workload status <target>` and choose a listed launcher item"
+                "retry with a launcher item id shown by the configured desktop launcher"
             }
             Self::ConfiguredItemMismatch => {
                 "rebuild the d2b bundle so public metadata and private configured items agree"
@@ -1482,6 +1482,33 @@ mod tests {
         assert!(err.remediation().contains("guest.shell"));
         assert_no_path_leak("GuestShellDisabled", &err.message());
         assert_no_path_leak("GuestShellDisabled", &err.remediation());
+    }
+
+    #[test]
+    fn workload_launch_errors_are_typed_actionable_and_redacted() {
+        let cases = [
+            (WorkloadLaunchErrorKind::ItemNotFound, 2),
+            (WorkloadLaunchErrorKind::ConfiguredItemMismatch, 70),
+            (WorkloadLaunchErrorKind::HelperUnavailable, 69),
+            (WorkloadLaunchErrorKind::OperationConflict, 76),
+            (WorkloadLaunchErrorKind::QueueFull, 75),
+            (WorkloadLaunchErrorKind::Internal, 42),
+        ];
+        for (kind, expected_exit) in cases {
+            let error = TypedError::WorkloadLaunchFailed { kind };
+            assert_eq!(error.exit_code(), expected_exit);
+            assert!(
+                error.kind().starts_with("workload-") || error.kind().starts_with("unsafe-local-")
+            );
+            assert!(!error.message().is_empty());
+            assert!(!error.remediation().is_empty());
+            assert_no_path_leak(error.kind(), &error.message());
+            assert_no_path_leak(error.kind(), &error.remediation());
+            for canary in ["argv-canary", "environment-canary", "unit-name-canary"] {
+                assert!(!error.message().contains(canary));
+                assert!(!error.remediation().contains(canary));
+            }
+        }
     }
 
     #[test]
