@@ -2837,6 +2837,10 @@ mod tests {
             .expect("create");
         assert_eq!(id, format!("{:032x}", 1));
         assert_eq!(snapshot.state, ExecState::Running);
+        let list = h.registry.list("boot-A").await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].exec_id, id);
+        assert_eq!(list[0].slot, 0);
     }
 
     #[tokio::test]
@@ -2881,11 +2885,6 @@ mod tests {
                 .await,
             Err(ExecError::InvalidArgv)
         );
-        // Now listable.
-        let list = h.registry.list("boot-A").await.unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].exec_id, id);
-        assert_eq!(list[0].slot, 0);
     }
 
     #[test]
