@@ -3550,7 +3550,7 @@ fn dispatch_unsafe_local_launcher(
     requester_uid: u32,
     operation_id: &d2b_realm_core::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
-) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
+) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     let request = HelperLaunchRequest {
@@ -3581,7 +3581,7 @@ fn dispatch_local_vm_launcher(
     vm: &str,
     operation_id: &d2b_realm_core::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
-) -> Result<public_wire::LauncherExecDisposition, TypedError> {
+) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
     let request = public_wire::ExecStartArgs {
         vm: vm.to_owned(),
