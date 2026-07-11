@@ -480,9 +480,8 @@ d2b.realms.local-root.workloads.work-controller = {
     autostart = true;
     tpm.enable = true;
     graphics.enable = true;
+    usb.securityKey.enable = true;
   };
-
-  usb.securityKey.enable = true;
 };
 
 d2b.realms.work = {
@@ -570,9 +569,8 @@ d2b.realms.local-root.workloads.work-connector = {
     autostart = true;
     tpm.enable = true;
     graphics.enable = true;
+    usb.securityKey.enable = true;
   };
-
-  usb.securityKey.enable = true;
 };
 
 d2b.realms.local-root.infrastructureProviders.azure = {
@@ -1047,6 +1045,9 @@ Implementation is incomplete without:
   cycle rejection, scalar-only `forRealm`, provider capability gating, typed
   relay-provider references, ancestor-only relay inheritance, and derived
   placement;
+- runtime route tests proving competing, partitioned, or otherwise ambiguous
+  controller generations publish no route, report the realm degraded, and
+  reject superseded generation grants until parent-authorized reconciliation;
 - Nix evaluation tests proving obsolete `unsafe-local` provider-kind values,
   inert provider records, old gateway declarations, and compatibility aliases
   fail with the documented actionable migration errors;
@@ -1067,14 +1068,16 @@ Implementation is incomplete without:
   no copied credential references;
 - route-engine tests for shared-relay shortcut authorization, replay,
   expiration, policy epoch changes, route revocation, signed endpoint-close
-  reports, untrusted endpoint byte counts, missing-report expiry, active relay
-  termination, maximum-lifetime fallback, and teardown;
+  reports, untrusted endpoint byte counts, missing-report expiry, active
+  shortcut revocation, maximum-lifetime fallback, and teardown;
 - end-to-end tests proving shortcut bytes bypass intermediate controllers while
   every policy boundary records the decision;
 - negative end-to-end tests proving shortcut failure either uses the already
   authorized parent relay route or returns a typed transport error without
   probing direct networks, SSH, provider-native APIs, generic TCP, or tunnels;
 - negative tests proving a relay-authenticated peer is not local `Admin`;
+- negative tests proving no remote realm, workload, relay, or provider peer can
+  receive or invoke the local privileged broker wire protocol;
 - YubiKey tests proving controller, browser, and developer ceremonies require
   trusted per-ceremony intent, serialize without token-cache sharing, reject
   destructive/unknown CTAP commands, cancel on disconnect, and release leases
