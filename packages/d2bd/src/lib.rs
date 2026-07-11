@@ -3462,7 +3462,10 @@ fn workload_runtime_status(
             let availability = match state.unsafe_local_helpers.availability(requester_uid) {
                 HelperAvailability::Ready => match state
                     .unsafe_local_helpers
-                    .last_failure(requester_uid)
+                    .last_failure(
+                        requester_uid,
+                        &entry.metadata.identity.canonical_target,
+                    )
                 {
                     Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::UserManagerUnavailable) => {
                         public_wire::WorkloadAvailability::UserManagerUnavailable

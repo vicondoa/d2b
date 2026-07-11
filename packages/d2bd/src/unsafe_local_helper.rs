@@ -151,7 +151,7 @@ impl HelperConnection {
 struct RegistryState {
     connections: HashMap<u32, Arc<HelperConnection>>,
     snapshots: HashMap<u32, HelperSnapshot>,
-    last_failures: HashMap<u32, HelperFailureCode>,
+    last_failures: HashMap<(u32, String), HelperFailureCode>,
 }
 
 pub struct HelperRegistry {
@@ -240,8 +240,16 @@ impl HelperRegistry {
         }
     }
 
-    pub fn last_failure(&self, uid: u32) -> Option<HelperFailureCode> {
-        self.state.lock().last_failures.get(&uid).copied()
+    pub fn last_failure(
+        &self,
+        uid: u32,
+        target: &d2b_core::workload_identity::WorkloadTarget,
+    ) -> Option<HelperFailureCode> {
+        self.state
+            .lock()
+            .last_failures
+            .get(&(uid, target.to_canonical()))
+            .copied()
     }
 
     pub fn dispatch_launch(
@@ -251,6 +259,7 @@ impl HelperRegistry {
     ) -> Result<HelperOperationResult, HelperRegistryError> {
         let fingerprint = launch_fingerprint(&request)?;
         let operation_key = request.operation_id.to_string();
+        let workload_target = request.workload.canonical_target.to_canonical();
         let request_id = request.request_id;
         match self.operations.lock().begin(
             requester_uid,
@@ -331,7 +340,10 @@ impl HelperRegistry {
                     result.clone(),
                     now_epoch_seconds(),
                 );
-                self.state.lock().last_failures.remove(&requester_uid);
+                self.state
+                    .lock()
+                    .last_failures
+                    .remove(&(requester_uid, workload_target));
                 Ok(result)
             }
             Ok(Ok(HelperReply::Rejected(rejected))) => {
@@ -344,7 +356,7 @@ impl HelperRegistry {
                 self.state
                     .lock()
                     .last_failures
-                    .insert(requester_uid, rejected.code);
+                    .insert((requester_uid, workload_target), rejected.code);
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Ok(HelperReply::Terminal { .. })) => {
@@ -1377,6 +1389,24 @@ mod tests {
         };
         assert!(connection.is_stale());
         drop(peer);
+    }
+
+    #[test]
+    fn helper_failures_are_scoped_to_workload_target() {
+        let registry = HelperRegistry::new(999, [1000]);
+        let browser =
+            d2b_core::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
+        let editor = d2b_core::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
+        registry.state.lock().last_failures.insert(
+            (1000, browser.to_canonical()),
+            HelperFailureCode::ProxyUnavailable,
+        );
+
+        assert_eq!(
+            registry.last_failure(1000, &browser),
+            Some(HelperFailureCode::ProxyUnavailable)
+        );
+        assert_eq!(registry.last_failure(1000, &editor), None);
     }
 
     #[test]
