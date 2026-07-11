@@ -12,6 +12,14 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the unsafe-local persistent-shell helper runtime: a hidden verified
+  user-scope supervisor owns each login-shell PTY, private reconnect socket,
+  bounded merged-output ring, and single attachment across helper reconnects.
+  Terminal streams transfer as one CLOEXEC fd, shell metadata survives in the
+  existing user ledger, and exact-scope teardown cannot target unrelated
+  same-UID processes. Public daemon shell routing and CLI enablement remain
+  deferred.
+
 - Prepared unsafe-local persistent shells with private helper protocol v2,
   correlated management results, bounded dedicated terminal-stream frames,
   restart snapshot metadata, typed shell failures, and the public

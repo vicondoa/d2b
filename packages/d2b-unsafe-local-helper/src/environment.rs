@@ -13,6 +13,7 @@ pub enum EnvironmentError {
     InvalidEntry,
     DuplicateKey,
     PathMissing,
+    RuntimeDirectoryInvalid,
     ExecutableUnavailable,
     ProxyUnavailable,
 }
@@ -96,6 +97,14 @@ impl ManagerEnvironment {
             .filter(|value| value.starts_with('/') && !value.contains('\0'))
             .map(PathBuf::from)
             .unwrap_or_else(|| passwd_home.join(".local/state"))
+    }
+
+    pub fn runtime_directory(&self) -> Result<PathBuf, EnvironmentError> {
+        self.entries
+            .get("XDG_RUNTIME_DIR")
+            .filter(|value| value.starts_with('/') && !value.contains('\0'))
+            .map(PathBuf::from)
+            .ok_or(EnvironmentError::RuntimeDirectoryInvalid)
     }
 
     pub fn resolve_program(&self, program: &str) -> Result<PathBuf, EnvironmentError> {

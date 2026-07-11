@@ -6,8 +6,8 @@
 persistent shells that run as the authenticated host user. It provides **no
 isolation boundary**. The helper connection and user-scope runtime are enabled
 for configured eligible users. Public configured launch is feature-negotiated;
-unsafe-local persistent shells remain unavailable until their dedicated backend
-is enabled.
+the user helper contains the persistent-shell backend, while public daemon
+routing and feature advertisement remain unavailable until integration lands.
 
 ## Nix options
 
@@ -134,6 +134,11 @@ limits. Operators may raise restrictive host limits independently; helper
 registration remains fail-closed if the effective per-socket requirement is not
 met.
 
+Shell requests additionally carry a closed trusted policy containing
+`defaultName` and `maxSessions`. The later daemon routing layer must populate
+those fields only from the bundle-hashed unsafe-local workload record; no public
+shell request can choose or raise them.
+
 The globally installed `d2b-unsafe-local-helper.service` is a systemd user
 service. `ConditionGroup=d2b-unsafe-local` prevents users who are not allowed to
 access an enabled unsafe-local realm from registering or entering a restart
@@ -157,6 +162,24 @@ preserved and reported degraded rather than killed by PID, name, or a broad
 cgroup sweep. These scopes last only for the systemd user-manager lifetime;
 d2b does not enable lingering.
 
+Persistent shells use a separate hidden `shell-supervisor` process in a
+`persistent-shell` transient user scope. The helper reserves the operation and
+name, reads the complete user-manager environment and passwd identity, starts
+the supervisor blocked, verifies the scope identity, releases it, waits for
+socket, PTY, and login-shell readiness, and only then atomically extends the
+existing scope ledger. The supervisor—not the reconnectable helper—owns the PTY
+master, login-shell child, output ring, attachment state, and private listener.
+The child executes the authenticated user's absolute passwd login shell in the
+passwd home with the complete manager environment; no shell string, PATH
+lookup, configurable command, or journal output is involved.
+
+The supervisor id is random and opaque. Its listener is derived beneath a
+validated same-UID runtime directory with mode `0700`; the socket is mode
+`0600`, rejects the wrong owner or file type, and cleanup removes only the
+original owned socket inode. Ledger adoption re-verifies both the transient
+scope and supervisor status. A missing or ambiguous listener is preserved and
+reported degraded rather than swept or killed.
+
 Terminal data uses exactly one connected `AF_UNIX`
 `SOCK_STREAM` passed with `SCM_RIGHTS`; listeners, datagram sockets, zero fds,
 and multiple fds are rejected. The receiver requires
@@ -168,9 +191,19 @@ little-endian body-length prefix for stdin writes, output reads, resize, wait,
 stdin close, attachment close, and typed rejections. The connected socket binds
 one attachment, so these frames never accept a client-supplied session handle.
 Frames are limited to 128 KiB, decoded chunks to 64 KiB, per-stream output rings
-to 8 MiB, and waits to 1000 ms.
-Terminal bytes do not share the helper control queue. This contract does not
-make unsafe-local persistent-shell runtime dispatch available yet.
+to the contract ceiling of 8 MiB, and waits to 1000 ms. The helper currently
+reserves 512 KiB per merged PTY output ring and caps all such reservations for
+one helper at 32 MiB. `stdout` is the authoritative merged PTY stream; `stderr`
+reads return an empty terminal result. Reads use absolute cursors and report
+dropped bytes after wrap. Writes and control sequences are strictly monotonic,
+and a long read poll does not block writes or resize.
+Terminal bytes do not share the helper control queue. Public daemon shell
+routing remains unavailable in this revision.
+
+Detach closes only the current attachment. Force attach atomically evicts the
+old attachment. Kill closes the owned PTY master, waits briefly, then signals
+only the still-verified transient scope with `SIGTERM` and finally `SIGKILL`;
+unrelated same-UID processes and scopes are never targeted.
 
 Every socket is created with `SOCK_CLOEXEC`, every other control or PTY fd uses
 `O_CLOEXEC`, and rights are received with `MSG_CMSG_CLOEXEC`. Only descriptors

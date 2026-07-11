@@ -485,6 +485,25 @@
       },
       "additionalProperties": false
     },
+    "HelperShellPolicy": {
+      "type": "object",
+      "required": [
+        "defaultName",
+        "maxSessions"
+      ],
+      "properties": {
+        "defaultName": {
+          "$ref": "#/definitions/ShellName"
+        },
+        "maxSessions": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 64.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
     "HelperShellRequest": {
       "oneOf": [
         {
@@ -498,12 +517,16 @@
               "type": "object",
               "required": [
                 "operationId",
+                "policy",
                 "requestId",
                 "workload"
               ],
               "properties": {
                 "operationId": {
                   "$ref": "#/definitions/OperationId"
+                },
+                "policy": {
+                  "$ref": "#/definitions/HelperShellPolicy"
                 },
                 "requestId": {
                   "type": "integer",
@@ -537,6 +560,7 @@
               "required": [
                 "initialTerminalSize",
                 "operationId",
+                "policy",
                 "requestId",
                 "workload"
               ],
@@ -580,6 +604,9 @@
                 "operationId": {
                   "$ref": "#/definitions/OperationId"
                 },
+                "policy": {
+                  "$ref": "#/definitions/HelperShellPolicy"
+                },
                 "requestId": {
                   "type": "integer",
                   "format": "uint64",
@@ -612,6 +639,7 @@
               "required": [
                 "name",
                 "operationId",
+                "policy",
                 "requestId",
                 "workload"
               ],
@@ -621,6 +649,9 @@
                 },
                 "operationId": {
                   "$ref": "#/definitions/OperationId"
+                },
+                "policy": {
+                  "$ref": "#/definitions/HelperShellPolicy"
                 },
                 "requestId": {
                   "type": "integer",
@@ -654,6 +685,7 @@
               "required": [
                 "name",
                 "operationId",
+                "policy",
                 "requestId",
                 "workload"
               ],
@@ -663,6 +695,9 @@
                 },
                 "operationId": {
                   "$ref": "#/definitions/OperationId"
+                },
+                "policy": {
+                  "$ref": "#/definitions/HelperShellPolicy"
                 },
                 "requestId": {
                   "type": "integer",
