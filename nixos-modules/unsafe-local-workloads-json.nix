@@ -50,22 +50,22 @@ let
 
   privateLocalVmWorkload = workload:
     lib.filterAttrs (_: value: value != null) {
-    identity = lib.filterAttrs (_: value: value != null) {
-      workloadId = workload.workloadId;
-      workloadName =
-        if workload.label == workload.workloadId
-        then null
-        else workload.label;
-      realmId = workload.realmId;
-      realmPath = lib.splitString "." workload.realmPath;
-      canonicalTarget = workload.canonicalTarget;
-      legacyVmName = workload.legacyVmName;
-      runtimeKind = workload.runtimeKind;
-      providerId = workload.runtimeProviderId;
+      identity = lib.filterAttrs (_: value: value != null) {
+        workloadId = workload.workloadId;
+        workloadName =
+          if workload.label == workload.workloadId
+          then null
+          else workload.label;
+        realmId = workload.realmId;
+        realmPath = lib.splitString "." workload.realmPath;
+        canonicalTarget = workload.canonicalTarget;
+        legacyVmName = workload.legacyVmName;
+        runtimeKind = workload.runtimeKind;
+        providerId = workload.runtimeProviderId;
       };
-    defaultItemId = workload.defaultItemId;
-    items = map privateItem workload.launcherItems;
-  };
+      defaultItemId = workload.defaultItemId;
+      items = map privateItem workload.launcherItems;
+    };
 
   data = {
     schemaVersion = "v2";

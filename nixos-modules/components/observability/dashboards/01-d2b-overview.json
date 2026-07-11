@@ -171,42 +171,42 @@
       ]
     },
     {
-          "id": 6,
-          "type": "timeseries",
-          "title": "Workload provider prerequisites",
-          "description": "Current bounded helper, scope, proxy, launcher, and shell availability by provider.",
-          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-          "options": {
-            "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
-            "tooltip": {"mode": "multi", "sort": "none"}
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "max by (provider, component, state) (d2b_daemon_workload_availability)",
-              "legendFormat": "{{provider}} {{component}} {{state}}"
-            }
-          ]
-        },
+      "id": 6,
+      "type": "timeseries",
+      "title": "Workload provider prerequisites",
+      "description": "Current bounded helper, scope, proxy, launcher, and shell availability by provider.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
         {
-          "id": 7,
-          "type": "timeseries",
-          "title": "Workload launch outcomes",
-          "description": "Configured launcher lifecycle results with closed provider, operation, and result labels.",
-          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-          "options": {
-            "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
-            "tooltip": {"mode": "multi", "sort": "none"}
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "expr": "sum by (provider, operation, outcome) (rate(d2b_daemon_workload_lifecycle_total[5m]))",
-              "legendFormat": "{{provider}} {{operation}} {{outcome}}"
+          "refId": "A",
+          "expr": "max by (provider, component, state) (d2b_daemon_workload_availability)",
+          "legendFormat": "{{provider}} {{component}} {{state}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Workload launch outcomes",
+      "description": "Configured launcher lifecycle outcomes with closed provider, operation, and outcome labels.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, operation, outcome) (rate(d2b_daemon_workload_lifecycle_total[5m]))",
+          "legendFormat": "{{provider}} {{operation}} {{outcome}}"
         }
       ]
     }
