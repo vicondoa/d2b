@@ -238,10 +238,10 @@ impl HelperRegistry {
         } else {
             HelperAvailability::Ready
         }
+    }
 
-        pub fn last_failure(&self, uid: u32) -> Option<HelperFailureCode> {
-            self.state.lock().last_failures.get(&uid).copied()
-        }
+    pub fn last_failure(&self, uid: u32) -> Option<HelperFailureCode> {
+        self.state.lock().last_failures.get(&uid).copied()
     }
 
     pub fn dispatch_launch(
