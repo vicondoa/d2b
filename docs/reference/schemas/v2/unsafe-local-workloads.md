@@ -12,7 +12,8 @@ public requests never supply argv.
 - `schemaVersion` is `v2`.
 - Workload and launcher-item counts are bounded.
 - Every identity names `runtimeKind` and `providerId` as `unsafe-local`.
-- `localVmWorkloads` entries require a trusted `legacyVmName` and
-  `runtimeKind = "nixos"`.
+- `localVmWorkloads` entries require `runtimeKind = "nixos"`.
+  `legacyVmName` is optional; first-class workloads use their workload id as
+  the backing VM name.
 - Exec argv is bounded, non-empty, and NUL-free; shell items require shell
   policy.

@@ -624,6 +624,7 @@ realm-workloads/cross-realm-ext-network-conflict-advisory-only
 realm-workloads/cross-realm-ext-network-conflict-in-index
 realm-workloads/cross-realm-same-vm-no-cid-collision
 realm-workloads/disabled-excluded-from-enabled
+realm-workloads/first-class-local-vm-private-launcher
 realm-workloads/index-accepted-provider-placeholder
 realm-workloads/index-accepted-with-legacyvmname
 realm-workloads/index-all-includes-disabled

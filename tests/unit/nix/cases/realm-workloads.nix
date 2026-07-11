@@ -123,6 +123,27 @@ let
   wlCfg = (mkEval [ workloadFixture ]).config;
   wlIndex = wlCfg.d2b._index;
   workRealm = wlIndex.realms.byPath."work.home";
+  firstClassLocalVmFixture = lib.recursiveUpdate workloadFixture {
+    d2b.realms.work.workloads.first-class = {
+      enable = true;
+      kind = "local-vm";
+      launcher = {
+        enable = true;
+        label = "First-class VM";
+        defaultItem = "probe";
+        items.probe = {
+          type = "exec";
+          name = "Probe";
+          argv = [ "true" ];
+        };
+      };
+    };
+  };
+  firstClassLocalVmCfg = (mkEval [ firstClassLocalVmFixture ]).config;
+  firstClassPrivateWorkload = lib.findFirst
+    (workload: workload.identity.workloadId == "first-class")
+    null
+    firstClassLocalVmCfg.d2b._bundle.unsafeLocalWorkloadsJson.data.localVmWorkloads;
 
   unsafeLocalFixture = lib.recursiveUpdate hostBase {
     users.users.bob = { isNormalUser = true; uid = 1001; };
@@ -257,6 +278,32 @@ let
   extNetMessages = failureMessages [ extNetConflictFixture ];
 in
 {
+  "realm-workloads/first-class-local-vm-private-launcher" = {
+    expr = {
+      found = firstClassPrivateWorkload != null;
+      legacyVmName = firstClassPrivateWorkload.identity.legacyVmName or null;
+      runtimeKind = firstClassPrivateWorkload.identity.runtimeKind;
+      defaultItemId = firstClassPrivateWorkload.defaultItemId;
+      item = builtins.head firstClassPrivateWorkload.items;
+      hasStateDir = firstClassPrivateWorkload ? stateDir;
+    };
+    expected = {
+      found = true;
+      legacyVmName = null;
+      runtimeKind = "nixos";
+      defaultItemId = "probe";
+      item = {
+        type = "exec";
+        id = "probe";
+        name = "Probe";
+        argv = [ "true" ];
+        graphical = false;
+        icon = { };
+      };
+      hasStateDir = false;
+    };
+  };
+
   # ── workload index: accepted config with legacyVmName ─────────────────────
   "realm-workloads/index-accepted-with-legacyvmname" = {
     expr =

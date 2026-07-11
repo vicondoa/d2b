@@ -3630,18 +3630,7 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
                 "unsafe-local persistent shell launch is unavailable; no host-shell fallback is permitted",
             ));
         }
-        let vm = workload
-            .identity
-            .legacy_vm_name
-            .as_ref()
-            .ok_or_else(|| {
-                CliFailure::new(
-                    70,
-                    "trusted local-VM workload metadata has no backing VM name",
-                )
-            })?
-            .as_str()
-            .to_owned();
+        let vm = local_vm_shell_target(&workload).to_owned();
         return cmd_shell(
             context,
             &ShellArgs {
@@ -3692,6 +3681,13 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
         ));
     }
     Ok(0)
+}
+
+fn local_vm_shell_target(workload: &public_wire::WorkloadPublicSummary) -> &str {
+    workload.identity.legacy_vm_name.as_ref().map_or_else(
+        || workload.identity.workload_id.as_str(),
+        |legacy| legacy.as_str(),
+    )
 }
 
 fn require_launch_features(
@@ -3893,6 +3889,18 @@ mod workload_launch_tests {
         let error = select_launcher_item(&missing_default, None).unwrap_err();
         assert_eq!(error.exit_code, 70);
         assert!(error.message.contains("rebuild the bundle"));
+    }
+
+    #[test]
+    fn local_vm_shell_target_uses_workload_id_without_legacy_binding() {
+        let mut first_class = workload("browser", "work", vec![item("terminal")], None);
+        first_class.provider_kind = WorkloadProviderKind::LocalVm;
+        assert_eq!(local_vm_shell_target(&first_class), "browser");
+
+        let mut legacy = first_class;
+        legacy.identity.legacy_vm_name =
+            Some(d2b_core::contract_id::ContractId::parse("corp-vm").unwrap());
+        assert_eq!(local_vm_shell_target(&legacy), "corp-vm");
     }
 
     #[test]

@@ -61,12 +61,18 @@ pub fn direct_local_workload_route(
     legacy_vm_name: Option<&str>,
 ) -> Result<DirectLocalWorkloadRoute, RouteError> {
     match provider {
-        d2b_realm_core::WorkloadProviderKind::LocalVm => legacy_vm_name
-            .map(|vm| DirectLocalWorkloadRoute::LocalVm { vm: vm.to_owned() })
-            .ok_or_else(|| RouteError::InvalidTarget {
-                target: target.to_owned(),
-                reason: "local-vm workload has no trusted VM binding".to_owned(),
-            }),
+        d2b_realm_core::WorkloadProviderKind::LocalVm => {
+            let vm = match legacy_vm_name {
+                Some(vm) => vm.to_owned(),
+                None => d2b_core::workload_identity::WorkloadTarget::parse(target)
+                    .map(|target| target.workload.as_str().to_owned())
+                    .map_err(|_| RouteError::InvalidTarget {
+                        target: target.to_owned(),
+                        reason: "local-vm workload target is invalid".to_owned(),
+                    })?,
+            };
+            Ok(DirectLocalWorkloadRoute::LocalVm { vm })
+        }
         d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
             Ok(DirectLocalWorkloadRoute::UnsafeLocal {
                 target: target.to_owned(),
@@ -1387,6 +1393,17 @@ mod tests {
             .unwrap(),
             DirectLocalWorkloadRoute::LocalVm {
                 vm: "corp-vm".to_owned()
+            }
+        );
+        assert_eq!(
+            direct_local_workload_route(
+                "browser.work.d2b",
+                d2b_realm_core::WorkloadProviderKind::LocalVm,
+                None,
+            )
+            .unwrap(),
+            DirectLocalWorkloadRoute::LocalVm {
+                vm: "browser".to_owned()
             }
         );
         assert_eq!(
