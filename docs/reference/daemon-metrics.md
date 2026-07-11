@@ -216,6 +216,18 @@ declared schema; see "Cardinality bounds" below.
   provider credentials, process environments, working directories, helper
   diagnostics, and terminal bytes are never metric labels.
 
+### `d2b_daemon_shell_lifecycle_total`
+
+- **Type:** counter
+- **Labels:** `provider`, `component`, `operation`, `outcome`, `error_kind`
+- **Meaning:** Provider-neutral persistent-shell lifecycle outcomes. Providers
+  are `guest-control` and `unsafe-local`; component is the closed value `shell`;
+  operations are `list`, `create`, `attach`, `detach`, `kill`, and `close`.
+  Outcomes and error kinds are closed daemon enums. No uid, target, shell name,
+  operation/session id, supervisor metadata, terminal bytes, helper diagnostic,
+  path, environment, or cwd is a label. The guest-control-specific counter above
+  remains available for compatibility.
+
 ### `d2b_daemon_workload_availability`
 
 - **Type:** gauge
@@ -261,6 +273,10 @@ declared schema; see "Cardinality bounds" below.
 | `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
 | `outcome` (guest-control) | closed enum | bounded by daemon code |
 | `error_kind` | normalized daemon error bucket | bounded by daemon code |
+| `provider` (shell) | closed shell backend enum | 2 |
+| `component` (shell) | constant `shell` | 1 |
+| `operation` (shell) | closed lifecycle-operation enum | 6 |
+| `outcome` (shell) | closed lifecycle-result enum | 5 |
 
 No label carries free-form text (no error messages, no store paths,
 no activation ids, no command output, no shell session names, no

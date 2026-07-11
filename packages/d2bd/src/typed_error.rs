@@ -252,6 +252,35 @@ pub enum GuestControlShellErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsafeLocalShellErrorKind {
+    FeatureUnavailable,
+    HelperUnavailable,
+    HelperStale,
+    QueueFull,
+    Timeout,
+    Protocol,
+    OperationConflict,
+    UserManagerUnavailable,
+    EnvironmentInvalid,
+    ExecutableUnavailable,
+    ScopeCreateFailed,
+    ScopeIdentityMismatch,
+    GraphicalSessionInactive,
+    WaylandUnavailable,
+    ProxyUnavailable,
+    FirstClientTimeout,
+    ShellUnavailable,
+    NotFound,
+    AlreadyAttached,
+    OutputGap,
+    OffsetMismatch,
+    TerminalClosed,
+    InvalidSize,
+    StaleSession,
+    Internal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadLaunchErrorKind {
     RealmNotDirectLocal,
     LauncherDisabled,
@@ -443,6 +472,160 @@ impl GuestControlShellErrorKind {
             Self::GuestError => "inspect guestd shell state and retry the shell operation",
             Self::Internal => {
                 "retry; if the failure persists inspect the daemon log for the typed shell-session record"
+            }
+        }
+    }
+}
+
+impl UnsafeLocalShellErrorKind {
+    pub fn wire_kind(self) -> &'static str {
+        match self {
+            Self::FeatureUnavailable => "unsafe-local-shell-feature-unavailable",
+            Self::HelperUnavailable => "unsafe-local-shell-helper-unavailable",
+            Self::HelperStale => "unsafe-local-shell-helper-stale",
+            Self::QueueFull => "unsafe-local-shell-capacity",
+            Self::Timeout => "unsafe-local-shell-timeout",
+            Self::Protocol => "unsafe-local-shell-protocol-error",
+            Self::OperationConflict => "unsafe-local-shell-operation-conflict",
+            Self::UserManagerUnavailable => "unsafe-local-shell-user-manager-unavailable",
+            Self::EnvironmentInvalid => "unsafe-local-shell-environment-invalid",
+            Self::ExecutableUnavailable => "unsafe-local-shell-executable-unavailable",
+            Self::ScopeCreateFailed => "unsafe-local-shell-scope-create-failed",
+            Self::ScopeIdentityMismatch => "unsafe-local-shell-scope-identity-mismatch",
+            Self::GraphicalSessionInactive => "unsafe-local-shell-graphical-session-inactive",
+            Self::WaylandUnavailable => "unsafe-local-shell-wayland-unavailable",
+            Self::ProxyUnavailable => "unsafe-local-shell-proxy-unavailable",
+            Self::FirstClientTimeout => "unsafe-local-shell-first-client-timeout",
+            Self::ShellUnavailable => "unsafe-local-shell-unavailable",
+            Self::NotFound => "unsafe-local-shell-not-found",
+            Self::AlreadyAttached => "unsafe-local-shell-already-attached",
+            Self::OutputGap => "unsafe-local-shell-output-gap",
+            Self::OffsetMismatch => "unsafe-local-shell-offset-mismatch",
+            Self::TerminalClosed => "unsafe-local-shell-terminal-closed",
+            Self::InvalidSize => "unsafe-local-shell-invalid-terminal-size",
+            Self::StaleSession => "unsafe-local-shell-stale-session",
+            Self::Internal => "unsafe-local-shell-internal",
+        }
+    }
+
+    fn exit_code(self) -> u8 {
+        match self {
+            Self::FeatureUnavailable => 70,
+            Self::HelperUnavailable
+            | Self::HelperStale
+            | Self::Timeout
+            | Self::UserManagerUnavailable
+            | Self::GraphicalSessionInactive
+            | Self::WaylandUnavailable
+            | Self::ProxyUnavailable
+            | Self::FirstClientTimeout
+            | Self::ShellUnavailable
+            | Self::TerminalClosed => 69,
+            Self::EnvironmentInvalid
+            | Self::ExecutableUnavailable
+            | Self::ScopeIdentityMismatch => 70,
+            Self::QueueFull | Self::AlreadyAttached => 75,
+            Self::Protocol
+            | Self::OperationConflict
+            | Self::NotFound
+            | Self::OutputGap
+            | Self::OffsetMismatch
+            | Self::InvalidSize => 76,
+            Self::StaleSession => 77,
+            Self::ScopeCreateFailed | Self::Internal => 42,
+        }
+    }
+
+    fn human_message(self) -> &'static str {
+        match self {
+            Self::FeatureUnavailable => {
+                "the client and daemon did not negotiate unsafe-local-shell-v1"
+            }
+            Self::HelperUnavailable => "no same-UID unsafe-local helper is connected",
+            Self::HelperStale => "the same-UID unsafe-local helper generation is stale",
+            Self::QueueFull => "the unsafe-local shell request queue is at capacity",
+            Self::Timeout => "the unsafe-local shell operation timed out",
+            Self::Protocol => "the unsafe-local shell helper returned a malformed response",
+            Self::OperationConflict => {
+                "the unsafe-local shell operation id conflicts with an earlier request"
+            }
+            Self::UserManagerUnavailable => "the user systemd manager is unavailable",
+            Self::EnvironmentInvalid => "the user-manager shell environment is invalid",
+            Self::ExecutableUnavailable => "the configured user login shell is unavailable",
+            Self::ScopeCreateFailed => "the user manager could not create the shell scope",
+            Self::ScopeIdentityMismatch => {
+                "the persistent shell scope identity could not be verified"
+            }
+            Self::GraphicalSessionInactive => "the graphical user session is inactive",
+            Self::WaylandUnavailable => "the user Wayland compositor is unavailable",
+            Self::ProxyUnavailable => "the workload Wayland proxy is unavailable",
+            Self::FirstClientTimeout => {
+                "the workload Wayland proxy did not accept its first client"
+            }
+            Self::ShellUnavailable => "the unsafe-local persistent shell is unavailable",
+            Self::NotFound => "the unsafe-local persistent shell was not found",
+            Self::AlreadyAttached => "the unsafe-local persistent shell is already attached",
+            Self::OutputGap => "the unsafe-local persistent shell output stream has a gap",
+            Self::OffsetMismatch => "the unsafe-local terminal input offset is stale",
+            Self::TerminalClosed => "the unsafe-local terminal attachment is closed",
+            Self::InvalidSize => "the unsafe-local terminal size is invalid",
+            Self::StaleSession => "the public unsafe-local shell attachment handle is stale",
+            Self::Internal => "the daemon failed to drive the unsafe-local shell",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::FeatureUnavailable => {
+                "update d2b, d2bd, and d2b-unsafe-local-helper together; no host-shell fallback is permitted"
+            }
+            Self::HelperUnavailable | Self::HelperStale => {
+                "start or restart d2b-unsafe-local-helper in the requesting user's login session, then retry"
+            }
+            Self::QueueFull => "wait for pending shell operations to finish, then retry",
+            Self::Timeout => {
+                "inspect helper and user-manager health, then list shells before deciding whether to retry"
+            }
+            Self::Protocol => "update d2b, d2bd, and d2b-unsafe-local-helper together",
+            Self::OperationConflict => {
+                "retry the public shell operation; d2bd will derive a fresh internal operation id"
+            }
+            Self::UserManagerUnavailable => {
+                "log in through a PAM-backed session and start the user systemd manager; linger is intentionally not enabled"
+            }
+            Self::EnvironmentInvalid => {
+                "repair the user manager's XDG_RUNTIME_DIR and D-Bus environment, then restart the helper"
+            }
+            Self::ExecutableUnavailable => {
+                "configure an absolute executable login shell for the requesting user"
+            }
+            Self::ScopeCreateFailed => {
+                "inspect the user manager and retry after it can create transient user scopes"
+            }
+            Self::ScopeIdentityMismatch => {
+                "restart the helper and inspect the user scope; d2b will not adopt ambiguous scope metadata"
+            }
+            Self::GraphicalSessionInactive => "start a graphical login session and retry",
+            Self::WaylandUnavailable => {
+                "start the Wayland compositor in the login session and retry"
+            }
+            Self::ProxyUnavailable | Self::FirstClientTimeout => {
+                "repair the d2b Wayland proxy prerequisites; no direct compositor fallback is permitted"
+            }
+            Self::ShellUnavailable | Self::TerminalClosed | Self::StaleSession => {
+                "list unsafe-local shells and attach again; attachment loss does not kill the persistent shell"
+            }
+            Self::NotFound => "list unsafe-local shells and retry with a listed name",
+            Self::AlreadyAttached => "attach with --force or detach the existing attachment first",
+            Self::OutputGap => {
+                "reattach to redraw the shell; terminal output before the retained cursor is unavailable"
+            }
+            Self::OffsetMismatch => {
+                "retry after reattaching so terminal input offsets restart from the current attachment"
+            }
+            Self::InvalidSize => "retry from a terminal reporting non-zero rows and columns",
+            Self::Internal => {
+                "retry; if the failure persists inspect the bounded unsafe-local shell event"
             }
         }
     }
@@ -659,6 +842,9 @@ pub enum TypedError {
     GuestControlShellFailed {
         kind: GuestControlShellErrorKind,
     },
+    UnsafeLocalShellFailed {
+        kind: UnsafeLocalShellErrorKind,
+    },
     WorkloadLaunchFailed {
         kind: WorkloadLaunchErrorKind,
     },
@@ -781,6 +967,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
             Self::GuestControlShellFailed { kind } => kind.wire_kind(),
+            Self::UnsafeLocalShellFailed { kind } => kind.wire_kind(),
             Self::WorkloadLaunchFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
             Self::ConsoleVmNotFound { .. } => "console-vm-not-found",
@@ -842,6 +1029,7 @@ impl TypedError {
             Self::GuestControlReadFailed { .. } => 70,
             Self::GuestControlExecFailed { kind } => kind.exit_code(),
             Self::GuestControlShellFailed { kind } => kind.exit_code(),
+            Self::UnsafeLocalShellFailed { kind } => kind.exit_code(),
             Self::WorkloadLaunchFailed { kind } => kind.exit_code(),
             // Shares the EX_TEMPFAIL-class exit code with the other
             // transient back-pressure refusals (session-capacity,
@@ -998,6 +1186,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlShellFailed { kind } => kind.human_message().to_owned(),
+            Self::UnsafeLocalShellFailed { kind } => kind.human_message().to_owned(),
             Self::WorkloadLaunchFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
             Self::ConsoleVmNotFound { vm } => {
@@ -1168,6 +1357,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlShellFailed { kind } => kind.remediation().to_owned(),
+            Self::UnsafeLocalShellFailed { kind } => kind.remediation().to_owned(),
             Self::WorkloadLaunchFailed { kind } => kind.remediation().to_owned(),
             Self::DaemonBusy => {
                 "the daemon is briefly at capacity; retry the command shortly".to_owned()
@@ -1380,6 +1570,7 @@ impl TypedError {
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
             | Self::GuestControlShellFailed { .. }
+            | Self::UnsafeLocalShellFailed { .. }
             | Self::WorkloadLaunchFailed { .. }
             | Self::DaemonBusy
             | Self::ConsoleVmNotFound { .. }
@@ -1736,6 +1927,60 @@ mod tests {
                     assert!(
                         !surface.contains(forbidden),
                         "kind={slug} leaks {forbidden:?}: {surface:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsafe_local_shell_failed_kinds_are_closed_and_leak_free() {
+        use UnsafeLocalShellErrorKind as UnsafeKind;
+        let kinds = [
+            UnsafeKind::FeatureUnavailable,
+            UnsafeKind::HelperUnavailable,
+            UnsafeKind::HelperStale,
+            UnsafeKind::QueueFull,
+            UnsafeKind::Timeout,
+            UnsafeKind::Protocol,
+            UnsafeKind::OperationConflict,
+            UnsafeKind::UserManagerUnavailable,
+            UnsafeKind::EnvironmentInvalid,
+            UnsafeKind::ExecutableUnavailable,
+            UnsafeKind::ScopeCreateFailed,
+            UnsafeKind::ScopeIdentityMismatch,
+            UnsafeKind::GraphicalSessionInactive,
+            UnsafeKind::WaylandUnavailable,
+            UnsafeKind::ProxyUnavailable,
+            UnsafeKind::FirstClientTimeout,
+            UnsafeKind::ShellUnavailable,
+            UnsafeKind::NotFound,
+            UnsafeKind::AlreadyAttached,
+            UnsafeKind::OutputGap,
+            UnsafeKind::OffsetMismatch,
+            UnsafeKind::TerminalClosed,
+            UnsafeKind::InvalidSize,
+            UnsafeKind::StaleSession,
+            UnsafeKind::Internal,
+        ];
+        for kind in kinds {
+            let error = TypedError::UnsafeLocalShellFailed { kind };
+            assert!(error.kind().starts_with("unsafe-local-shell-"));
+            assert!(!error.message().is_empty());
+            assert!(!error.remediation().is_empty());
+            for surface in [error.message(), error.remediation()] {
+                for forbidden in [
+                    "/run/",
+                    "/home/",
+                    "/nix/store",
+                    "supervisor",
+                    "InvocationID",
+                    "terminal bytes",
+                ] {
+                    assert!(
+                        !surface.contains(forbidden),
+                        "{} leaked {forbidden:?}: {surface:?}",
+                        error.kind()
                     );
                 }
             }

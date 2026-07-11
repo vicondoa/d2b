@@ -23,6 +23,7 @@ pub enum ScopeError {
     Timeout,
     CreateFailed,
     IdentityMismatch,
+    NotFound,
     QueryFailed,
     StopFailed,
 }
@@ -228,6 +229,10 @@ impl UserScopeManager for SystemdUserScopeManager {
                     state: HelperScopeState::Degraded,
                     identity_matches: false,
                 }),
+                Err(ScopeError::NotFound) => Ok(ScopeInspection {
+                    state: HelperScopeState::Exited,
+                    identity_matches: true,
+                }),
                 Err(error) => Err(error),
             }
         })
@@ -238,11 +243,16 @@ impl UserScopeManager for SystemdUserScopeManager {
         if !inspection.identity_matches {
             return Err(ScopeError::IdentityMismatch);
         }
+        if inspection.state == HelperScopeState::Exited {
+            return Ok(());
+        }
         self.with_connection(|connection| {
             let manager = Self::manager_proxy(connection)?;
             manager
                 .call_method("KillUnit", &(scope.unit_name.as_str(), "all", signal))
-                .map_err(map_stop_error)?;
+                .map(|_| ())
+                .map_err(map_stop_error)
+                .or_else(|error| (error == ScopeError::NotFound).then_some(()).ok_or(error))?;
             Ok(())
         })
     }
@@ -254,9 +264,12 @@ impl UserScopeManager for SystemdUserScopeManager {
         }
         self.with_connection(|connection| {
             let manager = Self::manager_proxy(connection)?;
-            let _: OwnedObjectPath = manager
-                .call("StopUnit", &(scope.unit_name.as_str(), "replace"))
-                .map_err(map_stop_error)?;
+            let result: Result<OwnedObjectPath, zbus::Error> =
+                manager.call("StopUnit", &(scope.unit_name.as_str(), "replace"));
+            result
+                .map(|_| ())
+                .map_err(map_stop_error)
+                .or_else(|error| (error == ScopeError::NotFound).then_some(()).ok_or(error))?;
             Ok(())
         })
     }
@@ -281,6 +294,8 @@ fn map_create_error(error: zbus::Error) -> ScopeError {
 fn map_query_error(error: zbus::Error) -> ScopeError {
     if is_timeout(&error) {
         ScopeError::Timeout
+    } else if is_no_such_unit(&error) {
+        ScopeError::NotFound
     } else {
         ScopeError::QueryFailed
     }
@@ -289,9 +304,19 @@ fn map_query_error(error: zbus::Error) -> ScopeError {
 fn map_stop_error(error: zbus::Error) -> ScopeError {
     if is_timeout(&error) {
         ScopeError::Timeout
+    } else if is_no_such_unit(&error) {
+        ScopeError::NotFound
     } else {
         ScopeError::StopFailed
     }
+}
+
+fn is_no_such_unit(error: &zbus::Error) -> bool {
+    matches!(
+        error,
+        zbus::Error::MethodError(name, _, _)
+            if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit"
+    )
 }
 
 fn is_timeout(error: &zbus::Error) -> bool {
@@ -315,7 +340,7 @@ where
         match query() {
             Ok((scope, HelperScopeState::Starting | HelperScopeState::Active)) => return Ok(scope),
             Ok(_) => return Err(ScopeError::IdentityMismatch),
-            Err(ScopeError::QueryFailed | ScopeError::IdentityMismatch)
+            Err(ScopeError::NotFound | ScopeError::QueryFailed | ScopeError::IdentityMismatch)
                 if Instant::now() < deadline =>
             {
                 std::thread::sleep(retry_interval);

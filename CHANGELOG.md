@@ -12,18 +12,28 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added end-to-end unsafe-local persistent shells. `d2bd` now resolves
+  canonical or unambiguous workload targets, derives helper policy only from
+  the hash-verified private bundle, multiplexes the helper terminal fd behind
+  an opaque public session handle, and routes attach/list/detach/kill without a
+  broker op, root unit, SSH path, or host-shell fallback. `d2b shell` and shell
+  launcher items require `unsafe-local-shell-v1`; provider-neutral audit and
+  low-cardinality metrics cover create, attach, detach, kill, close, and typed
+  failure boundaries. Persistent host shells survive CLI, helper, and daemon
+  reconnects while their verified user scope lives, but terminate with the
+  non-lingering user manager and provide no same-UID containment.
+
 - Added the unsafe-local persistent-shell helper runtime: a hidden verified
   user-scope supervisor owns each login-shell PTY, private reconnect socket,
   bounded merged-output ring, and single attachment across helper reconnects.
   Terminal streams transfer as one CLOEXEC fd, shell metadata survives in the
   existing user ledger, and exact-scope teardown cannot target unrelated
-  same-UID processes. Public daemon shell routing and CLI enablement remain
-  deferred.
+  same-UID processes.
 
 - Prepared unsafe-local persistent shells with private helper protocol v2,
   correlated management results, bounded dedicated terminal-stream frames,
   restart snapshot metadata, typed shell failures, and the public
-  `unsafe-local-shell-v1` feature token. Runtime dispatch remains unavailable.
+  `unsafe-local-shell-v1` feature token.
 
 - Added proposed ADR 0045, defining parent-owned workload-hosted realm
   controllers, explicit runtime/infrastructure/relay provider responsibilities,

@@ -1,9 +1,9 @@
-# Use persistent guest shells
+# Use persistent shells
 
 > Diataxis: how-to. Task-oriented operator guide for `d2b shell`.
 
-Persistent shells let you reconnect to a named interactive shell inside a
-running guest. Use them for long-lived interactive work. Use
+Persistent shells let you reconnect to a named interactive shell in a local VM
+or an explicitly unsafe-local workload. Use them for long-lived interactive work. Use
 `d2b vm exec <target> -- <cmd>` for one-off commands.
 
 For the persistence model, local IPC boundary, and same-UID trust model,
@@ -31,10 +31,46 @@ d2b.vms.work = {
 Switch the host configuration, then restart the affected VM so guestd sees the
 new shell policy.
 
+## Enable an unsafe-local shell
+
+Unsafe-local runs the login shell directly as the authenticated host user and
+provides no VM or same-UID containment:
+
+```nix
+d2b.realms.host = {
+  allowedUsers = [ "alice" ];
+  policy.allowUnsafeLocal = true;
+  workloads.tools = {
+    kind = "unsafe-local";
+    shell = {
+      enable = true;
+      defaultName = "primary";
+      maxSessions = 4;
+    };
+    launcher.items.terminal = {
+      type = "shell";
+      name = "Terminal";
+    };
+  };
+};
+```
+
+Rebuild the host, log in through a PAM-backed session, and verify the user
+helper is active:
+
+```bash
+systemctl --user status d2b-unsafe-local-helper.service
+d2b shell tools.host.d2b list
+```
+
+The daemon must negotiate `unsafe-local-shell-v1`. Version skew fails with an
+update recommendation; there is no static, SSH, or host-shell fallback.
+
 ## Attach to the default shell
 
 ```bash
 d2b shell work
+d2b shell tools.host.d2b
 ```
 
 The CLI prints the resolved session name before entering raw terminal mode. To
@@ -117,3 +153,8 @@ work-gw$ d2b shell <target>
 Persistent shells use a workload-user shpool socket inside the guest. Code
 already running as the same workload UID can reach that AF_UNIX socket. Do not
 co-locate untrusted same-UID services with persistent admin shells.
+
+Unsafe-local has the same trust limitation on the host uid. Its shell survives
+CLI, d2bd, and helper reconnects while the verified transient user scope stays
+alive. Logging out terminates the non-lingering user manager and its shells by
+design.

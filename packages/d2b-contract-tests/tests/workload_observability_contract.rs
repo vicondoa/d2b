@@ -21,3 +21,47 @@ fn overview_dashboard_covers_workload_provider_signals() {
         assert!(!rendered.contains(forbidden), "{forbidden}: {rendered}");
     }
 }
+
+#[test]
+fn overview_dashboard_covers_redacted_shell_lifecycle() {
+    let dashboard: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../nixos-modules/components/observability/dashboards/01-d2b-overview.json"
+    ))
+    .expect("overview dashboard is valid JSON");
+    let panel = dashboard["panels"]
+        .as_array()
+        .expect("dashboard panels")
+        .iter()
+        .find(|panel| {
+            serde_json::to_string(panel)
+                .expect("panel serializes")
+                .contains("d2b_daemon_shell_lifecycle_total")
+        })
+        .expect("shell lifecycle panel");
+    let rendered = format!(
+        "{} {}",
+        panel["targets"][0]["expr"].as_str().expect("shell query"),
+        panel["targets"][0]["legendFormat"]
+            .as_str()
+            .expect("shell legend")
+    );
+    for label in ["provider", "operation", "outcome", "error_kind"] {
+        assert!(rendered.contains(label), "{label}: {rendered}");
+    }
+    for forbidden in [
+        "uid",
+        "target",
+        "name",
+        "session",
+        "supervisor",
+        "terminal_bytes",
+        "argv",
+        "environment",
+        "cwd",
+        "path",
+        "pid",
+        "unit",
+    ] {
+        assert!(!rendered.contains(forbidden), "{forbidden}: {rendered}");
+    }
+}

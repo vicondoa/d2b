@@ -70,7 +70,9 @@ impl From<ScopeError> for RuntimeError {
             ScopeError::Timeout => Self::Timeout,
             ScopeError::CreateFailed => Self::ScopeCreateFailed,
             ScopeError::IdentityMismatch => Self::ScopeIdentityMismatch,
-            ScopeError::QueryFailed | ScopeError::StopFailed => Self::Internal,
+            ScopeError::NotFound | ScopeError::QueryFailed | ScopeError::StopFailed => {
+                Self::Internal
+            }
         }
     }
 }

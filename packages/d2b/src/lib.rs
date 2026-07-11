@@ -1848,7 +1848,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
     }
     let json_mode = !matches!(action, ShellAction::Attach) && args.json;
     let local_vm = match route_vm_target(context, &args.vm, json_mode)? {
-        VmTargetRoute::Local { vm } => vm,
+        VmTargetRoute::Local { vm } => resolve_local_shell_target(context, &args.vm, vm)?,
         VmTargetRoute::Gateway {
             realm, gateway_vm, ..
         } => return cmd_gateway_shell(context, args, action, realm, gateway_vm),
@@ -2114,9 +2114,13 @@ where
 
 fn is_close_attach_transport_unavailable(err: &CliFailure) -> bool {
     err.exit_code == 69
-        && err
+        && (err
             .message
             .contains("guest-control-shell-transport-unavailable")
+            || err.message.contains("unsafe-local-shell-terminal-closed")
+            || err
+                .message
+                .contains("unsafe-local-shell-helper-unavailable"))
 }
 
 fn run_shell_fsm<T, H, S>(
@@ -3589,7 +3593,7 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
 }
 
 fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
-    use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind};
+    use d2b_realm_core::{LauncherItemKind, ProtocolToken};
 
     if !context.public_socket.exists() {
         return Err(CliFailure::new(
@@ -3625,13 +3629,7 @@ fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
     let item = select_launcher_item(&workload, args.item.as_deref())?;
 
     if item.kind == LauncherItemKind::Shell {
-        if workload.provider_kind == WorkloadProviderKind::UnsafeLocal {
-            return Err(CliFailure::new(
-                70,
-                "unsafe-local persistent shell launch is unavailable; no host-shell fallback is permitted",
-            ));
-        }
-        let vm = local_vm_shell_target(&workload).to_owned();
+        let vm = shell_launch_target(&workload, &negotiated.capabilities)?;
         return cmd_shell(
             context,
             &ShellArgs {
@@ -3691,6 +3689,18 @@ fn local_vm_shell_target(workload: &public_wire::WorkloadPublicSummary) -> &str 
     )
 }
 
+fn shell_launch_target(
+    workload: &public_wire::WorkloadPublicSummary,
+    capabilities: &[d2b_contracts::FeatureFlag],
+) -> Result<String, CliFailure> {
+    if workload.provider_kind == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
+        require_unsafe_local_shell_feature(capabilities)?;
+        Ok(workload.identity.canonical_target.to_canonical())
+    } else {
+        Ok(local_vm_shell_target(workload).to_owned())
+    }
+}
+
 fn require_launch_features(
     capabilities: &[d2b_contracts::FeatureFlag],
     provider: Option<d2b_realm_core::WorkloadProviderKind>,
@@ -3715,6 +3725,98 @@ fn require_launch_features(
         ));
     }
     Ok(())
+}
+
+fn require_unsafe_local_shell_feature(
+    capabilities: &[d2b_contracts::FeatureFlag],
+) -> Result<(), CliFailure> {
+    if capabilities
+        .iter()
+        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
+    {
+        Ok(())
+    } else {
+        Err(CliFailure::new(
+            70,
+            "daemon does not negotiate unsafe-local-shell-v1; update d2b, d2bd, and d2b-unsafe-local-helper together; no host-shell fallback is permitted",
+        ))
+    }
+}
+
+fn resolve_local_shell_target(
+    context: &Context,
+    requested: &str,
+    fallback_vm: String,
+) -> Result<String, CliFailure> {
+    if !requested.ends_with(".d2b") {
+        return Ok(fallback_vm);
+    }
+    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|error| {
+        CliFailure::new(
+            69,
+            format!("shell: failed to connect to the d2bd public socket: {error}"),
+        )
+    })?;
+    socket
+        .send_frame(&daemon_hello_frame("hello")?)
+        .map_err(|error| CliFailure::new(69, format!("shell: failed to send hello: {error}")))?;
+    let hello = socket
+        .recv_frame()
+        .map_err(|error| CliFailure::new(69, format!("shell: failed to receive hello: {error}")))?;
+    let negotiated = parse_hello_reply(&hello)?;
+    if !negotiated
+        .capabilities
+        .iter()
+        .any(|feature| feature.known() == Some(KnownFeatureFlag::ConfiguredLaunchV1))
+    {
+        return Err(CliFailure::new(
+            70,
+            "daemon cannot resolve canonical shell targets; update d2b and d2bd together",
+        ));
+    }
+    let response = workload_socket_exchange(
+        &mut socket,
+        &public_wire::WorkloadOp::List(public_wire::WorkloadListArgs::default()),
+        "shell workload resolution",
+    )?;
+    let public_wire::WorkloadOpResponse::List(result) = response else {
+        return Err(CliFailure::new(
+            76,
+            "daemon returned the wrong workload response while resolving the shell target",
+        ));
+    };
+    let Some(workload) = result
+        .workloads
+        .into_iter()
+        .find(|workload| workload.identity.canonical_target.to_canonical() == requested)
+    else {
+        return Ok(fallback_vm);
+    };
+    match workload.provider_kind {
+        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
+            require_unsafe_local_shell_feature(&negotiated.capabilities)?;
+            Ok(workload.identity.canonical_target.to_canonical())
+        }
+        d2b_realm_core::WorkloadProviderKind::LocalVm => {
+            Ok(local_vm_shell_target(&workload).to_owned())
+        }
+        provider => Err(CliFailure::new(
+            70,
+            format!(
+                "workload provider '{}' does not support direct local persistent shells",
+                workload_provider_kind_label(provider)
+            ),
+        )),
+    }
+}
+
+fn workload_provider_kind_label(provider: d2b_realm_core::WorkloadProviderKind) -> &'static str {
+    match provider {
+        d2b_realm_core::WorkloadProviderKind::LocalVm => "local-vm",
+        d2b_realm_core::WorkloadProviderKind::QemuMedia => "qemu-media",
+        d2b_realm_core::WorkloadProviderKind::ProviderManaged => "provider-managed",
+        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => "unsafe-local",
+    }
 }
 
 fn select_launch_workload(
@@ -3826,7 +3928,7 @@ mod workload_launch_tests {
         }
     }
 
-    fn workload(
+    pub(super) fn workload(
         workload_id: &str,
         realm: &str,
         items: Vec<LauncherItemSummary>,
@@ -3916,6 +4018,28 @@ mod workload_launch_tests {
                 .unwrap_err();
         assert_eq!(error.exit_code, 70);
         assert!(error.message.contains("unsafe-local-provider-v1"));
+
+        let error = require_unsafe_local_shell_feature(&configured_only).unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("unsafe-local-shell-v1"));
+        assert!(error.message.contains("update d2b"));
+        assert!(error.message.contains("no host-shell fallback"));
+    }
+
+    #[test]
+    fn terminal_launcher_uses_canonical_target_only_for_unsafe_local() {
+        let features = [KnownFeatureFlag::UnsafeLocalShellV1.wire_value()];
+        let unsafe_local = workload("tools", "host", vec![item("terminal")], None);
+        assert_eq!(
+            shell_launch_target(&unsafe_local, &features).unwrap(),
+            "tools.host.d2b"
+        );
+
+        let mut local = workload("tools", "work", vec![item("terminal")], None);
+        local.provider_kind = WorkloadProviderKind::LocalVm;
+        local.identity.legacy_vm_name =
+            Some(d2b_core::contract_id::ContractId::parse("corp-vm").unwrap());
+        assert_eq!(shell_launch_target(&local, &[]).unwrap(), "corp-vm");
     }
 }
 
@@ -11940,6 +12064,81 @@ mod host_install_dispatch_tests {
                 .expect_err("error frame maps to CliFailure");
         assert_eq!(failure.exit_code, 70);
         assert!(!failure.message.contains("unknown field `opId`"));
+    }
+
+    #[test]
+    fn canonical_unsafe_local_shell_target_stays_canonical_after_daemon_resolution() {
+        let socket_path = test_socket_path("unsafe-local-shell-target", ".sock");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+        let response = public_wire::WorkloadOpResponse::List(public_wire::WorkloadListResult {
+            workloads: vec![super::workload_launch_tests::workload(
+                "tools",
+                "host",
+                Vec::new(),
+                None,
+            )],
+        });
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let hello = recv_test_frame(accepted).expect("read hello");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&hello).unwrap()["type"],
+                "hello"
+            );
+            let hello_reply = encode_type_tagged_message(
+                "helloOk",
+                &IpcHelloOk {
+                    server_version: Version::new("0.4.0").unwrap(),
+                    selected_version: Version::new("0.4.0").unwrap(),
+                    capabilities: daemon_supported_features(),
+                },
+                "hello response",
+            )
+            .unwrap();
+            send_test_frame(accepted, &hello_reply).unwrap();
+            let request = recv_test_frame(accepted).expect("read workload list");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&request).unwrap()["type"],
+                "workload"
+            );
+            let response =
+                encode_type_tagged_message("workloadResponse", &response, "workload response")
+                    .unwrap();
+            send_test_frame(accepted, &response).unwrap();
+            close(accepted).unwrap();
+        });
+        let context = Context {
+            manifest_path: socket_path.with_extension("manifest.json"),
+            bundle_path: socket_path.with_extension("bundle.json"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        assert_eq!(
+            super::resolve_local_shell_target(&context, "tools.host.d2b", "tools".to_owned())
+                .unwrap(),
+            "tools.host.d2b"
+        );
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
     }
 
     #[test]

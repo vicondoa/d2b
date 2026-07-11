@@ -168,6 +168,18 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         buckets_seconds: &[],
     },
     MetricDescriptor {
+        name: "d2b_daemon_shell_lifecycle_total",
+        kind: MetricKind::Counter,
+        labels: &[
+            "provider",
+            "component",
+            "operation",
+            "outcome",
+            "error_kind",
+        ],
+        buckets_seconds: &[],
+    },
+    MetricDescriptor {
         name: "d2b_daemon_workload_availability",
         kind: MetricKind::Gauge,
         labels: &["provider", "component", "state"],
@@ -445,6 +457,9 @@ fn help_text(name: &str) -> &'static str {
         "d2b_daemon_guest_control_shell_total" => {
             "Cumulative count of guest-control shell session/op outcomes by error_kind."
         }
+        "d2b_daemon_shell_lifecycle_total" => {
+            "Cumulative provider-neutral persistent-shell lifecycle outcomes."
+        }
         "d2b_daemon_workload_availability" => {
             "Observed workload inventory count by bounded provider, component, and state."
         }
@@ -608,6 +623,7 @@ mod tests {
                 "d2b_daemon_uptime_seconds",
                 "d2b_daemon_guest_control_exec_total",
                 "d2b_daemon_guest_control_shell_total",
+                "d2b_daemon_shell_lifecycle_total",
                 "d2b_daemon_workload_availability",
                 "d2b_daemon_workload_lifecycle_total",
             ]

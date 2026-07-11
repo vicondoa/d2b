@@ -1093,6 +1093,15 @@ in
         rootUnits =
           lib.attrNames unsafeCfg.systemd.services
           ++ lib.attrNames unsafeCfg.systemd.sockets;
+        privileges = unsafeCfg.d2b._bundle.privilegesJson.data;
+        shellPrivilege =
+          lib.findFirst (row: row.operation == "shell") null privileges.publicOperations;
+        unsafeLocalShellBrokerOps =
+          builtins.filter
+            (row:
+              lib.hasInfix "unsafe-local" row.operation
+              && lib.hasInfix "shell" row.operation)
+            privileges.brokerOperations;
       in {
         helperGroupDeclared = unsafeCfg.users.groups ? d2b-unsafe-local;
         eligibleHasLifecycleGroup =
@@ -1111,6 +1120,10 @@ in
           !(builtins.elem "d2b-unsafe-local-helper" rootUnits);
         noHelperBrokerSocketUnit =
           !(builtins.elem "d2b-unsafe-local-helper" (lib.attrNames unsafeCfg.systemd.sockets));
+        unsafeLocalShellRootUnits =
+          builtins.filter (name: lib.hasInfix "unsafe-local-shell" name) rootUnits;
+        shellBrokerRequired = shellPrivilege.brokerRequired;
+        unsafeLocalShellBrokerOps = unsafeLocalShellBrokerOps;
       };
     expected = {
       helperGroupDeclared = true;
@@ -1125,6 +1138,9 @@ in
       daemonAllowedUsers = [ "alice" ];
       helperRootUnitAbsent = true;
       noHelperBrokerSocketUnit = true;
+      unsafeLocalShellRootUnits = [ ];
+      shellBrokerRequired = "no";
+      unsafeLocalShellBrokerOps = [ ];
     };
   };
 

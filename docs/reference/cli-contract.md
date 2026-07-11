@@ -69,9 +69,10 @@ The public request carries only the canonical target, configured item id, and
 an idempotency operation id. It never carries argv, uid, environment, cwd,
 display paths, process ids, or unit names. An `exec` item dispatches through the
 selected provider. A local-VM `shell` item dispatches existing persistent-shell
-semantics; unsafe-local shell execution remains unavailable until its dedicated
-backend exists. When `--item` is omitted, the CLI selects `defaultItem`, then an
-only item, otherwise returns the available item ids and names.
+semantics. An unsafe-local `shell` item requires `unsafe-local-shell-v1` and
+invokes `d2b shell` with the workload's canonical target; there is no host-shell
+or SSH fallback. When `--item` is omitted, the CLI selects `defaultItem`, then
+an only item, otherwise returns the available item ids and names.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
 authenticated requester, operation id, target, and item id. Guestd persists that
@@ -80,8 +81,9 @@ existing exec instead of spawning a duplicate. A replay whose trusted argv hash
 does not match fails closed.
 
 The DTOs remain protocol version 3 and are gated by `configured-launch-v1`.
-Unsafe-local additionally requires `unsafe-local-provider-v1`. Unsupported peers
-return a typed capability refusal and never fall back.
+Unsafe-local additionally requires `unsafe-local-provider-v1`; shell items also
+require `unsafe-local-shell-v1`. Unsupported peers return an update remediation
+and never fall back.
 
 **Exit codes**
 
@@ -91,7 +93,7 @@ return a typed capability refusal and never fall back.
 | `2` | Target/item not found, or omitted item is ambiguous. |
 | `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. |
 | `69` | Provider prerequisite or transport unavailable. |
-| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. |
+| `70` | Capability unavailable, provider mismatch, or required feature/version skew. |
 | `76` | Protocol response or operation-id conflict. |
 
 ## Command reference
@@ -122,7 +124,7 @@ return a typed capability refusal and never fall back.
 | `2` | Target/item not found, or omitted item is ambiguous. | [`usage`](./error-codes.md#usage) |
 | `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. | workload launch error |
 | `69` | Provider prerequisite or transport unavailable. | workload launch error |
-| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. | workload launch error |
+| `70` | Capability unavailable, provider mismatch, or required feature/version skew. | workload launch error |
 | `76` | Protocol response or operation-id conflict. | workload launch error |
 
 **Human example**
@@ -3052,20 +3054,33 @@ verbs) are emitted on **stderr** for human output only, so they never perturb a
 - `detach` — detach a live/stale client without killing the shell;
 - `kill` — terminate a named shell session.
 
-The first positional after `shell` is always a d2b target address. Current
-local-shell-only generations accept declared local VM names as target addresses.
+The first positional after `shell` is always a d2b target address. Declared
+local VM names retain their existing behavior. Canonical direct-local workload
+targets and unambiguous workload-id aliases resolve inside `d2bd`: transition
+local VMs use `legacyVmName`, first-class local VMs use the workload id, and
+unsafe-local targets stay canonical rather than being coerced to VM names.
 A local VM named `list`, `attach`, `detach`, or `kill` attaches by default; use
 `d2b shell <target> <ACTION>` for management. Command-like trailing words such as
 `d2b shell work htop` are rejected with a hint to use
 `d2b vm exec <target> -- <cmd>` for one-off commands.
 
 `shell` keeps declared local VM names on the local daemon public socket and the
-authenticated guest-control terminal transport. Gateway-backed management forms
+authenticated guest-control terminal transport. Unsafe-local targets use the
+same public `ShellOp` shape, but d2bd resolves bundle-owned policy and the exact
+requester-UID helper, then multiplexes the validated helper terminal fd behind
+an opaque public attachment handle. List/detach/kill use helper management
+operations. Disconnect and `closeAttach` detach only; kill tears down only the
+verified shell scope. Gateway-backed management forms
 (`list`, `detach`, `kill`) resolve the local realm entrypoint, verify the gateway
 VM is running, and run the same `d2b shell <target> ...` command inside the
 gateway VM over the typed `vm exec` guest-control path. The host does not load
 realm credentials, provider transports, raw guest-control frames, SSH, or
 provider-native shell APIs.
+
+All shell actions remain admin-only. Launcher authorization for configured exec
+items does not extend to shell. Unsafe-local policy (`defaultName` and
+`maxSessions`) never appears in the public request and cannot be supplied by a
+client.
 
 Interactive gateway `attach` is fail-closed in this generation with an
 actionable `gateway-shell-attach-unavailable` error. Use
@@ -3095,6 +3110,11 @@ metrics never use names or terminal handles as labels.
 ```text
 $ d2b shell work
 attached to shell 'default' on vm 'work'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
+```
+
+```text
+$ d2b shell tools.host.d2b
+attached to shell 'primary' on vm 'tools.host.d2b'; detach with Ctrl-Space Ctrl-q; exit or Ctrl-D ends the session
 ```
 
 ```text
@@ -3141,8 +3161,9 @@ default detached  false     true
 }
 ```
 
-The JSON field remains named `vm` for the current schema. For local targets it
-contains the resolved local routed VM name. Gateway-backed management commands
+The JSON field remains named `vm` for the current schema. For local VM targets
+it contains the resolved backing VM name; for unsafe-local it carries the
+configured canonical workload target. Gateway-backed management commands
 forward the requested target through the selected gateway; the in-gateway
 response keeps its own current schema until a future output-version bump can
 rename this field to `target`.
@@ -3154,16 +3175,21 @@ rename this field to `target`.
 | `0` | Success, including idempotent detach/kill no-op results. |
 | `1` | Unexpected daemon reply or local protocol/serialization failure. |
 | `2` | Usage error, invalid flag combination, missing required `--name` for kill, invalid shell name, non-TTY attach, or gateway-backed interactive attach before semantic shell attach support lands. |
-| `69` | Local daemon public socket unavailable for shell dispatch. |
-| `70` | Daemon generation does not support persistent shell operations. |
-| `75` | Daemon admin authorization failed before guest contact. |
+| `42` | Internal scope/daemon failure. |
+| `69` | Daemon/helper/user-manager/terminal transport unavailable or timed out. |
+| `70` | Required shell capability or `unsafe-local-shell-v1` is unavailable. |
+| `75` | Admin authorization failed, another attachment owns the shell, or capacity is exhausted. |
+| `76` | Protocol, operation-correlation, name, cursor-gap, offset, or terminal-size failure. |
+| `77` | Stale public attachment handle or authenticated guest session. |
 
 **Redaction**
 
 Shell management JSON may include validated shell names because they are
 operator-facing identifiers. Daemon audit records use a fixed shell correlation
-digest; metrics labels never carry shell names, terminal session handles, attach
-ids, helper diagnostics, paths, argv, env, or terminal bytes.
+digest and may include the configured canonical target and peer uid; metrics
+labels are closed provider/component/operation/outcome/error enums. Neither
+surface carries shell names, terminal session handles, helper diagnostics,
+supervisor metadata, paths, argv, env, cwd, transcripts, or terminal bytes.
 
 ### `vm exec`
 
@@ -3462,3 +3488,4 @@ detached state lives in guestd's detached registry).
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `vm exec` | `rust-native` | Daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op. Attached exec uses the in-process `d2bd` session table; detached exec uses guestd's detached registry and VM-first management verbs. |
+| `shell` | `rust-native` | Admin-only provider-neutral `ShellOp`: local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a multiplexed terminal fd. No SSH, host-shell fallback, root unit, per-VM service, or broker op. |

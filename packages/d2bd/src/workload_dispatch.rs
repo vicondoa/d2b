@@ -4,15 +4,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::public_wire::{
-    GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary,
+use d2b_contracts::{
+    public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
+    unsafe_local_wire::HelperShellPolicy,
 };
 use d2b_core::{
     bundle_resolver::BundleResolver,
     configured_argv::ConfiguredArgv,
     realm_controller_config::RealmControllerPlacement,
     realm_workloads_launcher::LauncherWorkloadSummary,
-    unsafe_local_workloads::{UnsafeLocalLauncherItem, UnsafeLocalWorkloadsJson},
+    unsafe_local_workloads::{
+        UnsafeLocalLauncherItem, UnsafeLocalShellPolicy, UnsafeLocalWorkloadsJson,
+    },
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState};
@@ -32,6 +35,8 @@ pub(crate) enum CatalogError {
     ItemNotFound,
     ConfiguredItemMissing,
     ConfiguredItemMismatch,
+    ShellCapabilityUnavailable,
+    AliasConflict,
     OperationConflict,
     OperationInProgress,
 }
@@ -145,8 +150,17 @@ pub(crate) struct ResolvedExec {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ResolvedShell {
+    pub identity: Option<WorkloadIdentity>,
+    pub route: WorkloadRoute,
+    pub policy: Option<HelperShellPolicy>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct WorkloadCatalog {
     entries: BTreeMap<String, CatalogEntry>,
+    visible: std::collections::BTreeSet<String>,
+    known_local_vms: std::collections::BTreeSet<String>,
 }
 
 impl WorkloadCatalog {
@@ -156,20 +170,28 @@ impl WorkloadCatalog {
             .as_ref()
             .ok_or(CatalogError::ArtifactsUnavailable)?;
         let mut entries = BTreeMap::new();
+        let mut visible = std::collections::BTreeSet::new();
         for metadata in &public.workloads {
-            if !realm_is_direct_local(resolver, &metadata.identity) {
-                continue;
-            }
             let canonical = metadata.identity.canonical_target.to_canonical();
-            let route = route_for_provider(
-                metadata.provider_kind,
-                metadata
-                    .identity
-                    .legacy_vm_name
-                    .as_ref()
-                    .map(|vm| vm.as_str()),
-                metadata.identity.workload_id.as_str(),
-            );
+            let direct_local = realm_is_direct_local(resolver, &metadata.identity);
+            let route = if direct_local {
+                route_for_provider(
+                    metadata.provider_kind,
+                    metadata
+                        .identity
+                        .legacy_vm_name
+                        .as_ref()
+                        .map(|vm| vm.as_str()),
+                    metadata.identity.workload_id.as_str(),
+                )
+            } else {
+                WorkloadRoute::CapabilityUnavailable {
+                    provider: metadata.provider_kind,
+                }
+            };
+            if direct_local {
+                visible.insert(canonical.clone());
+            }
             entries.insert(
                 canonical,
                 CatalogEntry {
@@ -178,25 +200,43 @@ impl WorkloadCatalog {
                 },
             );
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            visible,
+            known_local_vms: resolver.manifest.vms.keys().cloned().collect(),
+        })
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries.values()
+        self.entries
+            .iter()
+            .filter(|(canonical, _)| self.visible.contains(*canonical))
+            .map(|(_, entry)| entry)
     }
 
     #[cfg(test)]
     pub(crate) fn from_test_entries(entries: impl IntoIterator<Item = CatalogEntry>) -> Self {
+        let entries = entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.metadata.identity.canonical_target.to_canonical(),
+                    entry,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let visible = entries.keys().cloned().collect();
+        let known_local_vms = entries
+            .values()
+            .filter_map(|entry| match &entry.route {
+                WorkloadRoute::LocalVm { vm } => Some(vm.clone()),
+                _ => None,
+            })
+            .collect();
         Self {
-            entries: entries
-                .into_iter()
-                .map(|entry| {
-                    (
-                        entry.metadata.identity.canonical_target.to_canonical(),
-                        entry,
-                    )
-                })
-                .collect(),
+            entries,
+            visible,
+            known_local_vms,
         }
     }
 
@@ -297,6 +337,141 @@ impl WorkloadCatalog {
             graphical: private_exec.graphical,
         })
     }
+
+    pub(crate) fn resolve_shell(
+        &self,
+        private: Option<&UnsafeLocalWorkloadsJson>,
+        target: &str,
+    ) -> Result<ResolvedShell, CatalogError> {
+        let Some(entry) = self.resolve_shell_entry(target)? else {
+            return Ok(ResolvedShell {
+                identity: None,
+                route: WorkloadRoute::LocalVm {
+                    vm: target.to_owned(),
+                },
+                policy: None,
+            });
+        };
+
+        match &entry.route {
+            WorkloadRoute::LocalVm { .. } | WorkloadRoute::CapabilityUnavailable { .. } => {
+                Ok(ResolvedShell {
+                    identity: Some(entry.metadata.identity.clone()),
+                    route: entry.route.clone(),
+                    policy: None,
+                })
+            }
+            WorkloadRoute::UnsafeLocal => {
+                let private = private.ok_or(CatalogError::ArtifactsUnavailable)?;
+                let configured = private
+                    .workloads
+                    .iter()
+                    .find(|workload| {
+                        workload.identity.canonical_target
+                            == entry.metadata.identity.canonical_target
+                    })
+                    .ok_or(CatalogError::ConfiguredItemMissing)?;
+                if configured.identity != entry.metadata.identity {
+                    return Err(CatalogError::ConfiguredItemMismatch);
+                }
+                validate_shell_item_parity(entry, configured.items.as_slice())?;
+                let policy = configured
+                    .shell
+                    .as_ref()
+                    .ok_or(CatalogError::ShellCapabilityUnavailable)
+                    .and_then(helper_shell_policy)?;
+                Ok(ResolvedShell {
+                    identity: Some(entry.metadata.identity.clone()),
+                    route: WorkloadRoute::UnsafeLocal,
+                    policy: Some(policy),
+                })
+            }
+        }
+    }
+
+    fn resolve_shell_entry(&self, target: &str) -> Result<Option<&CatalogEntry>, CatalogError> {
+        if target.ends_with(".d2b") {
+            return self
+                .entries
+                .get(target)
+                .map(Some)
+                .ok_or(CatalogError::TargetNotFound);
+        }
+
+        if self.known_local_vms.contains(target) {
+            return Ok(None);
+        }
+
+        let legacy = self
+            .entries
+            .values()
+            .filter(|entry| matches!(&entry.route, WorkloadRoute::LocalVm { vm } if vm == target))
+            .collect::<Vec<_>>();
+        if let [entry] = legacy.as_slice() {
+            return Ok(Some(*entry));
+        }
+        if legacy.len() > 1 {
+            return Err(CatalogError::AliasConflict);
+        }
+
+        let aliases = self
+            .entries
+            .values()
+            .filter(|entry| entry.metadata.identity.workload_id.as_str() == target)
+            .collect::<Vec<_>>();
+        match aliases.as_slice() {
+            [] => Ok(None),
+            [entry] => Ok(Some(*entry)),
+            _ => Err(CatalogError::AliasConflict),
+        }
+    }
+}
+
+fn helper_shell_policy(policy: &UnsafeLocalShellPolicy) -> Result<HelperShellPolicy, CatalogError> {
+    let policy = HelperShellPolicy {
+        default_name: ShellName::new(policy.default_name.clone())
+            .map_err(|_| CatalogError::ConfiguredItemMismatch)?,
+        max_sessions: policy.max_sessions,
+    };
+    policy
+        .validate_bounds()
+        .map_err(|_| CatalogError::ConfiguredItemMismatch)?;
+    Ok(policy)
+}
+
+fn validate_shell_item_parity(
+    entry: &CatalogEntry,
+    private_items: &[UnsafeLocalLauncherItem],
+) -> Result<(), CatalogError> {
+    let public_shells = entry
+        .metadata
+        .items
+        .iter()
+        .filter(|item| item.kind == LauncherItemKind::Shell)
+        .collect::<Vec<_>>();
+    let private_shells = private_items
+        .iter()
+        .filter_map(|item| match item {
+            UnsafeLocalLauncherItem::Shell(shell) => Some(shell),
+            UnsafeLocalLauncherItem::Exec(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if public_shells.is_empty() || private_shells.is_empty() {
+        return Err(CatalogError::ShellCapabilityUnavailable);
+    }
+    if public_shells.len() != private_shells.len()
+        || public_shells.iter().any(|public| {
+            public.graphical
+                || !private_shells.iter().any(|private| {
+                    private.id == public.id
+                        && private.name == public.name
+                        && private.icon == public.icon
+                })
+        })
+    {
+        return Err(CatalogError::ConfiguredItemMismatch);
+    }
+    Ok(())
 }
 
 fn route_for_provider(
@@ -345,7 +520,8 @@ mod tests {
         contract_id::ContractId,
         unsafe_local_workloads::{
             LocalVmConfiguredWorkload, UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION, UnsafeLocalExecItem,
-            UnsafeLocalWorkload, UnsafeLocalWorkloadsJson,
+            UnsafeLocalShellItem, UnsafeLocalShellPolicy, UnsafeLocalWorkload,
+            UnsafeLocalWorkloadsJson,
         },
     };
     use d2b_realm_core::{
@@ -474,6 +650,66 @@ mod tests {
                     items: vec![exec()],
                 })
                 .collect(),
+        }
+    }
+
+    fn shell_entry(provider: WorkloadProviderKind, realm: &str) -> CatalogEntry {
+        let mut entry = catalog_entry(provider);
+        entry.metadata.identity = workload_identity(realm);
+        match provider {
+            WorkloadProviderKind::LocalVm => {
+                entry.metadata.identity.legacy_vm_name =
+                    Some(ContractId::parse("corp-vm").unwrap());
+                entry.metadata.identity.runtime_kind = Some(ContractId::parse("nixos").unwrap());
+                entry.metadata.identity.provider_id =
+                    Some(ContractId::parse("local-cloud-hypervisor").unwrap());
+            }
+            WorkloadProviderKind::UnsafeLocal => {
+                entry.metadata.identity.runtime_kind =
+                    Some(ContractId::parse("unsafe-local").unwrap());
+                entry.metadata.identity.provider_id =
+                    Some(ContractId::parse("unsafe-local").unwrap());
+            }
+            _ => {}
+        }
+        entry.metadata.items.push(LauncherItemSummary {
+            id: ProtocolToken::parse("terminal").unwrap(),
+            name: "Terminal".to_owned(),
+            icon: LauncherIcon::default(),
+            kind: LauncherItemKind::Shell,
+            graphical: false,
+            capabilities: CapabilitySet::default(),
+        });
+        entry.route = route_for_provider(
+            provider,
+            entry
+                .metadata
+                .identity
+                .legacy_vm_name
+                .as_ref()
+                .map(|value| value.as_str()),
+            entry.metadata.identity.workload_id.as_str(),
+        );
+        entry
+    }
+
+    fn shell_private(entry: &CatalogEntry) -> UnsafeLocalWorkloadsJson {
+        UnsafeLocalWorkloadsJson {
+            schema_version: UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION.to_owned(),
+            workloads: vec![UnsafeLocalWorkload {
+                identity: entry.metadata.identity.clone(),
+                default_item_id: Some(ProtocolToken::parse("terminal").unwrap()),
+                items: vec![UnsafeLocalLauncherItem::Shell(UnsafeLocalShellItem {
+                    id: ProtocolToken::parse("terminal").unwrap(),
+                    name: "Terminal".to_owned(),
+                    icon: LauncherIcon::default(),
+                })],
+                shell: Some(UnsafeLocalShellPolicy {
+                    default_name: "primary".to_owned(),
+                    max_sessions: 4,
+                }),
+            }],
+            local_vm_workloads: Vec::new(),
         }
     }
 
@@ -677,6 +913,155 @@ mod tests {
         assert_eq!(
             WorkloadCatalog::from_test_entries([entry])
                 .resolve_exec(Some(&graphical_drift), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
+    }
+
+    #[test]
+    fn resolve_shell_routes_bare_and_canonical_local_vm_compatibly() {
+        let legacy = shell_entry(WorkloadProviderKind::LocalVm, "work");
+        let canonical = legacy.metadata.identity.canonical_target.to_canonical();
+        let catalog = WorkloadCatalog::from_test_entries([legacy.clone()]);
+        for target in [canonical.as_str(), "corp-vm", "browser"] {
+            let resolved = catalog.resolve_shell(None, target).unwrap();
+            assert_eq!(
+                resolved.route,
+                WorkloadRoute::LocalVm {
+                    vm: "corp-vm".to_owned()
+                }
+            );
+            assert!(resolved.policy.is_none());
+        }
+
+        let mut first_class = shell_entry(WorkloadProviderKind::LocalVm, "host");
+        first_class.metadata.identity.legacy_vm_name = None;
+        first_class.route = route_for_provider(
+            WorkloadProviderKind::LocalVm,
+            None,
+            first_class.metadata.identity.workload_id.as_str(),
+        );
+        let canonical = first_class
+            .metadata
+            .identity
+            .canonical_target
+            .to_canonical();
+        let catalog = WorkloadCatalog::from_test_entries([first_class]);
+        assert_eq!(
+            catalog.resolve_shell(None, &canonical).unwrap().route,
+            WorkloadRoute::LocalVm {
+                vm: "browser".to_owned()
+            }
+        );
+
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([])
+                .resolve_shell(None, "legacy-vm")
+                .unwrap()
+                .route,
+            WorkloadRoute::LocalVm {
+                vm: "legacy-vm".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_shell_keeps_unsafe_local_distinct_and_uses_private_policy() {
+        let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
+        let private = shell_private(&entry);
+        let canonical = entry.metadata.identity.canonical_target.to_canonical();
+        let catalog = WorkloadCatalog::from_test_entries([entry]);
+        for target in [canonical.as_str(), "browser"] {
+            let resolved = catalog.resolve_shell(Some(&private), target).unwrap();
+            assert_eq!(resolved.route, WorkloadRoute::UnsafeLocal);
+            let policy = resolved.policy.expect("trusted helper policy");
+            assert_eq!(policy.default_name.as_str(), "primary");
+            assert_eq!(policy.max_sessions, 4);
+        }
+    }
+
+    #[test]
+    fn known_bare_vm_name_precedes_unsafe_local_short_alias() {
+        let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
+        let private = shell_private(&entry);
+        let mut catalog = WorkloadCatalog::from_test_entries([entry]);
+        catalog.known_local_vms.insert("browser".to_owned());
+        let resolved = catalog.resolve_shell(Some(&private), "browser").unwrap();
+        assert_eq!(
+            resolved.route,
+            WorkloadRoute::LocalVm {
+                vm: "browser".to_owned()
+            }
+        );
+        assert!(resolved.identity.is_none());
+        assert!(resolved.policy.is_none());
+    }
+
+    #[test]
+    fn resolve_shell_rejects_unsupported_remote_and_ambiguous_routes() {
+        let mut unsupported = shell_entry(WorkloadProviderKind::QemuMedia, "media");
+        unsupported.route = WorkloadRoute::CapabilityUnavailable {
+            provider: WorkloadProviderKind::QemuMedia,
+        };
+        let canonical = unsupported
+            .metadata
+            .identity
+            .canonical_target
+            .to_canonical();
+        let catalog = WorkloadCatalog::from_test_entries([unsupported]);
+        assert_eq!(
+            catalog.resolve_shell(None, &canonical).unwrap().route,
+            WorkloadRoute::CapabilityUnavailable {
+                provider: WorkloadProviderKind::QemuMedia
+            }
+        );
+
+        let first = shell_entry(WorkloadProviderKind::UnsafeLocal, "work");
+        let second = shell_entry(WorkloadProviderKind::UnsafeLocal, "personal");
+        let catalog = WorkloadCatalog::from_test_entries([first, second]);
+        assert_eq!(
+            catalog.resolve_shell(None, "browser").unwrap_err(),
+            CatalogError::AliasConflict
+        );
+        assert_eq!(
+            catalog.resolve_shell(None, "missing.host.d2b").unwrap_err(),
+            CatalogError::TargetNotFound
+        );
+    }
+
+    #[test]
+    fn resolve_shell_rejects_private_policy_and_item_drift() {
+        let entry = shell_entry(WorkloadProviderKind::UnsafeLocal, "host");
+        let target = entry.metadata.identity.canonical_target.to_canonical();
+        let catalog = WorkloadCatalog::from_test_entries([entry.clone()]);
+
+        let mut missing_policy = shell_private(&entry);
+        missing_policy.workloads[0].shell = None;
+        assert_eq!(
+            catalog
+                .resolve_shell(Some(&missing_policy), &target)
+                .unwrap_err(),
+            CatalogError::ShellCapabilityUnavailable
+        );
+
+        let mut item_drift = shell_private(&entry);
+        let UnsafeLocalLauncherItem::Shell(item) = &mut item_drift.workloads[0].items[0] else {
+            unreachable!()
+        };
+        item.name = "Tampered".to_owned();
+        assert_eq!(
+            catalog
+                .resolve_shell(Some(&item_drift), &target)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
+
+        let mut identity_drift = shell_private(&entry);
+        identity_drift.workloads[0].identity.provider_id =
+            Some(ContractId::parse("tampered").unwrap());
+        assert_eq!(
+            catalog
+                .resolve_shell(Some(&identity_drift), &target)
                 .unwrap_err(),
             CatalogError::ConfiguredItemMismatch
         );

@@ -45,7 +45,7 @@ d2b.realms.work.workloads.shellbox = {
 ```
 
 For the shell lifecycle model and CLI fallback commands, see
-[Use persistent guest shells](./use-persistent-shells.md).
+[Use persistent shells](./use-persistent-shells.md).
 
 ## Add aligned flake inputs
 
