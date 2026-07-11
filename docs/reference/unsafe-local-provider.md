@@ -230,10 +230,11 @@ explicitly remapped for a child may survive `exec`.
 ## Runtime observability
 
 Helper registration, reconnect, supersede, and stale events use bounded event
-kinds and result classes. Provider-neutral shell audit records cover create,
-attach, list, detach, kill, close, and failure boundaries with only the
-configured canonical target, peer uid, closed provider/action/result values,
-optional force-takeover intent, and fixed correlation digests. The
+kinds and result classes. Provider-neutral `ShellLifecycle` is the sole runtime
+shell audit event for both providers. It covers create, attach, list, detach,
+kill, close, and failure boundaries with only the configured canonical target,
+peer uid, closed provider/action/result values, optional force-takeover intent,
+and optional fixed operation/session correlation digests. The
 `d2b_daemon_shell_lifecycle_total` metric uses only closed
 provider/component/operation/outcome/error labels. Neither surface includes
 argv, environment, cwd, paths, PIDs, unit names, helper diagnostics, shell
