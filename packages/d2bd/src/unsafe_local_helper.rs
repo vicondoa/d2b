@@ -1915,7 +1915,7 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .unwrap();
-        let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let raw = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
         fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
         let ready = HelperTerminalReady {
             request_id: request.request_id(),
@@ -2231,8 +2231,8 @@ mod tests {
         ));
         assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
 
-        let first = unistd::dup(stream.as_raw_fd()).unwrap();
-        let second = unistd::dup(stream.as_raw_fd()).unwrap();
+        let first = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
+        let second = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
         assert!(matches!(
             validate_terminal_fd(&ready, vec![ReceivedFd(first), ReceivedFd(second)]),
             Err(HelperRegistryError::InvalidTerminalFd)
