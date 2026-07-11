@@ -264,25 +264,36 @@ if pid == 0:
         ["d2b", "shell", "tools.host.d2b", "--name", "cli-e2e"],
     )
 
-os.write(master, b"printf cli-shell-canary\\n")
-deadline = time.monotonic() + 30
 output = bytearray()
-while b"cli-shell-canary" not in output and time.monotonic() < deadline:
-    readable, _, _ = select.select([master], [], [], 1)
-    if not readable:
-        continue
-    try:
-        chunk = os.read(master, 65536)
-    except OSError as error:
-        if error.errno == errno.EIO:
-            break
-        raise
-    if not chunk:
-        break
-    output.extend(chunk)
 
-if b"cli-shell-canary" not in output:
-    raise SystemExit("real d2b shell CLI did not round-trip terminal output")
+def read_until(marker, timeout):
+    deadline = time.monotonic() + timeout
+    while marker not in output and time.monotonic() < deadline:
+        readable, _, _ = select.select([master], [], [], 1)
+        if not readable:
+            continue
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        output.extend(chunk)
+    if marker not in output:
+        raise SystemExit(
+            f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
+        )
+
+read_until(b"attached to shell", 30)
+os.write(master, b"stty -echo\\n")
+time.sleep(0.5)
+while select.select([master], [], [], 0)[0]:
+    output.extend(os.read(master, 65536))
+output.clear()
+os.write(master, b"printf cli-shell-executed-canary\\n")
+read_until(b"cli-shell-executed-canary", 30)
 
 os.write(master, b"\\x00\\x11")
 deadline = time.monotonic() + 15
@@ -290,7 +301,9 @@ while time.monotonic() < deadline:
     waited, status = os.waitpid(pid, os.WNOHANG)
     if waited == pid:
         if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
-            raise SystemExit(f"real d2b shell CLI exited with status {status}")
+            raise SystemExit(
+                f"real d2b shell CLI exited with status {status}: {bytes(output)!r}"
+            )
         break
     time.sleep(0.05)
 else:
