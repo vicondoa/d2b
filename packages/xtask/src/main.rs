@@ -717,7 +717,7 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .source(source)
         .manual("d2b CLI")
         .render(&mut man_buffer)?;
-    fs::write(&man_path, man_buffer)?;
+    write_manpage(&man_path, man_buffer)?;
     let host_man_path = write_subcommand_manpage(&man_dir, &["host"], "d2b-host")?;
     let launch_man_path = write_subcommand_manpage(&man_dir, &["launch"], "d2b-launch")?;
     let shell_man_path = write_subcommand_manpage(&man_dir, &["shell"], "d2b-shell")?;
@@ -780,8 +780,20 @@ fn write_subcommand_manpage(
         .source("d2b".to_owned())
         .manual("d2b CLI")
         .render(&mut man_buffer)?;
-    fs::write(&man_path, man_buffer)?;
+    write_manpage(&man_path, man_buffer)?;
     Ok(man_path)
+}
+
+fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+    let rendered = String::from_utf8(rendered)?;
+    let mut normalized = rendered
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    normalized.push('\n');
+    fs::write(path, normalized)?;
+    Ok(())
 }
 
 fn patch_vm_exec_logs_bash_completion(

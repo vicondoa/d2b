@@ -47,12 +47,14 @@ pub enum Route {
 /// Provider-aware direct-local route used after trusted launcher metadata has
 /// identified the workload substrate. VM-only handlers accept only
 /// `LocalVm`; `UnsafeLocal` must remain on the provider-neutral workload API.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectLocalWorkloadRoute {
     LocalVm { vm: String },
     UnsafeLocal { target: String },
 }
 
+#[cfg(test)]
 pub fn direct_local_workload_route(
     target: &str,
     provider: d2b_realm_core::WorkloadProviderKind,

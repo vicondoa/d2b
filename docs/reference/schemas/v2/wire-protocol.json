@@ -7877,24 +7877,6 @@
             "kind": {
               "type": "string",
               "enum": [
-                "workload"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/WorkloadOpResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
                 "auth status"
               ]
             },
@@ -8170,6 +8152,24 @@
             },
             "payload": {
               "$ref": "#/definitions/GatewayDisplayOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/WorkloadOpResponse"
             }
           }
         },

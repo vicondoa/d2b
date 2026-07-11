@@ -8,6 +8,7 @@
   ],
   "properties": {
     "localVmWorkloads": {
+      "description": "Configured launcher items for local VM workloads. They share this private, bundle-hashed artifact so argv never enters public launcher metadata or the public request protocol.",
       "type": "array",
       "items": {
         "$ref": "#/definitions/LocalVmConfiguredWorkload"

@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LaunchOutputV1",
   "type": "object",
   "required": [
@@ -14,22 +14,44 @@
       "type": "string"
     },
     "disposition": {
+      "$ref": "#/definitions/LauncherExecDisposition"
+    },
+    "itemId": {
+      "$ref": "#/definitions/ProtocolToken"
+    },
+    "operationId": {
+      "$ref": "#/definitions/OperationId"
+    },
+    "target": {
+      "$ref": "#/definitions/RealmTarget"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "LauncherExecDisposition": {
+      "type": "string",
       "enum": [
         "committed",
         "already-committed"
-      ],
-      "type": "string"
+      ]
     },
-    "itemId": {
-      "type": "string"
+    "OperationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
-    "operationId": {
-      "type": "string"
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
     },
-    "target": {
-      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$",
-      "type": "string"
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
     }
-  },
-  "additionalProperties": false
+  }
 }

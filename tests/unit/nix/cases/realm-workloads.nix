@@ -1008,7 +1008,7 @@ in
       launcherV2Installed = true;
       launcherV2Mode = "0640";
       unsafeInstalled = true;
-      bundleVersion = 10;
+      bundleVersion = 11;
       launcherV2BundlePath = "/etc/d2b/realm-workloads-launcher-v2.json";
       bundlePath = "/etc/d2b/unsafe-local-workloads.json";
     };
