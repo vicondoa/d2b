@@ -126,6 +126,7 @@ pub enum DaemonEvent {
     WorkloadLauncher {
         target: String,
         item_id: String,
+        peer_uid: u32,
         provider: WorkloadLaunchProvider,
         result: WorkloadLaunchResult,
     },
@@ -2009,11 +2010,13 @@ mod tests {
         let event = DaemonEvent::WorkloadLauncher {
             target: "browser.host.d2b".to_owned(),
             item_id: "browser".to_owned(),
+            peer_uid: 1000,
             provider: WorkloadLaunchProvider::UnsafeLocal,
             result: WorkloadLaunchResult::Committed,
         };
         let rendered = serde_json::to_string(&event).expect("serialize launch event");
         assert!(rendered.contains("\"kind\":\"workload_launcher\""));
+        assert!(rendered.contains("\"peer_uid\":1000"));
         assert!(rendered.contains("\"provider\":\"unsafe-local\""));
         for canary in [
             "private-argv-canary",

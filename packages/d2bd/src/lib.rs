@@ -3364,6 +3364,7 @@ fn dispatch_workload(
                 );
                 emit_workload_launch_audit(
                     state,
+                    peer.uid,
                     &resolved,
                     daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
                 );
@@ -3401,6 +3402,7 @@ fn dispatch_workload(
                     workload_lifecycle_metric(state, provider_label, "launcher-exec", "failed");
                     emit_workload_launch_audit(
                         state,
+                        peer.uid,
                         &resolved,
                         daemon_audit::WorkloadLaunchResult::Failed,
                     );
@@ -3413,6 +3415,7 @@ fn dispatch_workload(
                     workload_lifecycle_metric(state, provider_label, "launcher-exec", "committed");
                     emit_workload_launch_audit(
                         state,
+                        peer.uid,
                         &resolved,
                         daemon_audit::WorkloadLaunchResult::Committed,
                     );
@@ -3427,6 +3430,7 @@ fn dispatch_workload(
                     );
                     emit_workload_launch_audit(
                         state,
+                        peer.uid,
                         &resolved,
                         daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
                     );
@@ -3588,7 +3592,8 @@ fn dispatch_local_vm_launcher(
         "workload-launch:{}",
         hex_bytes(&fingerprint.finalize()[..16])
     );
-    exec_detached::create_idempotent(state, &request, request_id)?;
+    let result = exec_detached::create_idempotent(state, &request, request_id)?;
+    emit_detached_create_audit(state, requester_uid, vm, &result.exec_id);
     Ok(public_wire::LauncherExecDisposition::Committed)
 }
 
@@ -3715,6 +3720,7 @@ fn workload_lifecycle_metric(state: &ServerState, provider: &str, operation: &st
 
 fn emit_workload_launch_audit(
     state: &ServerState,
+    peer_uid: u32,
     resolved: &workload_dispatch::ResolvedExec,
     result: daemon_audit::WorkloadLaunchResult,
 ) {
@@ -3732,6 +3738,7 @@ fn emit_workload_launch_audit(
         .write_event(&daemon_audit::DaemonEvent::WorkloadLauncher {
             target: resolved.identity.canonical_target.to_canonical(),
             item_id: resolved.item_id.as_str().to_owned(),
+            peer_uid,
             provider,
             result,
         });

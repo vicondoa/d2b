@@ -106,6 +106,11 @@ from the local peer uid and public operation identity. Guestd's durable detached
 record is the restart-stable idempotency authority; the same id and argv hash
 replay the existing exec, while a hash mismatch is rejected.
 
+Daemon audit records the authenticated `peer_uid` on each configured-launch
+outcome. Local-VM execution also emits the standard detached-create event with
+the opaque guest `exec_id`, allowing the launch request and guest execution to
+be correlated without recording argv, environment, cwd, or output.
+
 - transport: non-abstract Unix-domain `SOCK_SEQPACKET`
 - path: `/run/d2b/public.sock`
 - mode: `0660`
