@@ -8284,7 +8284,7 @@ fn dispatch_shell_management(
     let response = match op {
         public_wire::ShellOp::List(args) => {
             let resolved = resolve_shell_target(state, &args.vm).inspect_err(|error| {
-                emit_shell_failure_audit(state, peer.uid, &args.vm, error);
+                record_unresolved_shell_failure(state, peer.uid, &args.vm, "list", error);
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
@@ -8349,7 +8349,11 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::CapabilityUnavailable { provider } => {
-                    return Err(shell_route_capability_error(&args.vm, provider));
+                    let error = shell_route_capability_error(&args.vm, provider);
+                    record_resolved_shell_failure(
+                        state, peer.uid, &resolved, &args.vm, "list", None, &error,
+                    );
+                    return Err(error);
                 }
             };
             emit_provider_shell_audit(
@@ -8360,6 +8364,7 @@ fn dispatch_shell_management(
                     provider,
                     action: daemon_audit::ShellAuditAction::List,
                     result: daemon_audit::ShellAuditResult::Listed,
+                    force: None,
                     operation_digest,
                     session_digest: None,
                 },
@@ -8370,7 +8375,13 @@ fn dispatch_shell_management(
         public_wire::ShellOp::Detach(args) => {
             let requested_target = args.vm.clone();
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
-                emit_shell_failure_audit(state, peer.uid, &requested_target, error);
+                record_unresolved_shell_failure(
+                    state,
+                    peer.uid,
+                    &requested_target,
+                    "detach",
+                    error,
+                );
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
@@ -8442,20 +8453,20 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::CapabilityUnavailable { provider } => {
-                    return Err(shell_route_capability_error(&requested_target, provider));
+                    let error = shell_route_capability_error(&requested_target, provider);
+                    record_resolved_shell_failure(
+                        state,
+                        peer.uid,
+                        &resolved,
+                        &requested_target,
+                        "detach",
+                        None,
+                        &error,
+                    );
+                    return Err(error);
                 }
             };
             let digest = shell_ref_digest(&[&target, result.resolved_name.as_str()]);
-            if provider == shell_backend::ShellProvider::GuestControl {
-                emit_shell_management_audit(
-                    state,
-                    peer.uid,
-                    &target,
-                    daemon_audit::ShellAuditAction::Detach,
-                    daemon_audit::ShellAuditResult::Detached,
-                    &digest,
-                );
-            }
             emit_provider_shell_audit(
                 state,
                 ProviderShellAudit {
@@ -8464,6 +8475,7 @@ fn dispatch_shell_management(
                     provider,
                     action: daemon_audit::ShellAuditAction::Detach,
                     result: daemon_audit::ShellAuditResult::Detached,
+                    force: None,
                     operation_digest,
                     session_digest: Some(digest),
                 },
@@ -8475,7 +8487,7 @@ fn dispatch_shell_management(
             let requested_target = args.vm.clone();
             let requested_name = args.name;
             let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
-                emit_shell_failure_audit(state, peer.uid, &requested_target, error);
+                record_unresolved_shell_failure(state, peer.uid, &requested_target, "kill", error);
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
@@ -8543,20 +8555,20 @@ fn dispatch_shell_management(
                     )
                 }
                 WorkloadRoute::CapabilityUnavailable { provider } => {
-                    return Err(shell_route_capability_error(&requested_target, provider));
+                    let error = shell_route_capability_error(&requested_target, provider);
+                    record_resolved_shell_failure(
+                        state,
+                        peer.uid,
+                        &resolved,
+                        &requested_target,
+                        "kill",
+                        None,
+                        &error,
+                    );
+                    return Err(error);
                 }
             };
             let digest = shell_ref_digest(&[&target, requested_name.as_str()]);
-            if provider == shell_backend::ShellProvider::GuestControl {
-                emit_shell_management_audit(
-                    state,
-                    peer.uid,
-                    &target,
-                    daemon_audit::ShellAuditAction::Kill,
-                    daemon_audit::ShellAuditResult::Killed,
-                    &digest,
-                );
-            }
             emit_provider_shell_audit(
                 state,
                 ProviderShellAudit {
@@ -8565,6 +8577,7 @@ fn dispatch_shell_management(
                     provider,
                     action: daemon_audit::ShellAuditAction::Kill,
                     result: daemon_audit::ShellAuditResult::Killed,
+                    force: None,
                     operation_digest,
                     session_digest: Some(digest),
                 },
@@ -8654,29 +8667,74 @@ fn record_shell_dispatch_failure(
             provider,
             action: daemon_audit::ShellAuditAction::Failure,
             result: daemon_audit::ShellAuditResult::Refused,
+            force: None,
             operation_digest,
             session_digest: None,
         },
     );
 }
 
-fn emit_shell_management_audit(
+fn record_unresolved_shell_failure(
     state: &ServerState,
     peer_uid: u32,
-    vm: &str,
-    action: daemon_audit::ShellAuditAction,
-    result: daemon_audit::ShellAuditResult,
-    shell_ref_digest: &str,
+    _requested_target: &str,
+    operation: &'static str,
+    error: &TypedError,
 ) {
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
-            vm: vm.to_owned(),
-            peer_uid,
-            action,
-            result,
-            shell_ref_digest: shell_ref_digest.to_owned(),
-        });
+    let provider = shell_provider_for_error(error);
+    shell_metric_for_provider(
+        state,
+        provider,
+        operation,
+        "error",
+        shell_error_kind_label(error),
+    );
+    emit_shell_failure_audit(state, peer_uid, _requested_target, error);
+}
+
+fn record_resolved_shell_failure(
+    state: &ServerState,
+    peer_uid: u32,
+    resolved: &workload_dispatch::ResolvedShell,
+    _requested_target: &str,
+    operation: &'static str,
+    operation_digest: Option<String>,
+    error: &TypedError,
+) {
+    use workload_dispatch::WorkloadRoute;
+
+    let (provider, target) = match &resolved.route {
+        WorkloadRoute::UnsafeLocal => (
+            shell_backend::ShellProvider::UnsafeLocal,
+            resolved
+                .identity
+                .as_ref()
+                .map(|identity| identity.canonical_target.to_canonical())
+                .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
+        ),
+        WorkloadRoute::LocalVm { vm } => (shell_backend::ShellProvider::GuestControl, vm.clone()),
+        WorkloadRoute::CapabilityUnavailable { provider } => (
+            if *provider == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
+                shell_backend::ShellProvider::UnsafeLocal
+            } else {
+                shell_backend::ShellProvider::GuestControl
+            },
+            resolved
+                .identity
+                .as_ref()
+                .map(|identity| identity.canonical_target.to_canonical())
+                .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
+        ),
+    };
+    record_shell_dispatch_failure(
+        state,
+        peer_uid,
+        &target,
+        provider,
+        operation,
+        operation_digest,
+        error,
+    );
 }
 
 fn shell_audit_provider(
@@ -8696,6 +8754,7 @@ struct ProviderShellAudit<'a> {
     provider: shell_backend::ShellProvider,
     action: daemon_audit::ShellAuditAction,
     result: daemon_audit::ShellAuditResult,
+    force: Option<bool>,
     operation_digest: Option<String>,
     session_digest: Option<String>,
 }
@@ -8709,6 +8768,7 @@ fn emit_provider_shell_audit(state: &ServerState, event: ProviderShellAudit<'_>)
             provider: shell_audit_provider(event.provider),
             action: event.action,
             result: event.result,
+            force: event.force,
             operation_digest: event.operation_digest,
             session_digest: event.session_digest,
         });
@@ -8721,19 +8781,6 @@ fn emit_shell_attach_audit(
     shell_ref_digest: &str,
     force: bool,
 ) {
-    if established.provider == shell_backend::ShellProvider::GuestControl {
-        let _ =
-            state
-                .daemon_audit
-                .write_event(&daemon_audit::DaemonEvent::GuestControlShellAttached {
-                    vm: established.target.clone(),
-                    peer_uid,
-                    action: daemon_audit::ShellAuditAction::Attach,
-                    result: daemon_audit::ShellAuditResult::Attached,
-                    shell_ref_digest: shell_ref_digest.to_owned(),
-                    force,
-                });
-    }
     emit_provider_shell_audit(
         state,
         ProviderShellAudit {
@@ -8742,6 +8789,7 @@ fn emit_shell_attach_audit(
             provider: established.provider,
             action: daemon_audit::ShellAuditAction::Attach,
             result: daemon_audit::ShellAuditResult::Attached,
+            force: Some(force),
             operation_digest: established.operation_digest.clone(),
             session_digest: Some(shell_ref_digest.to_owned()),
         },
@@ -8755,18 +8803,6 @@ fn emit_shell_close_audit(
     result: daemon_audit::ShellAuditResult,
     shell_ref_digest: &str,
 ) {
-    if established.provider == shell_backend::ShellProvider::GuestControl {
-        let _ =
-            state
-                .daemon_audit
-                .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
-                    vm: established.target.clone(),
-                    peer_uid,
-                    action: daemon_audit::ShellAuditAction::Detach,
-                    result,
-                    shell_ref_digest: shell_ref_digest.to_owned(),
-                });
-    }
     emit_provider_shell_audit(
         state,
         ProviderShellAudit {
@@ -8775,6 +8811,7 @@ fn emit_shell_close_audit(
             provider: established.provider,
             action: daemon_audit::ShellAuditAction::Close,
             result,
+            force: None,
             operation_digest: established.operation_digest.clone(),
             session_digest: Some(shell_ref_digest.to_owned()),
         },
@@ -8797,6 +8834,7 @@ fn emit_shell_failure_audit(
             provider,
             action: daemon_audit::ShellAuditAction::Failure,
             result: daemon_audit::ShellAuditResult::Refused,
+            force: None,
             operation_digest: None,
             session_digest: None,
         },
@@ -8835,7 +8873,7 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
-            shell_metric(&state, "error", shell_error_kind_label(&error));
+            record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
             return;
         }
     };
@@ -8846,14 +8884,14 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
-            shell_metric_for_provider(
-                &state,
-                shell_provider_for_error(&error),
-                "attach",
-                "error",
-                shell_error_kind_label(&error),
-            );
-            emit_shell_failure_audit(&state, peer.uid, &attach.vm, &error);
+            match resolve_shell_target(&state, &attach.vm) {
+                Ok(resolved) => record_resolved_shell_failure(
+                    &state, peer.uid, &resolved, &attach.vm, "attach", None, &error,
+                ),
+                Err(_) => {
+                    record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
+                }
+            }
             return;
         }
     };
@@ -8873,7 +8911,16 @@ fn run_shell_owner(
             rt.handle(),
             &mut control_sequence,
         );
-        shell_metric_for_provider(&state, established.provider, "attach", "error", "transport");
+        let error = shell_transport_failed();
+        record_shell_dispatch_failure(
+            &state,
+            peer.uid,
+            &established.target,
+            established.provider,
+            "attach",
+            established.operation_digest.clone(),
+            &error,
+        );
         return;
     }
     emit_shell_attach_audit(
@@ -9151,6 +9198,7 @@ async fn establish_shell_backend(
                     provider: shell_backend::ShellProvider::UnsafeLocal,
                     action: daemon_audit::ShellAuditAction::Create,
                     result: daemon_audit::ShellAuditResult::Requested,
+                    force: None,
                     operation_digest: Some(operation_digest.clone()),
                     session_digest: None,
                 },

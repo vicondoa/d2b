@@ -234,6 +234,8 @@ pub enum DaemonEvent {
         action: ShellAuditAction,
         result: ShellAuditResult,
         #[serde(skip_serializing_if = "Option::is_none")]
+        force: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         operation_digest: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         session_digest: Option<String>,
@@ -1637,6 +1639,7 @@ mod tests {
             provider: ShellAuditProvider::UnsafeLocal,
             action: ShellAuditAction::Attach,
             result: ShellAuditResult::Attached,
+            force: Some(true),
             operation_digest: Some("1111111111111111".to_owned()),
             session_digest: Some("2222222222222222".to_owned()),
         })
@@ -1672,6 +1675,7 @@ mod tests {
         );
         let provider =
             serde_json::from_str::<serde_json::Value>(&records[2]).expect("provider shell event");
+        assert_eq!(provider["event"]["force"].as_bool(), Some(true));
         let keys = provider["event"]
             .as_object()
             .expect("provider event object")
@@ -1682,6 +1686,7 @@ mod tests {
             keys,
             std::collections::BTreeSet::from([
                 "action",
+                "force",
                 "kind",
                 "operation_digest",
                 "peer_uid",

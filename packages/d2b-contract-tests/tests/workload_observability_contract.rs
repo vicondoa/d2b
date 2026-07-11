@@ -48,6 +48,7 @@ fn overview_dashboard_covers_redacted_shell_lifecycle() {
     for label in ["provider", "operation", "outcome", "error_kind"] {
         assert!(rendered.contains(label), "{label}: {rendered}");
     }
+
     for forbidden in [
         "uid",
         "target",
@@ -64,4 +65,18 @@ fn overview_dashboard_covers_redacted_shell_lifecycle() {
     ] {
         assert!(!rendered.contains(forbidden), "{forbidden}: {rendered}");
     }
+}
+
+#[test]
+fn runtime_emits_only_provider_neutral_shell_audit_events() {
+    let daemon = include_str!("../../d2bd/src/lib.rs");
+    assert!(
+        !daemon.contains("DaemonEvent::GuestControlShellAttached"),
+        "runtime must not dual-emit legacy shell attach audit"
+    );
+    assert!(
+        !daemon.contains("DaemonEvent::GuestControlShellDetached"),
+        "runtime must not dual-emit legacy shell detach audit"
+    );
+    assert!(daemon.contains("DaemonEvent::ShellLifecycle"));
 }
