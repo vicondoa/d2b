@@ -111,7 +111,8 @@ The selected provider crate namespaces are:
 
 | Crate prefix | Standard interface | Responsibility |
 | --- | --- | --- |
-| `d2b-provider-api` | Interface crate | Provider descriptors, typed errors, operation context, capability DTOs, and provider traits. Contains no provider SDK or runtime implementation. |
+| `d2b-contracts` | Contract crate | Canonical serialized provider descriptors, operation contexts, capability DTOs, plans, observed-state envelopes, stable errors, and generated schemas. |
+| `d2b-provider-api` | Interface crate | In-process async Rust provider traits, typed registries, and runtime error wrappers over `d2b-contracts` types. Contains no duplicate contract DTO, provider SDK, or implementation. |
 | `d2b-provider-runtime-<implementation>` | `RuntimeProvider` | Plans, starts, stops, adopts, and inspects workloads. |
 | `d2b-provider-infrastructure-<implementation>` | `InfrastructureProvider` | Provisions, adopts, inspects, and deletes infrastructure that hosts workloads or realm controllers. |
 | `d2b-provider-relay-<implementation>` | `RelayProvider` | Opens relay sessions and creates or revokes scoped rendezvous bindings. |
@@ -166,16 +167,43 @@ their peers.
 
 ### Every provider implements a standard base interface
 
-`d2b-provider-api` replaces `d2b-realm-provider` as the narrow,
-implementation-free interface crate. It depends only on codec-neutral realm
-DTOs and the minimum async/I/O traits needed by the interfaces. It must not
-depend on:
+Existing `d2b-contracts` remains the canonical owner of provider data that is
+serialized, persisted, generated from Nix, sent over a wire, or shared by
+independently compiled components. Provider contracts live under a focused
+module such as `d2b_contracts::provider`.
+
+That module owns at least:
+
+- `ProviderDescriptor`, `ProviderType`, and `ProviderHealth`;
+- `ProviderOperationContext`;
+- primary and optional capability descriptors;
+- provider plans, opaque handles, and observed-state envelopes that cross a
+  crate, process, persistence, or wire boundary;
+- stable provider error kinds, retry hints, and redacted error envelopes;
+- schema versions and generated JSON/protobuf schemas where applicable.
+
+Provider implementations must import these canonical types. They must not
+declare provider-local copies with the same semantic fields.
+
+`d2b-provider-api` replaces only the trait, registry, and in-process runtime
+portion of `d2b-realm-provider`. It depends inward on `d2b-contracts` plus the
+minimum async/I/O traits needed by the interfaces. It may define non-serialized
+trait-object adapters, `ProviderResult`, and a runtime `ProviderError` wrapper,
+but that wrapper exposes the stable error envelope from `d2b-contracts`.
+
+`d2b-provider-api` must not depend on:
 
 - `d2bd`, the privileged broker, or host mutation implementations;
 - a cloud SDK, HTTP client, TLS implementation, or concrete transport;
 - a protocol codec;
 - a provider implementation crate;
 - test mocks or live-provider fixtures.
+
+`d2b-contracts` must not depend on `d2b-provider-api` or any provider
+implementation. If the current monolithic contract crate would otherwise force
+unrelated guest protobuf or codec dependencies into every provider build, those
+dependencies must be feature-gated or split behind contract-only modules rather
+than copying provider DTOs into the interface crate.
 
 Every registered provider implements the common base interface:
 
@@ -187,7 +215,8 @@ pub trait Provider: Send + Sync {
 }
 ```
 
-`ProviderDescriptor` is bounded, non-secret data containing:
+The canonical `d2b_contracts::provider::ProviderDescriptor` is bounded,
+non-secret data containing:
 
 - the configured `ProviderId`;
 - one closed `ProviderType`;
@@ -297,7 +326,7 @@ The implementation cutover uses this map:
 
 | Current crate | Selected replacement |
 | --- | --- |
-| `d2b-realm-provider` | `d2b-provider-api` |
+| `d2b-realm-provider` | Split serialized DTOs/capabilities/stable errors into `d2b-contracts::provider`, in-process traits/registries into `d2b-provider-api`, and mocks/conformance into `d2b-provider-testkit`. |
 | `d2b-host-providers` | Split into `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`, `d2b-provider-substrate-nixos`, `d2b-provider-substrate-linux`, and `d2b-provider-display-wayland`. |
 | `d2b-provider-aca` | `d2b-provider-runtime-azure-container-apps` |
 | `d2b-provider-relay` | `d2b-provider-relay-azure` |
@@ -308,10 +337,11 @@ The implementation cutover uses this map:
 | `d2b-gateway-runtime` | Delete after the realm controller composes typed provider registries directly. |
 
 Protocol-neutral realm routing and stream DTOs stay in realm-core crates.
-Provider interfaces and descriptors move to `d2b-provider-api`. Concrete
-provider dependencies stay in their type-first implementation crates. A
-provider implementation depends inward on the API and realm DTO crates; the API
-and realm crates never depend outward on implementations.
+Serialized provider DTOs and schemas move to `d2b-contracts`; in-process
+interfaces move to `d2b-provider-api`. Concrete provider dependencies stay in
+their type-first implementation crates. A provider implementation depends
+inward on the API and contract crates; contract, API, and realm crates never
+depend outward on implementations.
 
 The rename is one coordinated workspace cutover. No compatibility wrapper crates
 or re-export-only packages preserve the old names. Cargo manifests, lockfiles,
@@ -738,6 +768,7 @@ Implementation must preserve all of the following:
 
 Implementation requires coordinated changes across:
 
+- the canonical `d2b-contracts::provider` DTO and schema module;
 - the `d2b-provider-api` base and specialized provider interfaces;
 - type-first provider implementation crates and typed registries;
 - `d2b-provider-testkit` conformance suites and provider naming policy;
@@ -765,8 +796,12 @@ Implementation is incomplete without:
 
 - source-policy tests proving provider crate names use a recognized type-first
   axis and the implementation id matches the descriptor;
-- dependency-direction tests proving `d2b-provider-api` does not depend on an
-  implementation, cloud SDK, daemon, broker, codec, or concrete transport;
+- dependency-direction tests proving `d2b-contracts` does not depend on
+  `d2b-provider-api` or an implementation, and `d2b-provider-api` does not
+  depend on an implementation, cloud SDK, daemon, broker, codec, or concrete
+  transport;
+- policy tests proving provider implementations reuse
+  `d2b-contracts::provider` DTOs rather than declaring shadow serialized types;
 - conformance tests for every registered provider's primary interface and
   advertised optional capabilities;
 - Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
@@ -796,6 +831,8 @@ Implementation is incomplete without:
 - Gateway VMs become ordinary workloads with a precise role.
 - Provider crates sort by authority type and expose one recognizable interface
   and conformance contract.
+- Existing contract ownership is preserved: provider implementations and
+  traits share one serialized DTO/schema source in `d2b-contracts`.
 - Local and remote realm controllers use one configuration and protocol model.
 - Controller hosting lifecycle cannot become self-referential.
 - Provider, Relay, and controller responsibilities have explicit credential and
@@ -838,6 +875,16 @@ blur authority boundaries, and make capability claims difficult to verify. A
 small common `Provider` base plus mandatory primary-type interfaces preserves
 shared status/error semantics without pretending every provider can perform
 every operation.
+
+### Put async provider traits directly in `d2b-contracts`
+
+Rejected. `d2b-contracts` owns serialized, versioned data shared across process
+and crate boundaries. Async trait objects, typed registries, and runtime error
+wrappers are an in-process Rust plug-in API with different evolution and
+dependency requirements. Keeping those traits in `d2b-provider-api` prevents
+Tokio/runtime concerns from becoming part of the wire-contract layer while
+still requiring every trait method to consume and return canonical
+`d2b-contracts` types.
 
 ### Keep gateway VMs as a separate object
 
