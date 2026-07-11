@@ -3689,13 +3689,13 @@ fn record_workload_availability_metrics(
     }
 }
 
-fn workload_lifecycle_metric(state: &ServerState, provider: &str, operation: &str, result: &str) {
+fn workload_lifecycle_metric(state: &ServerState, provider: &str, operation: &str, outcome: &str) {
     state.metrics_registry.counter_inc(
         "d2b_daemon_workload_lifecycle_total",
         &[
             ("provider", provider),
             ("operation", operation),
-            ("result", result),
+            ("outcome", outcome),
         ],
     );
 }

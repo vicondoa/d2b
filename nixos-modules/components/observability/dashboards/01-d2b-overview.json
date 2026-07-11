@@ -205,8 +205,8 @@
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (provider, operation, result) (rate(d2b_daemon_workload_lifecycle_total[5m]))",
-              "legendFormat": "{{provider}} {{operation}} {{result}}"
+              "expr": "sum by (provider, operation, outcome) (rate(d2b_daemon_workload_lifecycle_total[5m]))",
+              "legendFormat": "{{provider}} {{operation}} {{outcome}}"
         }
       ]
     }

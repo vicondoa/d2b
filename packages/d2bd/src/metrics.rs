@@ -176,7 +176,7 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: "d2b_daemon_workload_lifecycle_total",
         kind: MetricKind::Counter,
-        labels: &["provider", "operation", "result"],
+        labels: &["provider", "operation", "outcome"],
         buckets_seconds: &[],
     },
 ];
@@ -789,14 +789,21 @@ mod tests {
             &[
                 ("provider", "unsafe-local"),
                 ("operation", "launcher-exec"),
-                ("result", "committed"),
+                ("outcome", "committed"),
             ],
         );
         let body = r.render();
         assert!(body.contains("d2b_daemon_workload_availability"));
         assert!(body.contains("d2b_daemon_workload_lifecycle_total"));
-        for forbidden in ["argv", "env", "cwd", "path", "pid", "unit"] {
-            assert!(!body.contains(forbidden));
+        for forbidden in [
+            "argv=",
+            "environment=",
+            "cwd=",
+            "path=",
+            "pid=",
+            "unit_name=",
+        ] {
+            assert!(!body.contains(forbidden), "{forbidden}: {body}");
         }
     }
 

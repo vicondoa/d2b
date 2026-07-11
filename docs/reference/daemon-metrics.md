@@ -228,9 +228,9 @@ declared schema; see "Cardinality bounds" below.
   ### `d2b_daemon_workload_lifecycle_total`
 
   - **Type:** counter
-  - **Labels:** `provider`, `operation`, `result`
+  - **Labels:** `provider`, `operation`, `outcome`
   - **Meaning:** Configured workload lifecycle outcomes. Values are bounded
-    provider/operation/result enums and never include argv, environment, cwd,
+    provider/operation/outcome enums and never include argv, environment, cwd,
     paths, process ids, unit names, or helper diagnostics.
 
 ## Cardinality bounds
