@@ -424,6 +424,19 @@ fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
     assert!(public_schema.contains("\"executionPosture\""));
     assert!(private_schema.contains("\"argv\""));
     assert!(private_schema.contains("\"additionalProperties\": false"));
+    let private_schema: serde_json::Value = serde_json::from_str(&private_schema).unwrap();
+    assert_eq!(
+        private_schema["properties"]["workloads"]["maxItems"],
+        serde_json::json!(16)
+    );
+    assert_eq!(
+        private_schema["properties"]["localVmWorkloads"]["maxItems"],
+        serde_json::json!(256)
+    );
+    assert_eq!(
+        private_schema["definitions"]["LocalVmConfiguredWorkload"]["properties"]["items"]["minItems"],
+        serde_json::json!(1)
+    );
     assert!(helper_schema.contains("\"protocolVersion\""));
     assert!(helper_schema.contains("\"terminalProtocolVersion\""));
 }

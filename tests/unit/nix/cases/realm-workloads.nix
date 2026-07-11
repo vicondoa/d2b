@@ -140,10 +140,69 @@ let
     };
   };
   firstClassLocalVmCfg = (mkEval [ firstClassLocalVmFixture ]).config;
+  firstClassPrivateWorkloads =
+    firstClassLocalVmCfg.d2b._bundle.unsafeLocalWorkloadsJson.data.localVmWorkloads;
   firstClassPrivateWorkload = lib.findFirst
     (workload: workload.identity.workloadId == "first-class")
     null
-    firstClassLocalVmCfg.d2b._bundle.unsafeLocalWorkloadsJson.data.localVmWorkloads;
+    firstClassPrivateWorkloads;
+
+  mixedPrivateData = (lib.evalModules {
+    modules = [
+      ../../../../nixos-modules/unsafe-local-workloads-json.nix
+      ({ lib, ... }: {
+        options.d2b._index = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        options.d2b._bundle.unsafeLocalWorkloadsJson = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        options.d2b.realms = lib.mkOption {
+          type = lib.types.attrs;
+          default = { };
+        };
+        config.d2b.realms.work.workloads.mixed = {
+          launcher.items = {
+            run = { };
+            docs = { };
+          };
+          shell.enable = false;
+        };
+        config.d2b._index.realms.workloads.enabled = [{
+          kind = "local-vm";
+          launcherEnabled = true;
+          workloadId = "mixed";
+          workloadName = "mixed";
+          label = "Mixed";
+          realmName = "work";
+          realmId = "work";
+          realmPath = "work";
+          canonicalTarget = "mixed.work.d2b";
+          legacyVmName = null;
+          runtimeKind = "nixos";
+          runtimeProviderId = "local-cloud-hypervisor";
+          defaultItemId = "run";
+          launcherItems = [
+            {
+              type = "exec";
+              id = "run";
+              name = "Run";
+              argv = [ "true" ];
+              graphical = false;
+              icon = { id = null; name = null; };
+            }
+            {
+              type = "link";
+              id = "docs";
+              name = "Documentation";
+            }
+          ];
+        }];
+      })
+    ];
+  }).config.d2b._bundle.unsafeLocalWorkloadsJson.data;
 
   unsafeLocalFixture = lib.recursiveUpdate hostBase {
     users.users.bob = { isNormalUser = true; uid = 1001; };
@@ -184,6 +243,38 @@ let
   };
   unsafeCfg = (mkEval [ unsafeLocalFixture ]).config;
   unsafeRow = builtins.head unsafeCfg.d2b._index.realms.workloads.enabled;
+
+  workloadNames = prefix: count:
+    map (n: "${prefix}-${toString n}") (lib.range 1 count);
+  unsafeBoundFixture = lib.recursiveUpdate hostBase {
+    d2b.daemonExperimental.enable = true;
+    d2b.realms.host = {
+      allowedUsers = [ "alice" ];
+      policy.allowUnsafeLocal = true;
+      workloads = lib.genAttrs (workloadNames "unsafe" 257) (_: {
+        kind = "unsafe-local";
+        launcher.items.run = {
+          type = "exec";
+          argv = [ "true" ];
+        };
+      });
+    };
+  };
+  localVmBoundFixture = lib.recursiveUpdate hostBase {
+    d2b.realms.work = {
+      allowedUsers = [ "alice" ];
+      workloads = lib.genAttrs (workloadNames "local" 257) (_: {
+        kind = "local-vm";
+        launcher = {
+          enable = true;
+          items.run = {
+            type = "exec";
+            argv = [ "true" ];
+          };
+        };
+      });
+    };
+  };
 
   # ── helpers ─────────────────────────────────────────────────────────────────
   failureMessages = modules:
@@ -281,6 +372,8 @@ in
   "realm-workloads/first-class-local-vm-private-launcher" = {
     expr = {
       found = firstClassPrivateWorkload != null;
+      emittedCount = builtins.length firstClassPrivateWorkloads;
+      legacyVmNameAbsent = !(firstClassPrivateWorkload.identity ? legacyVmName);
       legacyVmName = firstClassPrivateWorkload.identity.legacyVmName or null;
       runtimeKind = firstClassPrivateWorkload.identity.runtimeKind;
       defaultItemId = firstClassPrivateWorkload.defaultItemId;
@@ -289,6 +382,8 @@ in
     };
     expected = {
       found = true;
+      emittedCount = 1;
+      legacyVmNameAbsent = true;
       legacyVmName = null;
       runtimeKind = "nixos";
       defaultItemId = "probe";
@@ -301,6 +396,81 @@ in
         icon = { };
       };
       hasStateDir = false;
+    };
+  };
+
+  "realm-workloads/local-vm-private-items-filter-unsupported-kinds" = {
+    expr =
+      let
+        row = builtins.head mixedPrivateData.localVmWorkloads;
+      in {
+        itemCount = builtins.length row.items;
+        itemTypes = map (item: item.type) row.items;
+        hasNull = lib.any (item: item == null) row.items;
+        encodedHasNull = lib.hasInfix "null" (builtins.toJSON row.items);
+      };
+    expected = {
+      itemCount = 1;
+      itemTypes = [ "exec" ];
+      hasNull = false;
+      encodedHasNull = false;
+    };
+  };
+
+  "realm-workloads/empty-local-vm-launcher-stays-compatibility-only" = {
+    expr =
+      let
+        cfg = (mkEval [
+          firstClassLocalVmFixture
+          {
+            d2b.realms.work.workloads.first-class.launcher = {
+              defaultItem = lib.mkForce null;
+              items = lib.mkForce { };
+            };
+          }
+        ]).config;
+        privateRows =
+          cfg.d2b._bundle.unsafeLocalWorkloadsJson.data.localVmWorkloads;
+      in {
+        assertionsPass = lib.all (assertion: assertion.assertion) cfg.assertions;
+        firstClassExcluded = !lib.any
+          (row: row.identity.workloadId == "first-class")
+          privateRows;
+      };
+    expected = {
+      assertionsPass = true;
+      firstClassExcluded = true;
+    };
+  };
+
+  "realm-workloads/empty-local-vm-configured-launch-rejected" = {
+    expr =
+      let
+        messages = failureMessages [
+          firstClassLocalVmFixture
+          {
+            d2b.realms.work.workloads.first-class.launcher.items =
+              lib.mkForce { };
+          }
+        ];
+      in hasMessage
+        [ "first-class" "configured launch" "no supported exec or shell" ]
+        messages;
+    expected = true;
+  };
+
+  "realm-workloads/private-configured-workload-bounds" = {
+    expr = {
+      unsafeOverflow = hasMessage
+        [ "maximum of 256" "unsafe-local workloads" ]
+        (failureMessages [ unsafeBoundFixture ]);
+      localVmOverflow = hasMessage
+        [ "maximum of 256" "local-vm" "configured launch" ]
+        (failureMessages [ localVmBoundFixture ]);
+    };
+    expected = {
+      unsafeOverflow = true;
+      localVmOverflow = true;
     };
   };
 

@@ -44,47 +44,6 @@ pub enum Route {
     Gateway { gateway: String, target: String },
 }
 
-/// Provider-aware direct-local route used after trusted launcher metadata has
-/// identified the workload substrate. VM-only handlers accept only
-/// `LocalVm`; `UnsafeLocal` must remain on the provider-neutral workload API.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirectLocalWorkloadRoute {
-    LocalVm { vm: String },
-    UnsafeLocal { target: String },
-}
-
-#[cfg(test)]
-pub fn direct_local_workload_route(
-    target: &str,
-    provider: d2b_realm_core::WorkloadProviderKind,
-    legacy_vm_name: Option<&str>,
-) -> Result<DirectLocalWorkloadRoute, RouteError> {
-    match provider {
-        d2b_realm_core::WorkloadProviderKind::LocalVm => {
-            let vm = match legacy_vm_name {
-                Some(vm) => vm.to_owned(),
-                None => d2b_core::workload_identity::WorkloadTarget::parse(target)
-                    .map(|target| target.workload.as_str().to_owned())
-                    .map_err(|_| RouteError::InvalidTarget {
-                        target: target.to_owned(),
-                        reason: "local-vm workload target is invalid".to_owned(),
-                    })?,
-            };
-            Ok(DirectLocalWorkloadRoute::LocalVm { vm })
-        }
-        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
-            Ok(DirectLocalWorkloadRoute::UnsafeLocal {
-                target: target.to_owned(),
-            })
-        }
-        _ => Err(RouteError::InvalidTarget {
-            target: target.to_owned(),
-            reason: "workload provider does not expose a direct-local VM route".to_owned(),
-        }),
-    }
-}
-
 /// Why a target could not be routed (fail-closed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteError {
@@ -1379,43 +1338,6 @@ mod tests {
         assert_eq!(
             resolved.response.capability_preflight.required,
             CapabilitySet::from_caps([Capability::GpuAccel])
-        );
-    }
-
-    #[test]
-    fn direct_local_provider_routes_keep_vm_and_unsafe_local_separate() {
-        assert_eq!(
-            direct_local_workload_route(
-                "browser.work.d2b",
-                d2b_realm_core::WorkloadProviderKind::LocalVm,
-                Some("corp-vm"),
-            )
-            .unwrap(),
-            DirectLocalWorkloadRoute::LocalVm {
-                vm: "corp-vm".to_owned()
-            }
-        );
-        assert_eq!(
-            direct_local_workload_route(
-                "browser.work.d2b",
-                d2b_realm_core::WorkloadProviderKind::LocalVm,
-                None,
-            )
-            .unwrap(),
-            DirectLocalWorkloadRoute::LocalVm {
-                vm: "browser".to_owned()
-            }
-        );
-        assert_eq!(
-            direct_local_workload_route(
-                "browser.host.d2b",
-                d2b_realm_core::WorkloadProviderKind::UnsafeLocal,
-                None,
-            )
-            .unwrap(),
-            DirectLocalWorkloadRoute::UnsafeLocal {
-                target: "browser.host.d2b".to_owned()
-            }
         );
     }
 }

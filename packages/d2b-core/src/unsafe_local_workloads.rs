@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 
 pub const UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION: &str = "v2";
 pub const MAX_UNSAFE_LOCAL_WORKLOADS: usize = 256;
+pub const MAX_LOCAL_VM_CONFIGURED_WORKLOADS: usize = 256;
+pub const MAX_PRIVATE_CONFIGURED_WORKLOADS: usize =
+    MAX_UNSAFE_LOCAL_WORKLOADS + MAX_LOCAL_VM_CONFIGURED_WORKLOADS;
 pub const MAX_LAUNCHER_ITEMS_PER_WORKLOAD: usize = 64;
 pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 
@@ -15,11 +18,13 @@ pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnsafeLocalWorkloadsJson {
     pub schema_version: String,
+    #[schemars(length(max = 256))]
     pub workloads: Vec<UnsafeLocalWorkload>,
     /// Configured launcher items for local VM workloads. They share this
     /// private, bundle-hashed artifact so argv never enters public launcher
     /// metadata or the public request protocol.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 256))]
     pub local_vm_workloads: Vec<LocalVmConfiguredWorkload>,
 }
 
@@ -30,9 +35,19 @@ impl UnsafeLocalWorkloadsJson {
                 "unsafe-local-workloads schemaVersion must be {UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION}"
             ));
         }
-        if self.workloads.len() + self.local_vm_workloads.len() > MAX_UNSAFE_LOCAL_WORKLOADS {
+        if self.workloads.len() > MAX_UNSAFE_LOCAL_WORKLOADS {
             return Err(format!(
-                "configured workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}"
+                "unsafe-local workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}"
+            ));
+        }
+        if self.local_vm_workloads.len() > MAX_LOCAL_VM_CONFIGURED_WORKLOADS {
+            return Err(format!(
+                "local-vm configured workload count exceeds {MAX_LOCAL_VM_CONFIGURED_WORKLOADS}"
+            ));
+        }
+        if self.workloads.len() + self.local_vm_workloads.len() > MAX_PRIVATE_CONFIGURED_WORKLOADS {
+            return Err(format!(
+                "private configured workload count exceeds {MAX_PRIVATE_CONFIGURED_WORKLOADS}"
             ));
         }
         let mut targets = BTreeSet::new();
@@ -60,6 +75,7 @@ pub struct LocalVmConfiguredWorkload {
     pub identity: WorkloadIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_item_id: Option<ProtocolToken>,
+    #[schemars(length(min = 1, max = 64))]
     pub items: Vec<UnsafeLocalLauncherItem>,
 }
 
@@ -78,6 +94,7 @@ pub struct UnsafeLocalWorkload {
     pub identity: WorkloadIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_item_id: Option<ProtocolToken>,
+    #[schemars(length(min = 1, max = 64))]
     pub items: Vec<UnsafeLocalLauncherItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<UnsafeLocalShellPolicy>,
@@ -259,6 +276,18 @@ mod tests {
         }
     }
 
+    fn valid_local_vm_workload() -> LocalVmConfiguredWorkload {
+        let mut identity = identity();
+        identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+        identity.provider_id =
+            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+        LocalVmConfiguredWorkload {
+            identity,
+            default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+            items: vec![exec_item()],
+        }
+    }
+
     #[test]
     fn artifact_validates_default_and_redacts_argv_debug() {
         let artifact = UnsafeLocalWorkloadsJson {
@@ -302,16 +331,8 @@ mod tests {
 
     #[test]
     fn first_class_local_vm_workload_does_not_require_legacy_name() {
-        let mut identity = identity();
-        identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
-        identity.provider_id =
-            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
-        identity.legacy_vm_name = None;
-        let workload = LocalVmConfiguredWorkload {
-            identity,
-            default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
-            items: vec![exec_item()],
-        };
+        let mut workload = valid_local_vm_workload();
+        workload.identity.legacy_vm_name = None;
 
         workload.validate().unwrap();
     }
@@ -327,17 +348,64 @@ mod tests {
     }
 
     #[test]
-    fn artifact_rejects_workload_and_item_count_overflow() {
-        let artifact = UnsafeLocalWorkloadsJson {
+    fn artifact_enforces_separate_workload_and_item_bounds() {
+        let unsafe_overflow = UnsafeLocalWorkloadsJson {
             schema_version: "v2".to_owned(),
             workloads: vec![valid_workload(); MAX_UNSAFE_LOCAL_WORKLOADS + 1],
             local_vm_workloads: Vec::new(),
         };
-        assert!(artifact.validate().is_err());
+        assert_eq!(
+            unsafe_overflow.validate().unwrap_err(),
+            format!("unsafe-local workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}")
+        );
+
+        let local_vm_overflow = UnsafeLocalWorkloadsJson {
+            schema_version: "v2".to_owned(),
+            workloads: Vec::new(),
+            local_vm_workloads: vec![
+                valid_local_vm_workload();
+                MAX_LOCAL_VM_CONFIGURED_WORKLOADS + 1
+            ],
+        };
+        assert_eq!(
+            local_vm_overflow.validate().unwrap_err(),
+            format!(
+                "local-vm configured workload count exceeds {MAX_LOCAL_VM_CONFIGURED_WORKLOADS}"
+            )
+        );
 
         let mut workload = valid_workload();
         workload.items = vec![exec_item(); MAX_LAUNCHER_ITEMS_PER_WORKLOAD + 1];
         assert!(workload.validate().is_err());
+    }
+
+    #[test]
+    fn schema_exposes_private_artifact_allocation_bounds() {
+        let schema = serde_json::to_value(schemars::schema_for!(UnsafeLocalWorkloadsJson)).unwrap();
+        assert_eq!(
+            schema["properties"]["workloads"]["maxItems"],
+            MAX_UNSAFE_LOCAL_WORKLOADS
+        );
+        assert_eq!(
+            schema["properties"]["localVmWorkloads"]["maxItems"],
+            MAX_LOCAL_VM_CONFIGURED_WORKLOADS
+        );
+        assert_eq!(
+            schema["definitions"]["UnsafeLocalWorkload"]["properties"]["items"]["minItems"],
+            1
+        );
+        assert_eq!(
+            schema["definitions"]["UnsafeLocalWorkload"]["properties"]["items"]["maxItems"],
+            MAX_LAUNCHER_ITEMS_PER_WORKLOAD
+        );
+        assert_eq!(
+            schema["definitions"]["LocalVmConfiguredWorkload"]["properties"]["items"]["minItems"],
+            1
+        );
+        assert_eq!(
+            schema["definitions"]["LocalVmConfiguredWorkload"]["properties"]["items"]["maxItems"],
+            MAX_LAUNCHER_ITEMS_PER_WORKLOAD
+        );
     }
 
     #[test]

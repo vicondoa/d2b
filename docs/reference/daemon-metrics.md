@@ -220,10 +220,14 @@ declared schema; see "Cardinality bounds" below.
 
   - **Type:** gauge
   - **Labels:** `provider`, `component`, `state`
-  - **Meaning:** Current provider prerequisite posture for the closed components
-    `helper`, `scope`, `proxy`, `launcher`, and `shell`. Provider and state are
-    closed enums (`not-applicable` is used where a provider has no component);
-    workload ids and runtime details are not labels.
+  - **Meaning:** Count of workloads in the most recently observed inventory
+    snapshot for each closed provider/component/state tuple. An authorized
+    workload list or status request refreshes the complete inventory atomically,
+    including zero values for tuples no longer present. For unsafe-local
+    workloads, the snapshot reflects the requesting launcher's helper posture.
+    Components are `helper`, `scope`, `proxy`, `launcher`, and `shell`; provider
+    and state are closed enums (`not-applicable` is used where a provider has no
+    component). Workload ids and runtime details are not labels.
 
   ### `d2b_daemon_workload_lifecycle_total`
 

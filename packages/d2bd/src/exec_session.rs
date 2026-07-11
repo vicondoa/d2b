@@ -1071,9 +1071,10 @@ mod tests {
         const SECRET_KEY: &str = "SENTINEL_ENV_KEY_dspc";
         const SECRET_VAL: &str = "SENTINEL_ENV_VAL_dspc";
         const SECRET_CWD: &str = "SENTINEL_CWD_dspc";
+        const SECRET_REQUEST_ID: &str = "SENTINEL_REQUEST_ID_dspc";
         let spec = ExecStartSpec {
             vm: "corp-vm".to_owned(),
-            request_id: None,
+            request_id: Some(SECRET_REQUEST_ID.to_owned()),
             argv: vec!["sh".to_owned(), SECRET_ARGV.to_owned()],
             tty: true,
             detached: false,
@@ -1082,7 +1083,13 @@ mod tests {
             term_size: Some((24, 80)),
         };
         let rendered = format!("{spec:?}");
-        for secret in [SECRET_ARGV, SECRET_KEY, SECRET_VAL, SECRET_CWD] {
+        for secret in [
+            SECRET_ARGV,
+            SECRET_KEY,
+            SECRET_VAL,
+            SECRET_CWD,
+            SECRET_REQUEST_ID,
+        ] {
             assert!(
                 !rendered.contains(secret),
                 "ExecStartSpec Debug leaked {secret}: {rendered}"
