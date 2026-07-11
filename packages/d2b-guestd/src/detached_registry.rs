@@ -435,6 +435,7 @@ impl DetachedRegistry {
         }
 
         let argv_sha256 = argv_hash(&command);
+        let has_requested_exec_id = requested_exec_id.is_some();
         let exec_id = if let Some(exec_id) = requested_exec_id {
             if !is_valid_exec_id(&exec_id) {
                 return Err(ExecError::InvalidArgv);
@@ -468,6 +469,22 @@ impl DetachedRegistry {
         // Step 1: reserve slot + active + quota under the Creating guard.
         let slot = {
             let mut state = self.lock();
+            if has_requested_exec_id {
+                if state.is_tombstoned(&exec_id) {
+                    return Err(ExecError::ExecExpired);
+                }
+                if let Some(existing_slot) = state.find_any_by_id(&exec_id) {
+                    let existing = state
+                        .slots
+                        .get(&existing_slot)
+                        .expect("slot found by requested exec id");
+                    return if existing.record.argv_sha256 == argv_sha256 {
+                        Err(ExecError::ExecClosing)
+                    } else {
+                        Err(ExecError::InvalidArgv)
+                    };
+                }
+            }
             if state.active >= DETACHED_ACTIVE_PER_VM as u32 {
                 return Err(ExecError::ExecCapacityExceeded);
             }
@@ -2885,6 +2902,35 @@ mod tests {
                 .await,
             Err(ExecError::InvalidArgv)
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_requested_exec_id_reserves_only_one_slot() {
+        let h = harness();
+        h.units.set_live(0, true);
+        h.store.set_status(0, StatusPhase::Started);
+        let requested = "fedcba9876543210fedcba9876543210".to_owned();
+        let first = h.registry.create_with_exec_id(
+            "boot-A",
+            command(),
+            DetachedCaps::standard(0),
+            requested.clone(),
+        );
+        let second = h.registry.create_with_exec_id(
+            "boot-A",
+            command(),
+            DetachedCaps::standard(0),
+            requested,
+        );
+        let (first, second) = tokio::join!(first, second);
+
+        assert!(first.is_ok() || second.is_ok());
+        for result in [&first, &second] {
+            if let Err(error) = result {
+                assert_eq!(*error, ExecError::ExecClosing);
+            }
+        }
+        assert_eq!(h.registry.list("boot-A").await.unwrap().len(), 1);
     }
 
     #[test]

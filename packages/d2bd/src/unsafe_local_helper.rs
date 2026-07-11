@@ -360,18 +360,21 @@ impl HelperRegistry {
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Ok(HelperReply::Terminal { .. })) => {
+                connection.pending.lock().remove(&request_id);
                 self.operations
                     .lock()
                     .abort_active(requester_uid, &operation_key);
                 Err(HelperRegistryError::RequestCorrelationMismatch)
             }
             Ok(Err(error)) => {
+                connection.pending.lock().remove(&request_id);
                 self.operations
                     .lock()
                     .abort_active(requester_uid, &operation_key);
                 Err(error)
             }
             Err(_) => {
+                connection.pending.lock().remove(&request_id);
                 self.operations
                     .lock()
                     .abort_active(requester_uid, &operation_key);
