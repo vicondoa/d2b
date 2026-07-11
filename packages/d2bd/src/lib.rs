@@ -3063,6 +3063,15 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
+            if shell_op_targets_unsafe_local(&state, op)
+                && !unsafe_local_shell_feature_negotiated(&capabilities)
+            {
+                let error = TypedError::WireUnsupportedRequest {
+                    request_type: "unsafe-local-shell".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
             if matches!(op, public_wire::ShellOp::Attach(_)) {
                 let first_op_id = wire::shell_op_id(&frame);
                 let owner_state = state.clone();
@@ -3650,9 +3659,8 @@ fn dispatch_unsafe_local_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
-    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     let request = HelperLaunchRequest {
-        request_id: REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
         workload: resolved.identity.clone(),
         item_id: resolved.item_id.clone(),
@@ -8233,6 +8241,33 @@ fn shell_ref_digest(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
+fn unsafe_local_shell_feature_negotiated(capabilities: &[d2b_contracts::FeatureFlag]) -> bool {
+    capabilities
+        .iter()
+        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
+}
+
+fn shell_op_targets_unsafe_local(state: &ServerState, op: &public_wire::ShellOp) -> bool {
+    use workload_dispatch::WorkloadRoute;
+
+    let target = match op {
+        public_wire::ShellOp::Attach(args) => Some(args.vm.as_str()),
+        public_wire::ShellOp::List(args) => Some(args.vm.as_str()),
+        public_wire::ShellOp::Detach(args) => Some(args.vm.as_str()),
+        public_wire::ShellOp::Kill(args) => Some(args.vm.as_str()),
+        public_wire::ShellOp::WriteStdin(_)
+        | public_wire::ShellOp::ReadOutput(_)
+        | public_wire::ShellOp::Resize(_)
+        | public_wire::ShellOp::Wait(_)
+        | public_wire::ShellOp::CloseStdin(_)
+        | public_wire::ShellOp::CloseAttach(_) => None,
+    };
+    target.is_some_and(|target| {
+        resolve_shell_target(state, target)
+            .is_ok_and(|resolved| matches!(resolved.route, WorkloadRoute::UnsafeLocal))
+    })
+}
+
 fn dispatch_shell_management(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -8749,15 +8784,11 @@ fn emit_shell_close_audit(
 fn emit_shell_failure_audit(
     state: &ServerState,
     peer_uid: u32,
-    requested_target: &str,
+    _requested_target: &str,
     error: &TypedError,
 ) {
     let provider = shell_provider_for_error(error);
-    let target = if requested_target.ends_with(".d2b") {
-        requested_target
-    } else {
-        "unresolved"
-    };
+    let target = unresolved_shell_audit_target();
     emit_provider_shell_audit(
         state,
         ProviderShellAudit {
@@ -8770,6 +8801,10 @@ fn emit_shell_failure_audit(
             session_digest: None,
         },
     );
+}
+
+fn unresolved_shell_audit_target() -> &'static str {
+    "unresolved"
 }
 
 fn run_shell_owner(
@@ -9233,7 +9268,7 @@ fn map_shell_catalog_error(error: workload_dispatch::CatalogError, target: &str)
     }
 }
 
-fn next_internal_shell_request_id() -> u64 {
+fn next_internal_helper_request_id() -> u64 {
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     loop {
         let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -9241,6 +9276,10 @@ fn next_internal_shell_request_id() -> u64 {
             return request_id;
         }
     }
+}
+
+fn next_internal_shell_request_id() -> u64 {
+    next_internal_helper_request_id()
 }
 
 fn new_internal_shell_operation_id() -> Result<d2b_realm_core::OperationId, TypedError> {
@@ -28860,6 +28899,31 @@ mod broker_dispatch_tests {
             owner_digest, session_digest,
             "audit correlation must not use generated session ids"
         );
+    }
+
+    #[test]
+    fn helper_request_ids_share_one_nonzero_correlation_namespace() {
+        let launch = super::next_internal_helper_request_id();
+        let shell = super::next_internal_shell_request_id();
+        assert_ne!(launch, 0);
+        assert_ne!(shell, 0);
+        assert_ne!(launch, shell);
+    }
+
+    #[test]
+    fn unsafe_local_shell_feature_gate_is_explicit() {
+        assert!(!super::unsafe_local_shell_feature_negotiated(&[]));
+        assert!(super::unsafe_local_shell_feature_negotiated(&[
+            d2b_contracts::KnownFeatureFlag::UnsafeLocalShellV1.wire_value()
+        ]));
+    }
+
+    #[test]
+    fn unresolved_shell_audit_never_copies_public_target_text() {
+        let canary = "private-target-canary.work.d2b";
+        let target = super::unresolved_shell_audit_target();
+        assert_eq!(target, "unresolved");
+        assert!(!target.contains(canary));
     }
 
     #[test]

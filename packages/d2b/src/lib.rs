@@ -3790,7 +3790,12 @@ fn resolve_local_shell_target(
         .into_iter()
         .find(|workload| workload.identity.canonical_target.to_canonical() == requested)
     else {
-        return Ok(fallback_vm);
+        return Err(CliFailure::new(
+            70,
+            format!(
+                "canonical shell target '{requested}' is not present in the daemon workload inventory; no VM fallback is permitted"
+            ),
+        ));
     };
     match workload.provider_kind {
         d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
