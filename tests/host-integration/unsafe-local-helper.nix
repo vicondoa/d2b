@@ -255,6 +255,7 @@ import errno
 import os
 import pty
 import select
+import signal
 import time
 
 pid, master = pty.fork()
@@ -295,7 +296,7 @@ output.clear()
 os.write(master, b"printf cli-shell-executed-canary\\n")
 read_until(b"cli-shell-executed-canary", 30)
 
-os.write(master, b"\\x00\\x11")
+os.kill(pid, signal.SIGTERM)
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     waited, status = os.waitpid(pid, os.WNOHANG)
