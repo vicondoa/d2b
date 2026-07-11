@@ -785,6 +785,14 @@ fn serve_terminal(stream: UnixStream, state: Arc<SupervisorState>, generation: u
             }
             continue;
         }
+        if !terminal_request_may_run_concurrently(&request) {
+            let (response, close) =
+                process_terminal_request(request, &state, &protocol_state, generation);
+            if responses_tx.send((response, close)).is_err() || close {
+                break;
+            }
+            continue;
+        }
         let (count, available) = &*limiter;
         let mut active = count
             .lock()
@@ -834,6 +842,13 @@ fn serve_terminal(stream: UnixStream, state: Arc<SupervisorState>, generation: u
     }
     state.clear_attachment(generation);
     drop(responses_tx);
+}
+
+fn terminal_request_may_run_concurrently(request: &HelperTerminalRequest) -> bool {
+    matches!(
+        request,
+        HelperTerminalRequest::ReadOutput(_) | HelperTerminalRequest::Wait(_)
+    )
 }
 
 fn read_terminal_request(
@@ -1055,8 +1070,8 @@ mod tests {
     use super::*;
     use d2b_contracts::terminal_wire::TerminalSize;
     use d2b_contracts::unsafe_local_wire::{
-        HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalResize,
-        HelperTerminalWriteStdin,
+        HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalReadOutput,
+        HelperTerminalResize, HelperTerminalWait, HelperTerminalWriteStdin,
     };
 
     #[test]
@@ -1111,6 +1126,43 @@ mod tests {
             HelperTerminalResponse::Rejected(HelperTerminalRejected {
                 code: HelperFailureCode::InvalidRequest,
                 ..
+            })
+        ));
+    }
+
+    #[test]
+    fn only_observation_requests_may_run_concurrently() {
+        let chunk = d2b_contracts::unsafe_local_wire::HelperTerminalChunkBase64::new("").unwrap();
+        assert!(!terminal_request_may_run_concurrently(
+            &HelperTerminalRequest::WriteStdin(HelperTerminalWriteStdin {
+                request_id: 1,
+                offset: 0,
+                chunk_base64: chunk,
+                eof: false,
+            })
+        ));
+        assert!(terminal_request_may_run_concurrently(
+            &HelperTerminalRequest::ReadOutput(HelperTerminalReadOutput {
+                request_id: 2,
+                stream: TerminalStream::Stdout,
+                cursor: 0,
+                max_len: 1,
+                wait: false,
+                timeout_ms: 0,
+            })
+        ));
+        assert!(terminal_request_may_run_concurrently(
+            &HelperTerminalRequest::Wait(HelperTerminalWait {
+                request_id: 3,
+                timeout_ms: 0,
+            })
+        ));
+        assert!(!terminal_request_may_run_concurrently(
+            &HelperTerminalRequest::Resize(HelperTerminalResize {
+                request_id: 4,
+                control_sequence: 1,
+                rows: 24,
+                cols: 80,
             })
         ));
     }
