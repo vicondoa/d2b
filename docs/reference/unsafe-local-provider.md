@@ -5,9 +5,9 @@
 `unsafe-local` is an explicit realm workload provider for commands and
 persistent shells that run as the authenticated host user. It provides **no
 isolation boundary**. The helper connection and user-scope runtime are enabled
-for configured eligible users. Public configured launch is feature-negotiated;
-the user helper contains the persistent-shell backend, while public daemon
-routing and feature advertisement remain unavailable until integration lands.
+for configured eligible users. Public configured launch and persistent-shell
+dispatch are feature-negotiated and run only through `d2bd` and the exact
+requester-UID helper.
 
 ## Nix options
 
@@ -55,6 +55,8 @@ local-VM settings, QEMU settings, or legacy launcher command strings.
 Launcher item ids match `^[a-z][a-z0-9-]*$`. Exec `argv` is a non-empty vector,
 not a shell string, and is bounded to 128 entries, 16 KiB total, and 4 KiB per
 argument. A shell item requires `shell.enable = true`.
+Firefox is an ordinary configured `exec` item; a terminal launcher is an
+ordinary `shell` item. Neither has a provider-specific public request shape.
 
 ## Public metadata
 
@@ -89,10 +91,11 @@ The closed unsafe-local posture is:
 | `sessionPersistence` | `user-manager-lifetime` |
 
 `configured-launch-v1`, `unsafe-local-provider-v1`, and
-`unsafe-local-shell-v1` are additive protocol-v3 feature flags. Clients may
-recognize the shell token with this contract revision, but `d2bd` does not
-advertise it until runtime dispatch is enabled. Clients must hide or refuse
-unsupported operations; they must never fall back to unsafe-local.
+`unsafe-local-shell-v1` are additive protocol-v3 feature flags. `d2bd`
+advertises the shell flag only with the complete helper-management and terminal
+path enabled. Clients must hide or refuse unsupported operations and recommend
+updating `d2b`, `d2bd`, and the helper together; they must never fall back to a
+host shell, SSH, or a different provider.
 
 Availability values are directly actionable: `helper-unavailable` and
 `helper-stale` require restarting the caller's user helper;
@@ -135,9 +138,9 @@ registration remains fail-closed if the effective per-socket requirement is not
 met.
 
 Shell requests additionally carry a closed trusted policy containing
-`defaultName` and `maxSessions`. The later daemon routing layer must populate
-those fields only from the bundle-hashed unsafe-local workload record; no public
-shell request can choose or raise them.
+`defaultName` and `maxSessions`. The daemon populates those fields only from the
+bundle-hashed unsafe-local workload record after checking public/private shell
+item parity; no public shell request can choose or raise them.
 
 The globally installed `d2b-unsafe-local-helper.service` is a systemd user
 service. `ConditionGroup=d2b-unsafe-local` prevents users who are not allowed to
@@ -196,9 +199,24 @@ reserves 512 KiB per merged PTY output ring and caps all such reservations for
 one helper at 32 MiB. `stdout` is the authoritative merged PTY stream; `stderr`
 reads return an empty terminal result. Reads use absolute cursors and report
 dropped bytes after wrap. Writes and control sequences are strictly monotonic,
-and a long read poll does not block writes or resize.
-Terminal bytes do not share the helper control queue. Public daemon shell
-routing remains unavailable in this revision.
+and long read or wait polls do not block writes or resize. Terminal bytes do not
+share the helper control queue.
+
+`d2bd` resolves canonical targets and unambiguous workload-id aliases before
+dispatch. Transition local-VM workloads keep `legacyVmName`; first-class local
+VMs use their workload id. Unsafe-local is never coerced to a VM name, and
+remote, relay, non-direct-local, ambiguous, and unsupported-provider targets
+fail closed. Attach returns an opaque daemon-generated public session handle.
+Every later terminal operation must present that exact handle. Disconnect and
+`closeAttach` detach only; they never kill the persistent shell.
+
+List, detach, and kill are helper protocol operations with daemon-generated
+operation ids. Helper idempotency and name reservations prevent duplicate named
+supervisors. A daemon timeout is ambiguous: d2bd does not replay it
+automatically, and operators should list before retrying a destructive action.
+Helper unavailability, stale generation, user-manager failure, invalid terminal
+fd/frame, output gap, stale offset, quota, name conflict, terminal close, and
+timeout all return typed errors without provider fallback.
 
 Detach closes only the current attachment. Force attach atomically evicts the
 old attachment. Kill closes the owned PTY master, waits briefly, then signals
@@ -212,10 +230,15 @@ explicitly remapped for a child may survive `exec`.
 ## Runtime observability
 
 Helper registration, reconnect, supersede, and stale events use bounded event
-kinds and result classes. Runtime signals never expose uid, argv, environment,
-cwd, paths, PIDs, unit names, shell names, transcripts, or terminal bytes.
-Scope, proxy, launcher, and shell signals follow the same rule as those provider
-routes become available.
+kinds and result classes. Provider-neutral `ShellLifecycle` is the sole runtime
+shell audit event for both providers. It covers create, attach, list, detach,
+kill, close, and failure boundaries with only the configured canonical target,
+peer uid, closed provider/action/result values, optional force-takeover intent,
+and optional fixed operation/session correlation digests. The
+`d2b_daemon_shell_lifecycle_total` metric uses only closed
+provider/component/operation/outcome/error labels. Neither surface includes
+argv, environment, cwd, paths, PIDs, unit names, helper diagnostics, shell
+names, supervisor ids, transcripts, terminal bytes, or public session handles.
 
 Generated schemas:
 

@@ -15,6 +15,8 @@ pkgs.testers.runNixOSTest {
         isNormalUser = true;
         uid = 1001;
       };
+      d2b.site.adminUsers = [ "alice" ];
+      systemd.services.d2bd.environment.D2B_SKIP_KERNEL_MODULE_CHECK = "1";
       d2b.realms.host = {
         allowedUsers = [ "alice" ];
         policy.allowUnsafeLocal = true;
@@ -25,6 +27,15 @@ pkgs.testers.runNixOSTest {
             name = "Probe";
             argv = [ "true" ];
           };
+          launcher.items.terminal = {
+            type = "shell";
+            name = "Terminal";
+          };
+          shell = {
+            enable = true;
+            defaultName = "primary";
+            maxSessions = 4;
+          };
         };
       };
       environment.systemPackages = [ pkgs.jq pkgs.python3 ];
@@ -32,6 +43,7 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+if True:
     start_all()
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/unsafe-local-helper.sock", timeout=60)
@@ -39,8 +51,32 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
         "test \"$(stat -c %G /run/d2b/unsafe-local-helper.sock)\" = d2b-unsafe-local"
     )
-    machine.succeed("id -nG alice | tr ' ' '\\n' | grep -qx d2b-unsafe-local")
-    machine.fail("id -nG bob | tr ' ' '\\n' | grep -qx d2b-unsafe-local")
+    machine.succeed("id -nG alice | tr ' ' '\n' | grep -qx d2b-unsafe-local")
+    machine.fail("id -nG bob | tr ' ' '\n' | grep -qx d2b-unsafe-local")
+    machine.succeed(
+        "jq --arg path \"$D2B_MANIFEST_PATH\" "
+        "'.publicManifestPath = $path' /etc/d2b/bundle.json "
+        "> /run/d2b/test-bundle.json && "
+        "python3 -c 'import hashlib,json,sys; "
+        "p=sys.argv[1]; d=json.load(open(p)); h=dict(d); "
+        "h.pop(\"bundleHash\",None); h[\"artifactHashes\"]=None; "
+        "d[\"bundleHash\"]=\"sha256:\"+hashlib.sha256("
+        "json.dumps(h,sort_keys=True,separators=(\",\",\":\")).encode()"
+        ").hexdigest(); open(p,\"w\").write("
+        "json.dumps(d,sort_keys=True,separators=(\",\",\":\")))' "
+        "/run/d2b/test-bundle.json && "
+        "install -o root -g d2bd -m 0640 "
+        "/run/d2b/test-bundle.json /etc/d2b/bundle.json"
+    )
+    machine.succeed(
+        "jq --arg path \"$D2B_MANIFEST_PATH\" "
+        "'.artifacts.publicManifestPath = $path' /etc/d2b/daemon-config.json "
+        "> /run/d2b/test-daemon-config.json && "
+        "install -o root -g d2bd -m 0640 "
+        "/run/d2b/test-daemon-config.json /etc/d2b/daemon-config.json"
+    )
+    machine.succeed("systemctl restart d2bd.service")
+    machine.wait_for_unit("d2bd.service")
 
     machine.succeed("systemctl start user@1000.service")
     alice_user = (
@@ -78,177 +114,320 @@ pkgs.testers.runNixOSTest {
     )
     machine.fail(bob_user + " is-active d2b-unsafe-local-helper.service")
 
+    machine.succeed(r"""
+      cat > /run/d2b/shell-client.py <<'PY'
+import base64
+import json
+import os
+import socket
+import struct
+import sys
+import time
+
+SOCKET = "/run/d2b/public.sock"
+TARGET = "tools.host.d2b"
+
+def send_frame(conn, value):
+    body = json.dumps(value, separators=(",", ":")).encode()
+    conn.sendall(struct.pack("<I", len(body)) + body)
+
+def recv_frame(conn):
+    packet = conn.recv(1048580)
+    if len(packet) < 4:
+        raise RuntimeError("short public frame")
+    size = struct.unpack("<I", packet[:4])[0]
+    if size != len(packet) - 4:
+        raise RuntimeError("invalid public frame length")
+    return json.loads(packet[4:])
+
+def connect():
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    conn.connect(SOCKET)
+    send_frame(conn, {
+        "type": "hello",
+        "clientVersion": ">=0.4.0, <0.5.0",
+        "supportedFeatures": [
+            "typed-errors",
+            "configured-launch-v1",
+            "unsafe-local-provider-v1",
+            "unsafe-local-shell-v1"
+        ]
+    })
+    hello = recv_frame(conn)
+    if hello.get("type") != "helloOk":
+        raise RuntimeError("hello rejected")
+    if "unsafe-local-shell-v1" not in hello.get("capabilities", []):
+        raise RuntimeError("unsafe-local shell feature missing")
+    return conn
+
+def shell(conn, op, args, op_id):
+    send_frame(conn, {"type": "shell", "op": op, "args": args, "opId": op_id})
+    response = recv_frame(conn)
+    if response.get("type") == "error":
+        print(json.dumps(response), file=sys.stderr)
+        raise RuntimeError(response["error"]["kind"])
+    if response.get("type") != "shellResponse":
+        raise RuntimeError("unexpected shell response")
+    return response["result"]
+
+def attach(mode):
+    conn = connect()
+    attached = shell(conn, "attach", {
+        "vm": TARGET,
+        "name": "primary",
+        "force": False,
+        "initialTerminalSize": {"rows": 24, "cols": 80}
+    }, 1)
+    session = attached["session"]
+    shell(conn, "resize", {
+        "session": session, "rows": 33, "cols": 101, "opId": 1
+    }, 2)
+    if mode == "hold":
+        open("/run/user/1000/d2b-shell-hold.ready", "w").close()
+        cursor = 0
+        op_id = 3
+        while True:
+            result = shell(conn, "readOutput", {
+                "session": session,
+                "stream": "stdout",
+                "offset": cursor,
+                "maxLen": 65536,
+                "wait": True,
+                "timeoutMs": 250
+            }, op_id)
+            cursor = result["nextOffset"]
+            op_id += 1
+    command = os.environ.get("SHELL_COMMAND", "printf shell-roundtrip-canary")
+    expected = command.split()[-1].encode()
+    data = (command + "\n").encode()
+    shell(conn, "writeStdin", {
+        "session": session,
+        "offset": 0,
+        "chunkBase64": base64.b64encode(data).decode(),
+        "eof": False
+    }, 3)
+    cursor = 0
+    output = bytearray()
+    deadline = time.monotonic() + 15
+    op_id = 4
+    while time.monotonic() < deadline:
+        chunk = shell(conn, "readOutput", {
+            "session": session,
+            "stream": "stdout",
+            "offset": cursor,
+            "maxLen": 65536,
+            "wait": True,
+            "timeoutMs": 250
+        }, op_id)
+        output.extend(base64.b64decode(chunk["dataBase64"]))
+        cursor = chunk["nextOffset"]
+        op_id += 1
+        if expected in output:
+            break
+    else:
+        raise RuntimeError("command output timeout")
+    print(output.decode(errors="replace"))
+    shell(conn, "closeAttach", {"session": session}, op_id)
+
+def management(op):
+    conn = connect()
+    args = {"vm": TARGET}
+    if op in ("detach", "kill"):
+        args["name"] = "primary"
+    print(json.dumps(shell(conn, op, args, 1), sort_keys=True))
+
+if sys.argv[1] in ("attach", "hold"):
+    attach(sys.argv[1])
+else:
+    management(sys.argv[1])
+PY
+      chmod 0755 /run/d2b/shell-client.py
+    """)
+
+    shell_client = (
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/shell-client.py"
+    )
+    machine.succeed(r"""
+      cat > /run/d2b/cli-shell-e2e.py <<'PY'
+import errno
+import os
+import pty
+import select
+import signal
+import time
+
+pid, master = pty.fork()
+if pid == 0:
+    os.execv(
+        "/run/current-system/sw/bin/d2b",
+        ["d2b", "shell", "tools.host.d2b", "--name", "cli-e2e"],
+    )
+
+output = bytearray()
+
+def read_until(marker, timeout):
+    deadline = time.monotonic() + timeout
+    while marker not in output and time.monotonic() < deadline:
+        readable, _, _ = select.select([master], [], [], 1)
+        if not readable:
+            continue
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        output.extend(chunk)
+    if marker not in output:
+        raise SystemExit(
+            f"real d2b shell CLI missed {marker!r}: {bytes(output)!r}"
+        )
+
+read_until(b"attached to shell", 30)
+os.write(master, b"stty -echo\\n")
+time.sleep(0.5)
+while select.select([master], [], [], 0)[0]:
+    output.extend(os.read(master, 65536))
+output.clear()
+os.write(master, b"printf cli-shell-executed-canary\\n")
+read_until(b"cli-shell-executed-canary", 30)
+
+os.kill(pid, signal.SIGTERM)
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    waited, status = os.waitpid(pid, os.WNOHANG)
+    if waited == pid:
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            raise SystemExit(
+                f"real d2b shell CLI exited with status {status}: {bytes(output)!r}"
+            )
+        break
+    time.sleep(0.05)
+else:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    raise SystemExit("real d2b shell CLI did not detach")
+PY
+      chmod 0755 /run/d2b/cli-shell-e2e.py
+    """)
+    machine.succeed(
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "python3 /run/d2b/cli-shell-e2e.py"
+    )
+    machine.succeed(
+        "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "d2b shell tools.host.d2b kill --name cli-e2e --json "
+        "| jq -e '.result == \"killed\"'"
+    )
+    machine.succeed(
+        "runuser -u alice -- sh -c 'setsid sleep 300 >/dev/null 2>&1 & "
+        "echo $! > /run/user/1000/unrelated-same-uid.pid'"
+    )
+    unrelated_pid = machine.succeed(
+        "cat /run/user/1000/unrelated-same-uid.pid"
+    ).strip()
+
+    machine.succeed(
+        "SHELL_COMMAND='printf shell-roundtrip-canary' "
+        + shell_client + " attach | grep -q shell-roundtrip-canary"
+    )
+    machine.succeed(
+        shell_client + " list | jq -e "
+        "'.defaultName == \"primary\" and "
+        "(.sessions | any(.name == \"primary\" and .attached == false))'"
+    )
+    machine.succeed(
+        "SHELL_COMMAND='printf reattach-continuity-canary' "
+        + shell_client + " attach | grep -q reattach-continuity-canary"
+    )
+
+    machine.succeed("rm -f /run/user/1000/d2b-shell-hold.ready")
+    machine.succeed(
+        shell_client + " hold >/run/user/1000/d2b-shell-hold.log 2>&1 & "
+        "echo $! > /run/user/1000/d2b-shell-hold.pid"
+    )
+    machine.wait_for_file("/run/user/1000/d2b-shell-hold.ready", timeout=60)
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
-    machine.wait_for_file("/run/d2b/unsafe-local-helper.sock", timeout=60)
-    machine.wait_until_succeeds(
-        alice_user + " is-active d2b-unsafe-local-helper.service",
-        timeout=60,
+    machine.wait_until_fails(
+        "kill -0 $(cat /run/user/1000/d2b-shell-hold.pid)", timeout=60
     )
     machine.wait_until_succeeds(
-        "test \"$(journalctl -u d2bd.service --no-pager "
-        "| grep -c 'unsafe-local helper registered')\" -ge 2",
+        alice_user + " is-active d2b-unsafe-local-helper.service", timeout=60
+    )
+    machine.wait_until_succeeds(
+        shell_client + " list | jq -e '.sessions | any(.name == \"primary\")'",
         timeout=60,
+    )
+    machine.succeed(
+        "SHELL_COMMAND='printf daemon-restart-canary' "
+        + shell_client + " attach | grep -q daemon-restart-canary"
     )
 
-    machine.succeed("systemctl stop d2bd.service")
-    machine.succeed(alice_user + " stop d2b-unsafe-local-helper.service")
-    machine.succeed("rm -f /run/d2b/unsafe-local-helper.sock")
-    machine.succeed(
-        "cat > /run/d2b/helper-mock.py <<'PY'\n"
-        "import grp, json, os, socket, struct, time\n"
-        "path = '/run/d2b/unsafe-local-helper.sock'\n"
-        "def recv_frame(conn):\n"
-        "    data = conn.recv(262149)\n"
-        "    if len(data) < 4:\n"
-        "        raise RuntimeError('short frame')\n"
-        "    size = struct.unpack('<I', data[:4])[0]\n"
-        "    if size != len(data) - 4:\n"
-        "        raise RuntimeError('bad frame length')\n"
-        "    return json.loads(data[4:])\n"
-        "def send_frame(conn, value):\n"
-        "    data = json.dumps(value, separators=(',', ':')).encode()\n"
-        "    conn.sendall(struct.pack('<I', len(data)) + data)\n"
-        "def accept_helper(listener):\n"
-        "    conn, _ = listener.accept()\n"
-        "    hello = recv_frame(conn)\n"
-        "    generation = hello['payload']['generation']\n"
-        "    send_frame(conn, {'type':'helloAccepted','payload':{\n"
-        "        'protocolVersion':1,'generation':generation,\n"
-        "        'heartbeatIntervalSecs':5,'operationTimeoutSecs':30}})\n"
-        "    snapshot = recv_frame(conn)\n"
-        "    return conn, snapshot\n"
-        "listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)\n"
-        "listener.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)\n"
-        "listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)\n"
-        "listener.bind(path)\n"
-        "os.chmod(path, 0o660)\n"
-        "os.chown(path, -1, grp.getgrnam('d2b-unsafe-local').gr_gid)\n"
-        "listener.listen(8)\n"
-        "open('/run/d2b/helper-mock.ready', 'w').close()\n"
-        "conn, snapshot = accept_helper(listener)\n"
-        "open('/run/d2b/helper-snapshot-1.json', 'w').write(json.dumps(snapshot))\n"
-        "request = {'type':'launch','payload':{\n"
-        "  'requestId':41,'operationId':'op-host-scope-1',\n"
-        "  'workload':{'workloadId':'tools','realmId':'host',\n"
-        "    'realmPath':['host'],'canonicalTarget':'tools.host.d2b'},\n"
-        "  'itemId':'probe','argv':['sh','-c',\n"
-        "    'printf \"stdout=%s\\\\nstderr=%s\\\\nenv=%s\\\\ncwd=%s\\\\n\" '\n"
-        "    '\"$(readlink /proc/$$/fd/1)\" \"$(readlink /proc/$$/fd/2)\" '\n"
-        "    '\"$D2B_MANAGER_CANARY\" \"$PWD\" '\n"
-        "    '> /run/user/1000/d2b-helper-child-state; sleep 60'],\n"
-        "  'graphical':False}}\n"
-        "send_frame(conn, request)\n"
-        "response = recv_frame(conn)\n"
-        "open('/run/d2b/helper-launch-response.json', 'w').write(json.dumps(response))\n"
-        "conn.close()\n"
-        "conn, snapshot = accept_helper(listener)\n"
-        "open('/run/d2b/helper-snapshot-2.json', 'w').write(json.dumps(snapshot))\n"
-        "while os.path.exists('/run/d2b/keep-helper-connected'):\n"
-        "    send_frame(conn, {'type':'heartbeat','payload':{\n"
-        "      'generation':snapshot['payload']['generation'],'sequence':1}})\n"
-        "    try:\n"
-        "        recv_frame(conn)\n"
-        "    except Exception:\n"
-        "        break\n"
-        "    time.sleep(1)\n"
-        "conn.close()\n"
-        "conn, snapshot = accept_helper(listener)\n"
-        "send_frame(conn, {'type':'launch','payload':{\n"
-        "  'requestId':42,'operationId':'op-no-user-manager',\n"
-        "  'workload':{'workloadId':'tools','realmId':'host',\n"
-        "    'realmPath':['host'],'canonicalTarget':'tools.host.d2b'},\n"
-        "  'itemId':'probe','argv':['true'],'graphical':False}})\n"
-        "response = recv_frame(conn)\n"
-        "open('/run/d2b/helper-no-manager-response.json', 'w').write(json.dumps(response))\n"
-        "conn.close()\n"
-        "PY\n"
-        "chown d2bd:d2bd /run/d2b/helper-mock.py"
+    machine.succeed(alice_user + " restart d2b-unsafe-local-helper.service")
+    machine.wait_until_succeeds(
+        alice_user + " is-active d2b-unsafe-local-helper.service", timeout=60
+    )
+    machine.wait_until_succeeds(
+        shell_client + " list | jq -e '.sessions | any(.name == \"primary\")'",
+        timeout=60,
     )
     machine.succeed(
-        "runuser -u d2bd -- python3 /run/d2b/helper-mock.py "
-        ">/run/d2b/helper-mock.log 2>&1 & "
-        "echo $! > /run/d2b/helper-mock.pid"
+        "SHELL_COMMAND='printf helper-adoption-canary' "
+        + shell_client + " attach | grep -q helper-adoption-canary"
     )
-    machine.wait_for_file("/run/d2b/helper-mock.ready", timeout=60)
+    machine.succeed(shell_client + " kill | jq -e '.killed == true'")
+    machine.succeed(f"kill -0 {unrelated_pid}")
+    machine.succeed(shell_client + " list | jq -e '.sessions | length == 0'")
+
     machine.succeed(
-        alice_user + " set-environment D2B_MANAGER_CANARY=manager-canary"
+        "SHELL_COMMAND='printf logout-canary' "
+        + shell_client + " attach >/run/user/1000/logout-shell.log"
     )
-    machine.succeed("touch /run/d2b/keep-helper-connected")
-    machine.succeed(alice_user + " start d2b-unsafe-local-helper.service")
-    machine.wait_for_file("/run/d2b/helper-launch-response.json", timeout=60)
-    machine.succeed(
-        "jq -e '.type == \"operation\" and "
-        ".payload.disposition == \"committed\" and "
-        ".payload.scope.kind == \"launcher-app\"' "
-        "/run/d2b/helper-launch-response.json "
-        "|| { cat /run/d2b/helper-launch-response.json >&2; exit 1; }"
-    )
-    invocation = machine.succeed(
-        "jq -r .payload.scope.invocationId /run/d2b/helper-launch-response.json"
-    ).strip()
-    scope = machine.succeed(
+    shell_scope = machine.succeed(
         alice_user
         + " list-units --state=active --plain --no-legend "
-        "'d2b-unsafe-local-app-*.scope' | awk 'NR == 1 {print $1}'"
+        "'d2b-unsafe-local-shell-*.scope' | awk 'NR == 1 {print $1}'"
     ).strip()
-    assert scope.endswith(".scope"), f"unsafe-local app scope missing: {scope!r}"
-    machine.succeed(
-        alice_user + f" show -P InvocationID {scope} | grep -qx {invocation}"
-    )
-    machine.wait_until_succeeds(
-        "grep -qx 'cwd=/home/alice' /run/user/1000/d2b-helper-child-state",
-        timeout=60,
-    )
-    machine.succeed(
-        "grep -qx 'stdout=/dev/null' /run/user/1000/d2b-helper-child-state"
-    )
-    machine.succeed(
-        "grep -qx 'stderr=/dev/null' /run/user/1000/d2b-helper-child-state"
-    )
-    machine.succeed(
-        "grep -qx 'env=manager-canary' /run/user/1000/d2b-helper-child-state"
-    )
-    control_group = machine.succeed(
-        alice_user + f" show -P ControlGroup {scope}"
+    assert shell_scope.endswith(".scope"), f"persistent shell scope missing: {shell_scope!r}"
+    shell_control_group = machine.succeed(
+        alice_user + f" show -P ControlGroup {shell_scope}"
     ).strip()
-    app_pid = machine.succeed(
-        f"awk 'NR == 1 {{print $1}}' /sys/fs/cgroup{control_group}/cgroup.procs"
+    shell_pid = machine.succeed(
+        f"awk 'NR == 1 {{print $1}}' /sys/fs/cgroup{shell_control_group}/cgroup.procs"
     ).strip()
-    machine.succeed(f"test -d /proc/{app_pid}")
-    machine.wait_for_file("/run/d2b/helper-snapshot-2.json", timeout=60)
-    machine.succeed(
-        f"jq -e --arg invocation {invocation} "
-        "'.payload.scopes | any("
-        ".scope.invocationId == $invocation and .state == \"active\")' "
-        "/run/d2b/helper-snapshot-2.json"
-    )
-
     machine.succeed("loginctl show-user alice -p Linger --value | grep -qx no")
-    machine.succeed("rm -f /run/d2b/keep-helper-connected")
     machine.succeed("systemctl stop user@1000.service")
-    machine.wait_until_fails(f"test -d /proc/{app_pid}", timeout=60)
+    machine.wait_until_fails(f"test -d /proc/{shell_pid}", timeout=60)
 
     machine.succeed(
+        "install -d -o alice -g users -m 0700 /run/user/1000 && "
         "runuser -u alice -- env "
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/missing "
         "XDG_RUNTIME_DIR=/run/user/1000 "
-        "/run/current-system/sw/bin/d2b-unsafe-local-helper "
-        ">/run/d2b/no-manager-helper.log 2>&1 &"
+        "setsid -f /run/current-system/sw/bin/d2b-unsafe-local-helper "
+        "</dev/null >/run/d2b/no-manager-helper.log 2>&1"
     )
-    machine.wait_for_file("/run/d2b/helper-no-manager-response.json", timeout=60)
-    machine.succeed(
-        "jq -e '.type == \"rejected\" and "
-        ".payload.code == \"user-manager-unavailable\"' "
-        "/run/d2b/helper-no-manager-response.json"
+    machine.wait_until_succeeds(
+        "! " + shell_client + " attach >/run/d2b/no-manager-client.log 2>&1 && "
+        "grep -q unsafe-local-shell-user-manager-unavailable "
+        "/run/d2b/no-manager-client.log",
+        timeout=60,
     )
+    machine.succeed(f"kill {unrelated_pid}")
 
-    units = machine.succeed(
-        "systemctl list-unit-files --no-pager --no-legend "
-        "| awk '{print $1}' | grep -E '^(d2b|microvm)' | sort"
-    ).strip().split()
-    assert "d2b-unsafe-local-helper.service" not in units, (
-        "unsafe-local helper must be a user unit, not a fourth root unit"
+    machine.succeed("systemctl show d2bd.service >/dev/null")
+    machine.succeed("systemctl show d2b-priv-broker.service >/dev/null")
+    machine.succeed("systemctl show d2b-priv-broker.socket >/dev/null")
+    machine.succeed(
+        "! systemctl list-units --all --no-pager --no-legend "
+        "| grep -E 'd2b-unsafe-local-(helper|shell)'"
     )
   '';
 }

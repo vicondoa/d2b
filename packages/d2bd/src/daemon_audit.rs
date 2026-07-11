@@ -52,21 +52,35 @@ pub enum DetachedExecAuditResult {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellAuditAction {
+    Create,
     Attach,
+    List,
     Detach,
     Kill,
+    Close,
+    Failure,
 }
 
 /// Closed persistent-shell owner/management result.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellAuditResult {
+    Requested,
     Attached,
+    Listed,
     Detached,
     Killed,
     Closed,
+    Refused,
     Timeout,
     Error,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellAuditProvider {
+    GuestControl,
+    UnsafeLocal,
 }
 
 /// Closed reason a vm-start runner node fast-failed before readiness.
@@ -170,43 +184,23 @@ pub enum DaemonEvent {
         /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
         peer_uid: u32,
     },
-    /// Emitted when an authenticated persistent shell owner attachment is
-    /// established.
-    ///
-    /// Leak-safe: carries ONLY the VM name, admin peer uid, and whether a force
-    /// takeover was requested. Shell names, session handles, and terminal bytes
-    /// are never recorded.
-    GuestControlShellAttached {
-        /// VM name the shell attachment targets.
-        vm: String,
-        /// Admin peer uid (from `SO_PEERCRED`) that opened the attachment.
+    /// Provider-neutral persistent-shell lifecycle boundary. `target` is either
+    /// a configured canonical workload target or a local VM identifier.
+    /// Operation/session values are fixed-length digests; raw shell names,
+    /// handles, supervisor metadata, terminal bytes, paths, and diagnostics are
+    /// never present.
+    ShellLifecycle {
+        target: String,
         peer_uid: u32,
-        /// Closed shell action.
+        provider: ShellAuditProvider,
         action: ShellAuditAction,
-        /// Closed shell result.
         result: ShellAuditResult,
-        /// Fixed-length non-raw correlation digest for the targeted shell. This
-        /// is safe to record; raw shell names/session ids are never written.
-        shell_ref_digest: String,
-        /// Whether the caller requested force takeover.
-        force: bool,
-    },
-    /// Emitted when a persistent shell owner attachment ends.
-    ///
-    /// Leak-safe: carries ONLY the VM name, admin peer uid, and a closed result
-    /// enum. No shell name, session handle, or terminal bytes.
-    GuestControlShellDetached {
-        /// VM name the shell attachment targeted.
-        vm: String,
-        /// Admin peer uid (from `SO_PEERCRED`) that owned the attachment.
-        peer_uid: u32,
-        /// Closed shell action.
-        action: ShellAuditAction,
-        /// Closed teardown result.
-        result: ShellAuditResult,
-        /// Fixed-length non-raw correlation digest for the targeted shell. This
-        /// is safe to record; raw shell names/session ids are never written.
-        shell_ref_digest: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        force: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_digest: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_digest: Option<String>,
     },
     /// Emitted when a detached `vm exec -d` create succeeds.
     ///
@@ -1584,66 +1578,58 @@ mod tests {
         const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::GuestControlShellAttached {
-            vm: "corp-vm".to_owned(),
+        log.write_event(&DaemonEvent::ShellLifecycle {
+            target: "corp-vm".to_owned(),
             peer_uid: 1000,
+            provider: ShellAuditProvider::GuestControl,
             action: ShellAuditAction::Attach,
             result: ShellAuditResult::Attached,
-            shell_ref_digest: "0123456789abcdef".to_owned(),
-            force: true,
+            force: Some(true),
+            operation_digest: Some("1111111111111111".to_owned()),
+            session_digest: Some("2222222222222222".to_owned()),
         })
-        .expect("write shell attached event");
-        log.write_event(&DaemonEvent::GuestControlShellDetached {
-            vm: "corp-vm".to_owned(),
-            peer_uid: 1000,
-            action: ShellAuditAction::Detach,
-            result: ShellAuditResult::Closed,
-            shell_ref_digest: "0123456789abcdef".to_owned(),
-        })
-        .expect("write shell detached event");
+        .expect("write provider-neutral shell event");
 
         let records = log.captured.lock().expect("lock captured");
-        assert_eq!(records.len(), 2, "expected two captured shell records");
+        assert_eq!(records.len(), 1, "expected one unified shell record");
         for line in records.iter() {
             assert!(
                 !line.contains(SENTINEL),
                 "shell lifecycle audit leaked sentinel: {line}"
             );
-            for forbidden in ["SECRET", "/nix/store", "session", "handle", "terminal"] {
+            for forbidden in [
+                "SECRET-shell-name",
+                "/nix/store/path-like-token",
+                "supervisor_id",
+            ] {
                 assert!(
                     !line.contains(forbidden),
                     "shell lifecycle audit leaked forbidden canary {forbidden:?}: {line}",
                 );
             }
-            let record: serde_json::Value =
-                serde_json::from_str(line).expect("parse captured shell record");
-            let event = record.get("event").expect("event object");
-            let obj = event.as_object().expect("event is object");
-            for key in obj.keys() {
-                assert!(
-                    matches!(
-                        key.as_str(),
-                        "kind"
-                            | "vm"
-                            | "peer_uid"
-                            | "action"
-                            | "result"
-                            | "shell_ref_digest"
-                            | "force"
-                    ),
-                    "shell lifecycle audit exposed unexpected key {key:?}: {line}"
-                );
-            }
         }
+        let provider =
+            serde_json::from_str::<serde_json::Value>(&records[0]).expect("provider shell event");
+        assert_eq!(provider["event"]["force"].as_bool(), Some(true));
+        let keys = provider["event"]
+            .as_object()
+            .expect("provider event object")
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&records[0]).unwrap()["event"]["result"]
-                .as_str(),
-            Some("attached")
-        );
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&records[1]).unwrap()["event"]["result"]
-                .as_str(),
-            Some("closed")
+            keys,
+            std::collections::BTreeSet::from([
+                "action",
+                "force",
+                "kind",
+                "operation_digest",
+                "peer_uid",
+                "provider",
+                "result",
+                "session_digest",
+                "target",
+            ])
         );
     }
 

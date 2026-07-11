@@ -427,7 +427,7 @@ fn generated_unsafe_local_schemas_are_closed_and_argv_is_private() {
     let private_schema: serde_json::Value = serde_json::from_str(&private_schema).unwrap();
     assert_eq!(
         private_schema["properties"]["workloads"]["maxItems"],
-        serde_json::json!(16)
+        serde_json::json!(256)
     );
     assert_eq!(
         private_schema["properties"]["localVmWorkloads"]["maxItems"],

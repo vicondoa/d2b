@@ -33,6 +33,7 @@ It is not expected to survive:
 
 - VM reboot or target workload recreation;
 - shell-pool daemon restart or loss;
+- logout/termination of the non-lingering user manager for unsafe-local;
 - explicit `d2b shell <target> kill --name <name>`;
 - `exit` or `Ctrl-D` inside the shell.
 
@@ -55,8 +56,16 @@ daemon public socket and authenticated guest-control transport.
 
 Unsafe-local uses only same-UID Unix sockets. Its per-shell listener lives
 beneath the validated user runtime directory and is not a root service, broker
-operation, or per-VM unit. Public daemon routing for this backend remains
-feature-gated until the daemon integration lands.
+operation, or per-VM unit. `d2bd` resolves the target and bundle-owned shell
+policy, asks the exact requester-UID helper to create or reconnect, validates the
+single connected terminal fd, and multiplexes it behind a fresh opaque public
+attachment handle. Closing that public connection detaches the helper-owned
+terminal stream; it does not kill the user-scope shell.
+
+Daemon and helper restarts are reconnect events. The daemon intentionally keeps
+no persisted fd authority, while the helper snapshot revalidates the
+user-scope `InvocationID`, cgroup, and supervisor status before adoption.
+Ambiguous metadata is reported degraded and never triggers a broad kill.
 
 ## Same-UID AF_UNIX boundary
 
@@ -67,6 +76,11 @@ to either socket run as the workload UID.
 The socket is a same-UID IPC boundary, not a cryptographic separation boundary:
 code already running as that workload user can potentially interact with the
 same shell pool.
+
+For unsafe-local this is also the containment boundary: there is **no
+containment from other processes running as the same host uid**. The transient
+scope gives exact lifecycle ownership, not isolation. Persistence ends with the
+user-manager lifetime because d2b does not enable linger.
 
 For that reason, persistent shells are appropriate for a trusted workload-user
 environment. They are not a way to hide admin shell state from other code

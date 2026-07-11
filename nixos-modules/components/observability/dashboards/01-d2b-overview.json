@@ -209,6 +209,26 @@
           "legendFormat": "{{provider}} {{operation}} {{outcome}}"
         }
       ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Persistent shell lifecycle",
+      "description": "Provider-neutral shell outcomes using only closed provider, operation, outcome, and error labels.",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, operation, outcome, error_kind) (rate(d2b_daemon_shell_lifecycle_total[5m]))",
+          "legendFormat": "{{provider}} {{operation}} {{outcome}} {{error_kind}}"
+        }
+      ]
     }
   ]
 }

@@ -534,16 +534,37 @@ fn kill<M: UserScopeManager>(
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
     let scope = persisted_shell(runtime, &workload, &name)?;
-    verify_scope(runtime, &scope)?;
-    let kill_acknowledged = supervisor_action(runtime, &scope, SupervisorAction::Kill)
-        .map(|response| matches!(response.result, SupervisorResult::KillAccepted))
-        .unwrap_or(false);
-    if !kill_acknowledged {
-        return Err(RuntimeError::ShellUnavailable);
-    }
-
     let verified = scope.verified();
-    collect_verified_scope(runtime, &verified)?;
+    let inspection = runtime.manager.inspect_scope(&verified)?;
+    if !inspection.identity_matches {
+        return Err(RuntimeError::ScopeIdentityMismatch);
+    }
+    let killed = match inspection.state {
+        HelperScopeState::Starting | HelperScopeState::Active => {
+            let response = supervisor_action(runtime, &scope, SupervisorAction::Kill)?;
+            if !matches!(response.result, SupervisorResult::KillAccepted) {
+                return Err(RuntimeError::ShellUnavailable);
+            }
+            // The verified supervisor has acknowledged Kill. If systemd drops
+            // the now-empty scope before collection, do not signal a replacement.
+            if let Err(error) = collect_verified_scope(runtime, &verified)
+                && error != RuntimeError::ScopeIdentityMismatch
+            {
+                return Err(error);
+            }
+            true
+        }
+        HelperScopeState::Stopping => {
+            if let Err(error) = collect_verified_scope(runtime, &verified)
+                && error != RuntimeError::ScopeIdentityMismatch
+            {
+                return Err(error);
+            }
+            true
+        }
+        HelperScopeState::Exited => false,
+        HelperScopeState::Degraded => return Err(RuntimeError::ScopeIdentityMismatch),
+    };
     remove_shell_scope(runtime, &scope)?;
 
     let response = HelperShellResponse::Kill(HelperShellKillResponse {
@@ -551,7 +572,7 @@ fn kill<M: UserScopeManager>(
         operation_id: operation_id.clone(),
         result: ShellKillResult {
             name,
-            killed: true,
+            killed,
             state: ShellSessionState::Killed,
         },
     });

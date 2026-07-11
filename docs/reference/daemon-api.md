@@ -101,6 +101,23 @@ guest-control or the exact requester-UID unsafe-local helper. Remote/relay
 principals, UID fields, argv, environment, cwd, proxy paths, process ids, unit
 names, and fallback transports are not accepted.
 
+The existing protocol-v3 `shell` frame is provider-neutral without changing its
+serde shape: the historical `vm` field carries either a local VM name or a
+canonical target. `d2bd` resolves canonical and bare targets to local VM,
+unsafe-local, or a typed capability refusal. Unsafe-local policy comes only from
+the hash-verified private workload artifact. Attach dispatches a private helper
+v2 request for the exact authenticated peer uid, validates one connected
+terminal fd, generates a bounded opaque public session handle, and multiplexes
+terminal-v1 operations over that fd. List/detach/kill use correlated helper
+management responses. Public requests carry no policy, uid, argv, environment,
+cwd, path, operation id, or provider override.
+
+All shell operations require the local admin role before target resolution or
+helper/guest contact. `unsafe-local-shell-v1` is negotiated independently of
+guest shell support; a client that does not negotiate it cannot reach the
+unsafe-local route. Local VM shell behavior and protocol version 3 remain
+unchanged.
+
 Local-VM launcher execution uses a deterministic opaque guest exec id derived
 from the local peer uid and public operation identity. Guestd's durable detached
 record is the restart-stable idempotency authority; the same id and argv hash
@@ -220,10 +237,10 @@ host reboot.
 | `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2054) | struct { `flags`: `MutationFlags` } |
 | `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2061) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
 | `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2079) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
-| `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3690) | empty struct |
-| `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3776) | empty struct |
-| `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3830) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
-| `UsbSecurityKeyTestRequest` | struct | [`UsbSecurityKeyTestRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3855) | struct { `vm`: `String` } |
+| `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3695) | empty struct |
+| `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3781) | empty struct |
+| `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3835) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
+| `UsbSecurityKeyTestRequest` | struct | [`UsbSecurityKeyTestRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3860) | struct { `vm`: `String` } |
 
 ### Broker socket request types
 
@@ -343,10 +360,10 @@ see the auto-generated tables above for the committed Rust variants.
 | `KeysListResponse` | struct | [`KeysListResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2209) | struct { `entries`: `Vec<KeyEntry>` } |
 | `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2215) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
 | `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2456) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
-| `UsbSecurityKeyStatusResponse` | struct | [`UsbSecurityKeyStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3761) | struct { `host_proxy_enabled`: `bool`; `physical_keys`: `Vec<UsbSkPhysicalKeyStatus>`; `vm_devices`: `Vec<UsbSkVirtualDeviceStatus>`; `lease`: `UsbSkLeaseStatus` } |
-| `UsbSecurityKeySessionsResponse` | struct | [`UsbSecurityKeySessionsResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3823) | struct { `sessions`: `Vec<UsbSkSession>` } |
-| `UsbSecurityKeyCancelResponse` | struct | [`UsbSecurityKeyCancelResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3841) | struct { `cancelled_session_id`: `Option<String>`; `already_idle`: `bool` } |
-| `UsbSecurityKeyTestResponse` | struct | [`UsbSecurityKeyTestResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3878) | struct { `vm`: `String`; `ok`: `bool`; `checks`: `Vec<UsbSkTestCheck>` } |
+| `UsbSecurityKeyStatusResponse` | struct | [`UsbSecurityKeyStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3766) | struct { `host_proxy_enabled`: `bool`; `physical_keys`: `Vec<UsbSkPhysicalKeyStatus>`; `vm_devices`: `Vec<UsbSkVirtualDeviceStatus>`; `lease`: `UsbSkLeaseStatus` } |
+| `UsbSecurityKeySessionsResponse` | struct | [`UsbSecurityKeySessionsResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3828) | struct { `sessions`: `Vec<UsbSkSession>` } |
+| `UsbSecurityKeyCancelResponse` | struct | [`UsbSecurityKeyCancelResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3846) | struct { `cancelled_session_id`: `Option<String>`; `already_idle`: `bool` } |
+| `UsbSecurityKeyTestResponse` | struct | [`UsbSecurityKeyTestResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3883) | struct { `vm`: `String`; `ok`: `bool`; `checks`: `Vec<UsbSkTestCheck>` } |
 
 ### Broker socket response types
 
@@ -536,8 +553,8 @@ running live guest activation.
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts/src/public_wire.rs#L2470) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts/src/public_wire.rs#L2478) | `None`; `Launcher`; `Admin` |
 | `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/d2b-contracts/src/public_wire.rs#L2699) | `Pass`; `Warn`; `Fail` |
-| `UsbSkLeaseState` | enum | [`UsbSkLeaseState`](../../packages/d2b-contracts/src/public_wire.rs#L3728) | `Idle`; `Active`; `Queued`; `Unknown` |
-| `UsbSkSessionOutcome` | enum | [`UsbSkSessionOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L3783) | `Success`; `Timeout`; `Cancelled`; `DeviceUnavailable`; `Active`; `Unknown` |
+| `UsbSkLeaseState` | enum | [`UsbSkLeaseState`](../../packages/d2b-contracts/src/public_wire.rs#L3733) | `Idle`; `Active`; `Queued`; `Unknown` |
+| `UsbSkSessionOutcome` | enum | [`UsbSkSessionOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L3788) | `Success`; `Timeout`; `Cancelled`; `DeviceUnavailable`; `Active`; `Unknown` |
 | `SecurityKeyVmSessionState` | enum | [`SecurityKeyVmSessionState`](../../packages/d2b-contracts/src/security_key.rs#L165) | `Idle`; `AwaitingLease`; `Active`; `Completed`; `Cancelled` |
 | `SecurityKeySessionResult` | enum | [`SecurityKeySessionResult`](../../packages/d2b-contracts/src/security_key.rs#L230) | `InProgress`; `Success`; `CtapError`; `Timeout`; `Cancelled`; `InternalError` |
 | `SecurityKeyEvent` | enum | [`SecurityKeyEvent`](../../packages/d2b-contracts/src/security_key.rs#L290) | `SessionStarted` — struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `started_at`: `String` }; `SessionSucceeded` — struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `SessionFailed` — struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `result`: `SecurityKeySessionResult`; `ended_at`: `String` }; `SessionCancelled` — struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `DeviceRemoved` — struct { `device_label`: `SecurityKeyDeviceLabel`; `interrupted_session_id`: `Option<SecurityKeySessionId>` }; `DeviceReinserted` — struct { `device_label`: `SecurityKeyDeviceLabel` }; `SessionQueued` — struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `queued_at`: `String`; `blocking_vm`: `String` } |
@@ -593,7 +610,8 @@ The redaction policy is strict:
   public contract;
 - no secrets, stack traces, credential material, or raw command output;
 - no terminal payloads, argv/env/cwd, helper stderr/stdout, raw shell session
-  handles, or raw shell names in daemon metrics or broad debug/audit fields;
+  handles, raw shell names, supervisor ids, unit names, or helper diagnostics in
+  daemon metrics or broad debug/audit fields;
 - one human-readable remediation hint per failure;
 - one docs anchor into [`error-codes.md`](./error-codes.md).
 
@@ -717,12 +735,17 @@ helper reports tampering explicitly; the write path remains best-effort so
 an audit sink outage does not abort an already-authorized local operation.
 
 Persistent shell daemon events are in this daemon-owned stream, not the broker
-audit log. The shell variants record only the VM name, admin peer uid, closed
-action/result enums, force flag when relevant, and a fixed shell correlation
-digest. Raw shell names, terminal session handles, terminal bytes, helper
-diagnostics, argv, env, and paths are never written. Abrupt owner disconnects,
-close timeouts, and stale/unsupported guest generations are represented by
-closed result or typed-error buckets rather than free-form text.
+audit log. The provider-neutral `ShellLifecycle` variant is the sole runtime
+shell audit event for both `guest-control` and `unsafe-local`. It records only a
+configured canonical target or local VM id, admin peer uid, closed
+provider/action/result enums, optional force-takeover intent, and optional fixed
+operation/session correlation digests. It covers create, attach, list, detach,
+kill, close, and failure boundaries. Raw shell names, public handles,
+supervisor ids, terminal bytes, helper diagnostics, argv, env,
+cwd, PIDs, unit names, and paths are never written. Abrupt owner disconnects,
+close timeouts, stale helper generations, and malformed terminal frames are
+represented by closed results or typed-error buckets rather than free-form
+text.
 
 Graceful-shutdown daemon events also use this daemon-owned stream. Before a
 normal stop sends CH `vm.shutdown` or broker-mediated QMP `system_powerdown`,

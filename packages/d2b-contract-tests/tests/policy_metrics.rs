@@ -134,6 +134,33 @@ const EXPECTED_METRICS: &[ExpectedMetric] = &[
         buckets_expr: "&[]",
         bucket_values: None,
     },
+    ExpectedMetric {
+        name: "d2b_daemon_shell_lifecycle_total",
+        kind: "Counter",
+        labels: &[
+            "provider",
+            "component",
+            "operation",
+            "outcome",
+            "error_kind",
+        ],
+        buckets_expr: "&[]",
+        bucket_values: None,
+    },
+    ExpectedMetric {
+        name: "d2b_daemon_workload_availability",
+        kind: "Gauge",
+        labels: &["provider", "component", "state"],
+        buckets_expr: "&[]",
+        bucket_values: None,
+    },
+    ExpectedMetric {
+        name: "d2b_daemon_workload_lifecycle_total",
+        kind: "Counter",
+        labels: &["provider", "operation", "outcome"],
+        buckets_expr: "&[]",
+        bucket_values: None,
+    },
 ];
 
 const RETIRED_DOC_METRIC_COUNT: usize = EXPECTED_METRICS.len();

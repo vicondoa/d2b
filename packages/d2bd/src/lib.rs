@@ -119,6 +119,7 @@ pub mod supervisor;
 pub mod terminal_session;
 pub mod typed_error;
 pub mod unsafe_local_helper;
+pub mod unsafe_local_terminal;
 pub mod wire;
 mod workload_dispatch;
 pub mod workload_target_index;
@@ -148,6 +149,7 @@ pub mod known_hosts_refresh;
 // `dispatch_broker_vm_start` and from the host-prep DAG executor.
 // The pure check lives in
 // `crate::ssh_host_key_preflight`.
+mod shell_backend;
 pub mod ssh_host_key_preflight;
 // Refuses to start a `sys-<env>-net` VM when the on-disk dnsmasq.conf
 // for that env diverges from the
@@ -2942,6 +2944,7 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -3046,6 +3049,19 @@ fn handle_connection_authorized(
                 let error = TypedError::AuthzNotAdmin {
                     verb: "shell".to_owned(),
                 };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            if !unsafe_local_shell_feature_negotiated(&capabilities)
+                && let Some((target, operation, resolved)) =
+                    resolve_negotiated_unsafe_local_shell(state, op)
+            {
+                let error = shell_backend::unsafe_shell_failed(
+                    typed_error::UnsafeLocalShellErrorKind::FeatureUnavailable,
+                );
+                record_resolved_shell_failure(
+                    state, peer.uid, &resolved, target, operation, None, &error,
+                );
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
@@ -3612,9 +3628,8 @@ fn dispatch_unsafe_local_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
-    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     let request = HelperLaunchRequest {
-        request_id: REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
         workload: resolved.identity.clone(),
         item_id: resolved.item_id.clone(),
@@ -3678,7 +3693,9 @@ fn map_workload_catalog_error(error: workload_dispatch::CatalogError) -> TypedEr
         CatalogError::ItemNotFound => Kind::ItemNotFound,
         CatalogError::ArtifactsUnavailable
         | CatalogError::ConfiguredItemMissing
-        | CatalogError::ConfiguredItemMismatch => Kind::ConfiguredItemMismatch,
+        | CatalogError::ConfiguredItemMismatch
+        | CatalogError::ShellCapabilityUnavailable => Kind::ConfiguredItemMismatch,
+        CatalogError::AliasConflict => Kind::ItemNotFound,
         CatalogError::OperationConflict => Kind::OperationConflict,
         CatalogError::OperationInProgress => Kind::QueueFull,
     };
@@ -7966,6 +7983,40 @@ const SHELL_POLL_SLACK: Duration = Duration::from_secs(2);
 const SHELL_OWNER_INFLIGHT_CAP: usize = 64;
 const SHELL_METRIC: &str = "d2b_daemon_guest_control_shell_total";
 const SHELL_SUBSYSTEM: &str = "guest-control-shell";
+const SHELL_LIFECYCLE_METRIC: &str = "d2b_daemon_shell_lifecycle_total";
+const SHELL_LIFECYCLE_OPERATIONS: &[&str] =
+    &["list", "create", "attach", "detach", "kill", "close"];
+const SHELL_LIFECYCLE_OUTCOMES: &[&str] =
+    &["requested", "management", "established", "closed", "error"];
+const SHELL_LIFECYCLE_ERRORS: &[&str] = &[
+    "none",
+    "transport",
+    "auth",
+    "protocol",
+    "timeout",
+    "capability",
+    "stale-session",
+    "capacity",
+    "already-attached",
+    "not-found",
+    "output-gap",
+    "offset-mismatch",
+    "terminal-closed",
+    "invalid-size",
+    "helper-unavailable",
+    "helper-stale",
+    "user-manager",
+    "environment",
+    "executable",
+    "scope-create",
+    "scope-identity",
+    "graphical-session",
+    "wayland",
+    "proxy",
+    "operation-conflict",
+    "guest",
+    "internal",
+];
 
 fn shell_failed(kind: crate::typed_error::GuestControlShellErrorKind) -> TypedError {
     TypedError::GuestControlShellFailed { kind }
@@ -8080,7 +8131,73 @@ fn shell_error_kind_label(error: &TypedError) -> &'static str {
             K::GuestError => "guest",
             K::Internal => "internal",
         },
+        TypedError::UnsafeLocalShellFailed { kind } => {
+            use crate::typed_error::UnsafeLocalShellErrorKind as UnsafeKind;
+            match kind {
+                UnsafeKind::FeatureUnavailable => "capability",
+                UnsafeKind::HelperUnavailable => "helper-unavailable",
+                UnsafeKind::HelperStale => "helper-stale",
+                UnsafeKind::QueueFull => "capacity",
+                UnsafeKind::Timeout | UnsafeKind::FirstClientTimeout => "timeout",
+                UnsafeKind::Protocol => "protocol",
+                UnsafeKind::OperationConflict => "operation-conflict",
+                UnsafeKind::UserManagerUnavailable => "user-manager",
+                UnsafeKind::EnvironmentInvalid => "environment",
+                UnsafeKind::ExecutableUnavailable => "executable",
+                UnsafeKind::ScopeCreateFailed => "scope-create",
+                UnsafeKind::ScopeIdentityMismatch => "scope-identity",
+                UnsafeKind::GraphicalSessionInactive => "graphical-session",
+                UnsafeKind::WaylandUnavailable => "wayland",
+                UnsafeKind::ProxyUnavailable => "proxy",
+                UnsafeKind::ShellUnavailable => "capability",
+                UnsafeKind::NotFound => "not-found",
+                UnsafeKind::AlreadyAttached => "already-attached",
+                UnsafeKind::OutputGap => "output-gap",
+                UnsafeKind::OffsetMismatch => "offset-mismatch",
+                UnsafeKind::TerminalClosed => "terminal-closed",
+                UnsafeKind::InvalidSize => "invalid-size",
+                UnsafeKind::StaleSession => "stale-session",
+                UnsafeKind::Internal => "internal",
+            }
+        }
         _ => "internal",
+    }
+}
+
+fn shell_metric_for_provider(
+    state: &ServerState,
+    provider: shell_backend::ShellProvider,
+    operation: &'static str,
+    outcome: &'static str,
+    error_kind: &'static str,
+) {
+    debug_assert!(SHELL_LIFECYCLE_OPERATIONS.contains(&operation));
+    debug_assert!(SHELL_LIFECYCLE_OUTCOMES.contains(&outcome));
+    debug_assert!(SHELL_LIFECYCLE_ERRORS.contains(&error_kind));
+    state.metrics_registry.counter_inc(
+        SHELL_LIFECYCLE_METRIC,
+        &[
+            ("provider", provider.label()),
+            ("component", "shell"),
+            ("operation", operation),
+            ("outcome", outcome),
+            ("error_kind", error_kind),
+        ],
+    );
+    if provider == shell_backend::ShellProvider::GuestControl {
+        shell_metric(state, outcome, error_kind);
+    }
+}
+
+fn shell_provider_for_error(error: &TypedError) -> shell_backend::ShellProvider {
+    match error {
+        TypedError::UnsafeLocalShellFailed { .. } => shell_backend::ShellProvider::UnsafeLocal,
+        TypedError::RuntimeCapabilityUnsupported { runtime_kind, .. }
+            if runtime_kind == "unsafe-local" =>
+        {
+            shell_backend::ShellProvider::UnsafeLocal
+        }
+        _ => shell_backend::ShellProvider::GuestControl,
     }
 }
 
@@ -8093,82 +8210,349 @@ fn shell_ref_digest(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
+fn unsafe_local_shell_feature_negotiated(capabilities: &[d2b_contracts::FeatureFlag]) -> bool {
+    capabilities
+        .iter()
+        .any(|feature| feature.known() == Some(KnownFeatureFlag::UnsafeLocalShellV1))
+}
+
+fn resolve_negotiated_unsafe_local_shell<'a>(
+    state: &ServerState,
+    op: &'a public_wire::ShellOp,
+) -> Option<(&'a str, &'static str, workload_dispatch::ResolvedShell)> {
+    use workload_dispatch::WorkloadRoute;
+
+    let (target, operation) = match op {
+        public_wire::ShellOp::Attach(args) => Some((args.vm.as_str(), "attach")),
+        public_wire::ShellOp::List(args) => Some((args.vm.as_str(), "list")),
+        public_wire::ShellOp::Detach(args) => Some((args.vm.as_str(), "detach")),
+        public_wire::ShellOp::Kill(args) => Some((args.vm.as_str(), "kill")),
+        public_wire::ShellOp::WriteStdin(_)
+        | public_wire::ShellOp::ReadOutput(_)
+        | public_wire::ShellOp::Resize(_)
+        | public_wire::ShellOp::Wait(_)
+        | public_wire::ShellOp::CloseStdin(_)
+        | public_wire::ShellOp::CloseAttach(_) => None,
+    }?;
+    let resolved = resolve_shell_target(state, target).ok()?;
+    matches!(resolved.route, WorkloadRoute::UnsafeLocal).then_some((target, operation, resolved))
+}
+
 fn dispatch_shell_management(
     state: &ServerState,
     peer: &PeerIdentity,
     op: public_wire::ShellOp,
 ) -> Result<Value, TypedError> {
+    use d2b_contracts::unsafe_local_wire::{HelperShellRequest, HelperShellResponse};
+    use workload_dispatch::WorkloadRoute;
+
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "shell".to_owned(),
+        });
+    }
     let response = match op {
         public_wire::ShellOp::List(args) => {
-            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                let mut request = pb::ShellListRequest::new();
-                request.metadata = protobuf::MessageField::some(metadata);
-                async move {
-                    let response: pb::ShellListResponse = client
-                        .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
-                        .await
-                        .map_err(map_shell_health_error)?;
-                    shell_error_to_typed(response.error.as_ref())?;
-                    map_shell_list_response(response)
+            let resolved = resolve_shell_target(state, &args.vm).inspect_err(|error| {
+                record_unresolved_shell_failure(state, peer.uid, &args.vm, "list", error);
+            })?;
+            let (result, provider, target, operation_digest) = match resolved.route.clone() {
+                WorkloadRoute::LocalVm { vm } => {
+                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
+                        let mut request = pb::ShellListRequest::new();
+                        request.metadata = protobuf::MessageField::some(metadata);
+                        async move {
+                            let response: pb::ShellListResponse = client
+                                .unary_with_timeout("ShellList", request, SHELL_MANAGEMENT_TIMEOUT)
+                                .await
+                                .map_err(map_shell_health_error)?;
+                            shell_error_to_typed(response.error.as_ref())?;
+                            map_shell_list_response(response)
+                        }
+                    })
+                    .inspect_err(|error| {
+                        record_shell_dispatch_failure(
+                            state,
+                            peer.uid,
+                            &vm,
+                            shell_backend::ShellProvider::GuestControl,
+                            "list",
+                            None,
+                            error,
+                        );
+                    })?;
+                    (result, shell_backend::ShellProvider::GuestControl, vm, None)
                 }
-            })
-            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
-            shell_metric(state, "management", "none");
+                WorkloadRoute::UnsafeLocal => {
+                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let operation_id = new_internal_shell_operation_id()?;
+                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+                    let target = identity.canonical_target.to_canonical();
+                    let request = HelperShellRequest::List {
+                        request_id: next_internal_shell_request_id(),
+                        operation_id,
+                        workload: identity,
+                        policy,
+                    };
+                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
+                        .inspect_err(|error| {
+                            record_shell_dispatch_failure(
+                                state,
+                                peer.uid,
+                                &target,
+                                shell_backend::ShellProvider::UnsafeLocal,
+                                "list",
+                                Some(operation_digest.clone()),
+                                error,
+                            );
+                        })?;
+                    let HelperShellResponse::List(response) = response else {
+                        return Err(shell_backend::unsafe_shell_failed(
+                            typed_error::UnsafeLocalShellErrorKind::Protocol,
+                        ));
+                    };
+                    (
+                        response.result,
+                        shell_backend::ShellProvider::UnsafeLocal,
+                        target,
+                        Some(operation_digest),
+                    )
+                }
+                WorkloadRoute::CapabilityUnavailable { provider } => {
+                    let error = shell_route_capability_error(&args.vm, provider);
+                    record_resolved_shell_failure(
+                        state, peer.uid, &resolved, &args.vm, "list", None, &error,
+                    );
+                    return Err(error);
+                }
+            };
+            emit_provider_shell_audit(
+                state,
+                ProviderShellAudit {
+                    target: &target,
+                    peer_uid: peer.uid,
+                    provider,
+                    action: daemon_audit::ShellAuditAction::List,
+                    result: daemon_audit::ShellAuditResult::Listed,
+                    force: None,
+                    operation_digest,
+                    session_digest: None,
+                },
+            );
+            shell_metric_for_provider(state, provider, "list", "management", "none");
             public_wire::ShellOpResponse::List(result)
         }
         public_wire::ShellOp::Detach(args) => {
-            let vm = args.vm.clone();
-            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                let mut request = pb::ShellDetachRequest::new();
-                request.metadata = protobuf::MessageField::some(metadata);
-                request.name = args.name.map(|name| name.as_str().to_owned());
-                async move {
-                    let response: pb::ShellDetachResponse = client
-                        .unary_with_timeout("ShellDetach", request, SHELL_MANAGEMENT_TIMEOUT)
-                        .await
-                        .map_err(map_shell_health_error)?;
-                    shell_error_to_typed(response.error.as_ref())?;
-                    map_shell_detach_response(response)
+            let requested_target = args.vm.clone();
+            let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
+                record_unresolved_shell_failure(
+                    state,
+                    peer.uid,
+                    &requested_target,
+                    "detach",
+                    error,
+                );
+            })?;
+            let (result, provider, target, operation_digest) = match resolved.route.clone() {
+                WorkloadRoute::LocalVm { vm } => {
+                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
+                        let mut request = pb::ShellDetachRequest::new();
+                        request.metadata = protobuf::MessageField::some(metadata);
+                        request.name = args.name.map(|name| name.as_str().to_owned());
+                        async move {
+                            let response: pb::ShellDetachResponse = client
+                                .unary_with_timeout(
+                                    "ShellDetach",
+                                    request,
+                                    SHELL_MANAGEMENT_TIMEOUT,
+                                )
+                                .await
+                                .map_err(map_shell_health_error)?;
+                            shell_error_to_typed(response.error.as_ref())?;
+                            map_shell_detach_response(response)
+                        }
+                    })
+                    .inspect_err(|error| {
+                        record_shell_dispatch_failure(
+                            state,
+                            peer.uid,
+                            &vm,
+                            shell_backend::ShellProvider::GuestControl,
+                            "detach",
+                            None,
+                            error,
+                        );
+                    })?;
+                    (result, shell_backend::ShellProvider::GuestControl, vm, None)
                 }
-            })
-            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
-            emit_shell_management_audit(
+                WorkloadRoute::UnsafeLocal => {
+                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let name = args.name.unwrap_or_else(|| policy.default_name.clone());
+                    let operation_id = new_internal_shell_operation_id()?;
+                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+                    let target = identity.canonical_target.to_canonical();
+                    let request = HelperShellRequest::Detach {
+                        request_id: next_internal_shell_request_id(),
+                        operation_id,
+                        workload: identity,
+                        policy,
+                        name,
+                    };
+                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
+                        .inspect_err(|error| {
+                            record_shell_dispatch_failure(
+                                state,
+                                peer.uid,
+                                &target,
+                                shell_backend::ShellProvider::UnsafeLocal,
+                                "detach",
+                                Some(operation_digest.clone()),
+                                error,
+                            );
+                        })?;
+                    let HelperShellResponse::Detach(response) = response else {
+                        return Err(shell_backend::unsafe_shell_failed(
+                            typed_error::UnsafeLocalShellErrorKind::Protocol,
+                        ));
+                    };
+                    (
+                        response.result,
+                        shell_backend::ShellProvider::UnsafeLocal,
+                        target,
+                        Some(operation_digest),
+                    )
+                }
+                WorkloadRoute::CapabilityUnavailable { provider } => {
+                    let error = shell_route_capability_error(&requested_target, provider);
+                    record_resolved_shell_failure(
+                        state,
+                        peer.uid,
+                        &resolved,
+                        &requested_target,
+                        "detach",
+                        None,
+                        &error,
+                    );
+                    return Err(error);
+                }
+            };
+            let digest = shell_ref_digest(&[&target, result.resolved_name.as_str()]);
+            emit_provider_shell_audit(
                 state,
-                peer.uid,
-                &vm,
-                daemon_audit::ShellAuditAction::Detach,
-                daemon_audit::ShellAuditResult::Detached,
-                &shell_ref_digest(&[&vm, result.resolved_name.as_str()]),
+                ProviderShellAudit {
+                    target: &target,
+                    peer_uid: peer.uid,
+                    provider,
+                    action: daemon_audit::ShellAuditAction::Detach,
+                    result: daemon_audit::ShellAuditResult::Detached,
+                    force: None,
+                    operation_digest,
+                    session_digest: Some(digest),
+                },
             );
-            shell_metric(state, "management", "none");
+            shell_metric_for_provider(state, provider, "detach", "management", "none");
             public_wire::ShellOpResponse::Detach(result)
         }
         public_wire::ShellOp::Kill(args) => {
-            let vm = args.vm.clone();
-            let digest = shell_ref_digest(&[&vm, args.name.as_str()]);
-            let result = run_guest_shell_management(state, args.vm.as_str(), |client, metadata| {
-                let mut request = pb::ShellKillRequest::new();
-                request.metadata = protobuf::MessageField::some(metadata);
-                request.name = args.name.as_str().to_owned();
-                async move {
-                    let response: pb::ShellKillResponse = client
-                        .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
-                        .await
-                        .map_err(map_shell_health_error)?;
-                    shell_error_to_typed(response.error.as_ref())?;
-                    map_shell_kill_response(response)
+            let requested_target = args.vm.clone();
+            let requested_name = args.name;
+            let resolved = resolve_shell_target(state, &requested_target).inspect_err(|error| {
+                record_unresolved_shell_failure(state, peer.uid, &requested_target, "kill", error);
+            })?;
+            let (result, provider, target, operation_digest) = match resolved.route.clone() {
+                WorkloadRoute::LocalVm { vm } => {
+                    let guest_name = requested_name.clone();
+                    let result = run_guest_shell_management(state, &vm, |client, metadata| {
+                        let mut request = pb::ShellKillRequest::new();
+                        request.metadata = protobuf::MessageField::some(metadata);
+                        request.name = guest_name.as_str().to_owned();
+                        async move {
+                            let response: pb::ShellKillResponse = client
+                                .unary_with_timeout("ShellKill", request, SHELL_MANAGEMENT_TIMEOUT)
+                                .await
+                                .map_err(map_shell_health_error)?;
+                            shell_error_to_typed(response.error.as_ref())?;
+                            map_shell_kill_response(response)
+                        }
+                    })
+                    .inspect_err(|error| {
+                        record_shell_dispatch_failure(
+                            state,
+                            peer.uid,
+                            &vm,
+                            shell_backend::ShellProvider::GuestControl,
+                            "kill",
+                            None,
+                            error,
+                        );
+                    })?;
+                    (result, shell_backend::ShellProvider::GuestControl, vm, None)
                 }
-            })
-            .inspect_err(|error| shell_metric(state, "error", shell_error_kind_label(error)))?;
-            emit_shell_management_audit(
+                WorkloadRoute::UnsafeLocal => {
+                    let (identity, policy) = unsafe_shell_request_parts(&resolved)?;
+                    let operation_id = new_internal_shell_operation_id()?;
+                    let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+                    let target = identity.canonical_target.to_canonical();
+                    let request = HelperShellRequest::Kill {
+                        request_id: next_internal_shell_request_id(),
+                        operation_id,
+                        workload: identity,
+                        policy,
+                        name: requested_name.clone(),
+                    };
+                    let response = dispatch_unsafe_shell_management(state, peer.uid, request)
+                        .inspect_err(|error| {
+                            record_shell_dispatch_failure(
+                                state,
+                                peer.uid,
+                                &target,
+                                shell_backend::ShellProvider::UnsafeLocal,
+                                "kill",
+                                Some(operation_digest.clone()),
+                                error,
+                            );
+                        })?;
+                    let HelperShellResponse::Kill(response) = response else {
+                        return Err(shell_backend::unsafe_shell_failed(
+                            typed_error::UnsafeLocalShellErrorKind::Protocol,
+                        ));
+                    };
+                    (
+                        response.result,
+                        shell_backend::ShellProvider::UnsafeLocal,
+                        target,
+                        Some(operation_digest),
+                    )
+                }
+                WorkloadRoute::CapabilityUnavailable { provider } => {
+                    let error = shell_route_capability_error(&requested_target, provider);
+                    record_resolved_shell_failure(
+                        state,
+                        peer.uid,
+                        &resolved,
+                        &requested_target,
+                        "kill",
+                        None,
+                        &error,
+                    );
+                    return Err(error);
+                }
+            };
+            let digest = shell_ref_digest(&[&target, requested_name.as_str()]);
+            emit_provider_shell_audit(
                 state,
-                peer.uid,
-                &vm,
-                daemon_audit::ShellAuditAction::Kill,
-                daemon_audit::ShellAuditResult::Killed,
-                &digest,
+                ProviderShellAudit {
+                    target: &target,
+                    peer_uid: peer.uid,
+                    provider,
+                    action: daemon_audit::ShellAuditAction::Kill,
+                    result: daemon_audit::ShellAuditResult::Killed,
+                    force: None,
+                    operation_digest,
+                    session_digest: Some(digest),
+                },
             );
-            shell_metric(state, "management", "none");
+            shell_metric_for_provider(state, provider, "kill", "management", "none");
             public_wire::ShellOpResponse::Kill(result)
         }
         public_wire::ShellOp::Attach(_)
@@ -8182,23 +8566,253 @@ fn dispatch_shell_management(
     Ok(wire::shell_response(&response))
 }
 
-fn emit_shell_management_audit(
+fn unsafe_shell_request_parts(
+    resolved: &workload_dispatch::ResolvedShell,
+) -> Result<
+    (
+        d2b_core::workload_identity::WorkloadIdentity,
+        d2b_contracts::unsafe_local_wire::HelperShellPolicy,
+    ),
+    TypedError,
+> {
+    let identity = resolved.identity.clone().ok_or_else(|| {
+        shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol)
+    })?;
+    let policy = resolved.policy.clone().ok_or_else(|| {
+        shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol)
+    })?;
+    Ok((identity, policy))
+}
+
+fn dispatch_unsafe_shell_management(
     state: &ServerState,
     peer_uid: u32,
-    vm: &str,
+    request: d2b_contracts::unsafe_local_wire::HelperShellRequest,
+) -> Result<d2b_contracts::unsafe_local_wire::HelperShellResponse, TypedError> {
+    match state
+        .unsafe_local_helpers
+        .dispatch_shell(peer_uid, request)
+        .map_err(map_shell_helper_registry_error)?
+    {
+        unsafe_local_helper::HelperShellReply::Management(response) => Ok(response),
+        unsafe_local_helper::HelperShellReply::Terminal { .. } => Err(
+            shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol),
+        ),
+    }
+}
+
+fn shell_route_capability_error(
+    target: &str,
+    provider: d2b_realm_core::WorkloadProviderKind,
+) -> TypedError {
+    TypedError::RuntimeCapabilityUnsupported {
+        vm: target.to_owned(),
+        runtime_kind: workload_provider_label(provider).to_owned(),
+        capability: "persistent-shell".to_owned(),
+        verb: "shell".to_owned(),
+    }
+}
+
+fn record_shell_dispatch_failure(
+    state: &ServerState,
+    peer_uid: u32,
+    target: &str,
+    provider: shell_backend::ShellProvider,
+    operation: &'static str,
+    operation_digest: Option<String>,
+    error: &TypedError,
+) {
+    shell_metric_for_provider(
+        state,
+        provider,
+        operation,
+        "error",
+        shell_error_kind_label(error),
+    );
+    emit_provider_shell_audit(
+        state,
+        ProviderShellAudit {
+            target,
+            peer_uid,
+            provider,
+            action: daemon_audit::ShellAuditAction::Failure,
+            result: daemon_audit::ShellAuditResult::Refused,
+            force: None,
+            operation_digest,
+            session_digest: None,
+        },
+    );
+}
+
+fn record_unresolved_shell_failure(
+    state: &ServerState,
+    peer_uid: u32,
+    _requested_target: &str,
+    operation: &'static str,
+    error: &TypedError,
+) {
+    let provider = shell_provider_for_error(error);
+    shell_metric_for_provider(
+        state,
+        provider,
+        operation,
+        "error",
+        shell_error_kind_label(error),
+    );
+    emit_shell_failure_audit(state, peer_uid, _requested_target, error);
+}
+
+fn record_resolved_shell_failure(
+    state: &ServerState,
+    peer_uid: u32,
+    resolved: &workload_dispatch::ResolvedShell,
+    _requested_target: &str,
+    operation: &'static str,
+    operation_digest: Option<String>,
+    error: &TypedError,
+) {
+    use workload_dispatch::WorkloadRoute;
+
+    let (provider, target) = match &resolved.route {
+        WorkloadRoute::UnsafeLocal => (
+            shell_backend::ShellProvider::UnsafeLocal,
+            resolved
+                .identity
+                .as_ref()
+                .map(|identity| identity.canonical_target.to_canonical())
+                .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
+        ),
+        WorkloadRoute::LocalVm { vm } => (shell_backend::ShellProvider::GuestControl, vm.clone()),
+        WorkloadRoute::CapabilityUnavailable { provider } => (
+            if *provider == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
+                shell_backend::ShellProvider::UnsafeLocal
+            } else {
+                shell_backend::ShellProvider::GuestControl
+            },
+            resolved
+                .identity
+                .as_ref()
+                .map(|identity| identity.canonical_target.to_canonical())
+                .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
+        ),
+    };
+    record_shell_dispatch_failure(
+        state,
+        peer_uid,
+        &target,
+        provider,
+        operation,
+        operation_digest,
+        error,
+    );
+}
+
+fn shell_audit_provider(
+    provider: shell_backend::ShellProvider,
+) -> daemon_audit::ShellAuditProvider {
+    match provider {
+        shell_backend::ShellProvider::GuestControl => {
+            daemon_audit::ShellAuditProvider::GuestControl
+        }
+        shell_backend::ShellProvider::UnsafeLocal => daemon_audit::ShellAuditProvider::UnsafeLocal,
+    }
+}
+
+struct ProviderShellAudit<'a> {
+    target: &'a str,
+    peer_uid: u32,
+    provider: shell_backend::ShellProvider,
     action: daemon_audit::ShellAuditAction,
+    result: daemon_audit::ShellAuditResult,
+    force: Option<bool>,
+    operation_digest: Option<String>,
+    session_digest: Option<String>,
+}
+
+fn emit_provider_shell_audit(state: &ServerState, event: ProviderShellAudit<'_>) {
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::ShellLifecycle {
+            target: event.target.to_owned(),
+            peer_uid: event.peer_uid,
+            provider: shell_audit_provider(event.provider),
+            action: event.action,
+            result: event.result,
+            force: event.force,
+            operation_digest: event.operation_digest,
+            session_digest: event.session_digest,
+        });
+}
+
+fn emit_shell_attach_audit(
+    state: &ServerState,
+    peer_uid: u32,
+    established: &shell_backend::EstablishedShell,
+    shell_ref_digest: &str,
+    force: bool,
+) {
+    emit_provider_shell_audit(
+        state,
+        ProviderShellAudit {
+            target: &established.target,
+            peer_uid,
+            provider: established.provider,
+            action: daemon_audit::ShellAuditAction::Attach,
+            result: daemon_audit::ShellAuditResult::Attached,
+            force: Some(force),
+            operation_digest: established.operation_digest.clone(),
+            session_digest: Some(shell_ref_digest.to_owned()),
+        },
+    );
+}
+
+fn emit_shell_close_audit(
+    state: &ServerState,
+    peer_uid: u32,
+    established: &shell_backend::EstablishedShell,
     result: daemon_audit::ShellAuditResult,
     shell_ref_digest: &str,
 ) {
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
-            vm: vm.to_owned(),
+    emit_provider_shell_audit(
+        state,
+        ProviderShellAudit {
+            target: &established.target,
             peer_uid,
-            action,
+            provider: established.provider,
+            action: daemon_audit::ShellAuditAction::Close,
             result,
-            shell_ref_digest: shell_ref_digest.to_owned(),
-        });
+            force: None,
+            operation_digest: established.operation_digest.clone(),
+            session_digest: Some(shell_ref_digest.to_owned()),
+        },
+    );
+}
+
+fn emit_shell_failure_audit(
+    state: &ServerState,
+    peer_uid: u32,
+    _requested_target: &str,
+    error: &TypedError,
+) {
+    let provider = shell_provider_for_error(error);
+    let target = unresolved_shell_audit_target();
+    emit_provider_shell_audit(
+        state,
+        ProviderShellAudit {
+            target,
+            peer_uid,
+            provider,
+            action: daemon_audit::ShellAuditAction::Failure,
+            result: daemon_audit::ShellAuditResult::Refused,
+            force: None,
+            operation_digest: None,
+            session_digest: None,
+        },
+    );
+}
+
+fn unresolved_shell_audit_target() -> &'static str {
+    "unresolved"
 }
 
 fn run_shell_owner(
@@ -8229,95 +8843,72 @@ fn run_shell_owner(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
-            shell_metric(&state, "error", shell_error_kind_label(&error));
+            record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
             return;
         }
     };
-    let (client, guest_boot_id, attach_response) =
-        match rt.block_on(establish_shell_owner_async(&state, &attach)) {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = write_json_frame(
-                    stream.as_ref(),
-                    &wire::error_frame_with_id(first_op_id, &error),
-                );
-                shell_metric(&state, "error", shell_error_kind_label(&error));
-                return;
-            }
-        };
-    if let Err(error) = shell_error_to_typed(attach_response.error.as_ref()) {
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &wire::error_frame_with_id(first_op_id, &error),
-        );
-        shell_metric(&state, "error", shell_error_kind_label(&error));
-        return;
-    }
-    let session_id = match attach_response.session_id.clone() {
-        Some(session) => session,
-        None => {
-            tracing::warn!(
-                vm = %attach.vm,
-                resolved_name_valid = %public_wire::ShellName::new(&attach_response.resolved_name).is_ok(),
-                state = ?attach_response.state.enum_value(),
-                force_evicted = attach_response.force_evicted,
-                error_present = attach_response.error.is_some(),
-                "shell attach response missing session id"
-            );
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &wire::error_frame_with_id(first_op_id, &shell_protocol_failed()),
-            );
-            shell_metric(&state, "error", "protocol");
-            return;
-        }
-    };
-    let initial_control_seq = attach_response.control_seq;
-    let owner_shell_ref_digest = shell_ref_digest(&[&attach.vm, &attach_response.resolved_name]);
-    let public_attach_result = match map_shell_attach_response(attach_response) {
-        Ok(value) => public_wire::ShellOpResponse::Attach(value),
+    let established = match rt.block_on(establish_shell_backend(&state, peer.uid, &attach)) {
+        Ok(value) => value,
         Err(error) => {
             let _ = write_json_frame(
                 stream.as_ref(),
                 &wire::error_frame_with_id(first_op_id, &error),
             );
-            shell_metric(&state, "error", shell_error_kind_label(&error));
+            match resolve_shell_target(&state, &attach.vm) {
+                Ok(resolved) => record_resolved_shell_failure(
+                    &state, peer.uid, &resolved, &attach.vm, "attach", None, &error,
+                ),
+                Err(_) => {
+                    record_unresolved_shell_failure(&state, peer.uid, &attach.vm, "attach", &error);
+                }
+            }
             return;
         }
     };
-    let owner_resolved_name = match &public_attach_result {
-        public_wire::ShellOpResponse::Attach(result) => result.resolved_name.clone(),
-        _ => unreachable!("public_attach_result is always Attach"),
-    };
+    let owner_resolved_name = established.attach.resolved_name.clone();
+    let owner_shell_ref_digest =
+        shell_ref_digest(&[&established.target, owner_resolved_name.as_str()]);
+    let public_attach_result = public_wire::ShellOpResponse::Attach(established.attach.clone());
     if write_json_frame(
         stream.as_ref(),
         &wire::shell_response_with_id(first_op_id, &public_attach_result),
     )
     .is_err()
     {
-        shell_close_attach_best_effort_with_runtime(
+        let mut control_sequence = established.initial_control_sequence;
+        shell_backend::best_effort_close(
+            established.backend.as_ref(),
             rt.handle(),
-            &client,
-            &attach.vm,
-            &session_id,
-            &guest_boot_id,
+            &mut control_sequence,
         );
-        shell_metric(&state, "error", "transport");
+        let error = shell_transport_failed();
+        record_shell_dispatch_failure(
+            &state,
+            peer.uid,
+            &established.target,
+            established.provider,
+            "attach",
+            established.operation_digest.clone(),
+            &error,
+        );
         return;
     }
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlShellAttached {
-            vm: attach.vm.clone(),
-            peer_uid: peer.uid,
-            action: daemon_audit::ShellAuditAction::Attach,
-            result: daemon_audit::ShellAuditResult::Attached,
-            shell_ref_digest: owner_shell_ref_digest.clone(),
-            force: attach.force,
-        });
-    shell_metric(&state, "established", "none");
+    emit_shell_attach_audit(
+        &state,
+        peer.uid,
+        &established,
+        &owner_shell_ref_digest,
+        attach.force,
+    );
+    shell_metric_for_provider(
+        &state,
+        established.provider,
+        "attach",
+        "established",
+        "none",
+    );
 
-    let mut control_seq = initial_control_seq;
+    let mut control_seq = established.initial_control_sequence;
     let mut poll_tasks: Vec<std::thread::JoinHandle<()>> = Vec::new();
     let mut attachment_closed = false;
     while let Ok(frame) = read_frame(stream.as_ref()) {
@@ -8334,7 +8925,10 @@ fn run_shell_owner(
                 continue;
             }
         };
-        if matches!(op, public_wire::ShellOp::ReadOutput(_)) {
+        if matches!(
+            op,
+            public_wire::ShellOp::ReadOutput(_) | public_wire::ShellOp::Wait(_)
+        ) {
             if poll_tasks.len() >= SHELL_OWNER_INFLIGHT_CAP {
                 if write_json_frame(
                     stream.as_ref(),
@@ -8349,25 +8943,14 @@ fn run_shell_owner(
                 }
                 continue;
             }
-            let client = Arc::clone(&client);
+            let backend = Arc::clone(&established.backend);
             let poll_stream = Arc::clone(&stream);
-            let vm = attach.vm.clone();
-            let session_id = session_id.clone();
-            let guest_boot_id = guest_boot_id.clone();
             let rt_handle = rt.handle().clone();
             let task = std::thread::Builder::new()
                 .name("d2b-shell-poll".to_owned())
                 .spawn(move || {
                     let mut ignored_control_seq = 0;
-                    let value = match handle_shell_owner_op(
-                        &rt_handle,
-                        client.as_ref(),
-                        &vm,
-                        &session_id,
-                        &guest_boot_id,
-                        &mut ignored_control_seq,
-                        op,
-                    ) {
+                    let value = match backend.handle_op(&rt_handle, &mut ignored_control_seq, op) {
                         Ok(Some(response)) => wire::shell_response_with_id(op_id, &response),
                         Ok(None) => return,
                         Err(error) => wire::error_frame_with_id(op_id, &error),
@@ -8386,15 +8969,9 @@ fn run_shell_owner(
             continue;
         }
         let closes_owner = matches!(op, public_wire::ShellOp::CloseAttach(_));
-        let response = handle_shell_owner_op(
-            rt.handle(),
-            &client,
-            &attach.vm,
-            &session_id,
-            &guest_boot_id,
-            &mut control_seq,
-            op,
-        );
+        let response = established
+            .backend
+            .handle_op(rt.handle(), &mut control_seq, op);
         match response {
             Ok(Some(response)) => {
                 if write_json_frame(
@@ -8414,12 +8991,10 @@ fn run_shell_owner(
             Err(error) => {
                 if closes_owner
                     && matches!(
-                        shell_close_attach_best_effort_with_runtime(
+                        shell_backend::best_effort_close(
+                            established.backend.as_ref(),
                             rt.handle(),
-                            &client,
-                            &attach.vm,
-                            &session_id,
-                            &guest_boot_id
+                            &mut control_seq
                         ),
                         daemon_audit::ShellAuditResult::Closed
                     )
@@ -8449,24 +9024,20 @@ fn run_shell_owner(
     let close_result = if attachment_closed {
         daemon_audit::ShellAuditResult::Closed
     } else {
-        shell_close_attach_best_effort_with_runtime(
+        shell_backend::best_effort_close(
+            established.backend.as_ref(),
             rt.handle(),
-            &client,
-            &attach.vm,
-            &session_id,
-            &guest_boot_id,
+            &mut control_seq,
         )
     };
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlShellDetached {
-            vm: attach.vm.clone(),
-            peer_uid: peer.uid,
-            action: daemon_audit::ShellAuditAction::Detach,
-            result: close_result,
-            shell_ref_digest: owner_shell_ref_digest,
-        });
-    shell_metric(&state, "closed", "none");
+    emit_shell_close_audit(
+        &state,
+        peer.uid,
+        &established,
+        close_result,
+        &owner_shell_ref_digest,
+    );
+    shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
     let _ = nix::sys::socket::shutdown(
         stream.as_ref().as_raw_fd(),
         nix::sys::socket::Shutdown::Both,
@@ -8487,7 +9058,297 @@ fn synthetic_shell_close_attach_response(
     }
 }
 
-async fn establish_shell_owner_async(
+struct GuestShellBackend {
+    client: Arc<guest_control_health::TtrpcGuestControlClient>,
+    vm: String,
+    session_id: String,
+    guest_boot_id: String,
+}
+
+impl std::fmt::Debug for GuestShellBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuestShellBackend")
+            .field("vm", &self.vm)
+            .field("session_id", &"<redacted>")
+            .field("guest_boot_id", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
+impl shell_backend::ShellBackend for GuestShellBackend {
+    fn handle_op(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+        op: public_wire::ShellOp,
+    ) -> Result<Option<public_wire::ShellOpResponse>, TypedError> {
+        handle_shell_owner_op(
+            runtime,
+            self.client.as_ref(),
+            &self.vm,
+            &self.session_id,
+            &self.guest_boot_id,
+            control_sequence,
+            op,
+        )
+    }
+
+    fn close_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        _control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        shell_close_attach_with_runtime(
+            runtime,
+            self.client.as_ref(),
+            &self.vm,
+            &self.session_id,
+            &self.guest_boot_id,
+        )
+    }
+}
+
+async fn establish_shell_backend(
+    state: &ServerState,
+    peer_uid: u32,
+    attach: &public_wire::ShellAttachArgs,
+) -> Result<shell_backend::EstablishedShell, TypedError> {
+    use workload_dispatch::WorkloadRoute;
+
+    let resolved = resolve_shell_target(state, &attach.vm)?;
+
+    match resolved.route {
+        WorkloadRoute::LocalVm { vm } => {
+            let mut guest_attach = attach.clone();
+            guest_attach.vm = vm.clone();
+            let (client, guest_boot_id, response) =
+                establish_guest_shell_owner_async(state, &guest_attach).await?;
+            shell_error_to_typed(response.error.as_ref())?;
+            let session_id = response.session_id.clone().ok_or_else(|| {
+                tracing::warn!(
+                    vm = %vm,
+                    resolved_name_valid = %public_wire::ShellName::new(&response.resolved_name).is_ok(),
+                    state = ?response.state.enum_value(),
+                    force_evicted = response.force_evicted,
+                    error_present = response.error.is_some(),
+                    "shell attach response missing session id"
+                );
+                shell_protocol_failed()
+            })?;
+            let initial_control_sequence = response.control_seq;
+            let attach = map_shell_attach_response(response)?;
+            Ok(shell_backend::EstablishedShell {
+                backend: Arc::new(GuestShellBackend {
+                    client,
+                    vm: vm.clone(),
+                    session_id,
+                    guest_boot_id,
+                }),
+                attach,
+                target: vm,
+                provider: shell_backend::ShellProvider::GuestControl,
+                operation_digest: None,
+                initial_control_sequence,
+            })
+        }
+        WorkloadRoute::UnsafeLocal => {
+            let identity = resolved.identity.ok_or_else(|| {
+                shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol)
+            })?;
+            let policy = resolved.policy.ok_or_else(|| {
+                shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol)
+            })?;
+            let operation_id = new_internal_shell_operation_id()?;
+            let operation_digest = shell_ref_digest(&[operation_id.as_str()]);
+            emit_provider_shell_audit(
+                state,
+                ProviderShellAudit {
+                    target: &identity.canonical_target.to_canonical(),
+                    peer_uid,
+                    provider: shell_backend::ShellProvider::UnsafeLocal,
+                    action: daemon_audit::ShellAuditAction::Create,
+                    result: daemon_audit::ShellAuditResult::Requested,
+                    force: None,
+                    operation_digest: Some(operation_digest.clone()),
+                    session_digest: None,
+                },
+            );
+            shell_metric_for_provider(
+                state,
+                shell_backend::ShellProvider::UnsafeLocal,
+                "create",
+                "requested",
+                "none",
+            );
+            let request_id = next_internal_shell_request_id();
+            let request = d2b_contracts::unsafe_local_wire::HelperShellRequest::Attach {
+                request_id,
+                operation_id: operation_id.clone(),
+                workload: identity.clone(),
+                policy,
+                name: attach.name.clone(),
+                force: attach.force,
+                initial_terminal_size: attach.initial_terminal_size,
+            };
+            let reply = state
+                .unsafe_local_helpers
+                .dispatch_shell(peer_uid, request)
+                .map_err(map_shell_helper_registry_error)?;
+            let unsafe_local_helper::HelperShellReply::Terminal { ready, fd } = reply else {
+                return Err(shell_backend::unsafe_shell_failed(
+                    typed_error::UnsafeLocalShellErrorKind::Protocol,
+                ));
+            };
+            let public_session = new_public_shell_session_handle()?;
+            let terminal =
+                unsafe_local_terminal::UnsafeLocalTerminalClient::new(fd).map_err(|_| {
+                    shell_backend::unsafe_shell_failed(
+                        typed_error::UnsafeLocalShellErrorKind::Protocol,
+                    )
+                })?;
+            let resolved_name = ready.result.resolved_name;
+            let backend = shell_backend::UnsafeLocalShellBackend::new(
+                public_session.clone(),
+                resolved_name.clone(),
+                terminal,
+            );
+            Ok(shell_backend::EstablishedShell {
+                backend: Arc::new(backend),
+                attach: public_wire::ShellAttachResult {
+                    session: public_session,
+                    resolved_name,
+                    state: ready.result.state,
+                    force_evicted: ready.result.force_evicted,
+                },
+                target: identity.canonical_target.to_canonical(),
+                provider: shell_backend::ShellProvider::UnsafeLocal,
+                operation_digest: Some(operation_digest),
+                initial_control_sequence: 0,
+            })
+        }
+        WorkloadRoute::CapabilityUnavailable { provider } => {
+            Err(TypedError::RuntimeCapabilityUnsupported {
+                vm: attach.vm.clone(),
+                runtime_kind: workload_provider_label(provider).to_owned(),
+                capability: "persistent-shell".to_owned(),
+                verb: "shell".to_owned(),
+            })
+        }
+    }
+}
+
+fn resolve_shell_target(
+    state: &ServerState,
+    target: &str,
+) -> Result<workload_dispatch::ResolvedShell, TypedError> {
+    use workload_dispatch::{CatalogError, ResolvedShell, WorkloadCatalog, WorkloadRoute};
+
+    let resolver = load_bundle_resolver(state)?;
+    match WorkloadCatalog::from_resolver(&resolver) {
+        Ok(catalog) => catalog
+            .resolve_shell(resolver.unsafe_local_workloads.as_ref(), target)
+            .map_err(|error| map_shell_catalog_error(error, target)),
+        Err(CatalogError::ArtifactsUnavailable) if !target.ends_with(".d2b") => Ok(ResolvedShell {
+            identity: None,
+            route: WorkloadRoute::LocalVm {
+                vm: target.to_owned(),
+            },
+            policy: None,
+        }),
+        Err(error) => Err(map_shell_catalog_error(error, target)),
+    }
+}
+
+fn map_shell_catalog_error(error: workload_dispatch::CatalogError, target: &str) -> TypedError {
+    use workload_dispatch::CatalogError;
+    match error {
+        CatalogError::TargetNotFound => TypedError::WorkloadTargetNotFound {
+            target: target.to_owned(),
+        },
+        CatalogError::AliasConflict => TypedError::WorkloadAliasConflict {
+            workload_id: target.to_owned(),
+            detail: "multiple configured workloads share this short id".to_owned(),
+        },
+        CatalogError::ShellCapabilityUnavailable => shell_backend::unsafe_shell_failed(
+            typed_error::UnsafeLocalShellErrorKind::ShellUnavailable,
+        ),
+        CatalogError::ArtifactsUnavailable
+        | CatalogError::ConfiguredItemMissing
+        | CatalogError::ConfiguredItemMismatch => {
+            shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Protocol)
+        }
+        CatalogError::LauncherDisabled
+        | CatalogError::ItemNotFound
+        | CatalogError::OperationConflict
+        | CatalogError::OperationInProgress => {
+            shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Internal)
+        }
+    }
+}
+
+fn next_internal_helper_request_id() -> u64 {
+    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    loop {
+        let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        if request_id != 0 {
+            return request_id;
+        }
+    }
+}
+
+fn next_internal_shell_request_id() -> u64 {
+    next_internal_helper_request_id()
+}
+
+fn new_internal_shell_operation_id() -> Result<d2b_realm_core::OperationId, TypedError> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|_| {
+        shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Internal)
+    })?;
+    d2b_realm_core::OperationId::parse(format!("shell-{}", hex_bytes(&bytes))).map_err(|_| {
+        shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Internal)
+    })
+}
+
+fn new_public_shell_session_handle() -> Result<String, TypedError> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|_| {
+        shell_backend::unsafe_shell_failed(typed_error::UnsafeLocalShellErrorKind::Internal)
+    })?;
+    Ok(format!("shell-{}", hex_bytes(&bytes)))
+}
+
+fn map_shell_helper_registry_error(error: unsafe_local_helper::HelperRegistryError) -> TypedError {
+    use typed_error::UnsafeLocalShellErrorKind as UnsafeKind;
+    use unsafe_local_helper::HelperRegistryError as H;
+    match error {
+        H::HelperUnavailable | H::Io => {
+            shell_backend::unsafe_shell_failed(UnsafeKind::HelperUnavailable)
+        }
+        H::HelperStale | H::GenerationSuperseded => {
+            shell_backend::unsafe_shell_failed(UnsafeKind::HelperStale)
+        }
+        H::QueueFull | H::OperationInProgress => {
+            shell_backend::unsafe_shell_failed(UnsafeKind::QueueFull)
+        }
+        H::Timeout => shell_backend::unsafe_shell_failed(UnsafeKind::Timeout),
+        H::OperationIdConflict => shell_backend::unsafe_shell_failed(UnsafeKind::OperationConflict),
+        H::OperationRejected(code) => shell_backend::map_helper_failure(code),
+        H::InvalidFrame
+        | H::InvalidRequest
+        | H::FrameTooLarge
+        | H::ProtocolMismatch
+        | H::RequestCorrelationMismatch
+        | H::InvalidTerminalFd
+        | H::SocketBufferTooSmall
+        | H::SnapshotTooLarge => shell_backend::unsafe_shell_failed(UnsafeKind::Protocol),
+        H::UnauthorizedPeer | H::InvalidPeer => {
+            shell_backend::unsafe_shell_failed(UnsafeKind::Internal)
+        }
+    }
+}
+
+async fn establish_guest_shell_owner_async(
     state: &ServerState,
     attach: &public_wire::ShellAttachArgs,
 ) -> Result<
@@ -8765,22 +9626,6 @@ fn shell_close_attach_with_runtime(
         .map_err(map_shell_health_error)?;
     shell_error_to_typed(response.error.as_ref())?;
     map_shell_detach_response(response)
-}
-
-fn shell_close_attach_best_effort_with_runtime(
-    rt: &tokio::runtime::Handle,
-    client: &guest_control_health::TtrpcGuestControlClient,
-    vm: &str,
-    session_id: &str,
-    guest_boot_id: &str,
-) -> daemon_audit::ShellAuditResult {
-    match shell_close_attach_with_runtime(rt, client, vm, session_id, guest_boot_id) {
-        Ok(_) => daemon_audit::ShellAuditResult::Closed,
-        Err(TypedError::GuestControlShellFailed {
-            kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
-        }) => daemon_audit::ShellAuditResult::Timeout,
-        Err(_) => daemon_audit::ShellAuditResult::Error,
-    }
 }
 
 fn run_guest_shell_management<F, Fut, T>(
@@ -27958,9 +28803,9 @@ mod broker_dispatch_tests {
     #[test]
     fn shell_verb_is_admin_only() {
         use super::verb_requires_admin;
-        // Shell operations cross into the guest and can attach/detach/kill a
-        // workload-user terminal, so the daemon must deny launchers before any
-        // session lookup, guest-control probe, or owner reservation.
+        // Shell operations can attach/detach/kill a guest or unsafe-local
+        // workload-user terminal, so configured-launch authority never extends
+        // to shell and the daemon denies launchers before backend side effects.
         assert!(verb_requires_admin("shell"));
     }
 
@@ -28072,6 +28917,31 @@ mod broker_dispatch_tests {
             owner_digest, session_digest,
             "audit correlation must not use generated session ids"
         );
+    }
+
+    #[test]
+    fn helper_request_ids_share_one_nonzero_correlation_namespace() {
+        let launch = super::next_internal_helper_request_id();
+        let shell = super::next_internal_shell_request_id();
+        assert_ne!(launch, 0);
+        assert_ne!(shell, 0);
+        assert_ne!(launch, shell);
+    }
+
+    #[test]
+    fn unsafe_local_shell_feature_gate_is_explicit() {
+        assert!(!super::unsafe_local_shell_feature_negotiated(&[]));
+        assert!(super::unsafe_local_shell_feature_negotiated(&[
+            d2b_contracts::KnownFeatureFlag::UnsafeLocalShellV1.wire_value()
+        ]));
+    }
+
+    #[test]
+    fn unresolved_shell_audit_never_copies_public_target_text() {
+        let canary = "private-target-canary.work.d2b";
+        let target = super::unresolved_shell_audit_target();
+        assert_eq!(target, "unresolved");
+        assert!(!target.contains(canary));
     }
 
     #[test]

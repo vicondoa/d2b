@@ -3377,6 +3377,11 @@ mod tests {
         let decoded: PublicRequest =
             serde_json::from_value(value.clone()).expect("shell attach decodes");
         assert_eq!(decoded, attach);
+        let mut policy_injection = value;
+        policy_injection["payload"]["args"]["policy"] =
+            serde_json::json!({"defaultName": "attacker", "maxSessions": 64});
+        serde_json::from_value::<PublicRequest>(policy_injection)
+            .expect_err("public shell requests cannot inject helper policy");
 
         let kill_without_name = serde_json::json!({
             "kind": "shell",

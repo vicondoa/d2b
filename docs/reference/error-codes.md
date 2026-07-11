@@ -55,6 +55,40 @@ shape, remediation hint, and docs anchor.
 | <a id="provider-misconfigured"></a>`#provider-misconfigured` | `provider-misconfigured` | `80` | `provider` | provider for {vm} is misconfigured: {reason} | Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running. |
 <!-- END AUTO-GENERATED: error-table -->
 
+### Unsafe-local persistent-shell errors
+
+These daemon wire errors carry only a closed kind. They never include helper
+diagnostics, shell names, public session handles, terminal bytes, supervisor
+metadata, paths, environment, or cwd.
+
+| docs anchor / kind | exit | Meaning and remediation |
+| --- | --- | --- |
+| <a id="unsafe-local-shell-feature-unavailable"></a>`unsafe-local-shell-feature-unavailable` | `70` | Update `d2b`, `d2bd`, and the helper together; no host-shell fallback is permitted. |
+| <a id="unsafe-local-shell-helper-unavailable"></a>`unsafe-local-shell-helper-unavailable` | `69` | Start the requesting user's `d2b-unsafe-local-helper` in a login session. |
+| <a id="unsafe-local-shell-helper-stale"></a>`unsafe-local-shell-helper-stale` | `69` | Restart the same-UID helper; d2bd rejected a stale generation. |
+| <a id="unsafe-local-shell-capacity"></a>`unsafe-local-shell-capacity` | `75` | Wait for pending work, or detach/kill an existing session before retrying. |
+| <a id="unsafe-local-shell-timeout"></a>`unsafe-local-shell-timeout` | `69` | Inspect helper/user-manager health and list sessions before retrying; daemon timeouts are not replayed automatically. |
+| <a id="unsafe-local-shell-protocol-error"></a>`unsafe-local-shell-protocol-error` | `76` | Update `d2b`, `d2bd`, and the helper together. |
+| <a id="unsafe-local-shell-operation-conflict"></a>`unsafe-local-shell-operation-conflict` | `76` | Retry the public action so d2bd derives a fresh private operation id. |
+| <a id="unsafe-local-shell-user-manager-unavailable"></a>`unsafe-local-shell-user-manager-unavailable` | `69` | Log in through a PAM-backed session and start the user manager; d2b does not enable linger. |
+| <a id="unsafe-local-shell-environment-invalid"></a>`unsafe-local-shell-environment-invalid` | `70` | Repair the user manager's runtime-directory and D-Bus environment, then restart the helper. |
+| <a id="unsafe-local-shell-executable-unavailable"></a>`unsafe-local-shell-executable-unavailable` | `70` | Configure an absolute executable login shell for the user. |
+| <a id="unsafe-local-shell-scope-create-failed"></a>`unsafe-local-shell-scope-create-failed` | `42` | Repair transient user-scope creation and retry. |
+| <a id="unsafe-local-shell-scope-identity-mismatch"></a>`unsafe-local-shell-scope-identity-mismatch` | `70` | Restart the helper and inspect the degraded user scope; ambiguous metadata is not adopted or killed. |
+| <a id="unsafe-local-shell-graphical-session-inactive"></a>`unsafe-local-shell-graphical-session-inactive` | `69` | Start a graphical login session. |
+| <a id="unsafe-local-shell-wayland-unavailable"></a>`unsafe-local-shell-wayland-unavailable` | `69` | Start the login session's Wayland compositor. |
+| <a id="unsafe-local-shell-proxy-unavailable"></a>`unsafe-local-shell-proxy-unavailable` | `69` | Repair the d2b Wayland proxy; direct compositor fallback is forbidden. |
+| <a id="unsafe-local-shell-first-client-timeout"></a>`unsafe-local-shell-first-client-timeout` | `69` | Repair proxy readiness and retry. |
+| <a id="unsafe-local-shell-unavailable"></a>`unsafe-local-shell-unavailable` | `69` | List sessions and attach again; attachment loss does not kill the shell. |
+| <a id="unsafe-local-shell-not-found"></a>`unsafe-local-shell-not-found` | `76` | List sessions and retry with a listed name. |
+| <a id="unsafe-local-shell-already-attached"></a>`unsafe-local-shell-already-attached` | `75` | Detach the existing client or use `--force`. |
+| <a id="unsafe-local-shell-output-gap"></a>`unsafe-local-shell-output-gap` | `76` | Reattach to redraw from the retained output cursor. |
+| <a id="unsafe-local-shell-offset-mismatch"></a>`unsafe-local-shell-offset-mismatch` | `76` | Reattach before writing more input. |
+| <a id="unsafe-local-shell-terminal-closed"></a>`unsafe-local-shell-terminal-closed` | `69` | List and reattach; the persistent shell may still be running. |
+| <a id="unsafe-local-shell-invalid-terminal-size"></a>`unsafe-local-shell-invalid-terminal-size` | `76` | Retry from a terminal reporting non-zero rows and columns. |
+| <a id="unsafe-local-shell-stale-session"></a>`unsafe-local-shell-stale-session` | `77` | Reattach to obtain a fresh opaque public handle. |
+| <a id="unsafe-local-shell-internal"></a>`unsafe-local-shell-internal` | `42` | Retry, then inspect the bounded daemon lifecycle event if it persists. |
+
 ## CLI host-verb refusal envelope
 
 The CLI host verbs (`d2b host prepare`, `host destroy`,
@@ -88,7 +122,7 @@ matches an `#anchor` here. The goldens are the contract.
 | --- | --- | --- | --- | --- |
 | <a id="daemon-down"></a>`#daemon-down` | `daemon-down` | `1` | Daemon connectivity at `/run/d2b/public.sock` and broker dispatch readiness. | `d2bd` is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back `host prepare/destroy --apply` are not yet wired through `d2bd` (the broker op is staged but not yet reachable from the public socket). |
 | <a id="broker-error"></a>`#broker-error` | `broker-error` | `78` | Daemon → broker execution for `d2b <verb> --apply`. | The daemon reached the live broker executor, but the broker refused or failed the request. Disk-init failures use a `broker-error:DiskInit:<broker-kind>` shape when the broker fails while creating a declared image via `fallocate` + `mkfs.ext4` or when automatic declared-posture repair is bypassed because the existing image is ambiguous or unsafe. |
-| <a id="not-yet-implemented"></a>`#not-yet-implemented` | `not-yet-implemented` | `78` | Whether the requested native surface is shipped in this release. | The CLI/daemon has the verb shell, but the concrete backend is still deferred; the CLI returns a typed exit-78 envelope instead of falling back to bash. |
+| <a id="not-yet-implemented"></a>`#not-yet-implemented` | `not-yet-implemented` | `78` | Whether the requested native surface is shipped in this release. | The requested native backend is deferred; the CLI returns a typed exit-78 envelope instead of falling back to bash. |
 | <a id="--read-only-required"></a>`#--read-only-required` | `--read-only-required` | `78` | `host doctor` invocation flags. | `--read-only` flag missing. The current `host doctor` verb is read-only; mutation forms are separate surfaces. |
 | <a id="--apply-or-dry-run-required"></a>`#--apply-or-dry-run-required` | `--apply-or-dry-run-required` | `78` | `host prepare` / `host destroy` / `host install` invocation flags. | Neither `--dry-run` nor `--apply` was provided; these host verbs require one of the two to disambiguate plan vs mutate. |
 
