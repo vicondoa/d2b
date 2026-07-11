@@ -330,7 +330,7 @@ mod tests {
             WorkloadId::parse("browser").unwrap(),
             realm_id.clone(),
             RealmPath::new(vec![realm_id]).unwrap(),
-            WorkloadTarget::parse(format!("browser.{realm}.d2b")).unwrap(),
+            WorkloadTarget::parse(&format!("browser.{realm}.d2b")).unwrap(),
         )
     }
 

@@ -3840,7 +3840,7 @@ mod workload_launch_tests {
             WorkloadId::parse(workload_id).unwrap(),
             realm_id.clone(),
             RealmPath::new(vec![realm_id]).unwrap(),
-            WorkloadTarget::parse(format!("{workload_id}.{realm}.d2b")).unwrap(),
+            WorkloadTarget::parse(&format!("{workload_id}.{realm}.d2b")).unwrap(),
         );
         WorkloadPublicSummary {
             identity,
