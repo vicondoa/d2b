@@ -59,6 +59,13 @@ pub enum HelperRegistryError {
     Io,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperAvailability {
+    Ready,
+    Unavailable,
+    Stale,
+}
+
 pub enum HelperReply {
     Operation(HelperOperationResult),
     Rejected(HelperOperationRejected),
@@ -144,6 +151,7 @@ impl HelperConnection {
 struct RegistryState {
     connections: HashMap<u32, Arc<HelperConnection>>,
     snapshots: HashMap<u32, HelperSnapshot>,
+    last_failures: HashMap<u32, HelperFailureCode>,
 }
 
 pub struct HelperRegistry {
@@ -218,6 +226,24 @@ impl HelperRegistry {
         self.state.lock().snapshots.get(&uid).cloned()
     }
 
+    pub fn availability(&self, uid: u32) -> HelperAvailability {
+        let state = self.state.lock();
+        let Some(connection) = state.connections.get(&uid) else {
+            return HelperAvailability::Unavailable;
+        };
+        if connection.closed.load(Ordering::Acquire) {
+            HelperAvailability::Unavailable
+        } else if connection.is_stale() {
+            HelperAvailability::Stale
+        } else {
+            HelperAvailability::Ready
+        }
+
+        pub fn last_failure(&self, uid: u32) -> Option<HelperFailureCode> {
+            self.state.lock().last_failures.get(&uid).copied()
+        }
+    }
+
     pub fn dispatch_launch(
         &self,
         requester_uid: u32,
@@ -259,6 +285,9 @@ impl HelperRegistry {
             return Err(HelperRegistryError::HelperUnavailable);
         }
         if connection.is_stale() {
+            self.operations
+                .lock()
+                .abort_active(requester_uid, &operation_key);
             return Err(HelperRegistryError::HelperStale);
         }
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -302,6 +331,7 @@ impl HelperRegistry {
                     result.clone(),
                     now_epoch_seconds(),
                 );
+                self.state.lock().last_failures.remove(&requester_uid);
                 Ok(result)
             }
             Ok(Ok(HelperReply::Rejected(rejected))) => {
@@ -311,6 +341,10 @@ impl HelperRegistry {
                     rejected.code,
                     now_epoch_seconds(),
                 );
+                self.state
+                    .lock()
+                    .last_failures
+                    .insert(requester_uid, rejected.code);
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Ok(HelperReply::Terminal { .. })) => {

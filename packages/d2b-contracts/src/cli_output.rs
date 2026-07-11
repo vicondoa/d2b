@@ -65,6 +65,16 @@ pub struct VmExecCreateOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaunchOutputV1 {
+    pub command: String,
+    pub target: d2b_core::workload_identity::WorkloadTarget,
+    pub item_id: d2b_realm_core::ProtocolToken,
+    pub operation_id: d2b_realm_core::OperationId,
+    pub disposition: crate::public_wire::LauncherExecDisposition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmExecListOutputV1 {
     pub command: String,
     pub vm: String,

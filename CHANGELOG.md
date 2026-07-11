@@ -12,6 +12,17 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added feature-negotiated provider-neutral workload list, status, and configured
+  launch dispatch. `d2b launch` resolves targets and default/sole items from
+  argv-free public metadata, while `d2bd` resolves execution solely from the
+  bundle-hashed private item contract. Local VMs launch through authenticated
+  guest-control as the workload user; unsafe-local launches require an exact
+  same-UID helper. Unsupported providers, remote access, missing prerequisites,
+  and every fallback path fail with typed remediation. New bounded audit and
+  low-cardinality dashboard signals expose provider readiness and launch results
+  without command, environment, path, process, or unit details. Bundle format 11
+  extends the private configured-item artifact to local VM workloads.
+
 - Added the same-UID unsafe-local runtime foundation: `d2bd` now owns the
   bounded, peer-credential-authenticated helper socket and one-generation-per-
   UID registry; eligible users receive a fail-closed global systemd user
@@ -37,8 +48,8 @@ deprecations ship one minor release before removal.
   posture, argv-free launcher schema v2, private configured-item artifact,
   private helper wire v1, conditional host socket-buffer maxima for its bounded
   seqpacket frames, protocol-v3 feature flags, and bundle format v10.
-  Runtime dispatch remains feature-gated until the daemon/helper implementation
-  lands.
+  Runtime dispatch is feature-gated and available through the daemon workload
+  operation family.
 
 - Added ADR 0044 for an explicit `unsafe-local` runtime provider that treats
   host user/session/network workloads as first-class realm workloads for

@@ -61,6 +61,9 @@ _d2b() {
             d2b,list)
                 cmd="d2b__subcmd__list"
                 ;;
+            d2b,launch)
+                cmd="d2b__subcmd__launch"
+                ;;
             d2b,migrate)
                 cmd="d2b__subcmd__migrate"
                 ;;
@@ -704,7 +707,7 @@ _d2b() {
 
     case "${cmd}" in
         d2b)
-            opts="-h -V --help --version list status usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
+            opts="-h -V --help --version list status launch usb console audio audit host auth realm shell op vm up down restart build generations switch boot test rollback gc store keys trust rotate-known-host migrate config clipboard help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2806,6 +2809,24 @@ _d2b() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__launch)
+            opts="-h --item --json --human --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --item)
+                    COMPREPLY=()
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

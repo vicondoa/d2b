@@ -7778,6 +7778,25 @@
           }
         },
         {
+          "description": "Provider-neutral workload inventory, status, and configured launch.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/WorkloadOp"
+            }
+          }
+        },
+        {
           "description": "Security-key proxy status: host proxy health, configured FIDO device selectors, current lease, and per-VM virtual-device state. `d2b usb security-key status`",
           "type": "object",
           "required": [
@@ -7845,6 +7864,24 @@
             },
             "payload": {
               "$ref": "#/definitions/CapabilitiesResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/WorkloadOpResponse"
             }
           }
         },

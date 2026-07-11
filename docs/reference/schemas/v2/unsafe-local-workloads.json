@@ -7,6 +7,12 @@
     "workloads"
   ],
   "properties": {
+    "localVmWorkloads": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LocalVmConfiguredWorkload"
+      }
+    },
     "schemaVersion": {
       "type": "string"
     },
@@ -41,6 +47,35 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LocalVmConfiguredWorkload": {
+      "type": "object",
+      "required": [
+        "identity",
+        "items"
+      ],
+      "properties": {
+        "defaultItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProtocolToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity": {
+          "$ref": "#/definitions/WorkloadIdentity"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UnsafeLocalLauncherItem"
+          }
         }
       },
       "additionalProperties": false

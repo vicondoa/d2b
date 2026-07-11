@@ -22,7 +22,7 @@ world-readable system profile.
 | `realm-controllers.json` | private realm controller metadata | root:`d2bd` `0640` | Metadata-only per-realm daemon, broker, socket, state, audit, allocator binding, provider placement, and direct-access plan rooted in `d2b.realms`. |
 | `realm-identity.json` | private realm identity metadata | root:`d2bd` `0640` | Realm identity, provider binding, policy, and capability metadata consumed by the daemon. |
 | `realm-workloads-launcher-v2.json` | public launcher metadata in the private bundle | root:`d2bd` `0640` | Argv-free provider, posture, realm color, and generic launcher-item metadata served to authorized clients through the public daemon API. |
-| `unsafe-local-workloads.json` | private unsafe-local execution intent | root:`d2bd` `0640` | Normalized configured argv, workload identity, default item, and persistent-shell policy resolved only by `d2bd`. |
+| `unsafe-local-workloads.json` | private configured launcher intent | root:`d2bd` `0640` | Normalized configured argv and default items for unsafe-local and local-VM workloads, plus unsafe-local persistent-shell policy, resolved only by `d2bd`. |
 | `privileges.json` | private authorization policy | root:`d2bd` `0640` | Public API/CLI authorization matrix and private broker operation matrix. |
 | `closures/<vm>.json` | private closure metadata | root:`d2bd` `0640` | Per-VM toplevel, closure paths, declared-runner parity data, and generation metadata. |
 | `minijail-profile.json` | private sandbox profile catalog | root:`d2bd` `0640` | Typed minijail profile fields, mount policy, and bounded start-as-root exceptions. |
@@ -45,8 +45,8 @@ The policy is defined by
 schema directory is `docs/reference/schemas/v2/`; the bundle and
 per-artifact schemas were bumped from `v1` to `v2` to land the
 host-prepare additions; the current emitted
-bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 10`
-for the unsafe-local workload execution artifact.
+bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 11`
+for provider-neutral configured launcher execution.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under

@@ -6,6 +6,9 @@ let
   unsafeLocalWorkloads = lib.filter
     (workload: workload.kind == "unsafe-local")
     cfg._index.realms.workloads.enabled;
+  localVmWorkloads = lib.filter
+    (workload: workload.kind == "local-vm")
+    cfg._index.realms.workloads.enabled;
 
   privateItem = item:
     if item.type == "exec"
@@ -45,9 +48,28 @@ let
         else null;
     };
 
+  privateLocalVmWorkload = workload: {
+    identity = lib.filterAttrs (_: value: value != null) {
+      workloadId = workload.workloadId;
+      workloadName =
+        if workload.label == workload.workloadId
+        then null
+        else workload.label;
+      realmId = workload.realmId;
+      realmPath = lib.splitString "." workload.realmPath;
+      canonicalTarget = workload.canonicalTarget;
+      legacyVmName = workload.legacyVmName;
+      runtimeKind = workload.runtimeKind;
+      providerId = workload.runtimeProviderId;
+    };
+    defaultItemId = workload.defaultItemId;
+    items = map privateItem workload.launcherItems;
+  };
+
   data = {
     schemaVersion = "v2";
     workloads = map privateWorkload unsafeLocalWorkloads;
+    localVmWorkloads = map privateLocalVmWorkload localVmWorkloads;
   };
 in
 {

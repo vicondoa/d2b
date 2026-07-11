@@ -52,31 +52,41 @@ removed. See [Realm access resolver contract](./realm-access-resolver.md) for
 the target grammar, direct host-local socket binding, capability preflight, and
 typed denial shapes.
 
-Current CLI VM lifecycle and exec commands still operate through the global
-`d2bd` public socket and existing VM names unless a command section explicitly
-documents a realm-aware backend. The resolver contract is documentation and DTO
-shape for future routing; it does not make identity, relay, provider, or
-realm-local lifecycle behavior available in this release.
+VM lifecycle and arbitrary exec remain VM-only. A trusted unsafe-local target is
+rejected before those handlers can coerce its workload id to a VM name.
+Provider-neutral list, status, and configured launch use the workload operation
+family on the local `d2bd` public socket.
 
 ### Configured launcher operation
 
-The staged provider-neutral command contract is:
+The provider-neutral command is:
 
 ```text
 d2b launch <canonical-target> [--item <item-id>]
 ```
 
 The public request carries only the canonical target, configured item id, and
-an idempotency operation id. It never carries argv, uid, environment, cwd, or
-display paths. An `exec` item dispatches through the selected provider; a
-`shell` item dispatches persistent-shell semantics. When `--item` is omitted,
-the daemon selects `defaultItem`, then an only item, otherwise returns the
-available item ids and names.
+an idempotency operation id. It never carries argv, uid, environment, cwd,
+display paths, process ids, or unit names. An `exec` item dispatches through the
+selected provider. A local-VM `shell` item dispatches existing persistent-shell
+semantics; unsafe-local shell execution remains unavailable until its dedicated
+backend exists. When `--item` is omitted, the CLI selects `defaultItem`, then an
+only item, otherwise returns the available item ids and names.
 
-The DTOs are frozen under protocol version 3 and gated by
-`configured-launch-v1`; the command is not advertised until the daemon runtime
-lands. Unsupported peers return a typed capability refusal and never fall back
-to unsafe-local. See [Unsafe-local provider contract](./unsafe-local-provider.md).
+The DTOs remain protocol version 3 and are gated by `configured-launch-v1`.
+Unsafe-local additionally requires `unsafe-local-provider-v1`. Unsupported peers
+return a typed capability refusal and never fall back.
+
+**Exit codes**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Launch committed or was already committed for the operation id. |
+| `2` | Target/item not found, or omitted item is ambiguous. |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. |
+| `69` | Provider prerequisite or transport unavailable. |
+| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. |
+| `76` | Protocol response or operation-id conflict. |
 
 ## Command reference
 

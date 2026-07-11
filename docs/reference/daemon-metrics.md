@@ -216,6 +216,23 @@ declared schema; see "Cardinality bounds" below.
   provider credentials, process environments, working directories, helper
   diagnostics, and terminal bytes are never metric labels.
 
+  ### `d2b_daemon_workload_availability`
+
+  - **Type:** gauge
+  - **Labels:** `provider`, `component`, `state`
+  - **Meaning:** Current provider prerequisite posture for the closed components
+    `helper`, `scope`, `proxy`, `launcher`, and `shell`. Provider and state are
+    closed enums (`not-applicable` is used where a provider has no component);
+    workload ids and runtime details are not labels.
+
+  ### `d2b_daemon_workload_lifecycle_total`
+
+  - **Type:** counter
+  - **Labels:** `provider`, `operation`, `result`
+  - **Meaning:** Configured workload lifecycle outcomes. Values are bounded
+    provider/operation/result enums and never include argv, environment, cwd,
+    paths, process ids, unit names, or helper diagnostics.
+
 ## Cardinality bounds
 
 | Label | Source | Bound |

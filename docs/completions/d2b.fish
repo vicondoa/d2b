@@ -28,6 +28,7 @@ complete -c d2b -n "__fish_d2b_needs_command" -s h -l help -d 'Print help (see m
 complete -c d2b -n "__fish_d2b_needs_command" -s V -l version -d 'Print version'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "list" -d 'List declared VMs with daemon runtime state when d2bd is reachable'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "status" -d 'Show per-VM runtime status plus bridge health'
+complete -c d2b -n "__fish_d2b_needs_command" -f -a "launch" -d 'Launch a trusted configured workload item through its runtime provider'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "usb" -d 'USB attach / detach / probe'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "console" -d 'Foreground serial console bridge for headless VMs'
 complete -c d2b -n "__fish_d2b_needs_command" -f -a "audio" -d 'Per-VM audio status and grant controls'
@@ -64,6 +65,10 @@ complete -c d2b -n "__fish_d2b_using_subcommand status" -l json
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l human
 complete -c d2b -n "__fish_d2b_using_subcommand status" -l check-bridges
 complete -c d2b -n "__fish_d2b_using_subcommand status" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand launch" -l item -r
+complete -c d2b -n "__fish_d2b_using_subcommand launch" -l json
+complete -c d2b -n "__fish_d2b_using_subcommand launch" -l human
+complete -c d2b -n "__fish_d2b_using_subcommand launch" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -s h -l help -d 'Print help'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "attach" -d 'Bind a host USB busid to a VM via the native daemon path'
 complete -c d2b -n "__fish_d2b_using_subcommand usb; and not __fish_seen_subcommand_from attach detach probe security-key help" -f -a "detach" -d 'Unbind a host USB busid from a VM via the native daemon path'

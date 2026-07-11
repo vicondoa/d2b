@@ -121,6 +121,14 @@ pub enum VmShutdownOutcome {
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum DaemonEvent {
+    /// Bounded configured-launch lifecycle boundary. Target and item identity
+    /// are trusted bundle tokens; execution details never enter this record.
+    WorkloadLauncher {
+        target: String,
+        item_id: String,
+        provider: WorkloadLaunchProvider,
+        result: WorkloadLaunchResult,
+    },
     /// Emitted when the api-ready phase of a VM start does not converge
     /// within the configured timeout in strict split-readiness mode.
     ApiReadyTimeout {
@@ -267,6 +275,22 @@ pub enum DaemonEvent {
         outcome: VmShutdownOutcome,
         elapsed_ms: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadLaunchProvider {
+    LocalVm,
+    UnsafeLocal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadLaunchResult {
+    Committed,
+    AlreadyCommitted,
+    Refused,
+    Failed,
 }
 
 /// JSONL audit-log writer for daemon-side events.
@@ -1978,5 +2002,29 @@ mod tests {
         assert_eq!(parse_ymd("2024-03"), None);
         assert_eq!(parse_ymd("2024-03-09-10"), None);
         assert_eq!(parse_ymd("not-a-date"), None);
+    }
+
+    #[test]
+    fn workload_launch_event_contains_boundary_only() {
+        let event = DaemonEvent::WorkloadLauncher {
+            target: "browser.host.d2b".to_owned(),
+            item_id: "browser".to_owned(),
+            provider: WorkloadLaunchProvider::UnsafeLocal,
+            result: WorkloadLaunchResult::Committed,
+        };
+        let rendered = serde_json::to_string(&event).expect("serialize launch event");
+        assert!(rendered.contains("\"kind\":\"workload_launcher\""));
+        assert!(rendered.contains("\"provider\":\"unsafe-local\""));
+        for canary in [
+            "private-argv-canary",
+            "\"argv\"",
+            "\"env\"",
+            "\"cwd\"",
+            "\"path\"",
+            "\"pid\"",
+            "\"unit\"",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
     }
 }

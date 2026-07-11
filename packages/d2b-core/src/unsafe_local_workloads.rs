@@ -16,6 +16,11 @@ pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 pub struct UnsafeLocalWorkloadsJson {
     pub schema_version: String,
     pub workloads: Vec<UnsafeLocalWorkload>,
+    /// Configured launcher items for local VM workloads. They share this
+    /// private, bundle-hashed artifact so argv never enters public launcher
+    /// metadata or the public request protocol.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_vm_workloads: Vec<LocalVmConfiguredWorkload>,
 }
 
 impl UnsafeLocalWorkloadsJson {
@@ -25,9 +30,9 @@ impl UnsafeLocalWorkloadsJson {
                 "unsafe-local-workloads schemaVersion must be {UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION}"
             ));
         }
-        if self.workloads.len() > MAX_UNSAFE_LOCAL_WORKLOADS {
+        if self.workloads.len() + self.local_vm_workloads.len() > MAX_UNSAFE_LOCAL_WORKLOADS {
             return Err(format!(
-                "unsafe-local workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}"
+                "configured workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}"
             ));
         }
         let mut targets = BTreeSet::new();
@@ -38,7 +43,35 @@ impl UnsafeLocalWorkloadsJson {
             }
             workload.validate()?;
         }
+        for workload in &self.local_vm_workloads {
+            let target = workload.identity.canonical_target.to_canonical();
+            if !targets.insert(target.clone()) {
+                return Err(format!("duplicate configured workload target {target}"));
+            }
+            workload.validate()?;
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalVmConfiguredWorkload {
+    pub identity: WorkloadIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_item_id: Option<ProtocolToken>,
+    pub items: Vec<UnsafeLocalLauncherItem>,
+}
+
+impl LocalVmConfiguredWorkload {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.identity.legacy_vm_name.is_none() {
+            return Err("local-vm configured workload requires legacyVmName".to_owned());
+        }
+        if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("nixos") {
+            return Err("local-vm configured workload must use nixos runtimeKind".to_owned());
+        }
+        validate_items(&self.items, self.default_item_id.as_ref(), true)
     }
 }
 
@@ -66,39 +99,52 @@ impl UnsafeLocalWorkload {
                     .to_owned(),
             );
         }
-        if self.items.is_empty() {
-            return Err("unsafe-local workload must declare at least one launcher item".to_owned());
-        }
-        if self.items.len() > MAX_LAUNCHER_ITEMS_PER_WORKLOAD {
-            return Err(format!(
-                "unsafe-local launcher item count exceeds {MAX_LAUNCHER_ITEMS_PER_WORKLOAD}"
-            ));
-        }
-        let mut ids = BTreeSet::new();
-        for item in &self.items {
-            if !ids.insert(item.id()) {
-                return Err(format!(
-                    "duplicate unsafe-local launcher item id {}",
-                    item.id().as_str()
-                ));
-            }
-            if matches!(item, UnsafeLocalLauncherItem::Shell(_)) && self.shell.is_none() {
-                return Err("shell launcher item requires shell policy".to_owned());
-            }
-        }
-        if let Some(default_item_id) = &self.default_item_id
-            && !ids.contains(default_item_id)
-        {
-            return Err(format!(
-                "defaultItem {} does not name a declared launcher item",
-                default_item_id.as_str()
-            ));
-        }
+        validate_items(
+            &self.items,
+            self.default_item_id.as_ref(),
+            self.shell.is_some(),
+        )?;
         if let Some(shell) = &self.shell {
             shell.validate()?;
         }
         Ok(())
     }
+}
+
+fn validate_items(
+    items: &[UnsafeLocalLauncherItem],
+    default_item_id: Option<&ProtocolToken>,
+    shell_enabled: bool,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Err("configured workload must declare at least one launcher item".to_owned());
+    }
+    if items.len() > MAX_LAUNCHER_ITEMS_PER_WORKLOAD {
+        return Err(format!(
+            "configured launcher item count exceeds {MAX_LAUNCHER_ITEMS_PER_WORKLOAD}"
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for item in items {
+        if !ids.insert(item.id()) {
+            return Err(format!(
+                "duplicate configured launcher item id {}",
+                item.id().as_str()
+            ));
+        }
+        if matches!(item, UnsafeLocalLauncherItem::Shell(_)) && !shell_enabled {
+            return Err("shell launcher item requires shell policy".to_owned());
+        }
+    }
+    if let Some(default_item_id) = default_item_id
+        && !ids.contains(default_item_id)
+    {
+        return Err(format!(
+            "defaultItem {} does not name a declared launcher item",
+            default_item_id.as_str()
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -226,6 +272,7 @@ mod tests {
                 items: vec![exec_item()],
                 shell: None,
             }],
+            local_vm_workloads: Vec::new(),
         };
         artifact.validate().unwrap();
         assert!(!format!("{artifact:?}").contains("firefox"));
@@ -261,6 +308,7 @@ mod tests {
         let artifact = UnsafeLocalWorkloadsJson {
             schema_version: "v1".to_owned(),
             workloads: vec![valid_workload()],
+            local_vm_workloads: Vec::new(),
         };
         assert!(artifact.validate().is_err());
     }
@@ -270,6 +318,7 @@ mod tests {
         let artifact = UnsafeLocalWorkloadsJson {
             schema_version: "v2".to_owned(),
             workloads: vec![valid_workload(); MAX_UNSAFE_LOCAL_WORKLOADS + 1],
+            local_vm_workloads: Vec::new(),
         };
         assert!(artifact.validate().is_err());
 
@@ -306,5 +355,31 @@ mod tests {
         let mut workload = valid_workload();
         workload.default_item_id = Some(ProtocolToken::parse("missing").unwrap());
         assert!(workload.validate().is_err());
+    }
+
+    #[test]
+    fn local_vm_items_share_private_artifact_without_public_argv() {
+        let mut local_identity = identity();
+        local_identity.legacy_vm_name =
+            Some(crate::contract_id::ContractId::parse("corp-vm").unwrap());
+        local_identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+        local_identity.provider_id =
+            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+        let artifact = UnsafeLocalWorkloadsJson {
+            schema_version: "v2".to_owned(),
+            workloads: Vec::new(),
+            local_vm_workloads: vec![LocalVmConfiguredWorkload {
+                identity: local_identity,
+                default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+                items: vec![exec_item()],
+            }],
+        };
+        artifact.validate().unwrap();
+        let json = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(
+            json["localVmWorkloads"][0]["items"][0]["argv"][0],
+            "firefox"
+        );
+        assert!(!format!("{artifact:?}").contains("firefox"));
     }
 }

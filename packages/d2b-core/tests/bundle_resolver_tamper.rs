@@ -429,7 +429,7 @@ fn bundle_json_with_full_hashes(
 fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "artifactHashes": null,
-        "bundleVersion": 10,
+        "bundleVersion": 11,
         "schemaVersion": "v2",
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",

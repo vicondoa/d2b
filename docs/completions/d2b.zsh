@@ -47,6 +47,16 @@ _arguments "${_arguments_options[@]}" : \
 '::vm:_default' \
 && ret=0
 ;;
+(launch)
+_arguments "${_arguments_options[@]}" : \
+'--item=[]:ITEM:_default' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':target:_default' \
+&& ret=0
+;;
 (usb)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1861,6 +1871,7 @@ _d2b_commands() {
     local commands; commands=(
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
+'launch:Launch a trusted configured workload item through its runtime provider' \
 'usb:USB attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs' \
 'audio:Per-VM audio status and grant controls' \

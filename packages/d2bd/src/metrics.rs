@@ -167,6 +167,18 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         labels: &["subsystem", "outcome", "error_kind"],
         buckets_seconds: &[],
     },
+    MetricDescriptor {
+        name: "d2b_daemon_workload_availability",
+        kind: MetricKind::Gauge,
+        labels: &["provider", "component", "state"],
+        buckets_seconds: &[],
+    },
+    MetricDescriptor {
+        name: "d2b_daemon_workload_lifecycle_total",
+        kind: MetricKind::Counter,
+        labels: &["provider", "operation", "result"],
+        buckets_seconds: &[],
+    },
 ];
 
 /// Lookup a descriptor by name. `None` for any unknown name —
@@ -407,6 +419,12 @@ fn help_text(name: &str) -> &'static str {
         "d2b_daemon_guest_control_shell_total" => {
             "Cumulative count of guest-control shell session/op outcomes by error_kind."
         }
+        "d2b_daemon_workload_availability" => {
+            "Provider workload prerequisite availability by bounded component and state."
+        }
+        "d2b_daemon_workload_lifecycle_total" => {
+            "Configured workload lifecycle outcomes by provider and operation."
+        }
         _ => "",
     }
 }
@@ -564,6 +582,8 @@ mod tests {
                 "d2b_daemon_uptime_seconds",
                 "d2b_daemon_guest_control_exec_total",
                 "d2b_daemon_guest_control_shell_total",
+                "d2b_daemon_workload_availability",
+                "d2b_daemon_workload_lifecycle_total",
             ]
         );
     }
@@ -668,6 +688,9 @@ mod tests {
             "reason",
             "subsystem",
             "error_kind",
+            "provider",
+            "component",
+            "operation",
         ];
 
         // Populate one sample of EVERY inventory metric so render() emits
@@ -724,7 +747,6 @@ mod tests {
             "environment",
             "cwd",
             "current_working_directory",
-            "provider",
             "stream",
             "stream_id",
             "terminal_stream_id",
@@ -747,6 +769,34 @@ mod tests {
                 !body.contains(&format!("{forbidden}=\"")),
                 "guest-control field {forbidden:?} leaked as a metric label"
             );
+        }
+    }
+
+    #[test]
+    fn workload_metrics_serialize_without_execution_details() {
+        let r = Registry::new();
+        r.gauge_set(
+            "d2b_daemon_workload_availability",
+            &[
+                ("provider", "unsafe-local"),
+                ("component", "proxy"),
+                ("state", "ready"),
+            ],
+            1.0,
+        );
+        r.counter_inc(
+            "d2b_daemon_workload_lifecycle_total",
+            &[
+                ("provider", "unsafe-local"),
+                ("operation", "launcher-exec"),
+                ("result", "committed"),
+            ],
+        );
+        let body = r.render();
+        assert!(body.contains("d2b_daemon_workload_availability"));
+        assert!(body.contains("d2b_daemon_workload_lifecycle_total"));
+        for forbidden in ["argv", "env", "cwd", "path", "pid", "unit"] {
+            assert!(!body.contains(forbidden));
         }
     }
 

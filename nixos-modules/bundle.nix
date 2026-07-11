@@ -89,7 +89,7 @@ let
   # presence of this field; the resolver nullifies it before comparing.
   dataWithoutHash = {
     artifactHashes = null;
-    bundleVersion = 10;
+    bundleVersion = 11;
     schemaVersion = "v2";
     publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
     hostPath = "/etc/d2b/host.json";

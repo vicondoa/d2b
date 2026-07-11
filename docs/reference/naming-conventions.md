@@ -70,7 +70,7 @@ canon; see [AGENTS.md](../../AGENTS.md#existing-code-is-canon).
 Launcher item ids also use `^[a-z][a-z0-9-]*$`. They are scoped to one workload
 and appear in `d2b launch <target> --item <id>`.
 
-Private configured unsafe-local data is installed as
+Private configured unsafe-local and local-VM launcher data is installed as
 `/etc/d2b/unsafe-local-workloads.json`. Public provider-neutral launcher
 metadata uses `/etc/d2b/realm-workloads-launcher-v2.json`; the compatibility
 schema remains `/etc/d2b/realm-workloads-launcher.json`.

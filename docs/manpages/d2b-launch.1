@@ -1,0 +1,20 @@
+.TH d2b-launch 1 1970-01-01 "d2b 0.0.0-bootstrap" "d2b CLI"
+.SH NAME
+d2b-launch \- launch a trusted configured workload item
+.SH SYNOPSIS
+\fBd2b launch\fR <\fITARGET\fR> [\fB--item\fR <\fIID\fR>] [\fB--json\fR|\fB--human\fR]
+.SH DESCRIPTION
+Resolves argv-free launcher metadata through d2bd, then dispatches the selected
+private configured item through its provider. No command, uid, environment,
+working directory, path, process id, or unit name is accepted from the caller.
+.SH OPTIONS
+.TP
+\fB--item\fR <\fIID\fR>
+Select a configured item. Without this option, the declared default or sole item
+is selected; multiple items without a default are rejected.
+.TP
+\fB--json\fR
+Emit the typed launch result as JSON.
+.TP
+\fB--human\fR
+Force human-readable output.

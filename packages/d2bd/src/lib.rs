@@ -120,6 +120,7 @@ pub mod terminal_session;
 pub mod typed_error;
 pub mod unsafe_local_helper;
 pub mod wire;
+mod workload_dispatch;
 pub mod workload_target_index;
 use admission::{
     PeerIdentity, PeerRole, authorize_peer, gateway_display_op_requires_admin,
@@ -2935,11 +2936,22 @@ fn handle_connection_authorized(
             return Err(error);
         }
     };
-    let capabilities = vec![
+    let advertised_capabilities = [
         KnownFeatureFlag::TypedErrors.wire_value(),
         KnownFeatureFlag::StatusCheckBridges.wire_value(),
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
+        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
     ];
+    let capabilities = advertised_capabilities
+        .into_iter()
+        .filter(|capability| {
+            hello
+                .supported_features
+                .iter()
+                .any(|requested| requested.known() == capability.known())
+        })
+        .collect::<Vec<_>>();
     let hello_ok = wire::hello_ok(
         &state.config.server_version,
         &selected_version,
@@ -2966,6 +2978,20 @@ fn handle_connection_authorized(
                 continue;
             }
         };
+        if matches!(request, wire::Request::Workload(_))
+            && (!capabilities
+                .iter()
+                .any(|feature| feature.known() == Some(KnownFeatureFlag::ConfiguredLaunchV1))
+                || !capabilities.iter().any(|feature| {
+                    feature.known() == Some(KnownFeatureFlag::UnsafeLocalProviderV1)
+                }))
+        {
+            let error = TypedError::WireUnsupportedRequest {
+                request_type: "workload".to_owned(),
+            };
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            continue;
+        }
         // Exec takes over the connection as the long-lived owner connection.
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
         // the connection + a cheap ServerState clone move to a SPAWNED owner
@@ -3164,6 +3190,8 @@ fn request_invalidates_public_status_model(request: &wire::Request) -> bool {
             | wire::Request::Exec(public_wire::ExecOp::List(_))
             | wire::Request::Exec(public_wire::ExecOp::Logs(_))
             | wire::Request::Exec(public_wire::ExecOp::Status(_))
+            | wire::Request::Workload(public_wire::WorkloadOp::List(_))
+            | wire::Request::Workload(public_wire::WorkloadOp::Status(_))
             | wire::Request::Audio(public_wire::AudioOp::Status(_))
     )
 }
@@ -3227,6 +3255,7 @@ fn dispatch_request_locked(
         wire::Request::Shell(op) => dispatch_shell_management(state, peer, op),
         wire::Request::Console(op) => dispatch_console(state, peer, op),
         wire::Request::GatewayDisplay(op) => dispatch_gateway_display(state, peer, op),
+        wire::Request::Workload(op) => dispatch_workload(state, peer, op),
         wire::Request::Audio(op) => {
             if !matches!(op, public_wire::AudioOp::Status(_))
                 && !matches!(peer.role, PeerRole::Admin)
@@ -3238,6 +3267,461 @@ fn dispatch_request_locked(
             audio_dispatch::dispatch_audio(state, op)
         }
     }
+}
+
+fn dispatch_workload(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    op: public_wire::WorkloadOp,
+) -> Result<Value, TypedError> {
+    use d2b_realm_core::WorkloadProviderKind;
+    use workload_dispatch::{LaunchLedgerBegin, WorkloadCatalog, WorkloadRoute};
+
+    if !matches!(peer.role, PeerRole::Launcher | PeerRole::Admin) {
+        return Err(TypedError::AuthzNotALauncher { peer_uid: peer.uid });
+    }
+    let resolver = load_bundle_resolver(state)?;
+    let catalog = WorkloadCatalog::from_resolver(&resolver).map_err(map_workload_catalog_error)?;
+    let response = match op {
+        public_wire::WorkloadOp::List(args) => {
+            let workloads = catalog
+                .entries()
+                .filter(|entry| {
+                    args.realm.as_ref().is_none_or(|realm| {
+                        entry.metadata.identity.realm_path.target_form() == *realm
+                    })
+                })
+                .map(|entry| {
+                    let (workload_state, availability) =
+                        workload_runtime_status(state, peer.uid, entry);
+                    record_workload_availability_metrics(
+                        state,
+                        entry.metadata.provider_kind,
+                        availability,
+                        &entry.metadata.items,
+                    );
+                    WorkloadCatalog::public_summary(entry, workload_state, availability)
+                })
+                .collect();
+            public_wire::WorkloadOpResponse::List(public_wire::WorkloadListResult { workloads })
+        }
+        public_wire::WorkloadOp::Status(args) => {
+            let entry =
+                catalog
+                    .resolve(&args.target)
+                    .map_err(|_| TypedError::WorkloadTargetNotFound {
+                        target: args.target.to_canonical(),
+                    })?;
+            let (workload_state, availability) = workload_runtime_status(state, peer.uid, entry);
+            record_workload_availability_metrics(
+                state,
+                entry.metadata.provider_kind,
+                availability,
+                &entry.metadata.items,
+            );
+            public_wire::WorkloadOpResponse::Status(Box::new(public_wire::WorkloadStatusResult {
+                workload: WorkloadCatalog::public_summary(entry, workload_state, availability),
+            }))
+        }
+        public_wire::WorkloadOp::LauncherExec(args) => {
+            let route = catalog
+                .resolve(&args.target)
+                .map_err(|_| TypedError::WorkloadTargetNotFound {
+                    target: args.target.to_canonical(),
+                })?
+                .route
+                .clone();
+            if let WorkloadRoute::CapabilityUnavailable { provider } = route {
+                return Err(TypedError::RuntimeCapabilityUnsupported {
+                    vm: args.target.to_canonical(),
+                    runtime_kind: workload_provider_label(provider).to_owned(),
+                    capability: "configured-launch".to_owned(),
+                    verb: "launch".to_owned(),
+                });
+            }
+            let resolved = catalog
+                .resolve_exec(&resolver, &args.target, &args.item_id)
+                .map_err(map_workload_catalog_error)?;
+            let provider_label = workload_provider_label(match &resolved.route {
+                WorkloadRoute::LocalVm { .. } => WorkloadProviderKind::LocalVm,
+                WorkloadRoute::UnsafeLocal => WorkloadProviderKind::UnsafeLocal,
+                WorkloadRoute::CapabilityUnavailable { provider } => *provider,
+            });
+            let operation_id = args.operation_id.to_string();
+            let begin = workload_dispatch::begin_launch(
+                peer.uid,
+                &operation_id,
+                &args.target,
+                &args.item_id,
+            )
+            .map_err(map_workload_catalog_error)?;
+            if begin == LaunchLedgerBegin::AlreadyCommitted {
+                workload_lifecycle_metric(
+                    state,
+                    provider_label,
+                    "launcher-exec",
+                    "already-committed",
+                );
+                emit_workload_launch_audit(
+                    state,
+                    &resolved,
+                    daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
+                );
+                return Ok(wire::workload_response(
+                    &public_wire::WorkloadOpResponse::LauncherExec(
+                        public_wire::LauncherExecResult {
+                            target: args.target,
+                            item_id: args.item_id,
+                            operation_id: args.operation_id,
+                            disposition: public_wire::LauncherExecDisposition::AlreadyCommitted,
+                        },
+                    ),
+                ));
+            }
+            let dispatch_result = match &resolved.route {
+                WorkloadRoute::UnsafeLocal => {
+                    dispatch_unsafe_local_launcher(state, peer.uid, &args.operation_id, &resolved)
+                }
+                WorkloadRoute::LocalVm { vm } => {
+                    dispatch_local_vm_launcher(state, vm, &resolved.argv)
+                }
+                WorkloadRoute::CapabilityUnavailable { provider } => {
+                    Err(TypedError::RuntimeCapabilityUnsupported {
+                        vm: args.target.to_canonical(),
+                        runtime_kind: workload_provider_label(*provider).to_owned(),
+                        capability: "configured-launch".to_owned(),
+                        verb: "launch".to_owned(),
+                    })
+                }
+            };
+            let disposition = match dispatch_result {
+                Ok(disposition) => disposition,
+                Err(error) => {
+                    workload_dispatch::abort_launch(peer.uid, &operation_id);
+                    workload_lifecycle_metric(state, provider_label, "launcher-exec", "failed");
+                    emit_workload_launch_audit(
+                        state,
+                        &resolved,
+                        daemon_audit::WorkloadLaunchResult::Failed,
+                    );
+                    return Err(error);
+                }
+            };
+            workload_dispatch::complete_launch(peer.uid, &operation_id);
+            let disposition = match disposition {
+                public_wire::LauncherExecDisposition::Committed => {
+                    workload_lifecycle_metric(state, provider_label, "launcher-exec", "committed");
+                    emit_workload_launch_audit(
+                        state,
+                        &resolved,
+                        daemon_audit::WorkloadLaunchResult::Committed,
+                    );
+                    public_wire::LauncherExecDisposition::Committed
+                }
+                public_wire::LauncherExecDisposition::AlreadyCommitted => {
+                    workload_lifecycle_metric(
+                        state,
+                        provider_label,
+                        "launcher-exec",
+                        "already-committed",
+                    );
+                    emit_workload_launch_audit(
+                        state,
+                        &resolved,
+                        daemon_audit::WorkloadLaunchResult::AlreadyCommitted,
+                    );
+                    public_wire::LauncherExecDisposition::AlreadyCommitted
+                }
+            };
+            public_wire::WorkloadOpResponse::LauncherExec(public_wire::LauncherExecResult {
+                target: args.target,
+                item_id: args.item_id,
+                operation_id: args.operation_id,
+                disposition,
+            })
+        }
+    };
+    Ok(wire::workload_response(&response))
+}
+
+fn workload_runtime_status(
+    state: &ServerState,
+    requester_uid: u32,
+    entry: &workload_dispatch::CatalogEntry,
+) -> (
+    d2b_realm_core::WorkloadState,
+    public_wire::WorkloadAvailability,
+) {
+    use d2b_contracts::unsafe_local_wire::HelperScopeState;
+    use d2b_realm_core::WorkloadState;
+    use unsafe_local_helper::HelperAvailability;
+    use workload_dispatch::WorkloadRoute;
+
+    match &entry.route {
+        WorkloadRoute::UnsafeLocal => {
+            let availability = match state.unsafe_local_helpers.availability(requester_uid) {
+                HelperAvailability::Ready => match state
+                    .unsafe_local_helpers
+                    .last_failure(requester_uid)
+                {
+                    Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::UserManagerUnavailable) => {
+                        public_wire::WorkloadAvailability::UserManagerUnavailable
+                    }
+                    Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::GraphicalSessionInactive) => {
+                        public_wire::WorkloadAvailability::GraphicalSessionInactive
+                    }
+                    Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::WaylandUnavailable) => {
+                        public_wire::WorkloadAvailability::WaylandUnavailable
+                    }
+                    Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::ProxyUnavailable)
+                    | Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::FirstClientTimeout) => {
+                        public_wire::WorkloadAvailability::ProxyUnavailable
+                    }
+                    Some(_) => public_wire::WorkloadAvailability::Degraded,
+                    None => public_wire::WorkloadAvailability::Ready,
+                },
+                HelperAvailability::Unavailable => {
+                    public_wire::WorkloadAvailability::HelperUnavailable
+                }
+                HelperAvailability::Stale => public_wire::WorkloadAvailability::HelperStale,
+            };
+            let workload_state = state
+                .unsafe_local_helpers
+                .snapshot(requester_uid)
+                .and_then(|snapshot| {
+                    snapshot
+                        .scopes
+                        .into_iter()
+                        .find(|scope| scope.workload == entry.metadata.identity)
+                })
+                .map_or(WorkloadState::Stopped, |scope| match scope.state {
+                    HelperScopeState::Starting => WorkloadState::Starting,
+                    HelperScopeState::Active => WorkloadState::Running,
+                    HelperScopeState::Stopping => WorkloadState::Stopping,
+                    HelperScopeState::Exited => WorkloadState::Stopped,
+                    HelperScopeState::Degraded => WorkloadState::Failed,
+                });
+            (workload_state, availability)
+        }
+        WorkloadRoute::LocalVm { vm } => {
+            let running = state
+                .pidfd_table
+                .list_for_vm(vm)
+                .into_iter()
+                .any(|registration| {
+                    state
+                        .pidfd_table
+                        .still_alive_same_start_time(vm, &registration.role)
+                });
+            (
+                if running {
+                    WorkloadState::Running
+                } else {
+                    WorkloadState::Stopped
+                },
+                public_wire::WorkloadAvailability::Ready,
+            )
+        }
+        WorkloadRoute::CapabilityUnavailable { .. } => (
+            WorkloadState::Stopped,
+            public_wire::WorkloadAvailability::Degraded,
+        ),
+    }
+}
+
+fn dispatch_unsafe_local_launcher(
+    state: &ServerState,
+    requester_uid: u32,
+    operation_id: &d2b_realm_core::OperationId,
+    resolved: &workload_dispatch::ResolvedExec,
+) -> Result<public_wire::LauncherExecDisposition, TypedError> {
+    use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
+    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    let request = HelperLaunchRequest {
+        request_id: REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        operation_id: operation_id.clone(),
+        workload: resolved.identity.clone(),
+        item_id: resolved.item_id.clone(),
+        argv: resolved.argv.clone(),
+        graphical: resolved.graphical,
+    };
+    let result = state
+        .unsafe_local_helpers
+        .dispatch_launch(requester_uid, request)
+        .map_err(map_helper_registry_error)?;
+    Ok(match result.disposition {
+        HelperOperationDisposition::AlreadyCommitted => {
+            public_wire::LauncherExecDisposition::AlreadyCommitted
+        }
+        HelperOperationDisposition::Committed | HelperOperationDisposition::Completed => {
+            public_wire::LauncherExecDisposition::Committed
+        }
+    })
+}
+
+fn dispatch_local_vm_launcher(
+    state: &ServerState,
+    vm: &str,
+    argv: &d2b_core::configured_argv::ConfiguredArgv,
+) -> Result<public_wire::LauncherExecDisposition, TypedError> {
+    ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
+    let request = public_wire::ExecStartArgs {
+        vm: vm.to_owned(),
+        argv: argv.as_slice().to_vec(),
+        tty: false,
+        detached: true,
+        env: None,
+        cwd: None,
+        term_size: None,
+    };
+    exec_detached::create(state, &request)?;
+    Ok(public_wire::LauncherExecDisposition::Committed)
+}
+
+fn map_workload_catalog_error(error: workload_dispatch::CatalogError) -> TypedError {
+    use typed_error::WorkloadLaunchErrorKind as Kind;
+    use workload_dispatch::CatalogError;
+    let kind = match error {
+        CatalogError::TargetNotFound | CatalogError::TargetAmbiguous => Kind::ItemNotFound,
+        CatalogError::RealmNotDirectLocal => Kind::RealmNotDirectLocal,
+        CatalogError::LauncherDisabled => Kind::LauncherDisabled,
+        CatalogError::ItemNotFound => Kind::ItemNotFound,
+        CatalogError::ArtifactsUnavailable
+        | CatalogError::ConfiguredItemMissing
+        | CatalogError::ConfiguredItemMismatch => Kind::ConfiguredItemMismatch,
+        CatalogError::OperationConflict => Kind::OperationConflict,
+        CatalogError::OperationInProgress => Kind::QueueFull,
+    };
+    TypedError::WorkloadLaunchFailed { kind }
+}
+
+fn map_helper_registry_error(error: unsafe_local_helper::HelperRegistryError) -> TypedError {
+    use d2b_contracts::unsafe_local_wire::HelperFailureCode;
+    use typed_error::WorkloadLaunchErrorKind as Kind;
+    use unsafe_local_helper::HelperRegistryError;
+    let kind = match error {
+        HelperRegistryError::HelperUnavailable => Kind::HelperUnavailable,
+        HelperRegistryError::HelperStale | HelperRegistryError::GenerationSuperseded => {
+            Kind::HelperStale
+        }
+        HelperRegistryError::QueueFull | HelperRegistryError::OperationInProgress => {
+            Kind::QueueFull
+        }
+        HelperRegistryError::Timeout => Kind::Timeout,
+        HelperRegistryError::OperationIdConflict => Kind::OperationConflict,
+        HelperRegistryError::OperationRejected(code) => match code {
+            HelperFailureCode::UserManagerUnavailable => Kind::UserManagerUnavailable,
+            HelperFailureCode::GraphicalSessionInactive => Kind::GraphicalSessionInactive,
+            HelperFailureCode::WaylandUnavailable => Kind::WaylandUnavailable,
+            HelperFailureCode::ProxyUnavailable | HelperFailureCode::FirstClientTimeout => {
+                Kind::ProxyUnavailable
+            }
+            HelperFailureCode::OperationIdConflict => Kind::OperationConflict,
+            HelperFailureCode::QueueFull => Kind::QueueFull,
+            HelperFailureCode::Timeout => Kind::Timeout,
+            _ => Kind::Internal,
+        },
+        _ => Kind::Internal,
+    };
+    TypedError::WorkloadLaunchFailed { kind }
+}
+
+fn workload_provider_label(provider: d2b_realm_core::WorkloadProviderKind) -> &'static str {
+    match provider {
+        d2b_realm_core::WorkloadProviderKind::LocalVm => "local-vm",
+        d2b_realm_core::WorkloadProviderKind::QemuMedia => "qemu-media",
+        d2b_realm_core::WorkloadProviderKind::ProviderManaged => "provider-managed",
+        d2b_realm_core::WorkloadProviderKind::UnsafeLocal => "unsafe-local",
+    }
+}
+
+fn record_workload_availability_metrics(
+    state: &ServerState,
+    provider: d2b_realm_core::WorkloadProviderKind,
+    availability: public_wire::WorkloadAvailability,
+    items: &[d2b_realm_core::LauncherItemSummary],
+) {
+    let provider = workload_provider_label(provider);
+    let state_label = match availability {
+        public_wire::WorkloadAvailability::Ready => "ready",
+        public_wire::WorkloadAvailability::HelperUnavailable => "helper-unavailable",
+        public_wire::WorkloadAvailability::HelperStale => "helper-stale",
+        public_wire::WorkloadAvailability::UserManagerUnavailable => "user-manager-unavailable",
+        public_wire::WorkloadAvailability::GraphicalSessionInactive => "graphical-session-inactive",
+        public_wire::WorkloadAvailability::WaylandUnavailable => "wayland-unavailable",
+        public_wire::WorkloadAvailability::ProxyUnavailable => "proxy-unavailable",
+        public_wire::WorkloadAvailability::Degraded => "degraded",
+    };
+    for component in ["helper", "scope", "proxy", "launcher", "shell"] {
+        let applicable = match component {
+            "shell" => items
+                .iter()
+                .any(|item| item.kind == d2b_realm_core::LauncherItemKind::Shell),
+            "helper" | "scope" | "proxy" => provider == "unsafe-local",
+            _ => true,
+        };
+        let selected = if applicable {
+            state_label
+        } else {
+            "not-applicable"
+        };
+        for candidate in [
+            "ready",
+            "helper-unavailable",
+            "helper-stale",
+            "user-manager-unavailable",
+            "graphical-session-inactive",
+            "wayland-unavailable",
+            "proxy-unavailable",
+            "degraded",
+            "not-applicable",
+        ] {
+            state.metrics_registry.gauge_set(
+                "d2b_daemon_workload_availability",
+                &[
+                    ("provider", provider),
+                    ("component", component),
+                    ("state", candidate),
+                ],
+                if candidate == selected { 1.0 } else { 0.0 },
+            );
+        }
+    }
+}
+
+fn workload_lifecycle_metric(state: &ServerState, provider: &str, operation: &str, result: &str) {
+    state.metrics_registry.counter_inc(
+        "d2b_daemon_workload_lifecycle_total",
+        &[
+            ("provider", provider),
+            ("operation", operation),
+            ("result", result),
+        ],
+    );
+}
+
+fn emit_workload_launch_audit(
+    state: &ServerState,
+    resolved: &workload_dispatch::ResolvedExec,
+    result: daemon_audit::WorkloadLaunchResult,
+) {
+    let provider = match resolved.route {
+        workload_dispatch::WorkloadRoute::LocalVm { .. } => {
+            daemon_audit::WorkloadLaunchProvider::LocalVm
+        }
+        workload_dispatch::WorkloadRoute::UnsafeLocal => {
+            daemon_audit::WorkloadLaunchProvider::UnsafeLocal
+        }
+        workload_dispatch::WorkloadRoute::CapabilityUnavailable { .. } => return,
+    };
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::WorkloadLauncher {
+            target: resolved.identity.canonical_target.to_canonical(),
+            item_id: resolved.item_id.as_str().to_owned(),
+            provider,
+            result,
+        });
 }
 
 fn dispatch_console(

@@ -8,7 +8,7 @@ d2b \- d2b — opinionated NixOS desktop microVM CLI.
 .SH DESCRIPTION
 d2b — daemon\-native CLI for d2b microVMs.
 .PP
-All mutating verbs dispatch through d2bd and d2b\-priv\-broker. Read\-only verbs (list, status, audit, host check) prefer d2bd\*(Aqs public socket and fall back to static/local sources where documented. See `d2b <COMMAND> \-\-help` for per\-verb usage.
+Mutating verbs dispatch through d2bd; privileged host mutations additionally use d2b\-priv\-broker. Read\-only verbs (list, status, audit, host check) prefer d2bd\*(Aqs public socket and fall back to static/local sources where documented. See `d2b <COMMAND> \-\-help` for per\-verb usage.
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -23,6 +23,9 @@ List declared VMs with daemon runtime state when d2bd is reachable
 .TP
 d2b\-status(1)
 Show per\-VM runtime status plus bridge health
+.TP
+d2b\-launch(1)
+Launch a trusted configured workload item through its runtime provider
 .TP
 d2b\-usb(1)
 USB attach / detach / probe

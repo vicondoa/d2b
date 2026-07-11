@@ -5,8 +5,9 @@
 `unsafe-local` is an explicit realm workload provider for commands and
 persistent shells that run as the authenticated host user. It provides **no
 isolation boundary**. The helper connection and user-scope runtime are enabled
-for configured eligible users. Public workload launch and shell dispatch remain
-feature-negotiated until their provider routes are enabled.
+for configured eligible users. Public configured launch is feature-negotiated;
+unsafe-local persistent shells remain unavailable until their dedicated backend
+is enabled.
 
 ## Nix options
 
@@ -91,12 +92,28 @@ The closed unsafe-local posture is:
 feature flags. Clients must hide or refuse unsupported operations; they must
 never fall back to unsafe-local.
 
+Availability values are directly actionable: `helper-unavailable` and
+`helper-stale` require restarting the caller's user helper;
+`user-manager-unavailable` requires a PAM-backed graphical login;
+`graphical-session-inactive` and `wayland-unavailable` require an active Wayland
+session; and `proxy-unavailable` requires repairing the proxy prerequisite.
+There is no direct-compositor remediation path.
+
 ## Private bundle and helper wire
 
-Bundle version 10 adds
-`unsafeLocalWorkloadsPath = /etc/d2b/unsafe-local-workloads.json`. The private
-artifact contains normalized configured argv and shell policy and is covered by
-the normal bundle artifact hash.
+Bundle version 10 added
+`unsafeLocalWorkloadsPath = /etc/d2b/unsafe-local-workloads.json`; bundle
+version 11 extends that artifact with local-VM configured launcher items. The
+private artifact contains normalized configured argv and unsafe-local shell
+policy, and is covered by the normal bundle artifact
+hash. `d2bd` cross-checks its item id/type/graphical shape against public
+metadata before dispatch.
+
+Configured exec launch accepts only local launcher/admin peers on the direct
+host-local Unix binding. The helper lookup is keyed by the requester's
+`SO_PEERCRED` UID, so requester and helper identity are exactly equal. Relay,
+remote, stale-helper, cross-UID, direct-compositor, root, SSH, and arbitrary
+command fallbacks are not available.
 
 The separate helper protocol is version 1 on the daemon-owned
 `/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,

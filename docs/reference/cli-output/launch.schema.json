@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LaunchOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "disposition",
+    "itemId",
+    "operationId",
+    "target"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "disposition": {
+      "enum": [
+        "committed",
+        "already-committed"
+      ],
+      "type": "string"
+    },
+    "itemId": {
+      "type": "string"
+    },
+    "operationId": {
+      "type": "string"
+    },
+    "target": {
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
