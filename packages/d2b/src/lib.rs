@@ -1847,11 +1847,19 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
         }
     }
     let json_mode = !matches!(action, ShellAction::Attach) && args.json;
-    let local_vm = match route_vm_target(context, &args.vm, json_mode)? {
-        VmTargetRoute::Local { vm } => resolve_local_shell_target(context, &args.vm, vm)?,
-        VmTargetRoute::Gateway {
-            realm, gateway_vm, ..
-        } => return cmd_gateway_shell(context, args, action, realm, gateway_vm),
+    let direct_target = if args.vm.ends_with(".d2b") && context.public_socket.exists() {
+        try_resolve_direct_shell_target(context, &args.vm)?
+    } else {
+        None
+    };
+    let local_vm = match direct_target {
+        Some(target) => target,
+        None => match route_vm_target(context, &args.vm, json_mode)? {
+            VmTargetRoute::Local { vm } => vm,
+            VmTargetRoute::Gateway {
+                realm, gateway_vm, ..
+            } => return cmd_gateway_shell(context, args, action, realm, gateway_vm),
+        },
     };
     match action {
         ShellAction::Attach => {
@@ -3743,13 +3751,12 @@ fn require_unsafe_local_shell_feature(
     }
 }
 
-fn resolve_local_shell_target(
+fn try_resolve_direct_shell_target(
     context: &Context,
     requested: &str,
-    fallback_vm: String,
-) -> Result<String, CliFailure> {
+) -> Result<Option<String>, CliFailure> {
     if !requested.ends_with(".d2b") {
-        return Ok(fallback_vm);
+        return Ok(None);
     }
     let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|error| {
         CliFailure::new(
@@ -3790,20 +3797,15 @@ fn resolve_local_shell_target(
         .into_iter()
         .find(|workload| workload.identity.canonical_target.to_canonical() == requested)
     else {
-        return Err(CliFailure::new(
-            70,
-            format!(
-                "canonical shell target '{requested}' is not present in the daemon workload inventory; no VM fallback is permitted"
-            ),
-        ));
+        return Ok(None);
     };
     match workload.provider_kind {
         d2b_realm_core::WorkloadProviderKind::UnsafeLocal => {
             require_unsafe_local_shell_feature(&negotiated.capabilities)?;
-            Ok(workload.identity.canonical_target.to_canonical())
+            Ok(Some(workload.identity.canonical_target.to_canonical()))
         }
         d2b_realm_core::WorkloadProviderKind::LocalVm => {
-            Ok(local_vm_shell_target(&workload).to_owned())
+            Ok(Some(local_vm_shell_target(&workload).to_owned()))
         }
         provider => Err(CliFailure::new(
             70,
@@ -11977,6 +11979,17 @@ mod host_install_dispatch_tests {
         let (requests_tx, requests_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             for response in [
+                serde_json::from_slice(
+                    &encode_type_tagged_message(
+                        "workloadResponse",
+                        &public_wire::WorkloadOpResponse::List(public_wire::WorkloadListResult {
+                            workloads: Vec::new(),
+                        }),
+                        "empty direct workload response",
+                    )
+                    .expect("encode empty workload response"),
+                )
+                .expect("decode empty workload response"),
                 running_gateway_list_response("sys-work-gateway"),
                 json!({
                     "type": "error",
@@ -12138,9 +12151,8 @@ mod host_install_dispatch_tests {
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
         assert_eq!(
-            super::resolve_local_shell_target(&context, "tools.host.d2b", "tools".to_owned())
-                .unwrap(),
-            "tools.host.d2b"
+            super::try_resolve_direct_shell_target(&context, "tools.host.d2b").unwrap(),
+            Some("tools.host.d2b".to_owned())
         );
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
@@ -12314,21 +12326,25 @@ mod host_install_dispatch_tests {
             result.expect("mock returns gateway exec transport status"),
             0
         );
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert_eq!(
             requests[0].get("type").and_then(Value::as_str),
-            Some("list")
+            Some("workload")
         );
         assert_eq!(
             requests[1].get("type").and_then(Value::as_str),
+            Some("list")
+        );
+        assert_eq!(
+            requests[2].get("type").and_then(Value::as_str),
             Some("exec")
         );
         assert_eq!(
-            requests[1].pointer("/args/vm").and_then(Value::as_str),
+            requests[2].pointer("/args/vm").and_then(Value::as_str),
             Some("sys-work-gateway")
         );
         assert_eq!(
-            requests[1]
+            requests[2]
                 .pointer("/args/argv")
                 .and_then(Value::as_array)
                 .cloned()
@@ -12344,11 +12360,11 @@ mod host_install_dispatch_tests {
             ]
         );
         assert_eq!(
-            requests[1].pointer("/args/tty").and_then(Value::as_bool),
+            requests[2].pointer("/args/tty").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
-            requests[1]
+            requests[2]
                 .pointer("/args/detached")
                 .and_then(Value::as_bool),
             Some(false)
