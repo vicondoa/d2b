@@ -89,10 +89,10 @@ The closed unsafe-local posture is:
 | `sessionPersistence` | `user-manager-lifetime` |
 
 `configured-launch-v1`, `unsafe-local-provider-v1`, and
-`unsafe-local-shell-v1` are additive protocol-v3 feature flags. The shell token
-identifies contract support only until the later runtime slices enable
-dispatch. Clients must hide or refuse unsupported operations; they must never
-fall back to unsafe-local.
+`unsafe-local-shell-v1` are additive protocol-v3 feature flags. Clients may
+recognize the shell token with this contract revision, but `d2bd` does not
+advertise it until runtime dispatch is enabled. Clients must hide or refuse
+unsupported operations; they must never fall back to unsafe-local.
 
 Availability values are directly actionable: `helper-unavailable` and
 `helper-stale` require restarting the caller's user helper;

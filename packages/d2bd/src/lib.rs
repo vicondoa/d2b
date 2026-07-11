@@ -2942,7 +2942,6 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
