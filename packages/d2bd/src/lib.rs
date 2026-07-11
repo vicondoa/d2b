@@ -3063,7 +3063,7 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
-            if shell_op_targets_unsafe_local(&state, op)
+            if shell_op_targets_unsafe_local(state, op)
                 && !unsafe_local_shell_feature_negotiated(&capabilities)
             {
                 let error = TypedError::WireUnsupportedRequest {
