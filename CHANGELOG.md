@@ -22,6 +22,8 @@ deprecations ship one minor release before removal.
   low-cardinality dashboard signals expose provider readiness and launch results
   without command, environment, path, process, or unit details. Bundle format 11
   extends the private configured-item artifact to local VM workloads.
+  First-class local-VM workloads use their workload id as the backing VM name
+  when no transition-only `legacyVmName` is configured.
 
 - Added the same-UID unsafe-local runtime foundation: `d2bd` now owns the
   bounded, peer-credential-authenticated helper socket and one-generation-per-

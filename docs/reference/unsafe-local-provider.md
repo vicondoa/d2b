@@ -108,6 +108,8 @@ private artifact contains normalized configured argv and unsafe-local shell
 policy, and is covered by the normal bundle artifact
 hash. `d2bd` cross-checks its item id/type/graphical shape against public
 metadata before dispatch.
+For a local-VM workload, dispatch uses `legacyVmName` when present and otherwise
+uses the first-class workload id as the backing VM name.
 
 Configured exec launch accepts only local launcher/admin peers on the direct
 host-local Unix binding. The helper lookup is keyed by the requester's

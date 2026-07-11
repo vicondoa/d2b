@@ -168,6 +168,7 @@ impl WorkloadCatalog {
                     .legacy_vm_name
                     .as_ref()
                     .map(|vm| vm.as_str()),
+                metadata.identity.workload_id.as_str(),
             );
             entries.insert(
                 canonical,
@@ -282,11 +283,12 @@ impl WorkloadCatalog {
 fn route_for_provider(
     provider: WorkloadProviderKind,
     legacy_vm_name: Option<&str>,
+    workload_id: &str,
 ) -> WorkloadRoute {
     match provider {
-        WorkloadProviderKind::LocalVm => legacy_vm_name
-            .map(|vm| WorkloadRoute::LocalVm { vm: vm.to_owned() })
-            .unwrap_or(WorkloadRoute::CapabilityUnavailable { provider }),
+        WorkloadProviderKind::LocalVm => WorkloadRoute::LocalVm {
+            vm: legacy_vm_name.unwrap_or(workload_id).to_owned(),
+        },
         WorkloadProviderKind::UnsafeLocal => WorkloadRoute::UnsafeLocal,
         provider => WorkloadRoute::CapabilityUnavailable { provider },
     }
@@ -383,21 +385,21 @@ mod tests {
     #[test]
     fn provider_routes_never_coerce_unsafe_local_to_vm() {
         assert_eq!(
-            route_for_provider(WorkloadProviderKind::UnsafeLocal, Some("host")),
+            route_for_provider(WorkloadProviderKind::UnsafeLocal, Some("host"), "browser"),
             WorkloadRoute::UnsafeLocal
         );
         assert_eq!(
-            route_for_provider(WorkloadProviderKind::LocalVm, Some("corp-vm")),
+            route_for_provider(WorkloadProviderKind::LocalVm, Some("corp-vm"), "browser"),
             WorkloadRoute::LocalVm {
                 vm: "corp-vm".to_owned()
             }
         );
-        assert!(matches!(
-            route_for_provider(WorkloadProviderKind::LocalVm, None),
-            WorkloadRoute::CapabilityUnavailable {
-                provider: WorkloadProviderKind::LocalVm
+        assert_eq!(
+            route_for_provider(WorkloadProviderKind::LocalVm, None, "browser"),
+            WorkloadRoute::LocalVm {
+                vm: "browser".to_owned()
             }
-        ));
+        );
     }
 
     #[test]

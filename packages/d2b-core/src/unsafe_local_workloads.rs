@@ -65,9 +65,6 @@ pub struct LocalVmConfiguredWorkload {
 
 impl LocalVmConfiguredWorkload {
     pub fn validate(&self) -> Result<(), String> {
-        if self.identity.legacy_vm_name.is_none() {
-            return Err("local-vm configured workload requires legacyVmName".to_owned());
-        }
         if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("nixos") {
             return Err("local-vm configured workload must use nixos runtimeKind".to_owned());
         }
@@ -301,6 +298,22 @@ mod tests {
             max_sessions: 8,
         };
         assert!(!format!("{shell:?}").contains(canary));
+    }
+
+    #[test]
+    fn first_class_local_vm_workload_does_not_require_legacy_name() {
+        let mut identity = identity();
+        identity.runtime_kind = Some(crate::contract_id::ContractId::parse("nixos").unwrap());
+        identity.provider_id =
+            Some(crate::contract_id::ContractId::parse("local-cloud-hypervisor").unwrap());
+        identity.legacy_vm_name = None;
+        let workload = LocalVmConfiguredWorkload {
+            identity,
+            default_item_id: Some(ProtocolToken::parse("browser").unwrap()),
+            items: vec![exec_item()],
+        };
+
+        workload.validate().unwrap();
     }
 
     #[test]

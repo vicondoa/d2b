@@ -96,6 +96,54 @@ return a typed capability refusal and never fall back.
 
 ## Command reference
 
+### `launch`
+
+**Synopsis:** `d2b launch <TARGET> [--item <ITEM>] [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--item <ITEM>` | string | unset | Select the configured launcher item id. When omitted, use `defaultItem`, then a sole item, otherwise return the available ids and names. |
+| `--json` | boolean | `false` | Emit the stable machine-readable launch result on stdout. |
+| `--human` | boolean | `false` | Force the human launch confirmation on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `TARGET` | Canonical workload target or an unambiguous workload id. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Launch committed or was already committed. | — |
+| `2` | Target/item not found, or omitted item is ambiguous. | [`usage`](./error-codes.md#usage) |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. | workload launch error |
+| `69` | Provider prerequisite or transport unavailable. | workload launch error |
+| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. | workload launch error |
+| `76` | Protocol response or operation-id conflict. | workload launch error |
+
+**Human example**
+
+```text
+$ d2b launch tools.host.d2b --item browser
+launched tools.host.d2b item browser (committed)
+```
+
+**`--json` example** — schema: [`launch.schema.json`](./cli-output/launch.schema.json).
+
+```json
+{
+  "command": "launch",
+  "target": "tools.host.d2b",
+  "itemId": "browser",
+  "operationId": "launch-1234-5678",
+  "disposition": "committed"
+}
+```
+
 ### `list`
 
 **Synopsis:** `d2b list [--human] [--json]`
