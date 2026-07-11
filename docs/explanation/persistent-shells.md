@@ -17,12 +17,17 @@ semantic ADR 0039 attach support lands.
 
 ## Persistence boundary
 
-Persistent shell state belongs to the guest-local shell pool, not to the host
-CLI process. A session is expected to survive:
+Persistent shell state belongs to the target runtime, not to the host CLI
+process. For a VM that runtime is the guest-local shell pool. For an
+unsafe-local workload it is a separate user-scope supervisor that owns the PTY
+and reconnect listener rather than the short-lived user helper. A session is
+expected to survive:
 
 - the local CLI disconnecting;
 - the terminal window closing;
-- guestd restart when guestd can adopt the still-running shell pool.
+- guestd restart when guestd can adopt the still-running shell pool;
+- unsafe-local helper or d2bd reconnect while the verified user scope and
+  supervisor remain alive.
 
 It is not expected to survive:
 
@@ -48,10 +53,17 @@ Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing
 daemon public socket and authenticated guest-control transport.
 
+Unsafe-local uses only same-UID Unix sockets. Its per-shell listener lives
+beneath the validated user runtime directory and is not a root service, broker
+operation, or per-VM unit. Public daemon routing for this backend remains
+feature-gated until the daemon integration lands.
+
 ## Same-UID AF_UNIX boundary
 
-Inside the guest, shpool exposes an AF_UNIX socket under the workload user's
-runtime directory. Helpers that connect to that socket run as the workload UID.
+Inside a guest, shpool exposes an AF_UNIX socket under the workload user's
+runtime directory. Unsafe-local supervisors use the authenticated host user's
+runtime directory for the equivalent reconnect boundary. Helpers that connect
+to either socket run as the workload UID.
 The socket is a same-UID IPC boundary, not a cryptographic separation boundary:
 code already running as that workload user can potentially interact with the
 same shell pool.

@@ -1153,6 +1153,7 @@ dependencies = [
  "d2b-realm-core",
  "getrandom 0.2.17",
  "nix 0.29.0",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",

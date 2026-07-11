@@ -13,13 +13,14 @@ use nix::cmsg_space;
 use nix::libc;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{
-    ControlMessageOwned, MsgFlags, UnixAddr, getsockopt, recvmsg, send, sockopt::PeerCredentials,
+    ControlMessage, ControlMessageOwned, MsgFlags, UnixAddr, getsockopt, recvmsg, send, sendmsg,
+    sockopt::PeerCredentials,
 };
 use nix::unistd;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::fmt;
-use std::io::{IoSliceMut, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::io::{IoSlice, IoSliceMut, Read, Write};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +45,17 @@ pub struct HelperClient<M: UserScopeManager> {
     socket_path: PathBuf,
     expected_daemon_uid: u32,
     runtime: Arc<ScopeRuntime<M>>,
+}
+
+struct QueuedResponse {
+    frame: UnsafeLocalHelperToDaemon,
+    fd: Option<OwnedFd>,
+}
+
+impl QueuedResponse {
+    fn ordinary(frame: UnsafeLocalHelperToDaemon) -> Self {
+        Self { frame, fd: None }
+    }
 }
 
 impl<M: UserScopeManager> fmt::Debug for HelperClient<M> {
@@ -126,13 +138,13 @@ impl<M: UserScopeManager> HelperClient<M> {
             .set_nonblocking(true)
             .map_err(|_| ProtocolError::ConnectFailed)?;
         let (responses_tx, responses_rx) =
-            mpsc::sync_channel::<UnsafeLocalHelperToDaemon>(MAX_HELPER_QUEUE_DEPTH);
+            mpsc::sync_channel::<QueuedResponse>(MAX_HELPER_QUEUE_DEPTH);
         let response_wakeup_write = Arc::new(response_wakeup_write);
         let active = Arc::new(AtomicUsize::new(0));
 
         loop {
             while let Ok(response) = responses_rx.try_recv() {
-                send_frame(&socket, &response)?;
+                send_queued_response(&socket, response)?;
             }
             match wait_for_control_or_response(&socket, &response_wakeup_read)? {
                 ControlEvent::Response => continue,
@@ -178,7 +190,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                                     rejection(request_id, operation_id, failure_code(error))
                                 }
                             };
-                            if responses.send(response).is_ok() {
+                            if responses.send(QueuedResponse::ordinary(response)).is_ok() {
                                 let _ = wake_response_loop(&response_wakeup);
                             }
                             active.fetch_sub(1, Ordering::AcqRel);
@@ -186,16 +198,42 @@ impl<M: UserScopeManager> HelperClient<M> {
                         .map_err(|_| ProtocolError::RuntimeUnavailable)?;
                 }
                 DaemonToUnsafeLocalHelper::Shell(request) => {
-                    if let Some((request_id, operation_id)) = shell_operation_identity(request) {
+                    if active.fetch_add(1, Ordering::AcqRel) >= MAX_HELPER_QUEUE_DEPTH {
+                        active.fetch_sub(1, Ordering::AcqRel);
+                        let request_id = request.request_id();
+                        let operation_id = request.operation_id().clone();
                         send_frame(
                             &socket,
-                            &rejection(
-                                request_id,
-                                operation_id,
-                                HelperFailureCode::ShellUnavailable,
-                            ),
+                            &rejection(request_id, operation_id, HelperFailureCode::QueueFull),
                         )?;
+                        continue;
                     }
+                    let runtime = Arc::clone(&self.runtime);
+                    let responses = responses_tx.clone();
+                    let response_wakeup = Arc::clone(&response_wakeup_write);
+                    let active = Arc::clone(&active);
+                    std::thread::Builder::new()
+                        .name("d2b-unsafe-local-shell-operation".to_owned())
+                        .spawn(move || {
+                            let request_id = request.request_id();
+                            let operation_id = request.operation_id().clone();
+                            let queued = match runtime.shell(request) {
+                                Ok(dispatch) => QueuedResponse {
+                                    frame: dispatch.response,
+                                    fd: dispatch.terminal_fd,
+                                },
+                                Err(error) => QueuedResponse::ordinary(rejection(
+                                    request_id,
+                                    operation_id,
+                                    failure_code(error),
+                                )),
+                            };
+                            if responses.send(queued).is_ok() {
+                                let _ = wake_response_loop(&response_wakeup);
+                            }
+                            active.fetch_sub(1, Ordering::AcqRel);
+                        })
+                        .map_err(|_| ProtocolError::RuntimeUnavailable)?;
                 }
                 DaemonToUnsafeLocalHelper::HelloAccepted(_) => {
                     return Err(ProtocolError::ProtocolMismatch);
@@ -338,6 +376,48 @@ pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(),
     Ok(())
 }
 
+fn send_queued_response(socket: &Socket, response: QueuedResponse) -> Result<(), ProtocolError> {
+    match (&response.frame, response.fd) {
+        (UnsafeLocalHelperToDaemon::TerminalReady(_), Some(fd)) => {
+            send_frame_with_fd(socket, &response.frame, &fd)
+        }
+        (UnsafeLocalHelperToDaemon::TerminalReady(_), None) | (_, Some(_)) => {
+            Err(ProtocolError::InvalidFrame)
+        }
+        (_, None) => send_frame(socket, &response.frame),
+    }
+}
+
+fn send_frame_with_fd<T: serde::Serialize>(
+    socket: &Socket,
+    frame: &T,
+    fd: &OwnedFd,
+) -> Result<(), ProtocolError> {
+    let payload = serde_json::to_vec(frame).map_err(|_| ProtocolError::InvalidFrame)?;
+    if payload.len() > MAX_HELPER_FRAME_SIZE {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+    let length = u32::try_from(payload.len()).map_err(|_| ProtocolError::FrameTooLarge)?;
+    let mut encoded = Vec::with_capacity(payload.len() + 4);
+    encoded.extend_from_slice(&length.to_le_bytes());
+    encoded.extend_from_slice(&payload);
+    let iov = [IoSlice::new(&encoded)];
+    let raw = [fd.as_raw_fd()];
+    let control = [ControlMessage::ScmRights(&raw)];
+    let sent = sendmsg::<UnixAddr>(
+        socket.as_raw_fd(),
+        &iov,
+        &control,
+        MsgFlags::MSG_NOSIGNAL,
+        None,
+    )
+    .map_err(|_| ProtocolError::ConnectFailed)?;
+    if sent != encoded.len() {
+        return Err(ProtocolError::InvalidFrame);
+    }
+    Ok(())
+}
+
 pub fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
     encoded: &mut [u8],
@@ -412,7 +492,9 @@ fn rejection(
 
 fn failure_code(error: RuntimeError) -> HelperFailureCode {
     match error {
-        RuntimeError::InvalidIdentity => HelperFailureCode::InvalidRequest,
+        RuntimeError::InvalidRequest | RuntimeError::InvalidIdentity => {
+            HelperFailureCode::InvalidRequest
+        }
         RuntimeError::UserManagerUnavailable => HelperFailureCode::UserManagerUnavailable,
         RuntimeError::EnvironmentInvalid | RuntimeError::LedgerInvalid => {
             HelperFailureCode::EnvironmentInvalid
@@ -422,45 +504,26 @@ fn failure_code(error: RuntimeError) -> HelperFailureCode {
         RuntimeError::ScopeCreateFailed => HelperFailureCode::ScopeCreateFailed,
         RuntimeError::ScopeIdentityMismatch => HelperFailureCode::ScopeIdentityMismatch,
         RuntimeError::OperationIdConflict => HelperFailureCode::OperationIdConflict,
-        RuntimeError::OperationInProgress => HelperFailureCode::QueueFull,
+        RuntimeError::OperationInProgress | RuntimeError::QuotaExceeded => {
+            HelperFailureCode::QueueFull
+        }
+        RuntimeError::ShellUnavailable => HelperFailureCode::ShellUnavailable,
+        RuntimeError::ShellNotFound => HelperFailureCode::ShellNotFound,
+        RuntimeError::ShellAlreadyAttached => HelperFailureCode::ShellAlreadyAttached,
+        RuntimeError::TerminalClosed => HelperFailureCode::TerminalClosed,
         RuntimeError::Timeout => HelperFailureCode::Timeout,
         RuntimeError::Internal => HelperFailureCode::Internal,
-    }
-}
-
-fn shell_operation_identity(
-    request: d2b_contracts::unsafe_local_wire::HelperShellRequest,
-) -> Option<(u64, OperationId)> {
-    use d2b_contracts::unsafe_local_wire::HelperShellRequest;
-    match request {
-        HelperShellRequest::List {
-            request_id,
-            operation_id,
-            ..
-        }
-        | HelperShellRequest::Attach {
-            request_id,
-            operation_id,
-            ..
-        }
-        | HelperShellRequest::Detach {
-            request_id,
-            operation_id,
-            ..
-        }
-        | HelperShellRequest::Kill {
-            request_id,
-            operation_id,
-            ..
-        } => Some((request_id, operation_id)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-    use std::os::fd::OwnedFd;
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    use nix::sys::socket::{
+        AddressFamily, ControlMessageOwned, SockFlag, SockType, recvmsg, socketpair,
+    };
+    use std::os::fd::{AsRawFd, OwnedFd};
 
     #[test]
     fn socket_buffers_meet_frozen_effective_minimum() {
@@ -497,6 +560,30 @@ mod tests {
         Socket::from(fd)
     }
 
+    fn terminal_ready_frame() -> UnsafeLocalHelperToDaemon {
+        use d2b_contracts::public_wire::{ShellName, ShellSessionState};
+        use d2b_contracts::unsafe_local_wire::{
+            HelperScopeKind, HelperShellAttachResult, HelperTerminalReady, HelperTerminalTransport,
+            ScopeIdentity, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
+        };
+
+        UnsafeLocalHelperToDaemon::TerminalReady(HelperTerminalReady {
+            request_id: 1,
+            operation_id: OperationId::parse("op-terminal").unwrap(),
+            terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
+            transport: HelperTerminalTransport::ConnectedUnixStream,
+            scope: ScopeIdentity {
+                invocation_id: "opaque".to_owned(),
+                kind: HelperScopeKind::PersistentShell,
+            },
+            result: HelperShellAttachResult {
+                resolved_name: ShellName::new("host").unwrap(),
+                state: ShellSessionState::Attached,
+                force_evicted: false,
+            },
+        })
+    }
+
     #[test]
     fn completed_operation_wakes_idle_control_loop() {
         let (control, _peer) = socketpair(
@@ -517,5 +604,128 @@ mod tests {
             wait_for_control_or_response(&control, &wakeup_read).unwrap(),
             ControlEvent::Response
         );
+    }
+
+    #[test]
+    fn terminal_ready_queue_sends_exactly_one_cloexec_fd() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let sender = socket_from_owned(sender);
+        let (payload_read, _payload_write) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        send_queued_response(
+            &sender,
+            QueuedResponse {
+                frame: terminal_ready_frame(),
+                fd: Some(payload_read),
+            },
+        )
+        .unwrap();
+
+        let mut encoded = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
+        let mut iov = [IoSliceMut::new(&mut encoded)];
+        let mut control = cmsg_space!([RawFd; 2]);
+        let message = recvmsg::<UnixAddr>(
+            receiver.as_raw_fd(),
+            &mut iov,
+            Some(&mut control),
+            MsgFlags::MSG_CMSG_CLOEXEC,
+        )
+        .unwrap();
+        let mut received = Vec::new();
+        for cmsg in message.cmsgs().unwrap() {
+            if let ControlMessageOwned::ScmRights(fds) = cmsg {
+                received.extend(fds);
+            }
+        }
+        assert_eq!(received.len(), 1);
+        let flags = FdFlag::from_bits_truncate(fcntl(received[0], FcntlArg::F_GETFD).unwrap());
+        assert!(flags.contains(FdFlag::FD_CLOEXEC));
+        unistd::close(received[0]).unwrap();
+    }
+
+    #[test]
+    fn ordinary_queue_response_sends_zero_fds() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let sender = socket_from_owned(sender);
+        send_queued_response(
+            &sender,
+            QueuedResponse::ordinary(UnsafeLocalHelperToDaemon::Heartbeat(HelperHeartbeat {
+                generation: 1,
+                sequence: 2,
+            })),
+        )
+        .unwrap();
+        let mut encoded = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];
+        let mut iov = [IoSliceMut::new(&mut encoded)];
+        let mut control = cmsg_space!([RawFd; 2]);
+        let message = recvmsg::<UnixAddr>(
+            receiver.as_raw_fd(),
+            &mut iov,
+            Some(&mut control),
+            MsgFlags::MSG_CMSG_CLOEXEC,
+        )
+        .unwrap();
+        let rights = message
+            .cmsgs()
+            .unwrap()
+            .filter_map(|cmsg| match cmsg {
+                ControlMessageOwned::ScmRights(fds) => Some(fds.len()),
+                _ => None,
+            })
+            .sum::<usize>();
+        assert_eq!(rights, 0);
+    }
+
+    #[test]
+    fn queue_rejects_terminal_ready_without_its_one_fd() {
+        let (sender, _receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let sender = socket_from_owned(sender);
+        assert_eq!(
+            send_queued_response(&sender, QueuedResponse::ordinary(terminal_ready_frame())),
+            Err(ProtocolError::InvalidFrame)
+        );
+    }
+
+    #[test]
+    fn failed_fd_send_drops_queue_ownership() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let sender = socket_from_owned(sender);
+        drop(receiver);
+        let (payload_read, _payload_write) =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        let raw = payload_read.as_raw_fd();
+        let result = send_queued_response(
+            &sender,
+            QueuedResponse {
+                frame: terminal_ready_frame(),
+                fd: Some(payload_read),
+            },
+        );
+        assert_eq!(result, Err(ProtocolError::ConnectFailed));
+        assert!(!std::path::Path::new(&format!("/proc/self/fd/{raw}")).exists());
     }
 }

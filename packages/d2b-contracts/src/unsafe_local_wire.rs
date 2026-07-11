@@ -13,7 +13,10 @@ use crate::{
         TerminalStream, TerminalWaitResult, TerminalWriteStdinResult,
     },
 };
-use d2b_core::{configured_argv::ConfiguredArgv, workload_identity::WorkloadIdentity};
+use d2b_core::{
+    configured_argv::ConfiguredArgv, unsafe_local_workloads::MAX_UNSAFE_LOCAL_SHELL_SESSIONS,
+    workload_identity::WorkloadIdentity,
+};
 use d2b_realm_core::{ids::OperationId, token::ProtocolToken};
 use schemars::{
     JsonSchema,
@@ -259,6 +262,32 @@ pub struct HelperLaunchRequest {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelperShellPolicy {
+    pub default_name: ShellName,
+    #[schemars(range(min = 1, max = 64))]
+    pub max_sessions: u16,
+}
+
+impl fmt::Debug for HelperShellPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HelperShellPolicy")
+            .field("default_name", &"<redacted>")
+            .field("max_sessions", &self.max_sessions)
+            .finish()
+    }
+}
+
+impl HelperShellPolicy {
+    pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
+        (1..=MAX_UNSAFE_LOCAL_SHELL_SESSIONS)
+            .contains(&self.max_sessions)
+            .then_some(())
+            .ok_or(HelperFailureCode::InvalidRequest)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "op",
     content = "args",
@@ -273,6 +302,7 @@ pub enum HelperShellRequest {
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
         workload: WorkloadIdentity,
+        policy: HelperShellPolicy,
     },
     Attach {
         #[schemars(rename = "requestId")]
@@ -280,6 +310,7 @@ pub enum HelperShellRequest {
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
         workload: WorkloadIdentity,
+        policy: HelperShellPolicy,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<ShellName>,
         #[serde(default)]
@@ -296,6 +327,7 @@ pub enum HelperShellRequest {
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
         workload: WorkloadIdentity,
+        policy: HelperShellPolicy,
         name: ShellName,
     },
     Kill {
@@ -304,6 +336,7 @@ pub enum HelperShellRequest {
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
         workload: WorkloadIdentity,
+        policy: HelperShellPolicy,
         name: ShellName,
     },
 }
@@ -315,16 +348,19 @@ impl fmt::Debug for HelperShellRequest {
                 request_id,
                 operation_id,
                 workload,
+                policy,
             } => f
                 .debug_struct("HelperShellRequest::List")
                 .field("request_id", request_id)
                 .field("operation_id", operation_id)
                 .field("workload", workload)
+                .field("policy", policy)
                 .finish(),
             Self::Attach {
                 request_id,
                 operation_id,
                 workload,
+                policy,
                 name,
                 force,
                 initial_terminal_size,
@@ -333,6 +369,7 @@ impl fmt::Debug for HelperShellRequest {
                 .field("request_id", request_id)
                 .field("operation_id", operation_id)
                 .field("workload", workload)
+                .field("policy", policy)
                 .field("name", &name.as_ref().map(|_| "<redacted>"))
                 .field("force", force)
                 .field("initial_terminal_size", initial_terminal_size)
@@ -341,24 +378,28 @@ impl fmt::Debug for HelperShellRequest {
                 request_id,
                 operation_id,
                 workload,
+                policy,
                 ..
             } => f
                 .debug_struct("HelperShellRequest::Detach")
                 .field("request_id", request_id)
                 .field("operation_id", operation_id)
                 .field("workload", workload)
+                .field("policy", policy)
                 .field("name", &"<redacted>")
                 .finish(),
             Self::Kill {
                 request_id,
                 operation_id,
                 workload,
+                policy,
                 ..
             } => f
                 .debug_struct("HelperShellRequest::Kill")
                 .field("request_id", request_id)
                 .field("operation_id", operation_id)
                 .field("workload", workload)
+                .field("policy", policy)
                 .field("name", &"<redacted>")
                 .finish(),
         }
@@ -385,6 +426,13 @@ impl HelperShellRequest {
     }
 
     pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
+        let policy = match self {
+            Self::List { policy, .. }
+            | Self::Attach { policy, .. }
+            | Self::Detach { policy, .. }
+            | Self::Kill { policy, .. } => policy,
+        };
+        policy.validate_bounds()?;
         match self {
             Self::Attach {
                 initial_terminal_size,
@@ -728,7 +776,8 @@ impl HelperTerminalRequest {
     pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
         match self {
             Self::ReadOutput(request)
-                if request.max_len > MAX_UNSAFE_LOCAL_TERMINAL_CHUNK_BYTES
+                if request.max_len == 0
+                    || request.max_len > MAX_UNSAFE_LOCAL_TERMINAL_CHUNK_BYTES
                     || request.timeout_ms > MAX_UNSAFE_LOCAL_TERMINAL_WAIT_TIMEOUT_MS =>
             {
                 Err(HelperFailureCode::InvalidRequest)
@@ -996,6 +1045,13 @@ mod tests {
         ShellName::new(value).unwrap()
     }
 
+    fn shell_policy() -> HelperShellPolicy {
+        HelperShellPolicy {
+            default_name: shell_name("primary"),
+            max_sessions: 8,
+        }
+    }
+
     fn round_trip<T>(value: &T)
     where
         T: Serialize + DeserializeOwned + PartialEq + fmt::Debug,
@@ -1021,11 +1077,13 @@ mod tests {
                 request_id: 1,
                 operation_id: operation("op-list"),
                 workload: workload(),
+                policy: shell_policy(),
             },
             HelperShellRequest::Attach {
                 request_id: 2,
                 operation_id: operation("op-attach"),
                 workload: workload(),
+                policy: shell_policy(),
                 name: Some(shell_name("primary")),
                 force: true,
                 initial_terminal_size: TerminalSize { rows: 24, cols: 80 },
@@ -1034,12 +1092,14 @@ mod tests {
                 request_id: 3,
                 operation_id: operation("op-detach"),
                 workload: workload(),
+                policy: shell_policy(),
                 name: shell_name("primary"),
             },
             HelperShellRequest::Kill {
                 request_id: 4,
                 operation_id: operation("op-kill"),
                 workload: workload(),
+                policy: shell_policy(),
                 name: shell_name("primary"),
             },
         ];
@@ -1288,6 +1348,18 @@ mod tests {
             oversized_read.validate_bounds(),
             Err(HelperFailureCode::InvalidRequest)
         );
+        let zero_read = HelperTerminalRequest::ReadOutput(HelperTerminalReadOutput {
+            request_id: 1,
+            stream: TerminalStream::Stdout,
+            cursor: 0,
+            max_len: 0,
+            wait: false,
+            timeout_ms: 0,
+        });
+        assert_eq!(
+            zero_read.validate_bounds(),
+            Err(HelperFailureCode::InvalidRequest)
+        );
 
         let invalid_resize = HelperTerminalRequest::Resize(HelperTerminalResize {
             request_id: 1,
@@ -1309,15 +1381,42 @@ mod tests {
             decode_unsafe_local_terminal_frame::<HelperTerminalRequest>(&oversized_prefix),
             Err(HelperFailureCode::InvalidRequest)
         );
+        let valid =
+            encode_unsafe_local_terminal_frame(&HelperTerminalRequest::Wait(HelperTerminalWait {
+                request_id: 1,
+                timeout_ms: 1,
+            }))
+            .unwrap();
+        let mut trailing = valid;
+        trailing.push(0);
+        assert_eq!(
+            decode_unsafe_local_terminal_frame::<HelperTerminalRequest>(&trailing),
+            Err(HelperFailureCode::InvalidRequest)
+        );
+
+        let invalid_policy = HelperShellPolicy {
+            default_name: shell_name("primary"),
+            max_sessions: 0,
+        };
+        assert_eq!(
+            invalid_policy.validate_bounds(),
+            Err(HelperFailureCode::InvalidRequest)
+        );
     }
 
     #[test]
     fn debug_redacts_names_terminal_bytes_and_supervisor_identity() {
         let shell_canary = "private-shell-name-canary";
+        let policy = HelperShellPolicy {
+            default_name: shell_name(shell_canary),
+            max_sessions: 8,
+        };
+        assert!(!format!("{policy:?}").contains(shell_canary));
         let request = HelperShellRequest::Attach {
             request_id: 1,
             operation_id: operation("op-1"),
             workload: workload(),
+            policy,
             name: Some(shell_name(shell_canary)),
             force: true,
             initial_terminal_size: TerminalSize { rows: 24, cols: 80 },

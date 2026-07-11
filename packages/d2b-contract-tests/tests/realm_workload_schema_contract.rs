@@ -465,10 +465,29 @@ fn helper_shell_schema_is_correlated_bounded_and_authority_free() {
 
     let definitions = helper_schema["definitions"].as_object().unwrap();
     let shell_request = serde_json::to_string(&definitions["HelperShellRequest"]).unwrap();
-    for field in ["requestId", "operationId", "initialTerminalSize"] {
+    for field in ["requestId", "operationId", "initialTerminalSize", "policy"] {
         assert!(
             shell_request.contains(field),
             "helper shell request schema must use wire field {field}"
+        );
+    }
+    let shell_policy = &definitions["HelperShellPolicy"];
+    assert_eq!(
+        shell_policy["properties"]["maxSessions"]["minimum"].as_f64(),
+        Some(1.0)
+    );
+    assert_eq!(
+        shell_policy["properties"]["maxSessions"]["maximum"].as_f64(),
+        Some(64.0)
+    );
+    for required in ["defaultName", "maxSessions"] {
+        assert!(
+            shell_policy["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == required),
+            "trusted helper shell policy must require {required}"
         );
     }
     for forbidden in ["request_id", "operation_id", "initial_terminal_size"] {

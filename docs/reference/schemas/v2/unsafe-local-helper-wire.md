@@ -12,8 +12,10 @@ identity. The dedicated terminal stream remains terminal protocol version 1.
 - Control frames use bounded `AF_UNIX` `SOCK_SEQPACKET` messages.
 - Terminal readiness transfers exactly one connected `AF_UNIX` `SOCK_STREAM`.
 - Shell management requests and responses correlate both request and operation
-  ids. List, detach, and kill results map directly to the public shell result
-  DTOs.
+  ids. Each request also carries the bounded default name and session limit
+  resolved from the private workload policy; callers cannot supply that policy
+  through the public protocol. List, detach, and kill results map directly to
+  the public shell result DTOs.
 - The connected terminal stream is bound to one attachment. Its frames use a
   four-byte little-endian JSON-body length prefix, contain no client-supplied
   session handle, and cover bounded stdin writes, output reads, resize, wait,
@@ -27,5 +29,5 @@ identity. The dedicated terminal stream remains terminal protocol version 1.
 - Shell and terminal requests contain no uid, argv, environment, cwd, host
   path, transcript, PID, unit name, compositor data, or terminal session
   handle.
-- These are contract definitions only. Unsafe-local persistent-shell runtime
-  dispatch remains unavailable until its daemon and helper backend lands.
+- The user helper implements this contract. Public `d2bd` shell routing and
+  feature advertisement remain unavailable until the next integration slice.
