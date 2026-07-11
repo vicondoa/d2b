@@ -67,11 +67,11 @@ impl ClientState {
 
     fn abandon(&self, request_id: u64) {
         let mut abandoned = self.abandoned.lock();
-        if abandoned.len() >= MAX_ABANDONED_TERMINAL_REQUESTS {
-            if let Some(evicted) = abandoned.pop_front() {
-                self.abandoned_evicted_through
-                    .fetch_max(evicted, Ordering::AcqRel);
-            }
+        if abandoned.len() >= MAX_ABANDONED_TERMINAL_REQUESTS
+            && let Some(evicted) = abandoned.pop_front()
+        {
+            self.abandoned_evicted_through
+                .fetch_max(evicted, Ordering::AcqRel);
         }
         abandoned.push_back(request_id);
     }
