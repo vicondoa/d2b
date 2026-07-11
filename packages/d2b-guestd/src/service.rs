@@ -2082,6 +2082,7 @@ impl GuestControlService {
         &self,
         input: ExecCreateInput,
         guest_boot_id: &str,
+        requested_exec_id: Option<String>,
     ) -> ttrpc::Result<pb::ExecCreateResponse> {
         let Some(registry) = self.detached.as_ref() else {
             let mut response = pb::ExecCreateResponse::new();
@@ -2100,10 +2101,16 @@ impl GuestControlService {
             }
         };
 
-        match registry
-            .create(guest_boot_id, command, registry.default_caps())
-            .await
-        {
+        let created = if let Some(exec_id) = requested_exec_id {
+            registry
+                .create_with_exec_id(guest_boot_id, command, registry.default_caps(), exec_id)
+                .await
+        } else {
+            registry
+                .create(guest_boot_id, command, registry.default_caps())
+                .await
+        };
+        match created {
             Ok((exec_id, snapshot)) => {
                 let mut response = pb::ExecCreateResponse::new();
                 response.exec_id = Some(exec_id);
@@ -2708,7 +2715,14 @@ impl GuestControl for GuestControlService {
                 response.error = MessageField::some(guest_error_kind(ExecError::UnsupportedMode));
                 return Ok(response);
             }
-            return self.exec_create_detached(input, &guest_boot_id).await;
+            let requested_exec_id = request
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.request_id.strip_prefix("workload-launch:"))
+                .map(str::to_owned);
+            return self
+                .exec_create_detached(input, &guest_boot_id, requested_exec_id)
+                .await;
         }
 
         // Interactive TTY exec: tty=true && !detached routes to the PTY-backed,

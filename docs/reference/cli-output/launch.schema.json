@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LaunchOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "disposition",
+    "itemId",
+    "operationId",
+    "target"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "disposition": {
+      "$ref": "#/definitions/LauncherExecDisposition"
+    },
+    "itemId": {
+      "$ref": "#/definitions/ProtocolToken"
+    },
+    "operationId": {
+      "$ref": "#/definitions/OperationId"
+    },
+    "target": {
+      "$ref": "#/definitions/RealmTarget"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "LauncherExecDisposition": {
+      "type": "string",
+      "enum": [
+        "committed",
+        "already-committed"
+      ]
+    },
+    "OperationId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ProtocolToken": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "RealmTarget": {
+      "type": "string",
+      "maxLength": 388,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
+    }
+  }
+}

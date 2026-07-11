@@ -216,6 +216,27 @@ declared schema; see "Cardinality bounds" below.
   provider credentials, process environments, working directories, helper
   diagnostics, and terminal bytes are never metric labels.
 
+### `d2b_daemon_workload_availability`
+
+- **Type:** gauge
+- **Labels:** `provider`, `component`, `state`
+- **Meaning:** Count of workloads in the most recently observed inventory
+  snapshot for each closed provider/component/state tuple. An authorized
+  workload list or status request refreshes the complete inventory atomically,
+  including zero values for tuples no longer present. For unsafe-local
+  workloads, the snapshot reflects the requesting launcher's helper posture.
+  Components are `helper`, `scope`, `proxy`, `launcher`, and `shell`; provider
+  and state are closed enums (`not-applicable` is used where a provider has no
+  component). Workload ids and runtime details are not labels.
+
+### `d2b_daemon_workload_lifecycle_total`
+
+- **Type:** counter
+- **Labels:** `provider`, `operation`, `outcome`
+- **Meaning:** Configured workload lifecycle outcomes. Values are bounded
+  provider/operation/outcome enums and never include argv, environment, cwd,
+  paths, process ids, unit names, or helper diagnostics.
+
 ## Cardinality bounds
 
 | Label | Source | Bound |
@@ -226,6 +247,11 @@ declared schema; see "Cardinality bounds" below.
 | `step` | closed enum (host-prep DAG step IDs) | bounded by [`host-prep-dag.md`](./host-prep-dag.md) |
 | `op` | closed enum (broker wire op names) | bounded by [`daemon-api.md`](./daemon-api.md) |
 | `outcome` (broker) | closed enum | 3 |
+| `provider` (workload) | closed runtime-provider enum | 4 |
+| `component` (workload) | closed prerequisite enum | 5 |
+| `operation` (workload) | closed lifecycle-operation enum | 2 |
+| `state` (workload) | closed availability enum plus `not-applicable` | 9 |
+| `outcome` (workload) | closed lifecycle-result enum | 3 |
 | `vmm` | closed VM shutdown runtime enum | 3 |
 | `outcome` (VM shutdown) | closed daemon enum | bounded by daemon code |
 | `phase` | closed activation orchestration enum | 5 |

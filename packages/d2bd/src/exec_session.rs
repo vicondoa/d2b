@@ -199,6 +199,9 @@ impl Default for ExecOpDeadlines {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExecStartSpec {
     pub vm: String,
+    /// Optional opaque idempotency key forwarded as guest request metadata.
+    /// It is never argv and must not appear in Debug output.
+    pub request_id: Option<String>,
     pub argv: Vec<String>,
     pub tty: bool,
     pub detached: bool,
@@ -211,6 +214,7 @@ impl std::fmt::Debug for ExecStartSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecStartSpec")
             .field("vm", &self.vm)
+            .field("has_request_id", &self.request_id.is_some())
             .field("tty", &self.tty)
             .field("detached", &self.detached)
             .field("argv_len", &self.argv.len())
@@ -1067,8 +1071,10 @@ mod tests {
         const SECRET_KEY: &str = "SENTINEL_ENV_KEY_dspc";
         const SECRET_VAL: &str = "SENTINEL_ENV_VAL_dspc";
         const SECRET_CWD: &str = "SENTINEL_CWD_dspc";
+        const SECRET_REQUEST_ID: &str = "SENTINEL_REQUEST_ID_dspc";
         let spec = ExecStartSpec {
             vm: "corp-vm".to_owned(),
+            request_id: Some(SECRET_REQUEST_ID.to_owned()),
             argv: vec!["sh".to_owned(), SECRET_ARGV.to_owned()],
             tty: true,
             detached: false,
@@ -1077,7 +1083,13 @@ mod tests {
             term_size: Some((24, 80)),
         };
         let rendered = format!("{spec:?}");
-        for secret in [SECRET_ARGV, SECRET_KEY, SECRET_VAL, SECRET_CWD] {
+        for secret in [
+            SECRET_ARGV,
+            SECRET_KEY,
+            SECRET_VAL,
+            SECRET_CWD,
+            SECRET_REQUEST_ID,
+        ] {
             assert!(
                 !rendered.contains(secret),
                 "ExecStartSpec Debug leaked {secret}: {rendered}"
@@ -1296,6 +1308,7 @@ mod tests {
     fn spec() -> ExecStartSpec {
         ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: None,
             argv: vec!["true".to_owned()],
             tty: false,
             detached: false,

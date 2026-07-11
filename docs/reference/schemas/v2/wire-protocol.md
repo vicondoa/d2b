@@ -12,9 +12,9 @@ control plane accepts.
 - `framing` — length-prefixed AF_UNIX seqpacket frame rules.
 - `hello`, `helloOk`, `helloRejected` — version negotiation handshake.
 - `publicSocket` / `publicRequest` / `publicResponse` — CLI ↔ daemon wire.
-- `workloadOp` / `workloadOpResponse` — staged provider-neutral workload
-  operation DTOs; these remain outside `publicRequest` until runtime dispatch
-  is enabled.
+- `workloadOp` / `workloadOpResponse` — provider-neutral workload operation
+  DTOs, carried by the feature-negotiated `Workload` public request/response
+  variants.
 - `brokerSocket` / `brokerRequest` / `brokerResponse` — daemon ↔ broker wire.
 
 ## Contract notes

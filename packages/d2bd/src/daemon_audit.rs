@@ -121,6 +121,18 @@ pub enum VmShutdownOutcome {
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum DaemonEvent {
+    /// Bounded configured-launch lifecycle boundary. Target and item identity
+    /// are trusted bundle tokens; execution details never enter this record.
+    WorkloadLauncher {
+        target: String,
+        item_id: String,
+        operation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exec_id: Option<String>,
+        peer_uid: u32,
+        provider: WorkloadLaunchProvider,
+        result: WorkloadLaunchResult,
+    },
     /// Emitted when the api-ready phase of a VM start does not converge
     /// within the configured timeout in strict split-readiness mode.
     ApiReadyTimeout {
@@ -267,6 +279,22 @@ pub enum DaemonEvent {
         outcome: VmShutdownOutcome,
         elapsed_ms: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadLaunchProvider {
+    LocalVm,
+    UnsafeLocal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadLaunchResult {
+    Committed,
+    AlreadyCommitted,
+    Refused,
+    Failed,
 }
 
 /// JSONL audit-log writer for daemon-side events.
@@ -1978,5 +2006,53 @@ mod tests {
         assert_eq!(parse_ymd("2024-03"), None);
         assert_eq!(parse_ymd("2024-03-09-10"), None);
         assert_eq!(parse_ymd("not-a-date"), None);
+    }
+
+    #[test]
+    fn workload_launch_event_contains_boundary_only() {
+        let event = DaemonEvent::WorkloadLauncher {
+            target: "browser.host.d2b".to_owned(),
+            item_id: "browser".to_owned(),
+            operation_id: "launch-1".to_owned(),
+            exec_id: None,
+            peer_uid: 1000,
+            provider: WorkloadLaunchProvider::UnsafeLocal,
+            result: WorkloadLaunchResult::Committed,
+        };
+        let rendered = serde_json::to_string(&event).expect("serialize launch event");
+        assert!(rendered.contains("\"kind\":\"workload_launcher\""));
+        assert!(rendered.contains("\"peer_uid\":1000"));
+        assert!(rendered.contains("\"provider\":\"unsafe-local\""));
+        for canary in [
+            "private-argv-canary",
+            "\"argv\"",
+            "\"env\"",
+            "\"cwd\"",
+            "\"path\"",
+            "\"pid\"",
+            "\"unit\"",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+
+    #[test]
+    fn local_vm_workload_launch_provider_serializes_canonically() {
+        let event = DaemonEvent::WorkloadLauncher {
+            target: "browser.work.d2b".to_owned(),
+            item_id: "browser".to_owned(),
+            operation_id: "launch-2".to_owned(),
+            exec_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
+            peer_uid: 1000,
+            provider: WorkloadLaunchProvider::LocalVm,
+            result: WorkloadLaunchResult::Committed,
+        };
+        let rendered = serde_json::to_string(&event).unwrap();
+        assert!(rendered.contains("\"provider\":\"local-vm\""));
+        assert!(rendered.contains("\"operation_id\":\"launch-2\""));
+        assert!(rendered.contains("\"exec_id\":\"0123456789abcdef0123456789abcdef\""));
+        assert!(!rendered.contains("argv"));
+        assert!(!rendered.contains("environment"));
+        assert!(!rendered.contains("cwd"));
     }
 }

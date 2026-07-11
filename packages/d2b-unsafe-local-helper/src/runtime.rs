@@ -8,7 +8,8 @@ use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_realm_core::ids::OperationId;
 use nix::libc;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -33,6 +34,8 @@ pub enum RuntimeError {
     ProxyUnavailable,
     ScopeCreateFailed,
     ScopeIdentityMismatch,
+    OperationIdConflict,
+    OperationInProgress,
     Timeout,
     LedgerInvalid,
     Internal,
@@ -67,6 +70,8 @@ impl From<ScopeError> for RuntimeError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedScope {
     operation_id: OperationId,
+    #[serde(default)]
+    fingerprint: Option<[u8; 32]>,
     workload: WorkloadIdentity,
     unit_name: String,
     invocation_id: String,
@@ -117,8 +122,102 @@ impl fmt::Debug for PersistedScopeLedger {
 pub struct ScopeRuntime<M: UserScopeManager> {
     manager: Arc<M>,
     ledger_path: PathBuf,
-    ledger: Mutex<PersistedScopeLedger>,
+    ledger: Mutex<RuntimeLedger>,
     user_home: PathBuf,
+}
+
+struct RuntimeLedger {
+    persisted: PersistedScopeLedger,
+    reservations: BTreeMap<String, LaunchReservation>,
+    next_owner: u64,
+}
+
+impl Default for RuntimeLedger {
+    fn default() -> Self {
+        Self::from_persisted(PersistedScopeLedger {
+            schema_version: 1,
+            scopes: Vec::new(),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LaunchReservation {
+    fingerprint: [u8; 32],
+    owner: u64,
+}
+
+enum LaunchBegin {
+    Started(LaunchReservation),
+    AlreadyCommitted(Box<PersistedScope>),
+}
+
+impl RuntimeLedger {
+    fn from_persisted(persisted: PersistedScopeLedger) -> Self {
+        Self {
+            persisted,
+            reservations: BTreeMap::new(),
+            next_owner: 0,
+        }
+    }
+
+    fn begin(
+        &mut self,
+        operation_id: &OperationId,
+        fingerprint: [u8; 32],
+    ) -> Result<LaunchBegin, RuntimeError> {
+        let operation_key = operation_id.to_string();
+        if let Some(scope) = self
+            .persisted
+            .scopes
+            .iter()
+            .find(|scope| scope.operation_id == *operation_id)
+        {
+            return if scope.fingerprint == Some(fingerprint) {
+                Ok(LaunchBegin::AlreadyCommitted(Box::new(scope.clone())))
+            } else {
+                Err(RuntimeError::OperationIdConflict)
+            };
+        }
+        if let Some(reservation) = self.reservations.get(&operation_key) {
+            return if reservation.fingerprint == fingerprint {
+                Err(RuntimeError::OperationInProgress)
+            } else {
+                Err(RuntimeError::OperationIdConflict)
+            };
+        }
+        if self
+            .persisted
+            .scopes
+            .len()
+            .saturating_add(self.reservations.len())
+            >= MAX_HELPER_SNAPSHOT_SCOPES
+        {
+            return Err(RuntimeError::LedgerInvalid);
+        }
+        self.next_owner = self.next_owner.wrapping_add(1);
+        if self.next_owner == 0 {
+            self.next_owner = 1;
+        }
+        let reservation = LaunchReservation {
+            fingerprint,
+            owner: self.next_owner,
+        };
+        self.reservations.insert(operation_key, reservation);
+        Ok(LaunchBegin::Started(reservation))
+    }
+
+    fn owns(&self, operation_id: &OperationId, reservation: LaunchReservation) -> bool {
+        self.reservations
+            .get(operation_id.as_str())
+            .is_some_and(|active| active.owner == reservation.owner)
+    }
+
+    fn clear(&mut self, operation_id: &OperationId, reservation: LaunchReservation) {
+        if self.owns(operation_id, reservation) {
+            self.reservations.remove(operation_id.as_str());
+        }
+    }
 }
 
 impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
@@ -150,7 +249,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         user_home: PathBuf,
         ledger_path: PathBuf,
     ) -> Result<Self, RuntimeError> {
-        let ledger = load_ledger(&ledger_path)?;
+        let ledger = RuntimeLedger::from_persisted(load_ledger(&ledger_path)?);
         Ok(Self {
             manager: Arc::new(manager),
             ledger_path,
@@ -162,6 +261,39 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
     pub fn launch(
         &self,
         request: HelperLaunchRequest,
+    ) -> Result<HelperOperationResult, RuntimeError> {
+        let fingerprint = launch_fingerprint(&request)?;
+        let reservation = match self
+            .ledger
+            .lock()
+            .map_err(|_| RuntimeError::Internal)?
+            .begin(&request.operation_id, fingerprint)?
+        {
+            LaunchBegin::Started(reservation) => reservation,
+            LaunchBegin::AlreadyCommitted(scope) => {
+                return Ok(HelperOperationResult {
+                    request_id: request.request_id,
+                    operation_id: request.operation_id,
+                    disposition: HelperOperationDisposition::AlreadyCommitted,
+                    scope: Some(scope.verified().wire_identity()),
+                });
+            }
+        };
+        let operation_id = request.operation_id.clone();
+        let result = self.launch_reserved(request, fingerprint, reservation);
+        if result.is_err()
+            && let Ok(mut ledger) = self.ledger.lock()
+        {
+            ledger.clear(&operation_id, reservation);
+        }
+        result
+    }
+
+    fn launch_reserved(
+        &self,
+        request: HelperLaunchRequest,
+        fingerprint: [u8; 32],
+        reservation: LaunchReservation,
     ) -> Result<HelperOperationResult, RuntimeError> {
         let environment = self.manager.manager_environment()?;
         let argv = request.argv.as_slice();
@@ -187,36 +319,21 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         };
         let persisted = PersistedScope {
             operation_id: request.operation_id.clone(),
+            fingerprint: Some(fingerprint),
             workload: request.workload,
             unit_name: scope.unit_name.clone(),
             invocation_id: scope.invocation_id.clone(),
             control_group: scope.control_group.clone(),
             kind: scope.kind,
         };
-        let persist_result = match self.ledger.lock() {
-            Ok(mut ledger) => {
-                ledger
-                    .scopes
-                    .retain(|entry| entry.operation_id != persisted.operation_id);
-                ledger.scopes.push(persisted);
-                if ledger.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES {
-                    Err(RuntimeError::LedgerInvalid)
-                } else {
-                    persist_ledger(&self.ledger_path, &ledger)
-                }
-            }
-            Err(_) => Err(RuntimeError::Internal),
-        };
-        if let Err(error) = persist_result {
-            supervisor.abort();
-            self.stop_failed_scope(&scope);
-            self.remove_scope_record(&request.operation_id);
-            return Err(error);
-        }
         if let Err(error) = supervisor.release_and_wait_started() {
             supervisor.abort();
             self.stop_failed_scope(&scope);
-            self.remove_scope_record(&request.operation_id);
+            return Err(error);
+        }
+        if let Err(error) = self.commit_scope(&persisted, reservation) {
+            supervisor.abort();
+            self.stop_failed_scope(&scope);
             return Err(error);
         }
         supervisor.reap_in_background();
@@ -229,19 +346,29 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         })
     }
 
+    fn commit_scope(
+        &self,
+        persisted: &PersistedScope,
+        reservation: LaunchReservation,
+    ) -> Result<(), RuntimeError> {
+        let mut ledger = self.ledger.lock().map_err(|_| RuntimeError::Internal)?;
+        if !ledger.owns(&persisted.operation_id, reservation) {
+            return Err(RuntimeError::OperationIdConflict);
+        }
+        let mut candidate = ledger.persisted.clone();
+        candidate.scopes.push(persisted.clone());
+        if candidate.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES {
+            return Err(RuntimeError::LedgerInvalid);
+        }
+        persist_ledger(&self.ledger_path, &candidate)?;
+        ledger.persisted = candidate;
+        ledger.clear(&persisted.operation_id, reservation);
+        Ok(())
+    }
+
     fn stop_failed_scope(&self, scope: &VerifiedScope) {
         let _ = self.manager.terminate_scope(scope, libc::SIGKILL);
         let _ = self.manager.stop_scope(scope);
-    }
-
-    fn remove_scope_record(&self, operation_id: &OperationId) {
-        let Ok(mut ledger) = self.ledger.lock() else {
-            return;
-        };
-        ledger
-            .scopes
-            .retain(|entry| &entry.operation_id != operation_id);
-        let _ = persist_ledger(&self.ledger_path, &ledger);
     }
 
     pub fn snapshot(&self, generation: u64) -> Result<HelperSnapshot, RuntimeError> {
@@ -249,6 +376,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             .ledger
             .lock()
             .map_err(|_| RuntimeError::Internal)?
+            .persisted
             .scopes
             .clone();
         if entries.len() > MAX_HELPER_SNAPSHOT_SCOPES {
@@ -280,6 +408,17 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         }
         Ok(HelperSnapshot { generation, scopes })
     }
+}
+
+fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], RuntimeError> {
+    let encoded = serde_json::to_vec(&(
+        &request.workload,
+        &request.item_id,
+        &request.argv,
+        request.graphical,
+    ))
+    .map_err(|_| RuntimeError::Internal)?;
+    Ok(Sha256::digest(encoded).into())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -456,7 +595,15 @@ fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
     let encoded = fs::read(path).map_err(|_| RuntimeError::LedgerInvalid)?;
     let ledger: PersistedScopeLedger =
         serde_json::from_slice(&encoded).map_err(|_| RuntimeError::LedgerInvalid)?;
-    if ledger.schema_version != 1 || ledger.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES {
+    let unique_operations = ledger
+        .scopes
+        .iter()
+        .map(|scope| scope.operation_id.to_string())
+        .collect::<HashSet<_>>();
+    if ledger.schema_version != 1
+        || ledger.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES
+        || unique_operations.len() != ledger.scopes.len()
+    {
         return Err(RuntimeError::LedgerInvalid);
     }
     Ok(ledger)
@@ -493,13 +640,135 @@ fn persist_ledger(path: &Path, ledger: &PersistedScopeLedger) -> Result<(), Runt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::unsafe_local_wire::ScopeIdentity;
+    use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
+    use d2b_core::configured_argv::ConfiguredArgv;
+    use d2b_realm_core::token::ProtocolToken;
+    use std::sync::{Arc, Barrier};
+
+    fn launch(operation_id: &str, arg: &str) -> HelperLaunchRequest {
+        HelperLaunchRequest {
+            request_id: 1,
+            operation_id: OperationId::parse(operation_id).unwrap(),
+            workload: serde_json::from_value(serde_json::json!({
+                "workloadId": "tools",
+                "realmId": "host",
+                "realmPath": ["host"],
+                "canonicalTarget": "tools.host.d2b"
+            }))
+            .unwrap(),
+            item_id: ProtocolToken::parse("browser").unwrap(),
+            argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
+            graphical: false,
+        }
+    }
+
+    #[test]
+    fn concurrent_reservation_allows_only_one_launch_owner() {
+        const CONTENDERS: usize = 16;
+        let ledger = Arc::new(Mutex::new(RuntimeLedger::default()));
+        let barrier = Arc::new(Barrier::new(CONTENDERS));
+        let request = launch("op-concurrent", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        let operation_id = request.operation_id;
+        let mut threads = Vec::new();
+        for _ in 0..CONTENDERS {
+            let ledger = Arc::clone(&ledger);
+            let barrier = Arc::clone(&barrier);
+            let operation_id = operation_id.clone();
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                ledger.lock().unwrap().begin(&operation_id, fingerprint)
+            }));
+        }
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Ok(LaunchBegin::Started(_))))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(RuntimeError::OperationInProgress)))
+                .count(),
+            CONTENDERS - 1
+        );
+        assert_eq!(ledger.lock().unwrap().reservations.len(), 1);
+    }
+
+    #[test]
+    fn reservation_rejects_changed_fingerprint_and_replays_committed_scope() {
+        let first = launch("op-fingerprint", "first");
+        let first_fingerprint = launch_fingerprint(&first).unwrap();
+        let mut ledger = RuntimeLedger::default();
+        assert!(matches!(
+            ledger.begin(&first.operation_id, first_fingerprint),
+            Ok(LaunchBegin::Started(_))
+        ));
+        let changed = launch("op-fingerprint", "changed");
+        assert!(matches!(
+            ledger.begin(&changed.operation_id, launch_fingerprint(&changed).unwrap()),
+            Err(RuntimeError::OperationIdConflict)
+        ));
+
+        ledger.reservations.clear();
+        ledger.persisted.scopes.push(PersistedScope {
+            operation_id: first.operation_id.clone(),
+            fingerprint: Some(first_fingerprint),
+            workload: first.workload,
+            unit_name: "app-d2b.scope".to_owned(),
+            invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
+            control_group: "/user.slice/app-d2b.scope".to_owned(),
+            kind: HelperScopeKind::LauncherApp,
+        });
+        assert!(matches!(
+            ledger.begin(&first.operation_id, first_fingerprint),
+            Ok(LaunchBegin::AlreadyCommitted(_))
+        ));
+        assert!(matches!(
+            ledger.begin(&changed.operation_id, launch_fingerprint(&changed).unwrap()),
+            Err(RuntimeError::OperationIdConflict)
+        ));
+    }
+
+    #[test]
+    fn failed_launch_clears_only_its_own_reservation() {
+        let request = launch("op-owned", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        let mut ledger = RuntimeLedger::default();
+        let reservation = match ledger.begin(&request.operation_id, fingerprint).unwrap() {
+            LaunchBegin::Started(reservation) => reservation,
+            LaunchBegin::AlreadyCommitted(_) => panic!("new operation was already committed"),
+        };
+        ledger.clear(
+            &request.operation_id,
+            LaunchReservation {
+                fingerprint,
+                owner: reservation.owner.wrapping_add(1),
+            },
+        );
+        assert!(matches!(
+            ledger.begin(&request.operation_id, fingerprint),
+            Err(RuntimeError::OperationInProgress)
+        ));
+        ledger.clear(&request.operation_id, reservation);
+        assert!(matches!(
+            ledger.begin(&request.operation_id, fingerprint),
+            Ok(LaunchBegin::Started(_))
+        ));
+    }
 
     #[test]
     fn persisted_scope_debug_hides_scope_identifiers() {
         let canary = "scope-private-canary";
         let persisted = PersistedScope {
             operation_id: OperationId::parse("op-1").unwrap(),
+            fingerprint: None,
             workload: serde_json::from_value(serde_json::json!({
                 "workloadId": "tools",
                 "realmId": "host",

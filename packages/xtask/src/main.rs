@@ -14,12 +14,12 @@ use d2b_contracts::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts::{
     WireProtocolSchema,
     cli_output::{
-        AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, OpInspectOutputV1,
-        RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1, ShellKillOutputV1,
-        ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2, UsbProbeOutputV1,
-        VmAudioSetOutputV1, VmAudioStatusOutputV1, VmDisplayCloseOutputV1, VmDisplayListOutputV1,
-        VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1, VmExecLogsOutputV1,
-        VmExecStatusOutputV1,
+        AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
+        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, ShellDetachOutputV1,
+        ShellKillOutputV1, ShellListOutputV1, StatusOutputV2, StoreVerifyOutputV2,
+        UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1, VmDisplayCloseOutputV1,
+        VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
+        VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
 };
 use d2b_core::{
@@ -574,9 +574,10 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 22] = [
+    let schemas: [(&str, RootSchema); 23] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
+        ("launch.schema.json", schemars::schema_for!(LaunchOutputV1)),
         (
             "usb-probe.schema.json",
             schemars::schema_for!(UsbProbeOutputV1),
@@ -716,8 +717,9 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
         .source(source)
         .manual("d2b CLI")
         .render(&mut man_buffer)?;
-    fs::write(&man_path, man_buffer)?;
+    write_manpage(&man_path, man_buffer)?;
     let host_man_path = write_subcommand_manpage(&man_dir, &["host"], "d2b-host")?;
+    let launch_man_path = write_subcommand_manpage(&man_dir, &["launch"], "d2b-launch")?;
     let shell_man_path = write_subcommand_manpage(&man_dir, &["shell"], "d2b-shell")?;
     let clipboard_man_path = write_subcommand_manpage(&man_dir, &["clipboard"], "d2b-clipboard")?;
     let clipboard_arm_man_path =
@@ -746,6 +748,7 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     Ok(vec![
         man_path,
         host_man_path,
+        launch_man_path,
         shell_man_path,
         clipboard_man_path,
         clipboard_arm_man_path,
@@ -777,8 +780,20 @@ fn write_subcommand_manpage(
         .source("d2b".to_owned())
         .manual("d2b CLI")
         .render(&mut man_buffer)?;
-    fs::write(&man_path, man_buffer)?;
+    write_manpage(&man_path, man_buffer)?;
     Ok(man_path)
+}
+
+fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+    let rendered = String::from_utf8(rendered)?;
+    let mut normalized = rendered
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    normalized.push('\n');
+    fs::write(path, normalized)?;
+    Ok(())
 }
 
 fn patch_vm_exec_logs_bash_completion(

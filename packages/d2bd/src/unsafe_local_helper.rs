@@ -36,6 +36,8 @@ pub const HELPER_STALE_AFTER: Duration = Duration::from_secs(15);
 pub const HELPER_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_LOOP_TICK: Duration = Duration::from_millis(200);
+const HELPER_ACTIVE_OPERATION_RETENTION_SECS: u64 = 45;
+const LATE_RESPONSE_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperRegistryError {
@@ -57,6 +59,13 @@ pub enum HelperRegistryError {
     OperationRejected(HelperFailureCode),
     InvalidTerminalFd,
     Io,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperAvailability {
+    Ready,
+    Unavailable,
+    Stale,
 }
 
 pub enum HelperReply {
@@ -87,12 +96,18 @@ struct PendingRequest {
     sender: mpsc::SyncSender<Result<HelperReply, HelperRegistryError>>,
 }
 
+struct AbandonedRequest {
+    operation_id: String,
+    expires_at: Instant,
+}
+
 struct HelperConnection {
     generation: u64,
     socket: Arc<Socket>,
     outbound: mpsc::SyncSender<DaemonToUnsafeLocalHelper>,
     outbound_wakeup: Arc<UnixStream>,
     pending: Mutex<HashMap<u64, PendingRequest>>,
+    abandoned: Mutex<HashMap<u64, AbandonedRequest>>,
     last_heartbeat_millis: AtomicU64,
     connected_at: Instant,
     closed: AtomicBool,
@@ -138,12 +153,47 @@ impl HelperConnection {
         }
         Ok(())
     }
+
+    fn abandon_pending(&self, request_id: u64, operation_id: &str) {
+        let Some(pending) = self.pending.lock().remove(&request_id) else {
+            return;
+        };
+        if pending.operation_id != operation_id {
+            return;
+        }
+        let now = Instant::now();
+        let mut abandoned = self.abandoned.lock();
+        abandoned.retain(|_, request| request.expires_at > now);
+        if abandoned.len() >= MAX_HELPER_QUEUE_DEPTH
+            && let Some(oldest) = abandoned
+                .iter()
+                .min_by_key(|(_, request)| request.expires_at)
+                .map(|(request_id, _)| *request_id)
+        {
+            abandoned.remove(&oldest);
+        }
+        abandoned.insert(
+            request_id,
+            AbandonedRequest {
+                operation_id: operation_id.to_owned(),
+                expires_at: now + LATE_RESPONSE_RETENTION,
+            },
+        );
+    }
+
+    fn reap_abandoned(&self) {
+        let now = Instant::now();
+        self.abandoned
+            .lock()
+            .retain(|_, request| request.expires_at > now);
+    }
 }
 
 #[derive(Default)]
 struct RegistryState {
     connections: HashMap<u32, Arc<HelperConnection>>,
     snapshots: HashMap<u32, HelperSnapshot>,
+    last_failures: HashMap<(u32, String), HelperFailureCode>,
 }
 
 pub struct HelperRegistry {
@@ -218,6 +268,32 @@ impl HelperRegistry {
         self.state.lock().snapshots.get(&uid).cloned()
     }
 
+    pub fn availability(&self, uid: u32) -> HelperAvailability {
+        let state = self.state.lock();
+        let Some(connection) = state.connections.get(&uid) else {
+            return HelperAvailability::Unavailable;
+        };
+        if connection.closed.load(Ordering::Acquire) {
+            HelperAvailability::Unavailable
+        } else if connection.is_stale() {
+            HelperAvailability::Stale
+        } else {
+            HelperAvailability::Ready
+        }
+    }
+
+    pub fn last_failure(
+        &self,
+        uid: u32,
+        target: &d2b_core::workload_identity::WorkloadTarget,
+    ) -> Option<HelperFailureCode> {
+        self.state
+            .lock()
+            .last_failures
+            .get(&(uid, target.to_canonical()))
+            .copied()
+    }
+
     pub fn dispatch_launch(
         &self,
         requester_uid: u32,
@@ -225,6 +301,7 @@ impl HelperRegistry {
     ) -> Result<HelperOperationResult, HelperRegistryError> {
         let fingerprint = launch_fingerprint(&request)?;
         let operation_key = request.operation_id.to_string();
+        let workload_target = request.workload.canonical_target.to_canonical();
         let request_id = request.request_id;
         match self.operations.lock().begin(
             requester_uid,
@@ -259,6 +336,9 @@ impl HelperRegistry {
             return Err(HelperRegistryError::HelperUnavailable);
         }
         if connection.is_stale() {
+            self.operations
+                .lock()
+                .abort_active(requester_uid, &operation_key);
             return Err(HelperRegistryError::HelperStale);
         }
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -302,6 +382,10 @@ impl HelperRegistry {
                     result.clone(),
                     now_epoch_seconds(),
                 );
+                self.state
+                    .lock()
+                    .last_failures
+                    .remove(&(requester_uid, workload_target));
                 Ok(result)
             }
             Ok(Ok(HelperReply::Rejected(rejected))) => {
@@ -311,13 +395,30 @@ impl HelperRegistry {
                     rejected.code,
                     now_epoch_seconds(),
                 );
+                self.state
+                    .lock()
+                    .last_failures
+                    .insert((requester_uid, workload_target), rejected.code);
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Ok(HelperReply::Terminal { .. })) => {
+                connection.pending.lock().remove(&request_id);
+                self.operations
+                    .lock()
+                    .abort_active(requester_uid, &operation_key);
                 Err(HelperRegistryError::RequestCorrelationMismatch)
             }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(HelperRegistryError::Timeout),
+            Ok(Err(error)) => {
+                connection.pending.lock().remove(&request_id);
+                self.operations
+                    .lock()
+                    .abort_active(requester_uid, &operation_key);
+                Err(error)
+            }
+            Err(_) => {
+                connection.abandon_pending(request_id, &operation_key);
+                Err(HelperRegistryError::Timeout)
+            }
         }
     }
 
@@ -387,6 +488,7 @@ impl HelperRegistry {
             outbound,
             outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
+            abandoned: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now(),
             closed: AtomicBool::new(false),
@@ -449,6 +551,7 @@ impl HelperRegistry {
         let mut heartbeat_sequence = 0u64;
         let mut next_heartbeat = Instant::now() + HELPER_HEARTBEAT_INTERVAL;
         loop {
+            connection.reap_abandoned();
             if connection.closed.load(Ordering::Acquire) {
                 return Err(HelperRegistryError::GenerationSuperseded);
             }
@@ -484,11 +587,11 @@ impl HelperRegistry {
             match receive_frame::<UnsafeLocalHelperToDaemon>(&connection.socket, receive_buffer) {
                 Ok((frame, fds)) => {
                     if !self.is_active_generation(uid, connection) {
-                        close_raw_fds(fds);
+                        drop_received_fds(fds);
                         return Err(HelperRegistryError::GenerationSuperseded);
                     }
                     connection.touch();
-                    self.handle_incoming(connection, frame, fds)?;
+                    self.handle_incoming(uid, connection, frame, fds)?;
                 }
                 Err(error) => return Err(error),
             }
@@ -505,9 +608,10 @@ impl HelperRegistry {
 
     fn handle_incoming(
         &self,
+        uid: u32,
         connection: &HelperConnection,
         frame: UnsafeLocalHelperToDaemon,
-        fds: Vec<RawFd>,
+        fds: Vec<ReceivedFd>,
     ) -> Result<(), HelperRegistryError> {
         match frame {
             UnsafeLocalHelperToDaemon::Heartbeat(heartbeat) => {
@@ -519,21 +623,40 @@ impl HelperRegistry {
             }
             UnsafeLocalHelperToDaemon::Operation(result) => {
                 reject_unexpected_fds(fds)?;
-                complete_pending(
+                let delivered = complete_pending(
                     connection,
                     result.request_id,
                     result.operation_id.to_string(),
-                    HelperReply::Operation(result),
-                )
+                    HelperReply::Operation(result.clone()),
+                )?;
+                if !delivered {
+                    let operation_id = result.operation_id.to_string();
+                    self.operations.lock().complete(
+                        uid,
+                        &operation_id,
+                        result,
+                        now_epoch_seconds(),
+                    );
+                }
+                Ok(())
             }
             UnsafeLocalHelperToDaemon::Rejected(rejected) => {
                 reject_unexpected_fds(fds)?;
-                complete_pending(
+                let delivered = complete_pending(
                     connection,
                     rejected.request_id,
                     rejected.operation_id.to_string(),
-                    HelperReply::Rejected(rejected),
-                )
+                    HelperReply::Rejected(rejected.clone()),
+                )?;
+                if !delivered {
+                    self.operations.lock().reject(
+                        uid,
+                        rejected.operation_id.as_str(),
+                        rejected.code,
+                        now_epoch_seconds(),
+                    );
+                }
+                Ok(())
             }
             UnsafeLocalHelperToDaemon::TerminalReady(ready) => {
                 let fd = validate_terminal_fd(&ready, fds)?;
@@ -543,6 +666,7 @@ impl HelperRegistry {
                     ready.operation_id.to_string(),
                     HelperReply::Terminal { ready, fd },
                 )
+                .map(|_| ())
             }
             UnsafeLocalHelperToDaemon::Hello(_) | UnsafeLocalHelperToDaemon::Snapshot(_) => {
                 reject_unexpected_fds(fds)?;
@@ -557,9 +681,14 @@ fn complete_pending(
     request_id: u64,
     operation_id: String,
     reply: HelperReply,
-) -> Result<(), HelperRegistryError> {
-    let Some(pending) = connection.pending.lock().remove(&request_id) else {
-        return Err(HelperRegistryError::RequestCorrelationMismatch);
+) -> Result<bool, HelperRegistryError> {
+    let pending = connection.pending.lock().remove(&request_id);
+    let Some(pending) = pending else {
+        let abandoned = connection.abandoned.lock().remove(&request_id);
+        return match abandoned {
+            Some(abandoned) if abandoned.operation_id == operation_id => Ok(false),
+            _ => Err(HelperRegistryError::RequestCorrelationMismatch),
+        };
     };
     if pending.operation_id != operation_id {
         let _ = pending
@@ -567,10 +696,7 @@ fn complete_pending(
             .try_send(Err(HelperRegistryError::RequestCorrelationMismatch));
         return Err(HelperRegistryError::RequestCorrelationMismatch);
     }
-    pending
-        .sender
-        .try_send(Ok(reply))
-        .map_err(|_| HelperRegistryError::RequestCorrelationMismatch)
+    Ok(pending.sender.try_send(Ok(reply)).is_ok())
 }
 
 pub fn bind_helper_socket(
@@ -646,7 +772,7 @@ fn send_frame<T: Serialize>(socket: &Socket, frame: &T) -> Result<(), HelperRegi
 fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
     encoded: &mut [u8],
-) -> Result<(T, Vec<RawFd>), HelperRegistryError> {
+) -> Result<(T, Vec<ReceivedFd>), HelperRegistryError> {
     if encoded.len() < MAX_HELPER_FRAME_SIZE + 5 {
         return Err(HelperRegistryError::FrameTooLarge);
     }
@@ -662,6 +788,15 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
         Err(_) => return Err(HelperRegistryError::Io),
     };
     let read = message.bytes;
+    let mut fds = Vec::new();
+    for control in message
+        .cmsgs()
+        .map_err(|_| HelperRegistryError::InvalidFrame)?
+    {
+        if let ControlMessageOwned::ScmRights(rights) = control {
+            fds.extend(rights.into_iter().map(ReceivedFd));
+        }
+    }
     if read == 0 {
         return Err(HelperRegistryError::Io);
     }
@@ -671,17 +806,7 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
     {
         return Err(HelperRegistryError::FrameTooLarge);
     }
-    let mut fds = Vec::new();
-    for control in message
-        .cmsgs()
-        .map_err(|_| HelperRegistryError::InvalidFrame)?
-    {
-        if let ControlMessageOwned::ScmRights(rights) = control {
-            fds.extend(rights);
-        }
-    }
     if read < 4 {
-        close_raw_fds(fds);
         return Err(HelperRegistryError::InvalidFrame);
     }
     let declared = u32::from_le_bytes(
@@ -690,17 +815,13 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
             .map_err(|_| HelperRegistryError::InvalidFrame)?,
     ) as usize;
     if declared > MAX_HELPER_FRAME_SIZE {
-        close_raw_fds(fds);
         return Err(HelperRegistryError::FrameTooLarge);
     }
     if read != declared + 4 {
-        close_raw_fds(fds);
         return Err(HelperRegistryError::InvalidFrame);
     }
-    let frame = serde_json::from_slice(&encoded[4..read]).map_err(|_| {
-        close_raw_fds(fds.clone());
-        HelperRegistryError::InvalidFrame
-    })?;
+    let frame =
+        serde_json::from_slice(&encoded[4..read]).map_err(|_| HelperRegistryError::InvalidFrame)?;
     Ok((frame, fds))
 }
 
@@ -775,25 +896,42 @@ fn drain_outbound_wakeup(outbound_wakeup: &UnixStream) -> Result<(), HelperRegis
     }
 }
 
+struct ReceivedFd(RawFd);
+
+impl AsRawFd for ReceivedFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
+}
+
+impl Drop for ReceivedFd {
+    fn drop(&mut self) {
+        let _ = unistd::close(self.0);
+    }
+}
+
 fn validate_terminal_fd(
     ready: &HelperTerminalReady,
-    fds: Vec<RawFd>,
+    mut fds: Vec<ReceivedFd>,
 ) -> Result<OwnedFd, HelperRegistryError> {
     if ready.terminal_protocol_version != UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION
+        || !matches!(
+            ready.transport,
+            d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream
+        )
         || fds.len() != UNSAFE_LOCAL_TERMINAL_FD_COUNT
     {
-        close_raw_fds(fds);
         return Err(HelperRegistryError::InvalidTerminalFd);
     }
-    let raw = fds[0];
-    let duplicated = duplicate_received_fd(raw)?;
-    close_raw_fds(fds);
-    let flags = fcntl(duplicated.as_raw_fd(), FcntlArg::F_GETFD)
+    let received = fds.pop().ok_or(HelperRegistryError::InvalidTerminalFd)?;
+    let flags = fcntl(received.as_raw_fd(), FcntlArg::F_GETFD)
         .map_err(|_| HelperRegistryError::InvalidTerminalFd)?;
-    if !FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC)
-        || getsockopt(&duplicated, SocketTypeOpt)
-            .map_err(|_| HelperRegistryError::InvalidTerminalFd)?
-            != nix::sys::socket::SockType::Stream
+    if !FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC) {
+        return Err(HelperRegistryError::InvalidTerminalFd);
+    }
+    let duplicated = duplicate_received_fd(received.as_raw_fd())?;
+    if getsockopt(&duplicated, SocketTypeOpt).map_err(|_| HelperRegistryError::InvalidTerminalFd)?
+        != nix::sys::socket::SockType::Stream
         || getsockopt(&duplicated, AcceptConn)
             .map_err(|_| HelperRegistryError::InvalidTerminalFd)?
         || getpeername::<UnixAddr>(duplicated.as_raw_fd()).is_err()
@@ -819,15 +957,13 @@ fn duplicate_received_fd(raw: RawFd) -> Result<OwnedFd, HelperRegistryError> {
     Ok(duplicated)
 }
 
-fn close_raw_fds(fds: Vec<RawFd>) {
-    for fd in fds {
-        let _ = unistd::close(fd);
-    }
+fn drop_received_fds(fds: Vec<ReceivedFd>) {
+    drop(fds);
 }
 
-fn reject_unexpected_fds(fds: Vec<RawFd>) -> Result<(), HelperRegistryError> {
+fn reject_unexpected_fds(fds: Vec<ReceivedFd>) -> Result<(), HelperRegistryError> {
     let unexpected = !fds.is_empty();
-    close_raw_fds(fds);
+    drop_received_fds(fds);
     if unexpected {
         Err(HelperRegistryError::InvalidTerminalFd)
     } else {
@@ -837,7 +973,9 @@ fn reject_unexpected_fds(fds: Vec<RawFd>) -> Result<(), HelperRegistryError> {
 
 #[derive(Clone)]
 enum LedgerState {
-    Active,
+    Active {
+        started_at: u64,
+    },
     Completed {
         result: HelperOperationResult,
         completed_at: u64,
@@ -883,17 +1021,25 @@ impl OperationLedger {
                 return Err(HelperRegistryError::OperationIdConflict);
             }
             return match &entry.state {
-                LedgerState::Active => Err(HelperRegistryError::OperationInProgress),
+                LedgerState::Active { .. } => Err(HelperRegistryError::OperationInProgress),
                 LedgerState::Completed { result, .. } => Ok(LedgerBegin::Completed(result.clone())),
                 LedgerState::Rejected { code, .. } => Ok(LedgerBegin::Rejected(*code)),
                 LedgerState::Adopted { .. } => Err(HelperRegistryError::OperationIdConflict),
             };
         }
+        if entries
+            .values()
+            .filter(|entry| matches!(entry.state, LedgerState::Active { .. }))
+            .count()
+            >= MAX_HELPER_QUEUE_DEPTH
+        {
+            return Err(HelperRegistryError::QueueFull);
+        }
         entries.insert(
             operation_id,
             LedgerEntry {
                 fingerprint: Some(fingerprint),
-                state: LedgerState::Active,
+                state: LedgerState::Active { started_at: now },
             },
         );
         Ok(LedgerBegin::Started)
@@ -919,7 +1065,7 @@ impl OperationLedger {
         };
         if entries
             .get(operation_id)
-            .is_some_and(|entry| matches!(entry.state, LedgerState::Active))
+            .is_some_and(|entry| matches!(entry.state, LedgerState::Active { .. }))
         {
             entries.remove(operation_id);
         }
@@ -951,7 +1097,7 @@ impl OperationLedger {
             };
             match entries.entry(operation_id) {
                 std::collections::hash_map::Entry::Occupied(mut occupied) => {
-                    if matches!(occupied.get().state, LedgerState::Active) {
+                    if matches!(occupied.get().state, LedgerState::Active { .. }) {
                         occupied.get_mut().state = LedgerState::Completed {
                             result: adopted_result,
                             completed_at: now,
@@ -974,7 +1120,9 @@ impl OperationLedger {
             return;
         };
         entries.retain(|_, entry| match &entry.state {
-            LedgerState::Active => true,
+            LedgerState::Active { started_at } => {
+                now.saturating_sub(*started_at) < HELPER_ACTIVE_OPERATION_RETENTION_SECS
+            }
             LedgerState::Completed { completed_at, .. }
             | LedgerState::Rejected { completed_at, .. }
             | LedgerState::Adopted { completed_at, .. } => {
@@ -984,7 +1132,7 @@ impl OperationLedger {
         let mut completed: Vec<(String, u64)> = entries
             .iter()
             .filter_map(|(id, entry)| match &entry.state {
-                LedgerState::Active => None,
+                LedgerState::Active { .. } => None,
                 LedgerState::Completed { completed_at, .. }
                 | LedgerState::Rejected { completed_at, .. }
                 | LedgerState::Adopted { completed_at, .. } => Some((id.clone(), *completed_at)),
@@ -1116,17 +1264,8 @@ mod tests {
     }
 
     #[test]
-    fn operation_ledger_never_reaps_active_entries() {
+    fn operation_ledger_keeps_unexpired_active_entries() {
         let mut ledger = OperationLedger::default();
-        let active = launch(1, "active-op", "program");
-        ledger
-            .begin(
-                1000,
-                "active-op".to_owned(),
-                launch_fingerprint(&active).unwrap(),
-                0,
-            )
-            .unwrap();
         for index in 0..=MAX_COMPLETED_OPERATIONS_PER_UID {
             let request = launch(index as u64 + 2, &format!("done-{index}"), "program");
             let key = request.operation_id.to_string();
@@ -1140,18 +1279,140 @@ mod tests {
                 .unwrap();
             ledger.complete(1000, &key, completed(&request), index as u64 + 1);
         }
+        let active = launch(1, "active-op", "program");
+        ledger
+            .begin(
+                1000,
+                "active-op".to_owned(),
+                launch_fingerprint(&active).unwrap(),
+                MAX_COMPLETED_OPERATIONS_PER_UID as u64 + 2,
+            )
+            .unwrap();
         let entries = ledger.by_uid.get(&1000).unwrap();
         assert!(matches!(
             entries.get("active-op").map(|entry| &entry.state),
-            Some(LedgerState::Active)
+            Some(LedgerState::Active { .. })
         ));
         assert!(
             entries
                 .values()
-                .filter(|entry| !matches!(entry.state, LedgerState::Active))
+                .filter(|entry| !matches!(entry.state, LedgerState::Active { .. }))
                 .count()
                 <= MAX_COMPLETED_OPERATIONS_PER_UID
         );
+    }
+
+    #[test]
+    fn aborted_helper_operation_can_retry_same_id() {
+        let mut ledger = OperationLedger::default();
+        let request = launch(1, "retry-op", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        assert!(matches!(
+            ledger
+                .begin(1000, "retry-op".to_owned(), fingerprint, 1)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
+        ledger.abort_active(1000, "retry-op");
+        assert!(matches!(
+            ledger
+                .begin(1000, "retry-op".to_owned(), fingerprint, 2)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
+    }
+
+    #[test]
+    fn timed_out_operation_stays_ambiguous_until_active_expiry() {
+        let mut ledger = OperationLedger::default();
+        let request = launch(1, "timed-out-op", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        assert!(matches!(
+            ledger.begin(1000, "timed-out-op".to_owned(), fingerprint, 1),
+            Ok(LedgerBegin::Started)
+        ));
+        assert!(matches!(
+            ledger.begin(
+                1000,
+                "timed-out-op".to_owned(),
+                fingerprint,
+                1 + HELPER_OPERATION_TIMEOUT.as_secs()
+            ),
+            Err(HelperRegistryError::OperationInProgress)
+        ));
+        let changed = launch(2, "timed-out-op", "different");
+        assert!(matches!(
+            ledger.begin(
+                1000,
+                "timed-out-op".to_owned(),
+                launch_fingerprint(&changed).unwrap(),
+                1 + HELPER_OPERATION_TIMEOUT.as_secs()
+            ),
+            Err(HelperRegistryError::OperationIdConflict)
+        ));
+        assert!(matches!(
+            ledger.begin(
+                1000,
+                "timed-out-op".to_owned(),
+                fingerprint,
+                1 + HELPER_ACTIVE_OPERATION_RETENTION_SECS
+            ),
+            Ok(LedgerBegin::Started)
+        ));
+    }
+
+    #[test]
+    fn late_response_reconciles_abandoned_request_without_reopening_launch() {
+        let uid = 1000;
+        let registry = HelperRegistry::new(42, [uid]);
+        let request = launch(7, "late-op", "program");
+        let fingerprint = launch_fingerprint(&request).unwrap();
+        registry
+            .operations
+            .lock()
+            .begin(uid, "late-op".to_owned(), fingerprint, 1)
+            .unwrap();
+        let (socket, _peer) = seqpacket_pair();
+        let (outbound, _outbound_rx) = mpsc::sync_channel(1);
+        let (_wakeup_read, wakeup_write) = UnixStream::pair().unwrap();
+        let connection = HelperConnection {
+            generation: 1,
+            socket: Arc::new(socket),
+            outbound,
+            outbound_wakeup: Arc::new(wakeup_write),
+            pending: Mutex::new(HashMap::new()),
+            abandoned: Mutex::new(HashMap::new()),
+            last_heartbeat_millis: AtomicU64::new(0),
+            connected_at: Instant::now(),
+            closed: AtomicBool::new(false),
+        };
+        let (sender, receiver) = mpsc::sync_channel(1);
+        connection.pending.lock().insert(
+            request.request_id,
+            PendingRequest {
+                operation_id: request.operation_id.to_string(),
+                sender,
+            },
+        );
+        drop(receiver);
+        connection.abandon_pending(request.request_id, request.operation_id.as_str());
+
+        registry
+            .handle_incoming(
+                uid,
+                &connection,
+                UnsafeLocalHelperToDaemon::Operation(completed(&request)),
+                Vec::new(),
+            )
+            .unwrap();
+        assert!(matches!(
+            registry
+                .operations
+                .lock()
+                .begin(uid, "late-op".to_owned(), fingerprint, 2),
+            Ok(LedgerBegin::Completed(_))
+        ));
+        assert!(connection.abandoned.lock().is_empty());
     }
 
     #[test]
@@ -1261,7 +1522,7 @@ mod tests {
             let (frame, fds) =
                 receive_frame::<DaemonToUnsafeLocalHelper>(&helper, &mut receive_buffer)
                     .expect("daemon request");
-            close_raw_fds(fds);
+            drop_received_fds(fds);
             match frame {
                 DaemonToUnsafeLocalHelper::Launch(request) => {
                     assert_eq!(request.request_id, 91);
@@ -1309,6 +1570,7 @@ mod tests {
             outbound,
             outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
+            abandoned: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now(),
             closed: AtomicBool::new(false),
@@ -1337,12 +1599,31 @@ mod tests {
             outbound,
             outbound_wakeup: Arc::new(outbound_wakeup_write),
             pending: Mutex::new(HashMap::new()),
+            abandoned: Mutex::new(HashMap::new()),
             last_heartbeat_millis: AtomicU64::new(0),
             connected_at: Instant::now() - HELPER_STALE_AFTER - Duration::from_millis(1),
             closed: AtomicBool::new(false),
         };
         assert!(connection.is_stale());
         drop(peer);
+    }
+
+    #[test]
+    fn helper_failures_are_scoped_to_workload_target() {
+        let registry = HelperRegistry::new(999, [1000]);
+        let browser =
+            d2b_core::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
+        let editor = d2b_core::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
+        registry.state.lock().last_failures.insert(
+            (1000, browser.to_canonical()),
+            HelperFailureCode::ProxyUnavailable,
+        );
+
+        assert_eq!(
+            registry.last_failure(1000, &browser),
+            Some(HelperFailureCode::ProxyUnavailable)
+        );
+        assert_eq!(registry.last_failure(1000, &editor), None);
     }
 
     #[test]
@@ -1355,6 +1636,7 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
         let ready = HelperTerminalReady {
             request_id: 1,
             operation_id: OperationId::parse("op-terminal").unwrap(),
@@ -1366,7 +1648,7 @@ mod tests {
                 kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
             },
         };
-        let validated = validate_terminal_fd(&ready, vec![raw]).unwrap();
+        let validated = validate_terminal_fd(&ready, vec![ReceivedFd(raw)]).unwrap();
         let flags = fcntl(validated.as_raw_fd(), FcntlArg::F_GETFD).unwrap();
         assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
         drop(peer);
@@ -1379,11 +1661,56 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(datagram.as_raw_fd()).unwrap();
+        fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
         assert!(matches!(
-            validate_terminal_fd(&ready, vec![raw]),
+            validate_terminal_fd(&ready, vec![ReceivedFd(raw)]),
             Err(HelperRegistryError::InvalidTerminalFd)
         ));
         drop(datagram_peer);
+    }
+
+    #[test]
+    fn terminal_fd_validation_checks_received_cloexec_and_closes_errors() {
+        let (stream, _peer): (OwnedFd, OwnedFd) = socketpair(
+            AddressFamily::Unix,
+            nix::sys::socket::SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .unwrap();
+        let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let ready = HelperTerminalReady {
+            request_id: 1,
+            operation_id: OperationId::parse("op-terminal-flags").unwrap(),
+            terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
+            transport:
+                d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
+            scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
+                kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+            },
+        };
+
+        assert!(matches!(
+            validate_terminal_fd(&ready, vec![ReceivedFd(raw)]),
+            Err(HelperRegistryError::InvalidTerminalFd)
+        ));
+        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+
+        let first = unistd::dup(stream.as_raw_fd()).unwrap();
+        let second = unistd::dup(stream.as_raw_fd()).unwrap();
+        assert!(matches!(
+            validate_terminal_fd(&ready, vec![ReceivedFd(first), ReceivedFd(second)]),
+            Err(HelperRegistryError::InvalidTerminalFd)
+        ));
+        assert_eq!(
+            fcntl(first, FcntlArg::F_GETFD),
+            Err(nix::errno::Errno::EBADF)
+        );
+        assert_eq!(
+            fcntl(second, FcntlArg::F_GETFD),
+            Err(nix::errno::Errno::EBADF)
+        );
     }
 
     fn register_helper(registry: Arc<HelperRegistry>, generation: u64) -> Socket {
@@ -1407,7 +1734,7 @@ mod tests {
         let (accepted, fds) =
             receive_frame::<DaemonToUnsafeLocalHelper>(&client, &mut receive_buffer)
                 .expect("hello accepted");
-        close_raw_fds(fds);
+        drop_received_fds(fds);
         assert!(matches!(
             accepted,
             DaemonToUnsafeLocalHelper::HelloAccepted(HelperHelloAccepted {

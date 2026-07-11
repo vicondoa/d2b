@@ -429,7 +429,7 @@ fn bundle_json_with_full_hashes(
 fn unsafe_local_bundle_pre_hash() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "artifactHashes": null,
-        "bundleVersion": 10,
+        "bundleVersion": 11,
         "schemaVersion": "v2",
         "publicManifestPath": "vms.json",
         "hostPath": "host.json",
@@ -511,7 +511,7 @@ fn loads_hashed_unsafe_local_workloads_artifact() {
     let bundle_path = write_unsafe_local_bundle(dir.path(), &policy);
     let resolver =
         BundleResolver::load_with_policy(&bundle_path, &policy).expect("unsafe-local bundle loads");
-    assert_eq!(resolver.bundle.bundle_version, 10);
+    assert_eq!(resolver.bundle.bundle_version, 11);
     assert!(resolver.realm_workloads_launcher_v2.is_some());
     assert!(
         resolver

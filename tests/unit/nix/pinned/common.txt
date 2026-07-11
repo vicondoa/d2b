@@ -624,6 +624,9 @@ realm-workloads/cross-realm-ext-network-conflict-advisory-only
 realm-workloads/cross-realm-ext-network-conflict-in-index
 realm-workloads/cross-realm-same-vm-no-cid-collision
 realm-workloads/disabled-excluded-from-enabled
+realm-workloads/empty-local-vm-configured-launch-rejected
+realm-workloads/empty-local-vm-launcher-stays-compatibility-only
+realm-workloads/first-class-local-vm-private-launcher
 realm-workloads/index-accepted-provider-placeholder
 realm-workloads/index-accepted-with-legacyvmname
 realm-workloads/index-all-includes-disabled
@@ -643,10 +646,12 @@ realm-workloads/launcher-json-no-implicit-dedup
 realm-workloads/launcher-json-shape
 realm-workloads/launcher-json-workload-id-field
 realm-workloads/launcher-v2-public-metadata-hides-argv
+realm-workloads/local-vm-private-items-filter-unsupported-kinds
 realm-workloads/persistent-shell-compatibility-item
+realm-workloads/private-configured-workload-bounds
 realm-workloads/realm-row-workload-names
 realm-workloads/realm-with-no-workloads-empty-index
-realm-workloads/unsafe-local-artifacts-and-bundle-v10
+realm-workloads/unsafe-local-artifacts-and-bundle-v11
 realm-workloads/unsafe-local-helper-user-service-and-eligibility
 realm-workloads/unsafe-local-index-posture-and-items
 realm-workloads/unsafe-local-omitted-from-launcher-v1

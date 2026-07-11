@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
 
 use crate::detached::{
     ManagedUnit, ManagedUnitKind, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
@@ -203,6 +204,9 @@ struct SlotEntry {
     active_counted: bool,
     /// In-flight `ExecLogs` reads (GC defers unlink while > 0).
     read_guards: u32,
+    /// Completion channel for callers coalesced onto a deterministic-id create.
+    /// Re-adopted records have no local creator and therefore no channel.
+    create_resolution: Option<watch::Receiver<CreateResolution>>,
 }
 
 impl SlotEntry {
@@ -215,6 +219,21 @@ impl SlotEntry {
     fn hidden(&self) -> bool {
         self.creating || self.dispatch_hold
     }
+}
+
+#[derive(Debug, Clone)]
+enum CreateResolution {
+    Creating,
+    Finished(Result<ExecSnapshot, ExecError>),
+}
+
+enum CreateAdmission {
+    Reserved {
+        slot: u32,
+        resolution: watch::Sender<CreateResolution>,
+    },
+    ReplayVisible,
+    ReplayCreating(watch::Receiver<CreateResolution>),
 }
 
 /// Per-slot unit liveness resolved against systemd. A query error is its
@@ -286,6 +305,13 @@ impl RegistryState {
         self.slots
             .iter()
             .find(|(_, entry)| !entry.hidden() && entry.record.exec_id == exec_id)
+            .map(|(slot, _)| *slot)
+    }
+
+    fn find_any_by_id(&self, exec_id: &str) -> Option<u32> {
+        self.slots
+            .iter()
+            .find(|(_, entry)| entry.record.exec_id == exec_id)
             .map(|(slot, _)| *slot)
     }
 
@@ -401,59 +427,188 @@ impl DetachedRegistry {
         command: ValidatedCommand,
         caps: DetachedCaps,
     ) -> Result<(String, ExecSnapshot), ExecError> {
+        self.create_inner(boot_id, command, caps, None).await
+    }
+
+    pub async fn create_with_exec_id(
+        &self,
+        boot_id: &str,
+        command: ValidatedCommand,
+        caps: DetachedCaps,
+        exec_id: String,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
+        self.create_inner(boot_id, command, caps, Some(exec_id))
+            .await
+    }
+
+    async fn create_inner(
+        &self,
+        boot_id: &str,
+        command: ValidatedCommand,
+        caps: DetachedCaps,
+        requested_exec_id: Option<String>,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
         Self::assert_quota_invariant();
         if boot_id != self.config.boot_id {
             return Err(ExecError::StaleSession);
         }
 
         let argv_sha256 = argv_hash(&command);
-        let exec_id = self.ids.next_exec_id()?;
+        let has_requested_exec_id = requested_exec_id.is_some();
+        let exec_id = if let Some(exec_id) = requested_exec_id {
+            if !is_valid_exec_id(&exec_id) {
+                return Err(ExecError::InvalidArgv);
+            }
+            exec_id
+        } else {
+            self.ids.next_exec_id()?
+        };
         let now = self.clock.now_ms();
 
-        // Step 1: reserve slot + active + quota under the Creating guard.
-        let slot = {
+        // Step 1: replay or reserve slot + active + quota atomically under the
+        // Creating guard. The recheck here prevents duplicate reservations.
+        let admission = {
             let mut state = self.lock();
-            if state.active >= DETACHED_ACTIVE_PER_VM as u32 {
-                return Err(ExecError::ExecCapacityExceeded);
+            if has_requested_exec_id {
+                if state.is_tombstoned(&exec_id) {
+                    return Err(ExecError::ExecExpired);
+                }
+                if let Some(existing_slot) = state.find_any_by_id(&exec_id) {
+                    let existing = state
+                        .slots
+                        .get(&existing_slot)
+                        .expect("slot found by requested exec id");
+                    if existing.record.argv_sha256 != argv_sha256 {
+                        return Err(ExecError::InvalidArgv);
+                    }
+                    if existing.creating {
+                        let receiver = existing
+                            .create_resolution
+                            .as_ref()
+                            .ok_or(ExecError::Internal)?
+                            .clone();
+                        CreateAdmission::ReplayCreating(receiver)
+                    } else if existing.dispatch_hold {
+                        // A restart-recovered dispatch is deliberately hidden
+                        // until the reaper resolves it. It is not a teardown.
+                        return Err(ExecError::Internal);
+                    } else {
+                        CreateAdmission::ReplayVisible
+                    }
+                } else {
+                    self.reserve_create(&mut state, &exec_id, &argv_sha256, &caps, now)?
+                }
+            } else {
+                self.reserve_create(&mut state, &exec_id, &argv_sha256, &caps, now)?
             }
-            let Some(slot) = state.free_slot() else {
-                return Err(ExecError::ExecCapacityExceeded);
-            };
-            let reserve = caps.reserved_bytes();
-            if state.reserved_log_bytes.saturating_add(reserve) > DETACHED_LOG_QUOTA_BYTES {
-                return Err(ExecError::RetainedLogQuotaExceeded);
-            }
-            let record = DurableRecord {
-                exec_id: exec_id.clone(),
-                slot,
-                boot_id: self.config.boot_id.clone(),
-                create_time_unix: now,
-                dispatch_deadline_unix: now.saturating_add(DISPATCH_DEADLINE_MS),
-                argv_sha256: argv_sha256.clone(),
-                state: RecordState::Dispatching,
-                exit_code: None,
-                term_signal: None,
-                lost: false,
-                terminal_time_unix: None,
-            };
-            state.reserved_log_bytes = state.reserved_log_bytes.saturating_add(reserve);
-            state.active = state.active.saturating_add(1);
-            state.slots.insert(
-                slot,
-                SlotEntry {
-                    record,
-                    caps: caps.clone(),
-                    creating: true,
-                    dispatch_hold: false,
-                    generation: 0,
-                    active_counted: true,
-                    read_guards: 0,
-                },
-            );
-            slot
         };
 
-        let spec = match build_spec(&command, &caps, &self.config, slot) {
+        let (slot, resolution) = match admission {
+            CreateAdmission::ReplayVisible => {
+                let snapshot = self.inspect(&exec_id, boot_id).await?;
+                return Ok((exec_id, snapshot));
+            }
+            CreateAdmission::ReplayCreating(receiver) => {
+                return self.await_create_replay(exec_id, receiver).await;
+            }
+            CreateAdmission::Reserved { slot, resolution } => (slot, resolution),
+        };
+
+        let result = self
+            .execute_reserved_create(slot, &exec_id, &command, &caps)
+            .await;
+        resolution.send_replace(CreateResolution::Finished(
+            result
+                .as_ref()
+                .map(|(_, snapshot)| *snapshot)
+                .map_err(|e| *e),
+        ));
+        result
+    }
+
+    fn reserve_create(
+        &self,
+        state: &mut RegistryState,
+        exec_id: &str,
+        argv_sha256: &str,
+        caps: &DetachedCaps,
+        now: u64,
+    ) -> Result<CreateAdmission, ExecError> {
+        if state.active >= DETACHED_ACTIVE_PER_VM as u32 {
+            return Err(ExecError::ExecCapacityExceeded);
+        }
+        let Some(slot) = state.free_slot() else {
+            return Err(ExecError::ExecCapacityExceeded);
+        };
+        let reserve = caps.reserved_bytes();
+        if state.reserved_log_bytes.saturating_add(reserve) > DETACHED_LOG_QUOTA_BYTES {
+            return Err(ExecError::RetainedLogQuotaExceeded);
+        }
+        let record = DurableRecord {
+            exec_id: exec_id.to_owned(),
+            slot,
+            boot_id: self.config.boot_id.clone(),
+            create_time_unix: now,
+            dispatch_deadline_unix: now.saturating_add(DISPATCH_DEADLINE_MS),
+            argv_sha256: argv_sha256.to_owned(),
+            state: RecordState::Dispatching,
+            exit_code: None,
+            term_signal: None,
+            lost: false,
+            terminal_time_unix: None,
+        };
+        let (resolution, receiver) = watch::channel(CreateResolution::Creating);
+        state.reserved_log_bytes = state.reserved_log_bytes.saturating_add(reserve);
+        state.active = state.active.saturating_add(1);
+        state.slots.insert(
+            slot,
+            SlotEntry {
+                record,
+                caps: caps.clone(),
+                creating: true,
+                dispatch_hold: false,
+                generation: 0,
+                active_counted: true,
+                read_guards: 0,
+                create_resolution: Some(receiver),
+            },
+        );
+        Ok(CreateAdmission::Reserved { slot, resolution })
+    }
+
+    async fn await_create_replay(
+        &self,
+        exec_id: String,
+        mut receiver: watch::Receiver<CreateResolution>,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
+        let wait = async {
+            loop {
+                let resolution = receiver.borrow().clone();
+                if let CreateResolution::Finished(result) = resolution {
+                    return result;
+                }
+                receiver.changed().await.map_err(|_| ExecError::Internal)?;
+            }
+        };
+        match tokio::time::timeout(
+            Duration::from_millis(CREATE_TIMEOUT_MS + STATUS_POLL_INTERVAL_MS),
+            wait,
+        )
+        .await
+        {
+            Ok(result) => result.map(|snapshot| (exec_id, snapshot)),
+            Err(_) => Err(ExecError::Internal),
+        }
+    }
+
+    async fn execute_reserved_create(
+        &self,
+        slot: u32,
+        exec_id: &str,
+        command: &ValidatedCommand,
+        caps: &DetachedCaps,
+    ) -> Result<(String, ExecSnapshot), ExecError> {
+        let spec = match build_spec(command, caps, &self.config, slot) {
             Ok(spec) => spec,
             Err(error) => {
                 self.abort_create(slot).await;
@@ -479,7 +634,7 @@ impl DetachedRegistry {
         }
 
         // Step 5: await the runner's first phase marker, bounded by CREATE_TIMEOUT.
-        self.await_create_resolution(slot, &exec_id).await
+        self.await_create_resolution(slot, exec_id).await
     }
 
     fn persist_dispatch(&self, slot: u32, spec: &ExecSpec) -> Result<(), ExecError> {
@@ -603,6 +758,7 @@ impl DetachedRegistry {
             }
             entry.creating = false;
             entry.dispatch_hold = false;
+            entry.create_resolution = None;
         }
         let record = state.slots.get(&slot).map(|e| e.record.clone());
         drop(state);
@@ -633,6 +789,7 @@ impl DetachedRegistry {
             }
             entry.creating = false;
             entry.dispatch_hold = false;
+            entry.create_resolution = None;
             let record = entry.record.clone();
             state.release_active(slot);
             record
@@ -1504,6 +1661,7 @@ impl DetachedRegistry {
                 generation: 0,
                 active_counted,
                 read_guards: 0,
+                create_resolution: None,
             },
         );
         let _ = self
@@ -2459,6 +2617,9 @@ mod tests {
         fn stopped(&self, slot: u32) -> bool {
             self.inner.lock().unwrap().stopped.contains(&slot)
         }
+        fn start_count(&self) -> usize {
+            self.inner.lock().unwrap().started.len()
+        }
         fn set_fail_list(&self, fail: bool) {
             self.inner.lock().unwrap().fail_list = fail;
         }
@@ -2782,11 +2943,123 @@ mod tests {
             .expect("create");
         assert_eq!(id, format!("{:032x}", 1));
         assert_eq!(snapshot.state, ExecState::Running);
-        // Now listable.
         let list = h.registry.list("boot-A").await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].exec_id, id);
         assert_eq!(list[0].slot, 0);
+    }
+
+    #[tokio::test]
+    async fn requested_exec_id_replays_without_duplicate_spawn() {
+        let h = harness();
+        h.units.set_live(0, true);
+        h.store.set_status(0, StatusPhase::Started);
+        let requested = "0123456789abcdef0123456789abcdef".to_owned();
+        let (first_id, first) = h
+            .registry
+            .create_with_exec_id(
+                "boot-A",
+                command(),
+                DetachedCaps::standard(0),
+                requested.clone(),
+            )
+            .await
+            .unwrap();
+        let (second_id, second) = h
+            .registry
+            .create_with_exec_id(
+                "boot-A",
+                command(),
+                DetachedCaps::standard(0),
+                requested.clone(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first_id, requested);
+        assert_eq!(second_id, first_id);
+        assert_eq!(second.state, first.state);
+        assert_eq!(h.registry.list("boot-A").await.unwrap().len(), 1);
+        assert_eq!(h.units.start_count(), 1);
+        assert_eq!(
+            h.registry
+                .create_with_exec_id(
+                    "boot-A",
+                    command_with_program("/bin/false"),
+                    DetachedCaps::standard(0),
+                    requested,
+                )
+                .await,
+            Err(ExecError::InvalidArgv)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_requested_exec_id_coalesces_while_creating() {
+        let Harness {
+            registry,
+            store,
+            units,
+            now: _now,
+            events: _events,
+        } = harness();
+        units.set_live(0, true);
+        let gate = Arc::new(ReadGate::default());
+        store.install_status_gate(Arc::clone(&gate));
+        let registry = Arc::new(registry);
+        let requested = "fedcba9876543210fedcba9876543210".to_owned();
+        let first_registry = Arc::clone(&registry);
+        let first_requested = requested.clone();
+        let first = tokio::spawn(async move {
+            first_registry
+                .create_with_exec_id(
+                    "boot-A",
+                    command(),
+                    DetachedCaps::standard(0),
+                    first_requested,
+                )
+                .await
+        });
+        gate.wait_until_entered();
+
+        assert_eq!(
+            registry
+                .create_with_exec_id(
+                    "boot-A",
+                    command_with_program("/bin/false"),
+                    DetachedCaps::standard(0),
+                    requested.clone(),
+                )
+                .await,
+            Err(ExecError::InvalidArgv)
+        );
+
+        let second_registry = Arc::clone(&registry);
+        let second_requested = requested.clone();
+        let second = tokio::spawn(async move {
+            second_registry
+                .create_with_exec_id(
+                    "boot-A",
+                    command(),
+                    DetachedCaps::standard(0),
+                    second_requested,
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !second.is_finished(),
+            "same-id replay must wait for the creating request"
+        );
+
+        store.set_status(0, StatusPhase::Started);
+        gate.release();
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(first.0, requested);
+        assert_eq!(second, first);
+        assert_eq!(units.start_count(), 1);
+        assert_eq!(registry.list("boot-A").await.unwrap().len(), 1);
     }
 
     #[test]

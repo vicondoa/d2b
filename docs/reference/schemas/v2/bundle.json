@@ -40,7 +40,7 @@
       ]
     },
     "bundleVersion": {
-      "description": "Version of the bundle format; bundleVersion 10 adds provider-neutral launcher metadata and configured unsafe-local workload metadata while artifact schemaVersion stays v2.",
+      "description": "Version of the bundle format; bundleVersion 11 extends the private configured-item artifact to local VM workloads while artifact schemaVersion stays v2.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0

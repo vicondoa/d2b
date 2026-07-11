@@ -219,7 +219,10 @@ pub(crate) fn build_exec_create_request(
 ) -> pb::ExecCreateRequest {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm_id.to_owned();
-    metadata.request_id = "guest-control-exec".to_owned();
+    metadata.request_id = spec
+        .request_id
+        .clone()
+        .unwrap_or_else(|| "guest-control-exec".to_owned());
     metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
 
     let mut request = pb::ExecCreateRequest::new();
@@ -803,6 +806,7 @@ mod tests {
 
         let spec = ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: None,
             argv: vec!["true".to_owned()],
             tty: false,
             detached: false,
@@ -831,6 +835,7 @@ mod tests {
         // client must never be able to select/escalate the target user).
         let spec = ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: Some("workload-launch:0123456789abcdef0123456789abcdef".to_owned()),
             argv: vec!["true".to_owned()],
             tty: false,
             detached: false,
@@ -839,6 +844,13 @@ mod tests {
             term_size: None,
         };
         let request = build_exec_create_request("work", &spec);
+        assert_eq!(
+            request
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.request_id.as_str()),
+            Some("workload-launch:0123456789abcdef0123456789abcdef")
+        );
         assert_eq!(
             request.user.as_deref(),
             None,
@@ -862,6 +874,7 @@ mod tests {
         // `validate_and_authorize_tty` accepts with an open stdin.
         let spec = ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: None,
             argv: vec!["true".to_owned()],
             tty: true,
             detached: false,

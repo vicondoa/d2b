@@ -58,6 +58,7 @@ pub enum Request {
     Shell(public_wire::ShellOp),
     Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
+    Workload(public_wire::WorkloadOp),
     Audio(public_wire::AudioOp),
 }
 
@@ -96,6 +97,7 @@ impl Request {
             Self::Shell(_) => "shell",
             Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
+            Self::Workload(_) => "workload",
             Self::Audio(_) => "audio",
         }
     }
@@ -147,6 +149,7 @@ impl Request {
             | Self::Shell(_)
             | Self::Console(_)
             | Self::GatewayDisplay(_)
+            | Self::Workload(_)
             | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
         }
     }
@@ -366,6 +369,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         }
         "gatewayDisplay" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::GatewayDisplay)
+            .map_err(map_parse_error),
+        "workload" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::Workload)
             .map_err(map_parse_error),
         "audio" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Audio)
@@ -644,6 +650,18 @@ pub fn shell_response(payload: &public_wire::ShellOpResponse) -> Value {
     value
 }
 
+/// Serialize a `WorkloadOpResponse` as a `workloadResponse` daemon wire frame.
+pub fn workload_response(payload: &public_wire::WorkloadOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("workloadResponse".to_owned()),
+        );
+    }
+    value
+}
+
 /// `shellResponse` frame tagged with the correlating envelope `opId`.
 pub fn shell_response_with_id(op_id: u64, payload: &public_wire::ShellOpResponse) -> Value {
     let mut value = shell_response(payload);
@@ -746,5 +764,22 @@ mod tests {
         assert_eq!(value["type"], "shellResponse");
         assert_eq!(value["opId"], 42);
         assert_eq!(value["op"], "list");
+    }
+
+    #[test]
+    fn workload_launcher_exec_rejects_public_argv() {
+        let frame = br#"{"type":"workload","op":"launcherExec","args":{"target":"browser.host.d2b","itemId":"browser","operationId":"launch-1","argv":["canary"]}}"#;
+        let error = parse_request(frame).expect_err("public argv must reject");
+        assert_eq!(error.kind(), "wire-unknown-field");
+        assert!(!error.message().contains("canary"));
+    }
+
+    #[test]
+    fn workload_launcher_exec_accepts_only_reference_fields() {
+        let frame = br#"{"type":"workload","op":"launcherExec","args":{"target":"browser.host.d2b","itemId":"browser","operationId":"launch-1"}}"#;
+        assert!(matches!(
+            parse_request(frame).expect("workload request"),
+            Request::Workload(d2b_contracts::public_wire::WorkloadOp::LauncherExec(_))
+        ));
     }
 }

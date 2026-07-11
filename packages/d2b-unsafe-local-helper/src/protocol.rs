@@ -420,6 +420,8 @@ fn failure_code(error: RuntimeError) -> HelperFailureCode {
         RuntimeError::ProxyUnavailable => HelperFailureCode::ProxyUnavailable,
         RuntimeError::ScopeCreateFailed => HelperFailureCode::ScopeCreateFailed,
         RuntimeError::ScopeIdentityMismatch => HelperFailureCode::ScopeIdentityMismatch,
+        RuntimeError::OperationIdConflict => HelperFailureCode::OperationIdConflict,
+        RuntimeError::OperationInProgress => HelperFailureCode::QueueFull,
         RuntimeError::Timeout => HelperFailureCode::Timeout,
         RuntimeError::Internal => HelperFailureCode::Internal,
     }

@@ -121,6 +121,9 @@ pub enum PublicRequest {
     /// through the ADR 0032 orchestrator.
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOp),
+    /// Provider-neutral workload inventory, status, and configured launch.
+    #[serde(rename = "workload")]
+    Workload(WorkloadOp),
     /// Security-key proxy status: host proxy health, configured FIDO device
     /// selectors, current lease, and per-VM virtual-device state.
     /// `d2b usb security-key status`
@@ -174,6 +177,8 @@ pub enum PublicResponse {
     Audio(AudioOpResponse),
     #[serde(rename = "gateway display")]
     GatewayDisplay(GatewayDisplayOpResponse),
+    #[serde(rename = "workload")]
+    Workload(WorkloadOpResponse),
     /// `d2b usb security-key status` response.
     #[serde(rename = "usb security-key status")]
     UsbSecurityKeyStatus(crate::security_key::SecurityKeyStatusResponse),

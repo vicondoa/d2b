@@ -80,6 +80,7 @@ enum DetachedRealResponse {
 pub(crate) enum DetachedTestRequest {
     Create {
         vm: String,
+        request_id: Option<String>,
         argv_len: usize,
         env_len: usize,
         has_cwd: bool,
@@ -171,9 +172,26 @@ pub(crate) fn create(
     state: &ServerState,
     start: &public_wire::ExecStartArgs,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, None)
+}
+
+pub(crate) fn create_idempotent(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    request_id: String,
+) -> Result<ExecDetachedCreateResult, TypedError> {
+    create_with_request_id(state, start, Some(request_id))
+}
+
+fn create_with_request_id(
+    state: &ServerState,
+    start: &public_wire::ExecStartArgs,
+    request_id: Option<String>,
+) -> Result<ExecDetachedCreateResult, TypedError> {
     #[cfg(test)]
     if let Some(result) = test_hook(DetachedTestRequest::Create {
         vm: start.vm.clone(),
+        request_id: request_id.clone(),
         argv_len: start.argv.len(),
         env_len: start.env.as_ref().map_or(0, Vec::len),
         has_cwd: start.cwd.is_some(),
@@ -188,6 +206,7 @@ pub(crate) fn create(
 
     let spec = ExecStartSpec {
         vm: start.vm.clone(),
+        request_id,
         argv: start.argv.clone(),
         tty: start.tty,
         detached: true,
@@ -1249,6 +1268,7 @@ mod tests {
     fn start_spec() -> ExecStartSpec {
         ExecStartSpec {
             vm: "work".to_owned(),
+            request_id: None,
             argv: vec!["true".to_owned()],
             tty: false,
             detached: true,

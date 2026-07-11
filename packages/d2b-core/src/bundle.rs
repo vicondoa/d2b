@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Bundle {
-    /// Version of the bundle format; bundleVersion 10 adds provider-neutral
-    /// launcher metadata and configured unsafe-local workload metadata while
-    /// artifact schemaVersion stays v2.
+    /// Version of the bundle format; bundleVersion 11 extends the private
+    /// configured-item artifact to local VM workloads while artifact
+    /// schemaVersion stays v2.
     pub bundle_version: u32,
     /// Schema version directory used to validate all artifacts in this bundle.
     pub schema_version: String,

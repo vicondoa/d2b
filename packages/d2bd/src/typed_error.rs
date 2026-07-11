@@ -251,6 +251,122 @@ pub enum GuestControlShellErrorKind {
     Internal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadLaunchErrorKind {
+    RealmNotDirectLocal,
+    LauncherDisabled,
+    ItemNotFound,
+    ConfiguredItemMismatch,
+    HelperUnavailable,
+    HelperStale,
+    UserManagerUnavailable,
+    GraphicalSessionInactive,
+    WaylandUnavailable,
+    ProxyUnavailable,
+    OperationConflict,
+    QueueFull,
+    Timeout,
+    Internal,
+}
+
+impl WorkloadLaunchErrorKind {
+    fn wire_kind(self) -> &'static str {
+        match self {
+            Self::RealmNotDirectLocal => "workload-realm-not-direct-local",
+            Self::LauncherDisabled => "workload-launcher-disabled",
+            Self::ItemNotFound => "workload-launcher-item-not-found",
+            Self::ConfiguredItemMismatch => "workload-configured-item-mismatch",
+            Self::HelperUnavailable => "unsafe-local-helper-unavailable",
+            Self::HelperStale => "unsafe-local-helper-stale",
+            Self::UserManagerUnavailable => "unsafe-local-user-manager-unavailable",
+            Self::GraphicalSessionInactive => "unsafe-local-graphical-session-inactive",
+            Self::WaylandUnavailable => "unsafe-local-wayland-unavailable",
+            Self::ProxyUnavailable => "unsafe-local-proxy-unavailable",
+            Self::OperationConflict => "workload-operation-conflict",
+            Self::QueueFull => "workload-launch-queue-full",
+            Self::Timeout => "workload-launch-timeout",
+            Self::Internal => "workload-launch-internal",
+        }
+    }
+
+    fn exit_code(self) -> u8 {
+        match self {
+            Self::ItemNotFound | Self::LauncherDisabled => 2,
+            Self::RealmNotDirectLocal | Self::ConfiguredItemMismatch => 70,
+            Self::HelperUnavailable
+            | Self::HelperStale
+            | Self::UserManagerUnavailable
+            | Self::GraphicalSessionInactive
+            | Self::WaylandUnavailable
+            | Self::ProxyUnavailable => 69,
+            Self::OperationConflict => 76,
+            Self::QueueFull | Self::Timeout => 75,
+            Self::Internal => 42,
+        }
+    }
+
+    fn human_message(self) -> &'static str {
+        match self {
+            Self::RealmNotDirectLocal => {
+                "the workload realm is not available through direct local access"
+            }
+            Self::LauncherDisabled => "the workload launcher is disabled",
+            Self::ItemNotFound => "the configured launcher item was not found",
+            Self::ConfiguredItemMismatch => {
+                "public launcher metadata does not match the private configured item"
+            }
+            Self::HelperUnavailable => "no same-UID unsafe-local helper is connected",
+            Self::HelperStale => "the same-UID unsafe-local helper heartbeat is stale",
+            Self::UserManagerUnavailable => "the user systemd manager is unavailable",
+            Self::GraphicalSessionInactive => "the graphical user session is inactive",
+            Self::WaylandUnavailable => "the user Wayland compositor is unavailable",
+            Self::ProxyUnavailable => "the workload Wayland proxy is unavailable",
+            Self::OperationConflict => "the operation id was reused for a different launch",
+            Self::QueueFull => "the unsafe-local helper queue is full",
+            Self::Timeout => "the configured launch timed out",
+            Self::Internal => "the daemon could not dispatch the configured launch",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::RealmNotDirectLocal => {
+                "connect directly to the owning local realm or use its configured gateway"
+            }
+            Self::LauncherDisabled => {
+                "enable the workload launcher in the Nix configuration and rebuild"
+            }
+            Self::ItemNotFound => {
+                "retry with a launcher item id shown by the configured desktop launcher"
+            }
+            Self::ConfiguredItemMismatch => {
+                "rebuild the d2b bundle so public metadata and private configured items agree"
+            }
+            Self::HelperUnavailable | Self::HelperStale => {
+                "start or restart d2b-unsafe-local-helper in the requesting user's graphical session"
+            }
+            Self::UserManagerUnavailable => {
+                "log in through a PAM-backed graphical session and start the user systemd manager"
+            }
+            Self::GraphicalSessionInactive => "start a graphical user session and retry",
+            Self::WaylandUnavailable => {
+                "start the Wayland compositor in the requesting user's session and retry"
+            }
+            Self::ProxyUnavailable => {
+                "repair the d2b Wayland proxy prerequisites; direct compositor fallback is not permitted"
+            }
+            Self::OperationConflict => "retry with a fresh operation id",
+            Self::QueueFull => "wait for pending launches to complete and retry",
+            Self::Timeout => {
+                "inspect helper and user-manager health, then retry with a fresh operation id"
+            }
+            Self::Internal => {
+                "inspect the bounded daemon launch event and rebuild the trusted bundle if necessary"
+            }
+        }
+    }
+}
+
 impl GuestControlShellErrorKind {
     pub fn wire_kind(self) -> &'static str {
         match self {
@@ -543,6 +659,9 @@ pub enum TypedError {
     GuestControlShellFailed {
         kind: GuestControlShellErrorKind,
     },
+    WorkloadLaunchFailed {
+        kind: WorkloadLaunchErrorKind,
+    },
     /// The daemon refused a new connection because the bounded in-flight
     /// connection-handler pool is saturated. Returned immediately
     /// (non-blocking) from the accept path so a burst of clients cannot
@@ -662,6 +781,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
             Self::GuestControlExecFailed { kind } => kind.wire_kind(),
             Self::GuestControlShellFailed { kind } => kind.wire_kind(),
+            Self::WorkloadLaunchFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
             Self::ConsoleVmNotFound { .. } => "console-vm-not-found",
             Self::ConsoleNotRunning { .. } => "console-vm-not-running",
@@ -722,6 +842,7 @@ impl TypedError {
             Self::GuestControlReadFailed { .. } => 70,
             Self::GuestControlExecFailed { kind } => kind.exit_code(),
             Self::GuestControlShellFailed { kind } => kind.exit_code(),
+            Self::WorkloadLaunchFailed { kind } => kind.exit_code(),
             // Shares the EX_TEMPFAIL-class exit code with the other
             // transient back-pressure refusals (session-capacity,
             // rate-limited): a retry may succeed.
@@ -877,6 +998,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
             Self::GuestControlShellFailed { kind } => kind.human_message().to_owned(),
+            Self::WorkloadLaunchFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
             Self::ConsoleVmNotFound { vm } => {
                 format!("console: VM '{vm}' not found in the bundle")
@@ -1046,6 +1168,7 @@ impl TypedError {
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
             Self::GuestControlShellFailed { kind } => kind.remediation().to_owned(),
+            Self::WorkloadLaunchFailed { kind } => kind.remediation().to_owned(),
             Self::DaemonBusy => {
                 "the daemon is briefly at capacity; retry the command shortly".to_owned()
             }
@@ -1257,6 +1380,7 @@ impl TypedError {
             | Self::GuestControlReadFailed { .. }
             | Self::GuestControlExecFailed { .. }
             | Self::GuestControlShellFailed { .. }
+            | Self::WorkloadLaunchFailed { .. }
             | Self::DaemonBusy
             | Self::ConsoleVmNotFound { .. }
             | Self::ConsoleNotRunning { .. }
@@ -1358,6 +1482,33 @@ mod tests {
         assert!(err.remediation().contains("guest.shell"));
         assert_no_path_leak("GuestShellDisabled", &err.message());
         assert_no_path_leak("GuestShellDisabled", &err.remediation());
+    }
+
+    #[test]
+    fn workload_launch_errors_are_typed_actionable_and_redacted() {
+        let cases = [
+            (WorkloadLaunchErrorKind::ItemNotFound, 2),
+            (WorkloadLaunchErrorKind::ConfiguredItemMismatch, 70),
+            (WorkloadLaunchErrorKind::HelperUnavailable, 69),
+            (WorkloadLaunchErrorKind::OperationConflict, 76),
+            (WorkloadLaunchErrorKind::QueueFull, 75),
+            (WorkloadLaunchErrorKind::Internal, 42),
+        ];
+        for (kind, expected_exit) in cases {
+            let error = TypedError::WorkloadLaunchFailed { kind };
+            assert_eq!(error.exit_code(), expected_exit);
+            assert!(
+                error.kind().starts_with("workload-") || error.kind().starts_with("unsafe-local-")
+            );
+            assert!(!error.message().is_empty());
+            assert!(!error.remediation().is_empty());
+            assert_no_path_leak(error.kind(), &error.message());
+            assert_no_path_leak(error.kind(), &error.remediation());
+            for canary in ["argv-canary", "environment-canary", "unit-name-canary"] {
+                assert!(!error.message().contains(canary));
+                assert!(!error.remediation().contains(canary));
+            }
+        }
     }
 
     #[test]

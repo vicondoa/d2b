@@ -52,33 +52,97 @@ removed. See [Realm access resolver contract](./realm-access-resolver.md) for
 the target grammar, direct host-local socket binding, capability preflight, and
 typed denial shapes.
 
-Current CLI VM lifecycle and exec commands still operate through the global
-`d2bd` public socket and existing VM names unless a command section explicitly
-documents a realm-aware backend. The resolver contract is documentation and DTO
-shape for future routing; it does not make identity, relay, provider, or
-realm-local lifecycle behavior available in this release.
+VM lifecycle and arbitrary exec remain VM-only. A trusted unsafe-local target is
+rejected before those handlers can coerce its workload id to a VM name.
+Provider-neutral list, status, and configured launch use the workload operation
+family on the local `d2bd` public socket.
 
 ### Configured launcher operation
 
-The staged provider-neutral command contract is:
+The provider-neutral command is:
 
 ```text
 d2b launch <canonical-target> [--item <item-id>]
 ```
 
 The public request carries only the canonical target, configured item id, and
-an idempotency operation id. It never carries argv, uid, environment, cwd, or
-display paths. An `exec` item dispatches through the selected provider; a
-`shell` item dispatches persistent-shell semantics. When `--item` is omitted,
-the daemon selects `defaultItem`, then an only item, otherwise returns the
-available item ids and names.
+an idempotency operation id. It never carries argv, uid, environment, cwd,
+display paths, process ids, or unit names. An `exec` item dispatches through the
+selected provider. A local-VM `shell` item dispatches existing persistent-shell
+semantics; unsafe-local shell execution remains unavailable until its dedicated
+backend exists. When `--item` is omitted, the CLI selects `defaultItem`, then an
+only item, otherwise returns the available item ids and names.
 
-The DTOs are frozen under protocol version 3 and gated by
-`configured-launch-v1`; the command is not advertised until the daemon runtime
-lands. Unsupported peers return a typed capability refusal and never fall back
-to unsafe-local. See [Unsafe-local provider contract](./unsafe-local-provider.md).
+For local-VM exec items, d2bd derives an opaque guest exec id from the
+authenticated requester, operation id, target, and item id. Guestd persists that
+id with the detached exec record, so replay after a daemon restart returns the
+existing exec instead of spawning a duplicate. A replay whose trusted argv hash
+does not match fails closed.
+
+The DTOs remain protocol version 3 and are gated by `configured-launch-v1`.
+Unsafe-local additionally requires `unsafe-local-provider-v1`. Unsupported peers
+return a typed capability refusal and never fall back.
+
+**Exit codes**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Launch committed or was already committed for the operation id. |
+| `2` | Target/item not found, or omitted item is ambiguous. |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. |
+| `69` | Provider prerequisite or transport unavailable. |
+| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. |
+| `76` | Protocol response or operation-id conflict. |
 
 ## Command reference
+
+### `launch`
+
+**Synopsis:** `d2b launch <TARGET> [--item <ITEM>] [--human] [--json]`
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--item <ITEM>` | string | unset | Select the configured launcher item id. When omitted, use `defaultItem`, then a sole item, otherwise return the available ids and names. |
+| `--json` | boolean | `false` | Emit the stable machine-readable launch result on stdout. |
+| `--human` | boolean | `false` | Force the human launch confirmation on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `TARGET` | Canonical workload target or an unambiguous workload id. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Launch committed or was already committed. | — |
+| `2` | Target/item not found, or omitted item is ambiguous. | [`usage`](./error-codes.md#usage) |
+| `31` / `75` | Caller lacks launcher/admin authority or the operation is temporarily busy. | workload launch error |
+| `69` | Provider prerequisite or transport unavailable. | workload launch error |
+| `70` | Capability unavailable, provider mismatch, or unsafe-local shell requested. | workload launch error |
+| `76` | Protocol response or operation-id conflict. | workload launch error |
+
+**Human example**
+
+```text
+$ d2b launch tools.host.d2b --item browser
+launched tools.host.d2b item browser (committed)
+```
+
+**`--json` example** — schema: [`launch.schema.json`](./cli-output/launch.schema.json).
+
+```json
+{
+  "command": "launch",
+  "target": "tools.host.d2b",
+  "itemId": "browser",
+  "operationId": "launch-1234-5678",
+  "disposition": "committed"
+}
+```
 
 ### `list`
 

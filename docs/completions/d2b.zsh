@@ -47,6 +47,16 @@ _arguments "${_arguments_options[@]}" : \
 '::vm:_default' \
 && ret=0
 ;;
+(launch)
+_arguments "${_arguments_options[@]}" : \
+'--item=[Configured launcher item id. Omit to use the declared default or sole item]:ITEM:_default' \
+'(--human)--json[Emit a structured JSON result]' \
+'(--json)--human[Force human-readable output]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':target -- Canonical workload target or an unambiguous workload id:_default' \
+&& ret=0
+;;
 (usb)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1399,6 +1409,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(launch)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (usb)
 _arguments "${_arguments_options[@]}" : \
 ":: :_d2b__subcmd__help__subcmd__usb_commands" \
@@ -1861,6 +1875,7 @@ _d2b_commands() {
     local commands; commands=(
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
+'launch:Launch a trusted configured workload item through its runtime provider' \
 'usb:USB attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs' \
 'audio:Per-VM audio status and grant controls' \
@@ -2140,6 +2155,7 @@ _d2b__subcmd__help_commands() {
     local commands; commands=(
 'list:List declared VMs with daemon runtime state when d2bd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
+'launch:Launch a trusted configured workload item through its runtime provider' \
 'usb:USB attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs' \
 'audio:Per-VM audio status and grant controls' \
@@ -2378,6 +2394,11 @@ _d2b__subcmd__help__subcmd__keys__subcmd__rotate_commands() {
 _d2b__subcmd__help__subcmd__keys__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'd2b help keys show commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__help__subcmd__launch_commands] )) ||
+_d2b__subcmd__help__subcmd__launch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b help launch commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__help__subcmd__list_commands] )) ||
 _d2b__subcmd__help__subcmd__list_commands() {
@@ -2773,6 +2794,11 @@ _d2b__subcmd__keys__subcmd__rotate_commands() {
 _d2b__subcmd__keys__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'd2b keys show commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__launch_commands] )) ||
+_d2b__subcmd__launch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b launch commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__list_commands] )) ||
 _d2b__subcmd__list_commands() {

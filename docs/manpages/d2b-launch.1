@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH d2b-launch 1 1970-01-01 d2b "d2b CLI"
+.SH NAME
+launch \- Launch a trusted configured workload item through its runtime provider
+.SH SYNOPSIS
+\fBlaunch\fR [\fB\-\-item\fR] [\fB\-\-json\fR] [\fB\-\-human\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+.SH DESCRIPTION
+Launch a trusted configured workload item through its runtime provider
+.SH OPTIONS
+.TP
+\fB\-\-item\fR \fI<ITEM>\fR
+Configured launcher item id. Omit to use the declared default or sole item
+.TP
+\fB\-\-json\fR
+Emit a structured JSON result
+.TP
+\fB\-\-human\fR
+Force human\-readable output
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fITARGET\fR>
+Canonical workload target or an unambiguous workload id

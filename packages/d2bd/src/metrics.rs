@@ -167,6 +167,18 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         labels: &["subsystem", "outcome", "error_kind"],
         buckets_seconds: &[],
     },
+    MetricDescriptor {
+        name: "d2b_daemon_workload_availability",
+        kind: MetricKind::Gauge,
+        labels: &["provider", "component", "state"],
+        buckets_seconds: &[],
+    },
+    MetricDescriptor {
+        name: "d2b_daemon_workload_lifecycle_total",
+        kind: MetricKind::Counter,
+        labels: &["provider", "operation", "outcome"],
+        buckets_seconds: &[],
+    },
 ];
 
 /// Lookup a descriptor by name. `None` for any unknown name —
@@ -255,6 +267,32 @@ impl Registry {
         let mut g = self.inner.lock().expect("metrics registry poisoned");
         let entry = g.gauges.entry((name, owned)).or_default();
         entry.value = value;
+    }
+
+    /// Atomically replace one bounded gauge family. Existing series in the
+    /// family are zeroed before the supplied snapshot is applied so a scrape
+    /// cannot observe a partially refreshed inventory or retain a stale value.
+    pub fn gauge_family_replace(&self, name: &'static str, samples: &[(Vec<(&str, &str)>, f64)]) {
+        let owned = samples
+            .iter()
+            .map(|(labels, value)| {
+                let labels = labels
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect::<LabelSet>();
+                Self::validate(name, MetricKind::Gauge, &labels);
+                (labels, *value)
+            })
+            .collect::<Vec<_>>();
+        let mut registry = self.inner.lock().expect("metrics registry poisoned");
+        for ((metric_name, _), sample) in &mut registry.gauges {
+            if *metric_name == name {
+                sample.value = 0.0;
+            }
+        }
+        for (labels, value) in owned {
+            registry.gauges.entry((name, labels)).or_default().value = value;
+        }
     }
 
     pub fn histogram_observe(
@@ -406,6 +444,12 @@ fn help_text(name: &str) -> &'static str {
         }
         "d2b_daemon_guest_control_shell_total" => {
             "Cumulative count of guest-control shell session/op outcomes by error_kind."
+        }
+        "d2b_daemon_workload_availability" => {
+            "Observed workload inventory count by bounded provider, component, and state."
+        }
+        "d2b_daemon_workload_lifecycle_total" => {
+            "Configured workload lifecycle outcomes by provider and operation."
         }
         _ => "",
     }
@@ -564,6 +608,8 @@ mod tests {
                 "d2b_daemon_uptime_seconds",
                 "d2b_daemon_guest_control_exec_total",
                 "d2b_daemon_guest_control_shell_total",
+                "d2b_daemon_workload_availability",
+                "d2b_daemon_workload_lifecycle_total",
             ]
         );
     }
@@ -668,6 +714,9 @@ mod tests {
             "reason",
             "subsystem",
             "error_kind",
+            "provider",
+            "component",
+            "operation",
         ];
 
         // Populate one sample of EVERY inventory metric so render() emits
@@ -724,7 +773,6 @@ mod tests {
             "environment",
             "cwd",
             "current_working_directory",
-            "provider",
             "stream",
             "stream_id",
             "terminal_stream_id",
@@ -747,6 +795,41 @@ mod tests {
                 !body.contains(&format!("{forbidden}=\"")),
                 "guest-control field {forbidden:?} leaked as a metric label"
             );
+        }
+    }
+
+    #[test]
+    fn workload_metrics_serialize_without_execution_details() {
+        let r = Registry::new();
+        r.gauge_set(
+            "d2b_daemon_workload_availability",
+            &[
+                ("provider", "unsafe-local"),
+                ("component", "proxy"),
+                ("state", "ready"),
+            ],
+            1.0,
+        );
+        r.counter_inc(
+            "d2b_daemon_workload_lifecycle_total",
+            &[
+                ("provider", "unsafe-local"),
+                ("operation", "launcher-exec"),
+                ("outcome", "committed"),
+            ],
+        );
+        let body = r.render();
+        assert!(body.contains("d2b_daemon_workload_availability"));
+        assert!(body.contains("d2b_daemon_workload_lifecycle_total"));
+        for forbidden in [
+            "argv=",
+            "environment=",
+            "cwd=",
+            "path=",
+            "pid=",
+            "unit_name=",
+        ] {
+            assert!(!body.contains(forbidden), "{forbidden}: {body}");
         }
     }
 

@@ -100,7 +100,7 @@ const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
 #[command(
     version,
     about = "d2b — opinionated NixOS desktop microVM CLI.",
-    long_about = "d2b — daemon-native CLI for d2b microVMs.\n\nAll mutating verbs dispatch through d2bd and d2b-priv-broker. \
+    long_about = "d2b — daemon-native CLI for d2b microVMs.\n\nMutating verbs dispatch through d2bd; privileged host mutations additionally use d2b-priv-broker. \
         Read-only verbs (list, status, audit, host check) prefer d2bd's \
         public socket and fall back to static/local sources where documented. \
         See `d2b <COMMAND> --help` for per-verb usage."
@@ -116,6 +116,8 @@ enum NativeCommand {
     List(ListArgs),
     /// Show per-VM runtime status plus bridge health.
     Status(StatusArgs),
+    /// Launch a trusted configured workload item through its runtime provider.
+    Launch(LaunchArgs),
     /// USB attach / detach / probe.
     Usb(UsbArgs),
     /// Foreground serial console bridge for headless VMs.
@@ -176,6 +178,21 @@ enum NativeCommand {
     Config(ConfigArgs),
     /// Clipboard authority operations (picker-driven paste replay via d2b-clipd).
     Clipboard(ClipboardArgs),
+}
+
+#[derive(Debug, Args)]
+struct LaunchArgs {
+    /// Canonical workload target or an unambiguous workload id.
+    target: String,
+    /// Configured launcher item id. Omit to use the declared default or sole item.
+    #[arg(long)]
+    item: Option<String>,
+    /// Emit a structured JSON result.
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    /// Force human-readable output.
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1492,6 +1509,15 @@ struct ShellResponseFrame {
     payload: ShellOpResponse,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkloadResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: public_wire::WorkloadOpResponse,
+}
+
 #[derive(Debug, Clone)]
 enum AuditSocketOutcome {
     Unreachable,
@@ -1568,7 +1594,10 @@ where
 fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
     vec![
         KnownFeatureFlag::TypedErrors.wire_value(),
+        KnownFeatureFlag::StatusCheckBridges.wire_value(),
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
+        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
     ]
 }
 
@@ -2472,6 +2501,7 @@ fn dispatch(
     match &cli.command {
         NativeCommand::List(args) => cmd_list(context, args),
         NativeCommand::Status(args) => cmd_status(context, args),
+        NativeCommand::Launch(args) => cmd_launch(context, args),
         NativeCommand::Usb(args) => match &args.command {
             UsbCommand::Attach(args) => cmd_usb_attach(context, args),
             UsbCommand::Detach(args) => cmd_usb_detach(context, args),
@@ -3555,6 +3585,378 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
         ));
     }
     Ok(0)
+}
+
+fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
+    use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind};
+
+    if !context.public_socket.exists() {
+        return Err(CliFailure::new(
+            69,
+            "launch requires the d2bd public socket; no static or provider fallback is permitted",
+        ));
+    }
+    let mut socket = SeqpacketUnixSocket::connect(&context.public_socket).map_err(|error| {
+        CliFailure::new(
+            69,
+            format!("failed to connect to the d2bd public socket: {error}"),
+        )
+    })?;
+    socket
+        .send_frame(&daemon_hello_frame("hello")?)
+        .map_err(|error| CliFailure::new(69, format!("failed to send hello frame: {error}")))?;
+    let hello = socket
+        .recv_frame()
+        .map_err(|error| CliFailure::new(69, format!("failed to receive hello reply: {error}")))?;
+    let negotiated = parse_hello_reply(&hello)?;
+    require_launch_features(&negotiated.capabilities, None)?;
+
+    let list = public_wire::WorkloadOp::List(public_wire::WorkloadListArgs::default());
+    let list_response = workload_socket_exchange(&mut socket, &list, "workload list")?;
+    let public_wire::WorkloadOpResponse::List(list_result) = list_response else {
+        return Err(CliFailure::new(
+            76,
+            "daemon returned the wrong workload response to list",
+        ));
+    };
+    let workload = select_launch_workload(list_result.workloads, &args.target)?;
+    require_launch_features(&negotiated.capabilities, Some(workload.provider_kind))?;
+    let item = select_launcher_item(&workload, args.item.as_deref())?;
+
+    if item.kind == LauncherItemKind::Shell {
+        if workload.provider_kind == WorkloadProviderKind::UnsafeLocal {
+            return Err(CliFailure::new(
+                70,
+                "unsafe-local persistent shell launch is unavailable; no host-shell fallback is permitted",
+            ));
+        }
+        let vm = local_vm_shell_target(&workload).to_owned();
+        return cmd_shell(
+            context,
+            &ShellArgs {
+                vm,
+                action: Some(ShellAction::Attach),
+                name: None,
+                force: false,
+                json: args.json,
+                human: args.human,
+            },
+        );
+    }
+
+    let item_id = ProtocolToken::parse(item.id.as_str().to_owned())
+        .map_err(|_| CliFailure::new(70, "trusted launcher item id is invalid"))?;
+    let operation_id = new_launch_operation_id()?;
+    let target = workload.identity.canonical_target.clone();
+    let launch = public_wire::WorkloadOp::LauncherExec(public_wire::LauncherExecArgs {
+        target: target.clone(),
+        item_id: item_id.clone(),
+        operation_id: operation_id.clone(),
+    });
+    let response = workload_socket_exchange(&mut socket, &launch, "launcher exec")?;
+    let public_wire::WorkloadOpResponse::LauncherExec(result) = response else {
+        return Err(CliFailure::new(
+            76,
+            "daemon returned the wrong workload response to launcher exec",
+        ));
+    };
+    let output = LaunchOutputV1 {
+        command: "launch".to_owned(),
+        target,
+        item_id,
+        operation_id,
+        disposition: result.disposition,
+    };
+    if args.json {
+        print_json(&output)?;
+    } else {
+        let disposition = match output.disposition {
+            public_wire::LauncherExecDisposition::Committed => "committed",
+            public_wire::LauncherExecDisposition::AlreadyCommitted => "already committed",
+        };
+        print_stdout(&format!(
+            "launched {} item {} ({disposition})\n",
+            output.target.to_canonical(),
+            output.item_id.as_str()
+        ));
+    }
+    Ok(0)
+}
+
+fn local_vm_shell_target(workload: &public_wire::WorkloadPublicSummary) -> &str {
+    workload.identity.legacy_vm_name.as_ref().map_or_else(
+        || workload.identity.workload_id.as_str(),
+        |legacy| legacy.as_str(),
+    )
+}
+
+fn require_launch_features(
+    capabilities: &[d2b_contracts::FeatureFlag],
+    provider: Option<d2b_realm_core::WorkloadProviderKind>,
+) -> Result<(), CliFailure> {
+    let has_feature = |expected| {
+        capabilities
+            .iter()
+            .any(|feature| feature.known() == Some(expected))
+    };
+    if !has_feature(KnownFeatureFlag::ConfiguredLaunchV1) {
+        return Err(CliFailure::new(
+            70,
+            "daemon does not negotiate configured-launch-v1; update d2b and d2bd together",
+        ));
+    }
+    if provider == Some(d2b_realm_core::WorkloadProviderKind::UnsafeLocal)
+        && !has_feature(KnownFeatureFlag::UnsafeLocalProviderV1)
+    {
+        return Err(CliFailure::new(
+            70,
+            "daemon does not negotiate unsafe-local-provider-v1; no local execution fallback is permitted",
+        ));
+    }
+    Ok(())
+}
+
+fn select_launch_workload(
+    workloads: Vec<public_wire::WorkloadPublicSummary>,
+    target: &str,
+) -> Result<public_wire::WorkloadPublicSummary, CliFailure> {
+    let mut candidates = workloads
+        .into_iter()
+        .filter(|workload| {
+            workload.identity.canonical_target.to_canonical() == target
+                || workload.identity.workload_id.as_str() == target
+        })
+        .collect::<Vec<_>>();
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(CliFailure::new(
+            2,
+            format!("workload target `{target}` was not found"),
+        )),
+        _ => {
+            let targets = candidates
+                .iter()
+                .map(|workload| workload.identity.canonical_target.to_canonical())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(CliFailure::new(
+                2,
+                format!("workload id `{target}` is ambiguous; use one of: {targets}"),
+            ))
+        }
+    }
+}
+
+fn select_launcher_item(
+    workload: &public_wire::WorkloadPublicSummary,
+    requested: Option<&str>,
+) -> Result<d2b_realm_core::LauncherItemSummary, CliFailure> {
+    if let Some(item) = requested {
+        return workload
+            .launcher_items
+            .iter()
+            .find(|candidate| candidate.id.as_str() == item)
+            .cloned()
+            .ok_or_else(|| {
+                CliFailure::new(
+                    2,
+                    format!(
+                        "launcher item `{item}` is not configured for `{}`",
+                        workload.identity.canonical_target.to_canonical()
+                    ),
+                )
+            });
+    }
+    if let Some(default_item) = workload.default_item_id.as_ref() {
+        return workload
+            .launcher_items
+            .iter()
+            .find(|candidate| &candidate.id == default_item)
+            .cloned()
+            .ok_or_else(|| {
+                CliFailure::new(
+                    70,
+                    "trusted launcher metadata names a missing default item; rebuild the bundle",
+                )
+            });
+    }
+    if let [only] = workload.launcher_items.as_slice() {
+        return Ok(only.clone());
+    }
+    let choices = workload
+        .launcher_items
+        .iter()
+        .map(|item| format!("{} ({})", item.id.as_str(), item.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CliFailure::new(
+        2,
+        if choices.is_empty() {
+            "workload has no configured launcher items".to_owned()
+        } else {
+            format!("launcher item is ambiguous; choose one with --item: {choices}")
+        },
+    ))
+}
+
+#[cfg(test)]
+mod workload_launch_tests {
+    use super::*;
+    use d2b_contracts::public_wire::{
+        GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary,
+    };
+    use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
+    use d2b_realm_core::{
+        CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+        IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, ProtocolToken,
+        SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
+        ids::{RealmId, WorkloadId},
+        realm::RealmPath,
+    };
+
+    fn item(id: &str) -> LauncherItemSummary {
+        LauncherItemSummary {
+            id: ProtocolToken::parse(id).unwrap(),
+            name: id.to_owned(),
+            icon: LauncherIcon::default(),
+            kind: LauncherItemKind::Exec,
+            graphical: false,
+            capabilities: CapabilitySet::default(),
+        }
+    }
+
+    fn workload(
+        workload_id: &str,
+        realm: &str,
+        items: Vec<LauncherItemSummary>,
+        default_item: Option<&str>,
+    ) -> WorkloadPublicSummary {
+        let realm_id = RealmId::parse(realm).unwrap();
+        let identity = WorkloadIdentity::new(
+            WorkloadId::parse(workload_id).unwrap(),
+            realm_id.clone(),
+            RealmPath::new(vec![realm_id]).unwrap(),
+            WorkloadTarget::parse(&format!("{workload_id}.{realm}.d2b")).unwrap(),
+        );
+        WorkloadPublicSummary {
+            identity,
+            provider_kind: WorkloadProviderKind::UnsafeLocal,
+            state: WorkloadState::Stopped,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: IsolationPosture::UnsafeLocal,
+                environment: EnvironmentPosture::SystemdUserManagerAmbient,
+                display_environment: DisplayEnvironmentPosture::NotApplicable,
+                execution_identity: ExecutionIdentityPosture::AuthenticatedRequesterUid,
+                session_persistence: SessionPersistencePosture::UserManagerLifetime,
+            },
+            availability: WorkloadAvailability::Ready,
+            graphical_posture: GraphicalLaunchPosture::NotApplicable,
+            capabilities: CapabilitySet::default(),
+            launcher_items: items,
+            default_item_id: default_item.map(|id| ProtocolToken::parse(id).unwrap()),
+        }
+    }
+
+    #[test]
+    fn target_alias_ambiguity_lists_canonical_choices() {
+        let error = select_launch_workload(
+            vec![
+                workload("browser", "work", vec![item("open")], None),
+                workload("browser", "home", vec![item("open")], None),
+            ],
+            "browser",
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("browser.work.d2b"));
+        assert!(error.message.contains("browser.home.d2b"));
+    }
+
+    #[test]
+    fn item_selection_covers_sole_ambiguous_and_missing_default() {
+        let sole = workload("tools", "host", vec![item("only")], None);
+        assert_eq!(
+            select_launcher_item(&sole, None).unwrap().id.as_str(),
+            "only"
+        );
+
+        let ambiguous = workload("tools", "host", vec![item("browser"), item("editor")], None);
+        let error = select_launcher_item(&ambiguous, None).unwrap_err();
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("--item"));
+
+        let missing_default = workload("tools", "host", vec![item("browser")], Some("missing"));
+        let error = select_launcher_item(&missing_default, None).unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("rebuild the bundle"));
+    }
+
+    #[test]
+    fn local_vm_shell_target_uses_workload_id_without_legacy_binding() {
+        let mut first_class = workload("browser", "work", vec![item("terminal")], None);
+        first_class.provider_kind = WorkloadProviderKind::LocalVm;
+        assert_eq!(local_vm_shell_target(&first_class), "browser");
+
+        let mut legacy = first_class;
+        legacy.identity.legacy_vm_name =
+            Some(d2b_core::contract_id::ContractId::parse("corp-vm").unwrap());
+        assert_eq!(local_vm_shell_target(&legacy), "corp-vm");
+    }
+
+    #[test]
+    fn launch_feature_skew_fails_closed() {
+        let error = require_launch_features(&[], None).unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("configured-launch-v1"));
+
+        let configured_only = [KnownFeatureFlag::ConfiguredLaunchV1.wire_value()];
+        let error =
+            require_launch_features(&configured_only, Some(WorkloadProviderKind::UnsafeLocal))
+                .unwrap_err();
+        assert_eq!(error.exit_code, 70);
+        assert!(error.message.contains("unsafe-local-provider-v1"));
+    }
+}
+
+fn workload_socket_exchange(
+    socket: &mut SeqpacketUnixSocket,
+    op: &public_wire::WorkloadOp,
+    label: &str,
+) -> Result<public_wire::WorkloadOpResponse, CliFailure> {
+    let request = encode_type_tagged_message("workload", op, label)?;
+    socket
+        .send_frame(&request)
+        .map_err(|error| CliFailure::new(69, format!("failed to send {label}: {error}")))?;
+    let response = socket
+        .recv_frame()
+        .map_err(|error| CliFailure::new(69, format!("failed to receive {label}: {error}")))?;
+    let value = decode_daemon_frame(&response, label)?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("workloadResponse") => serde_json::from_value::<WorkloadResponseFrame>(value)
+            .map(|frame| frame.payload)
+            .map_err(|error| {
+                CliFailure::new(76, format!("failed to decode {label} response: {error}"))
+            }),
+        Some("error") => {
+            let frame: ErrorFrame = serde_json::from_value(value).map_err(|error| {
+                CliFailure::new(76, format!("failed to decode {label} error: {error}"))
+            })?;
+            Err(cli_failure_from_daemon_error(frame.error))
+        }
+        _ => Err(CliFailure::new(
+            76,
+            format!("daemon returned an unexpected response to {label}"),
+        )),
+    }
+}
+
+fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CliFailure::new(42, "system clock is before the Unix epoch"))?
+        .as_nanos();
+    d2b_realm_core::OperationId::parse(format!("launch-{}-{nanos}", std::process::id()))
+        .map_err(|_| CliFailure::new(42, "failed to construct a launch operation id"))
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
@@ -9958,6 +10360,7 @@ fn all_known_subcommands() -> Vec<String> {
     vec![
         "list",
         "status",
+        "launch",
         "audit",
         "host check",
         "auth status",
