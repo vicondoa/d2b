@@ -6,6 +6,7 @@ use d2b_contracts::unsafe_local_wire::{
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
     MAX_HELPER_QUEUE_DEPTH, MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES,
     UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
+    unsafe_local_helper_protocol_supported,
 };
 use d2b_realm_core::ids::OperationId;
 use nix::cmsg_space;
@@ -103,7 +104,7 @@ impl<M: UserScopeManager> HelperClient<M> {
         let accepted: DaemonToUnsafeLocalHelper = receive_frame(&socket, &mut receive_buffer)?;
         match accepted {
             DaemonToUnsafeLocalHelper::HelloAccepted(accepted)
-                if accepted.protocol_version == UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION
+                if unsafe_local_helper_protocol_supported(accepted.protocol_version)
                     && accepted.generation == generation => {}
             DaemonToUnsafeLocalHelper::HelloAccepted(_) => {
                 return Err(ProtocolError::GenerationMismatch);
@@ -432,8 +433,12 @@ fn shell_operation_identity(
 ) -> Option<(u64, OperationId)> {
     use d2b_contracts::unsafe_local_wire::HelperShellRequest;
     match request {
-        HelperShellRequest::List { .. } => None,
-        HelperShellRequest::Attach {
+        HelperShellRequest::List {
+            request_id,
+            operation_id,
+            ..
+        }
+        | HelperShellRequest::Attach {
             request_id,
             operation_id,
             ..
