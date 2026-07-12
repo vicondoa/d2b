@@ -1294,6 +1294,49 @@ Implementation must preserve all of the following:
     replace or widen that identity, and method-required capabilities are
     derived from trusted service metadata.
 
+## Session and transport observability
+
+ComponentSession and transport implementations export bounded metrics for:
+
+| Metric family | Required dimensions |
+| --- | --- |
+| session/transport active count | transport kind, session purpose |
+| per-channel and aggregate queue depth/capacity ratio | channel class |
+| dropped/rejected record count | channel class, bounded reason class |
+| channel waker/scheduling delay | channel class |
+| control-credit exhaustion | session purpose |
+| transport connect/reconnect attempt | transport kind, purpose, result class |
+| reconnect backoff state | transport kind, bounded backoff class |
+| Noise/component-session handshake | mechanism class, purpose, result class |
+| terminal session close | purpose, terminal reason class |
+
+`channel class` is one of `session-control`, `ttrpc-control`, or
+`named-stream`; it is never a stream id. Queue metrics are aggregated by class
+and may expose bounded max/sum observations, not one metric series per session
+or stream.
+
+Reconnect loops emit a counter for every attempt while audit and log events are
+deduplicated. The first transition into reconnecting, each bounded backoff-class
+change, authentication-result-class change, recovery, and terminal failure are
+recorded. Repeated identical failures within the suppression window increment a
+suppressed-event count that is included in the next emitted summary. Raw error
+text, endpoint, credential, or peer-provided label never becomes an audit field
+or metric label.
+
+Tracing and audit may retain bounded non-secret correlation identifiers that
+would be too cardinal for metrics:
+
+- configured `provider_id`;
+- `operation_id`, `correlation_id`, and trace id;
+- `shortcut_id`;
+- controller/workload generation;
+- bounded session generation.
+
+These identifiers are permitted as trace span attributes and structured audit
+fields, but not metric labels. Raw transport endpoints, provider resource ids,
+token subjects, user/device ids, key fingerprints, proof material, and payload
+metadata remain excluded from metrics, traces, and audit.
+
 ## Audit retention and export
 
 Every realm controller owns an append-only local audit log with bounded
@@ -1416,7 +1459,8 @@ Implementation is incomplete without:
   semantic traffic;
 - deterministic demux scheduler tests proving reserved session/ttrpc control
   credit, channel-specific waker delivery, bounded queues, cancellation
-  preemption, round-robin data fairness, and no lock held across await;
+  preemption, round-robin data fairness, no lock held across await, and queue
+  depth/drop/waker-delay metrics without per-session or per-stream labels;
 - fixed Noise profile test vectors plus fuzz/property tests for handshake and
   encrypted-record parsers, including truncation, duplicate/reordered
   fragments, oversized ttrpc frames, nonce exhaustion, and reconnect;
@@ -1476,11 +1520,16 @@ Implementation is incomplete without:
   identity loss;
 - audit tests covering retention/rotation, signed export checkpoints, planned
   replacement drain, forced-loss `audit-gap`, and shortcut audit completeness;
+- reconnect-flap tests proving every attempt increments bounded metrics while
+  repeated audit/log events are suppressed and summarized by backoff/result
+  class without losing recovery or terminal transitions;
 - status/telemetry tests proving `interaction-required` is visible without
   leaking user, token, RP, or endpoint identity; status includes the bounded
   provider id/remediation while metric labels omit the provider id;
-- redaction tests covering provider ids, endpoints, Entra identities, Azure
-  resource ids, and shortcut metadata.
+- telemetry classification tests proving bounded provider/operation/shortcut
+  ids remain available in traces/audit but never metric labels, while endpoints,
+  Entra identities, Azure resource ids, credentials, proofs, and payload
+  metadata are absent from every telemetry surface.
 
 ## Consequences
 
