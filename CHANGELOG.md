@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Terminate and reap plain unsafe-local workloads when supervisor startup
+  acknowledgement fails instead of leaving an untracked child running.
 - Included realm accent color in daemon-side unsafe-local launch fingerprints so
   operation-id reuse with changed graphical identity fails as a conflict.
 - Corrected desktop terminal composition guidance so WeezTerm follows only the

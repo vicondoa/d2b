@@ -996,10 +996,14 @@ fn run_plain_supervisor(
     started_ack: &mut impl Write,
 ) -> Result<(), RuntimeError> {
     let mut child = spawn_app(spec)?;
-    started_ack
+    if started_ack
         .write_all(&[1])
         .and_then(|()| started_ack.flush())
-        .map_err(|_| RuntimeError::Internal)?;
+        .is_err()
+    {
+        terminate_and_reap(&mut child);
+        return Err(RuntimeError::Internal);
+    }
     child.wait().map_err(|_| RuntimeError::Internal)?;
     Ok(())
 }
@@ -1888,6 +1892,53 @@ mod tests {
         assert_eq!(ack, [1]);
     }
 
+    struct DelayedFailingAck;
+
+    impl Write for DelayedFailingAck {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(250));
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "test ack failure",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn plain_supervisor_reaps_child_when_started_ack_fails() {
+        let scratch = Scratch::new();
+        let marker = scratch.0.join("child-pid");
+        let spec = SupervisorSpec {
+            program: std::env::current_exe().unwrap(),
+            args: vec![
+                "--exact".to_owned(),
+                "runtime::tests::test_child_hold".to_owned(),
+                "--nocapture".to_owned(),
+            ],
+            environment: BTreeMap::from([(
+                "D2B_TEST_PID_MARKER".to_owned(),
+                marker.to_string_lossy().into_owned(),
+            )]),
+            cwd: std::env::current_dir().unwrap(),
+            graphical: None,
+        };
+
+        assert_eq!(
+            run_plain_supervisor(&spec, &mut DelayedFailingAck),
+            Err(RuntimeError::Internal)
+        );
+        let pid = fs::read_to_string(marker)
+            .expect("child marker")
+            .trim()
+            .parse::<u32>()
+            .expect("child pid");
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
+
     #[test]
     fn first_client_wait_fails_immediately_when_app_exits() {
         let scratch = Scratch::new();
@@ -1953,6 +2004,10 @@ mod tests {
 
     #[test]
     fn test_child_hold() {
+        if let Some(marker) = std::env::var_os("D2B_TEST_PID_MARKER") {
+            fs::write(marker, std::process::id().to_string()).unwrap();
+            std::thread::sleep(Duration::from_secs(2));
+        }
         if std::env::var_os("D2B_TEST_HOLD").is_some() {
             std::thread::sleep(Duration::from_secs(2));
         }
