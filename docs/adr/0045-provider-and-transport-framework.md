@@ -234,6 +234,13 @@ pub trait Provider: Send + Sync {
 }
 ```
 
+The base and specialized provider traits remain `#[async_trait]`, `Send`, and
+`Sync` and are deliberately object-safe for `Arc<dyn ProviderTrait>` registries.
+They do not expose generic methods, return `Self`, or require implementation
+associated types at the registry boundary. Native async traits/RPITIT are not
+used for these dynamic registries until Rust supports the required dyn
+semantics without provider-specific wrappers.
+
 The canonical `d2b_contracts::provider::ProviderDescriptor` is bounded,
 non-secret data containing:
 
@@ -304,6 +311,13 @@ Unix-stream, native-vsock, Cloud-Hypervisor-vsock, direct-TLS/QUIC, loopback,
 and Azure Relay implementations all return the same `TransportSession`. Relay
 authentication and rendezvous remain Azure-Relay implementation details; they
 never become d2b principal authentication.
+
+`d2b-provider` owns the live, non-serializable `ByteStream`,
+`TransportSession`, and `TransportListener` runtime types because
+`TransportProvider` returns them. `d2b-session` depends inward on
+`d2b-provider` and consumes `TransportSession`; `d2b-provider` never depends on
+`d2b-session`. Only serializable target, binding, descriptor, capability, and
+status DTOs live in `d2b-contracts`.
 
 The existing local-only `RuntimeProvider` and provider-managed
 `WorkloadProvider` split is retired. Local VMMs, host-user runtimes, container
@@ -606,6 +620,22 @@ stream handler never read the underlying transport concurrently, and a blocked
 data stream cannot consume the reserved control credit required for
 cancellation, revocation, keepalive, or close.
 
+The session driver exposes cooperative virtual `AsyncRead + AsyncWrite`
+endpoints:
+
+- one ttrpc control endpoint with reserved ingress/egress capacity;
+- one endpoint per admitted named stream with independent bounded queues and
+  credit;
+- an internal session-control queue that preempts ordinary data for close,
+  revocation, keepalive, and fatal errors.
+
+One read task authenticates/decrypts records and wakes only the destination
+channel's reader. One write task schedules session-control first, then ttrpc
+control, then named-stream data with bounded round-robin fairness. No queue lock
+is held across an await. Per-channel and aggregate queue caps fail closed with
+typed backpressure; a stalled named stream cannot starve control traffic or
+another stream.
+
 ### Existing component protocols migrate behind the session layer
 
 - `PeerSession` version/codec/capability negotiation and
@@ -761,11 +791,6 @@ parent-owned declaration carries a typed controller role:
 d2b.realms.local-root.workloads.work-controller = {
   kind = "local-vm";
 
-  roles.realmController = {
-    enable = true;
-    forRealm = "work";
-  };
-
   localVm = {
     autostart = true;
     tpm.enable = true;
@@ -776,27 +801,28 @@ d2b.realms.local-root.workloads.work-controller = {
 
 d2b.realms.work = {
   parent = "local-root";
+  controller.workload = "work-controller.local-root.d2b";
 };
 ```
 
-The option spelling above is the selected public shape. Implementation may add
-typed sub-options, but it must not replace the role with an arbitrary command,
-free-form service definition, or provider-specific controller option.
+The child realm's forward pointer is the selected public shape. The normalized
+workload index derives the controller role for the referenced generic workload.
+No realm scans parent workloads to discover a `forRealm` back-reference.
+Implementation may add typed controller sub-options, but it must not replace
+the pointer with an arbitrary command, free-form service definition, or
+provider-specific controller option.
 
 The declaration has these invariants:
 
-1. The controller workload is owned by the direct parent realm of
-   `forRealm`.
+1. `controller.workload` names a workload owned by the direct parent realm.
 2. A workload cannot control its owning realm, an ancestor, a sibling, or an
    unrelated realm.
-3. Exactly one controller workload is declared for a realm. At runtime, at most
-   one authenticated controller generation is authoritative. If competing,
-   partitioned, or otherwise ambiguous generations are observed, no new route
-   is published and the realm is reported degraded until parent-authorized
-   reconciliation selects a generation.
-4. `roles.realmController.forRealm` is a scalar realm path. Lists are rejected
-   at evaluation, so one declaration cannot collapse multiple realm credential
-   domains.
+3. `controller.workload` is one scalar canonical workload target. Lists are
+   rejected, so one realm cannot select multiple controller credential domains.
+4. At runtime, at most one authenticated controller generation is authoritative.
+   If competing, partitioned, or otherwise ambiguous generations are observed,
+   no new route is published and the realm is reported degraded until
+   parent-authorized reconciliation selects a generation.
 5. The workload runtime provider must advertise full realm-controller support.
    The provider must also advertise `realm-controller-host-v1` and its
    persistent identity protection. Host-user and host-process sandbox providers
@@ -880,12 +906,9 @@ d2b.realms.local-root.runtimeProviders.azure-controller = {
 d2b.realms.local-root.workloads.work-controller = {
   kind = "provider-managed";
   provider = "azure-controller";
-
-  roles.realmController = {
-    enable = true;
-    forRealm = "work";
-  };
 };
+
+d2b.realms.work.controller.workload = "work-controller.local-root.d2b";
 ```
 
 `provider-managed` is the selected generic workload configuration variant for a
@@ -945,10 +968,22 @@ Three responsibilities may be co-located but are not the same role:
 | Infrastructure provider executor | Provider API calls and lifecycle of provider-hosted workloads. |
 | Transport connector | Provider-specific transport authentication and outbound session establishment. |
 
-Only `roles.realmController` is asserted directly by a generic workload.
-Infrastructure-provider and transport-connector behavior is derived from the
-provider or transport binding that references the executor workload. This avoids
-two independently configurable declarations claiming the same authority.
+Controller, infrastructure-executor, and transport-connector roles are derived
+from forward references into one recursion-safe normalized index:
+
+```text
+d2b._index.workloadRoles.<canonical-workload-target>
+  controllerFor
+  infrastructureExecutorFor
+  transportConnectorFor
+```
+
+`index.nix` computes this table once from raw realm/provider/transport option
+values. Guest composition consumes only its own precomputed row; it never scans
+`config.d2b.realms.*`, parent workloads, or provider attrsets. Provider and
+transport declarations cannot depend on guest config derived from the role
+index. This one-way dependency prevents Nix evaluation cycles and avoids two
+independently configurable declarations claiming the same authority.
 
 For a local controller, all three responsibilities may live in one dedicated,
 Entra-managed controller VM. For a remote controller, a local Entra-managed VM
@@ -985,10 +1020,10 @@ d2b.realms.work.transportProviders.azure-work = {
   connector = {
     workload = "work-connector.local-root.d2b";
     credentialRef = "entra-work-relay";
-    transportAuthentication = "entra-user";
+    underlayAuthentication = "entra-user";
   };
 
-  controllerTransportAuthentication = "managed-identity";
+  controllerUnderlayAuthentication = "managed-identity";
 };
 
 d2b.realms.work.transport = {
@@ -1002,7 +1037,7 @@ d2b.realms.work.transport = {
 d2b.realms.payments.transport.inheritFrom = "work";
 ```
 
-The two `*TransportAuthentication` fields authenticate endpoints to Azure
+The two `*UnderlayAuthentication` fields authenticate endpoints to Azure
 Relay only. The d2b peers still complete `noise-realm` ComponentSession
 authentication before semantic traffic.
 
@@ -1212,9 +1247,11 @@ retry indefinitely, or expose a direct host compositor fallback.
 
 `interaction-required`, `interaction-started`, `interaction-completed`, and
 `interaction-failed` are bounded status/event classes exported to CLI status,
-desktop notifications, tracing, and metrics. Labels may include provider type,
-realm class, and result class, but never a user identity, token subject, RP id,
-or provider endpoint.
+desktop notifications, tracing, and metrics. Human and machine-readable status
+include the bounded configured `ProviderId`, realm path, and exact remediation
+command so the operator can invoke the correct provider. Metric labels remain
+limited to provider type, realm class, and result class; they never include the
+provider id, user identity, token subject, RP id, or provider endpoint.
 
 The CTAP proxy covers FIDO/WebAuthn only. PIV, CCID, OTP, and OpenPGP interfaces
 still require exclusive USB ownership. A single physical key cannot
@@ -1318,7 +1355,8 @@ Implementation requires coordinated changes across:
 - ttrpc/protobuf daemon, realm, guest, and provider service contracts;
 - type-first provider implementation crates and typed registries;
 - `d2b-provider-testkit` conformance suites and provider naming policy;
-- `d2b.realms.<realm>.workloads.<workload>.roles.realmController`;
+- `d2b.realms.<realm>.controller.workload` and the normalized
+  `d2b._index.workloadRoles` table;
 - typed runtime and infrastructure provider bindings replacing the ambiguous
   inert provider record;
 - `d2b.realms.<realm>.transport` provider, fabric inheritance, connector, and
@@ -1348,6 +1386,9 @@ Implementation is incomplete without:
   `d2b-provider` or an implementation, and `d2b-provider` does not
   depend on an implementation, cloud SDK, daemon, broker, codec, or concrete
   transport;
+- dependency-direction tests proving live `ByteStream`, `TransportSession`, and
+  `TransportListener` types live only in `d2b-provider`; `d2b-session` depends
+  inward on `d2b-provider`, never the reverse;
 - dependency-direction tests proving every
   `d2b-provider-<type>-<implementation>` crate is a leaf adapter that does not
   depend on `d2bd`, `d2b-priv-broker`, or another provider implementation;
@@ -1361,6 +1402,8 @@ Implementation is incomplete without:
 - registry tests proving optional capability descriptor claims and
   capability-specific trait registrations match exactly without trait-object
   downcasting;
+- compile-time object-safety tests constructing `Arc<dyn ProviderTrait>` for
+  every primary and optional provider interface;
 - contract tests proving `ProviderOperationContext` remains serializable and
   runtime cancellation/deadline state exists only in `ProviderCallContext`;
 - transport conformance tests for Unix-stream, native-vsock,
@@ -1371,6 +1414,9 @@ Implementation is incomplete without:
   binding, downgrade rejection, channel binding, replay, hard limits,
   keepalive, close, record fragmentation/reassembly, and forbidden pre-auth
   semantic traffic;
+- deterministic demux scheduler tests proving reserved session/ttrpc control
+  credit, channel-specific waker delivery, bounded queues, cancellation
+  preemption, round-robin data fairness, and no lock held across await;
 - fixed Noise profile test vectors plus fuzz/property tests for handshake and
   encrypted-record parsers, including truncation, duplicate/reordered
   fragments, oversized ttrpc frames, nonce exhaustion, and reconnect;
@@ -1384,9 +1430,9 @@ Implementation is incomplete without:
   seqpacket/SCM_RIGHTS endpoints are not silently registered as generic byte
   transports;
 - Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
-  cycle rejection, scalar-only `forRealm`, provider capability gating, typed
-  transport-provider references, ancestor-only transport inheritance, and
-  derived placement;
+  cycle rejection, scalar-only controller target, recursion-free role-index
+  construction, provider capability gating, typed transport-provider
+  references, ancestor-only transport inheritance, and derived placement;
 - runtime route tests proving competing, partitioned, or otherwise ambiguous
   controller generations publish no route, report the realm degraded, and
   reject superseded generation grants until parent-authorized reconciliation;
@@ -1431,7 +1477,8 @@ Implementation is incomplete without:
 - audit tests covering retention/rotation, signed export checkpoints, planned
   replacement drain, forced-loss `audit-gap`, and shortcut audit completeness;
 - status/telemetry tests proving `interaction-required` is visible without
-  leaking user, token, RP, or endpoint identity;
+  leaking user, token, RP, or endpoint identity; status includes the bounded
+  provider id/remediation while metric labels omit the provider id;
 - redaction tests covering provider ids, endpoints, Entra identities, Azure
   resource ids, and shortcut metadata.
 
