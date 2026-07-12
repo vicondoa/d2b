@@ -149,6 +149,12 @@ loop. The helper connects outward; `d2bd` does not discover a user bus or
 impersonate a user. Both peers verify `SO_PEERCRED`, and a valid reconnect
 atomically supersedes the prior generation for that UID.
 
+Supplementary groups are fixed when the login session starts. After enabling
+the first unsafe-local realm for a user, or adding that user to `allowedUsers`,
+the user must log out and back in before the helper can connect. The existing
+session remains fail-closed because neither its user manager nor helper
+processes have the new `d2b-unsafe-local` group.
+
 For each operation the helper reads
 `org.freedesktop.systemd1.Manager.Environment` from the current user manager.
 It rejects malformed or oversized data rather than trimming it, clears the
