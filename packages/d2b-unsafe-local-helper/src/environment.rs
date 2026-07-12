@@ -16,6 +16,7 @@ pub enum EnvironmentError {
     RuntimeDirectoryInvalid,
     ExecutableUnavailable,
     ProxyUnavailable,
+    WaylandUnavailable,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -74,7 +75,7 @@ impl ManagerEnvironment {
         let mut entries = self.entries.clone();
         if graphical {
             let display = proxy_wayland_display.ok_or(EnvironmentError::ProxyUnavailable)?;
-            if display.is_empty() || display.contains('\0') || display.contains('/') {
+            if !valid_proxy_display(display) {
                 return Err(EnvironmentError::ProxyUnavailable);
             }
             entries.remove("DISPLAY");
@@ -107,10 +108,23 @@ impl ManagerEnvironment {
             .ok_or(EnvironmentError::RuntimeDirectoryInvalid)
     }
 
+    pub fn wayland_display(&self) -> Result<&str, EnvironmentError> {
+        self.entries
+            .get("WAYLAND_DISPLAY")
+            .map(String::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && !value.contains('\0')
+                    && !value.split('/').any(|component| component == "..")
+            })
+            .ok_or(EnvironmentError::WaylandUnavailable)
+    }
+
     pub fn resolve_program(&self, program: &str) -> Result<PathBuf, EnvironmentError> {
         if program.is_empty() || program.contains('\0') {
             return Err(EnvironmentError::ExecutableUnavailable);
         }
+
         if program.contains('/') {
             let path = PathBuf::from(program);
             return executable_file(&path)
@@ -130,6 +144,22 @@ impl ManagerEnvironment {
         }
         Err(EnvironmentError::ExecutableUnavailable)
     }
+}
+
+pub(crate) fn valid_proxy_display(display: &str) -> bool {
+    let Some((directory, socket)) = display.split_once('/') else {
+        return false;
+    };
+    socket == "wayland.sock"
+        && !directory.contains('/')
+        && directory
+            .strip_prefix("d2b-unsafe-local-")
+            .is_some_and(|suffix| {
+                suffix.len() == 32
+                    && suffix
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
 }
 
 fn valid_key(key: &str) -> bool {
@@ -184,13 +214,30 @@ mod tests {
             Err(EnvironmentError::ProxyUnavailable)
         );
         let child = environment
-            .child_entries(true, Some("d2b-wayland-proxy-1"))
+            .child_entries(
+                true,
+                Some("d2b-unsafe-local-00112233445566778899aabbccddeeff/wayland.sock"),
+            )
             .unwrap();
         assert!(!child.contains_key("DISPLAY"));
         assert_eq!(
             child.get("WAYLAND_DISPLAY").map(String::as_str),
-            Some("d2b-wayland-proxy-1")
+            Some("d2b-unsafe-local-00112233445566778899aabbccddeeff/wayland.sock")
         );
+        for invalid in [
+            "wayland.sock",
+            "/absolute/wayland.sock",
+            "../wayland.sock",
+            "d2b-unsafe-local-00112233445566778899aabbccddeeff/../wayland.sock",
+            "d2b-unsafe-local-00112233445566778899aabbccddeefg/wayland.sock",
+            "d2b-unsafe-local-00112233445566778899aabbccddeeff/other.sock",
+        ] {
+            assert_eq!(
+                environment.child_entries(true, Some(invalid)),
+                Err(EnvironmentError::ProxyUnavailable),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]

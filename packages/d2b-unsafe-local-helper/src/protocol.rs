@@ -501,6 +501,8 @@ fn failure_code(error: RuntimeError) -> HelperFailureCode {
         }
         RuntimeError::ExecutableUnavailable => HelperFailureCode::ExecutableUnavailable,
         RuntimeError::ProxyUnavailable => HelperFailureCode::ProxyUnavailable,
+        RuntimeError::WaylandUnavailable => HelperFailureCode::WaylandUnavailable,
+        RuntimeError::FirstClientTimeout => HelperFailureCode::FirstClientTimeout,
         RuntimeError::ScopeCreateFailed => HelperFailureCode::ScopeCreateFailed,
         RuntimeError::ScopeIdentityMismatch => HelperFailureCode::ScopeIdentityMismatch,
         RuntimeError::OperationIdConflict => HelperFailureCode::OperationIdConflict,

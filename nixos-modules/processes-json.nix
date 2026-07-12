@@ -1345,6 +1345,7 @@ in
 {
   config = {
     assertions = videoAssertions;
+    d2b._hostToolPackages.d2bWaylandProxy = d2bWaylandProxyPackage;
     d2b._bundle.processesJson = {
       inherit data jsonText;
       path = "${jsonFile}";

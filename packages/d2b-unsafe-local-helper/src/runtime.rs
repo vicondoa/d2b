@@ -1,22 +1,32 @@
 use crate::environment::EnvironmentError;
+use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
 use d2b_contracts::public_wire::ShellName;
 use d2b_contracts::unsafe_local_wire::{
     HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
     HelperScopeSnapshot, HelperScopeState, HelperShellRequest, HelperShellResponse, HelperSnapshot,
     HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
-    MAX_HELPER_SNAPSHOT_SCOPES,
+    MAX_HELPER_SNAPSHOT_SCOPES, RealmAccentColor,
 };
 use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::ids::OperationId;
+use d2b_realm_core::{WorkloadProviderKind, ids::OperationId};
+use d2b_wayland_proxy::readiness::{
+    ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
+};
 use nix::libc;
+use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+use nix::sys::wait::{WaitStatus, waitpid};
+use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -24,9 +34,13 @@ use std::time::{Duration, Instant};
 use uzers::os::unix::UserExt;
 use uzers::{get_current_uid, get_user_by_uid};
 
-pub const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(5);
+pub const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(25);
 pub const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LEDGER_BYTES: u64 = 1024 * 1024;
+const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const FIRST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_READINESS_EVENT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -36,6 +50,8 @@ pub enum RuntimeError {
     EnvironmentInvalid,
     ExecutableUnavailable,
     ProxyUnavailable,
+    WaylandUnavailable,
+    FirstClientTimeout,
     ScopeCreateFailed,
     ScopeIdentityMismatch,
     OperationIdConflict,
@@ -57,6 +73,7 @@ impl From<EnvironmentError> for RuntimeError {
                 Self::ExecutableUnavailable
             }
             EnvironmentError::ProxyUnavailable => Self::ProxyUnavailable,
+            EnvironmentError::WaylandUnavailable => Self::WaylandUnavailable,
             _ => Self::EnvironmentInvalid,
         }
     }
@@ -157,6 +174,7 @@ pub struct ScopeRuntime<M: UserScopeManager> {
     pub(crate) shell_home: PathBuf,
     pub(crate) uid: u32,
     pub(crate) executable: PathBuf,
+    pub(crate) wayland_proxy_binary: Option<PathBuf>,
 }
 
 pub(crate) struct RuntimeLedger {
@@ -397,12 +415,16 @@ impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
             .field("shell_home", &"<redacted>")
             .field("uid", &"<redacted>")
             .field("executable", &"<redacted>")
+            .field(
+                "wayland_proxy_configured",
+                &self.wayland_proxy_binary.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl<M: UserScopeManager> ScopeRuntime<M> {
-    pub fn new(manager: M) -> Result<Self, RuntimeError> {
+    pub fn new(manager: M, wayland_proxy_binary: PathBuf) -> Result<Self, RuntimeError> {
         let uid = get_current_uid();
         if uid == 0 {
             return Err(RuntimeError::InvalidIdentity);
@@ -414,7 +436,14 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         }
         let ledger_path = user_home.join(".local/state/d2b/unsafe-local-scopes.json");
         let executable = std::env::current_exe().map_err(|_| RuntimeError::Internal)?;
-        Self::with_paths_and_executable(manager, user_home, ledger_path, executable)
+        validate_immutable_proxy_binary(&wayland_proxy_binary)?;
+        Self::with_paths_executable_and_proxy(
+            manager,
+            user_home,
+            ledger_path,
+            executable,
+            Some(wayland_proxy_binary),
+        )
     }
 
     pub fn with_paths(
@@ -431,6 +460,16 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         user_home: PathBuf,
         ledger_path: PathBuf,
         executable: PathBuf,
+    ) -> Result<Self, RuntimeError> {
+        Self::with_paths_executable_and_proxy(manager, user_home, ledger_path, executable, None)
+    }
+
+    pub(crate) fn with_paths_executable_and_proxy(
+        manager: M,
+        user_home: PathBuf,
+        ledger_path: PathBuf,
+        executable: PathBuf,
+        wayland_proxy_binary: Option<PathBuf>,
     ) -> Result<Self, RuntimeError> {
         let uid = get_current_uid();
         if uid == 0 {
@@ -450,6 +489,7 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             shell_home,
             uid,
             executable,
+            wayland_proxy_binary,
         })
     }
 
@@ -500,12 +540,35 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         let environment = self.manager.manager_environment()?;
         let argv = request.argv.as_slice();
         let program = environment.resolve_program(&argv[0])?;
-        let child_environment = environment.child_entries(request.graphical, None)?;
+        let graphical = if request.graphical {
+            let runtime_directory = environment.runtime_directory()?;
+            validate_runtime_directory(&runtime_directory, self.uid)
+                .map_err(|_| RuntimeError::EnvironmentInvalid)?;
+            let wayland_proxy_binary = self
+                .wayland_proxy_binary
+                .clone()
+                .ok_or(RuntimeError::ProxyUnavailable)?;
+            Some(GraphicalSupervisorSpec::new(
+                wayland_proxy_binary,
+                runtime_directory,
+                environment.wayland_display()?.to_owned(),
+                request.workload.target().clone(),
+                request.realm_accent_color.clone(),
+                self.uid,
+            )?)
+        } else {
+            None
+        };
+        let child_environment = environment.child_entries(
+            request.graphical,
+            graphical.as_ref().map(|g| g.display.as_str()),
+        )?;
         let spec = SupervisorSpec {
             program,
             args: argv[1..].to_vec(),
             environment: child_environment,
             cwd: self.user_home.clone(),
+            graphical,
         };
         let mut supervisor = BlockedSupervisor::spawn(&spec)?;
         let supervisor_pid = supervisor.id();
@@ -625,9 +688,42 @@ fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], Runtime
         &request.item_id,
         &request.argv,
         request.graphical,
+        &request.realm_accent_color,
     ))
     .map_err(|_| RuntimeError::Internal)?;
     Ok(Sha256::digest(encoded).into())
+}
+
+fn validate_immutable_proxy_binary(path: &Path) -> Result<(), RuntimeError> {
+    if !path.is_absolute()
+        || !path.starts_with("/nix/store")
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(RuntimeError::ProxyUnavailable);
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| RuntimeError::ProxyUnavailable)?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err(RuntimeError::ProxyUnavailable);
+    }
+    Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(DIGITS[(byte >> 4) as usize] as char);
+        output.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -637,6 +733,86 @@ pub struct SupervisorSpec {
     args: Vec<String>,
     environment: BTreeMap<String, String>,
     cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    graphical: Option<GraphicalSupervisorSpec>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphicalSupervisorSpec {
+    proxy_binary: PathBuf,
+    runtime_directory: PathBuf,
+    display: String,
+    upstream_display: String,
+    target: d2b_core::workload_identity::WorkloadTarget,
+    realm_accent_color: RealmAccentColor,
+    uid: u32,
+    first_client_timeout_ms: u64,
+}
+
+impl GraphicalSupervisorSpec {
+    fn new(
+        proxy_binary: PathBuf,
+        runtime_directory: PathBuf,
+        upstream_display: String,
+        target: d2b_core::workload_identity::WorkloadTarget,
+        realm_accent_color: RealmAccentColor,
+        uid: u32,
+    ) -> Result<Self, RuntimeError> {
+        let mut random = [0u8; 16];
+        getrandom::getrandom(&mut random).map_err(|_| RuntimeError::Internal)?;
+        let display = format!("d2b-unsafe-local-{}/wayland.sock", hex(&random));
+        let spec = Self {
+            proxy_binary,
+            runtime_directory,
+            display,
+            upstream_display,
+            target,
+            realm_accent_color,
+            uid,
+            first_client_timeout_ms: FIRST_CLIENT_TIMEOUT.as_millis() as u64,
+        };
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    fn validate(&self) -> Result<(), RuntimeError> {
+        if !self.proxy_binary.is_absolute()
+            || !self.runtime_directory.is_absolute()
+            || self.upstream_display.is_empty()
+            || self.upstream_display.contains('\0')
+            || self
+                .upstream_display
+                .split('/')
+                .any(|component| component == "..")
+            || self.uid == 0
+            || self.first_client_timeout_ms == 0
+            || self.first_client_timeout_ms > FIRST_CLIENT_TIMEOUT.as_millis() as u64
+        {
+            return Err(RuntimeError::EnvironmentInvalid);
+        }
+        crate::environment::valid_proxy_display(&self.display)
+            .then_some(())
+            .ok_or(RuntimeError::ProxyUnavailable)
+    }
+
+    fn private_directory(&self) -> Result<PathBuf, RuntimeError> {
+        self.validate()?;
+        let directory = self
+            .display
+            .split_once('/')
+            .map(|(directory, _)| directory)
+            .ok_or(RuntimeError::EnvironmentInvalid)?;
+        Ok(self.runtime_directory.join(directory))
+    }
+
+    fn wayland_socket(&self) -> Result<PathBuf, RuntimeError> {
+        Ok(self.runtime_directory.join(&self.display))
+    }
+
+    fn readiness_socket(&self) -> Result<PathBuf, RuntimeError> {
+        Ok(self.private_directory()?.join("readiness.sock"))
+    }
 }
 
 impl fmt::Debug for SupervisorSpec {
@@ -646,6 +822,7 @@ impl fmt::Debug for SupervisorSpec {
             .field("arg_count", &self.args.len())
             .field("environment_count", &self.environment.len())
             .field("cwd", &"<redacted>")
+            .field("graphical", &self.graphical.is_some())
             .finish()
     }
 }
@@ -767,7 +944,21 @@ pub fn run_scope_supervisor() -> Result<(), RuntimeError> {
         return Err(RuntimeError::Internal);
     }
 
-    let mut child = Command::new(&spec.program)
+    run_supervisor_spec(spec, &mut std::io::stdout())
+}
+
+fn run_supervisor_spec(
+    spec: SupervisorSpec,
+    started_ack: &mut impl Write,
+) -> Result<(), RuntimeError> {
+    match spec.graphical.clone() {
+        Some(graphical) => run_graphical_supervisor(&spec, &graphical, started_ack),
+        None => run_plain_supervisor(&spec, started_ack),
+    }
+}
+
+fn spawn_app(spec: &SupervisorSpec) -> Result<Child, RuntimeError> {
+    Command::new(&spec.program)
         .args(&spec.args)
         .env_clear()
         .envs(&spec.environment)
@@ -776,15 +967,376 @@ pub fn run_scope_supervisor() -> Result<(), RuntimeError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|_| RuntimeError::ExecutableUnavailable)?;
-    std::io::stdout()
+        .map_err(|_| RuntimeError::ExecutableUnavailable)
+}
+
+fn run_plain_supervisor(
+    spec: &SupervisorSpec,
+    started_ack: &mut impl Write,
+) -> Result<(), RuntimeError> {
+    let mut child = spawn_app(spec)?;
+    started_ack
         .write_all(&[1])
-        .map_err(|_| RuntimeError::Internal)?;
-    std::io::stdout()
-        .flush()
+        .and_then(|()| started_ack.flush())
         .map_err(|_| RuntimeError::Internal)?;
     child.wait().map_err(|_| RuntimeError::Internal)?;
     Ok(())
+}
+
+fn run_graphical_supervisor(
+    spec: &SupervisorSpec,
+    graphical: &GraphicalSupervisorSpec,
+    started_ack: &mut impl Write,
+) -> Result<(), RuntimeError> {
+    graphical.validate()?;
+    validate_runtime_directory(&graphical.runtime_directory, graphical.uid)
+        .map_err(|_| RuntimeError::EnvironmentInvalid)?;
+    let runtime = PrivateGraphicalRuntime::prepare(graphical)?;
+    let mut proxy = spawn_proxy(graphical)?;
+    let mut app = None;
+    let startup = (|| {
+        let mut readiness = ReadinessChannel::new(runtime.readiness_listener(), graphical.uid)?;
+        readiness.expect(
+            ProxyReadinessStage::Upstream,
+            graphical,
+            Instant::now() + PROXY_READY_TIMEOUT,
+            &mut proxy,
+            None,
+        )?;
+        readiness.expect(
+            ProxyReadinessStage::Listener,
+            graphical,
+            Instant::now() + PROXY_READY_TIMEOUT,
+            &mut proxy,
+            None,
+        )?;
+        app = Some(spawn_app(spec)?);
+        readiness.expect(
+            ProxyReadinessStage::FirstClient,
+            graphical,
+            Instant::now() + Duration::from_millis(graphical.first_client_timeout_ms),
+            &mut proxy,
+            app.as_mut(),
+        )?;
+        started_ack
+            .write_all(&[1])
+            .and_then(|()| started_ack.flush())
+            .map_err(|_| RuntimeError::Internal)
+    })();
+    if let Err(error) = startup {
+        if let Some(child) = app.as_mut() {
+            terminate_and_reap(child);
+        }
+        terminate_and_reap(&mut proxy);
+        return Err(error);
+    }
+
+    wait_for_graphical_exit(app.as_mut().ok_or(RuntimeError::Internal)?, &mut proxy)
+}
+
+fn spawn_proxy(graphical: &GraphicalSupervisorSpec) -> Result<Child, RuntimeError> {
+    Command::new(&graphical.proxy_binary)
+        .args(proxy_arguments(graphical)?)
+        .env_clear()
+        .env("XDG_RUNTIME_DIR", &graphical.runtime_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| RuntimeError::ProxyUnavailable)
+}
+
+fn proxy_arguments(graphical: &GraphicalSupervisorSpec) -> Result<Vec<OsString>, RuntimeError> {
+    Ok(vec![
+        "--listen".into(),
+        graphical.wayland_socket()?.into_os_string(),
+        "--connect".into(),
+        graphical.upstream_display.clone().into(),
+        "--target".into(),
+        graphical.target.to_canonical().into(),
+        "--provider-kind".into(),
+        "unsafe-local".into(),
+        "--border-enable".into(),
+        "--border-color-active".into(),
+        graphical.realm_accent_color.as_str().into(),
+        "--readiness-socket".into(),
+        graphical.readiness_socket()?.into_os_string(),
+        "--first-client-timeout-ms".into(),
+        graphical.first_client_timeout_ms.to_string().into(),
+        "--clipd-bridge-user-uid".into(),
+        graphical.uid.to_string().into(),
+    ])
+}
+
+fn terminate_and_reap(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+fn wait_for_graphical_exit(app: &mut Child, proxy: &mut Child) -> Result<(), RuntimeError> {
+    let app_pid = Pid::from_raw(i32::try_from(app.id()).map_err(|_| RuntimeError::Internal)?);
+    let proxy_pid = Pid::from_raw(i32::try_from(proxy.id()).map_err(|_| RuntimeError::Internal)?);
+    loop {
+        match waitpid(None, None) {
+            Ok(WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _)) if pid == app_pid => {
+                terminate_and_reap(proxy);
+                return Ok(());
+            }
+            Ok(WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _))
+                if pid == proxy_pid =>
+            {
+                terminate_and_reap(app);
+                return Ok(());
+            }
+            Ok(
+                WaitStatus::StillAlive
+                | WaitStatus::Continued(_)
+                | WaitStatus::Stopped(_, _)
+                | WaitStatus::PtraceEvent(_, _, _)
+                | WaitStatus::PtraceSyscall(_),
+            ) => {}
+            Ok(_) => return Err(RuntimeError::Internal),
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(_) => return Err(RuntimeError::Internal),
+        }
+    }
+}
+
+struct PrivateGraphicalRuntime {
+    _directory: PrivateGraphicalDirectory,
+    readiness_listener: UnixListener,
+}
+
+impl PrivateGraphicalRuntime {
+    fn prepare(spec: &GraphicalSupervisorSpec) -> Result<Self, RuntimeError> {
+        let directory = PrivateGraphicalDirectory::prepare(spec)?;
+        let readiness_path = spec.readiness_socket()?;
+        let readiness_listener =
+            UnixListener::bind(&readiness_path).map_err(|_| RuntimeError::ProxyUnavailable)?;
+        fs::set_permissions(&readiness_path, fs::Permissions::from_mode(0o600))
+            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+        let metadata =
+            fs::symlink_metadata(&readiness_path).map_err(|_| RuntimeError::ProxyUnavailable)?;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != spec.uid
+            || metadata.permissions().mode() & 0o7777 != 0o600
+        {
+            return Err(RuntimeError::ProxyUnavailable);
+        }
+        let flags = rustix::io::fcntl_getfd(&readiness_listener)
+            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+        rustix::io::fcntl_setfd(&readiness_listener, flags | rustix::io::FdFlags::CLOEXEC)
+            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+        readiness_listener
+            .set_nonblocking(true)
+            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+        Ok(Self {
+            _directory: directory,
+            readiness_listener,
+        })
+    }
+
+    fn readiness_listener(&self) -> &UnixListener {
+        &self.readiness_listener
+    }
+}
+
+struct PrivateGraphicalDirectory {
+    path: PathBuf,
+}
+
+impl PrivateGraphicalDirectory {
+    fn prepare(spec: &GraphicalSupervisorSpec) -> Result<Self, RuntimeError> {
+        let directory = spec.private_directory()?;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+            .create(&directory)
+            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+        let result = (|| {
+            let metadata =
+                fs::symlink_metadata(&directory).map_err(|_| RuntimeError::ProxyUnavailable)?;
+            use std::os::unix::fs::MetadataExt;
+            if !metadata.file_type().is_dir()
+                || metadata.file_type().is_symlink()
+                || metadata.uid() != spec.uid
+                || metadata.permissions().mode() & 0o7777 != 0o700
+            {
+                return Err(RuntimeError::ProxyUnavailable);
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => Ok(Self { path: directory }),
+            Err(error) => {
+                let _ = fs::remove_dir_all(directory);
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for PrivateGraphicalDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+struct ReadinessChannel<'a> {
+    listener: &'a UnixListener,
+    stream: Option<UnixStream>,
+    buffered: Vec<u8>,
+    expected_uid: u32,
+}
+
+impl<'a> ReadinessChannel<'a> {
+    fn new(listener: &'a UnixListener, expected_uid: u32) -> Result<Self, RuntimeError> {
+        Ok(Self {
+            listener,
+            stream: None,
+            buffered: Vec::new(),
+            expected_uid,
+        })
+    }
+
+    fn expect(
+        &mut self,
+        expected_stage: ProxyReadinessStage,
+        spec: &GraphicalSupervisorSpec,
+        deadline: Instant,
+        proxy: &mut Child,
+        mut app: Option<&mut Child>,
+    ) -> Result<(), RuntimeError> {
+        loop {
+            if let Some(app) = app.as_deref_mut()
+                && app
+                    .try_wait()
+                    .map_err(|_| RuntimeError::Internal)?
+                    .is_some()
+            {
+                return Err(RuntimeError::FirstClientTimeout);
+            }
+            if proxy
+                .try_wait()
+                .map_err(|_| RuntimeError::Internal)?
+                .is_some()
+            {
+                return Err(stage_failure(expected_stage));
+            }
+            if Instant::now() >= deadline {
+                return Err(stage_failure(expected_stage));
+            }
+            if self.stream.is_none() {
+                match self.listener.accept() {
+                    Ok((stream, _)) => {
+                        let peer = getsockopt(&stream, PeerCredentials)
+                            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+                        if peer.uid() != self.expected_uid {
+                            return Err(RuntimeError::ProxyUnavailable);
+                        }
+                        let flags = rustix::io::fcntl_getfd(&stream)
+                            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+                        rustix::io::fcntl_setfd(&stream, flags | rustix::io::FdFlags::CLOEXEC)
+                            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+                        stream
+                            .set_nonblocking(true)
+                            .map_err(|_| RuntimeError::ProxyUnavailable)?;
+                        self.stream = Some(stream);
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                        ) => {}
+                    Err(_) => return Err(RuntimeError::ProxyUnavailable),
+                }
+            }
+            if let Some(event) = self.read_event()? {
+                validate_readiness_event(&event, expected_stage, spec)?;
+                return Ok(());
+            }
+            std::thread::sleep(
+                READINESS_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+
+    fn read_event(&mut self) -> Result<Option<ProxyReadinessEvent>, RuntimeError> {
+        if let Some(event) = decode_buffered_event(&mut self.buffered)? {
+            return Ok(Some(event));
+        }
+        let Some(stream) = self.stream.as_mut() else {
+            return Ok(None);
+        };
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => return Err(RuntimeError::ProxyUnavailable),
+                Ok(read) => {
+                    self.buffered.extend_from_slice(&chunk[..read]);
+                    if self.buffered.len() > MAX_READINESS_EVENT_BYTES {
+                        return Err(RuntimeError::ProxyUnavailable);
+                    }
+                    if let Some(event) = decode_buffered_event(&mut self.buffered)? {
+                        return Ok(Some(event));
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Ok(None);
+                }
+                Err(_) => return Err(RuntimeError::ProxyUnavailable),
+            }
+        }
+    }
+}
+
+fn decode_buffered_event(
+    buffered: &mut Vec<u8>,
+) -> Result<Option<ProxyReadinessEvent>, RuntimeError> {
+    let Some(newline) = buffered.iter().position(|byte| *byte == b'\n') else {
+        return Ok(None);
+    };
+    let frame = buffered.drain(..=newline).collect::<Vec<_>>();
+    let body = &frame[..frame.len() - 1];
+    if body.is_empty() {
+        return Err(RuntimeError::ProxyUnavailable);
+    }
+    serde_json::from_slice(body)
+        .map(Some)
+        .map_err(|_| RuntimeError::ProxyUnavailable)
+}
+
+fn validate_readiness_event(
+    event: &ProxyReadinessEvent,
+    expected_stage: ProxyReadinessStage,
+    spec: &GraphicalSupervisorSpec,
+) -> Result<(), RuntimeError> {
+    if event.protocol_version != READINESS_PROTOCOL_VERSION
+        || event.target != spec.target
+        || event.provider_kind != WorkloadProviderKind::UnsafeLocal
+        || event.stage != expected_stage
+        || event.state != ProxyReadinessState::Ready
+        || event.failure.is_some()
+    {
+        return Err(stage_failure(expected_stage));
+    }
+    Ok(())
+}
+
+fn stage_failure(stage: ProxyReadinessStage) -> RuntimeError {
+    match stage {
+        ProxyReadinessStage::Upstream => RuntimeError::WaylandUnavailable,
+        ProxyReadinessStage::Listener => RuntimeError::ProxyUnavailable,
+        ProxyReadinessStage::FirstClient => RuntimeError::FirstClientTimeout,
+    }
 }
 
 fn load_ledger(path: &Path) -> Result<PersistedScopeLedger, RuntimeError> {
@@ -888,8 +1440,67 @@ mod tests {
     use super::*;
     use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
     use d2b_core::configured_argv::ConfiguredArgv;
+    use d2b_core::workload_identity::WorkloadTarget;
     use d2b_realm_core::token::ProtocolToken;
+    use nix::unistd::Uid;
     use std::sync::{Arc, Barrier};
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let mut random = [0u8; 8];
+            getrandom::getrandom(&mut random).unwrap();
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(Path::parent)
+                .unwrap();
+            let path = root.join(format!(".d2bt-{}", hex(&random)));
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn graphical_spec(runtime_directory: PathBuf) -> GraphicalSupervisorSpec {
+        GraphicalSupervisorSpec::new(
+            PathBuf::from("/nix/store/fake-proxy/bin/d2b-wayland-proxy"),
+            runtime_directory,
+            "wayland-1".to_owned(),
+            WorkloadTarget::parse("tools.host.d2b").unwrap(),
+            RealmAccentColor::new("#cc3344").unwrap(),
+            Uid::current().as_raw(),
+        )
+        .unwrap()
+    }
+
+    fn ready(spec: &GraphicalSupervisorSpec, stage: ProxyReadinessStage) -> ProxyReadinessEvent {
+        ProxyReadinessEvent {
+            protocol_version: READINESS_PROTOCOL_VERSION,
+            target: spec.target.clone(),
+            provider_kind: WorkloadProviderKind::UnsafeLocal,
+            stage,
+            state: ProxyReadinessState::Ready,
+            failure: None,
+        }
+    }
+
+    fn read_test_event(channel: &mut ReadinessChannel<'_>) -> ProxyReadinessEvent {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(event) = channel.read_event().unwrap() {
+                return event;
+            }
+            assert!(Instant::now() < deadline, "readiness event timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     fn launch(operation_id: &str, arg: &str) -> HelperLaunchRequest {
         HelperLaunchRequest {
@@ -905,6 +1516,8 @@ mod tests {
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
+            realm_accent_color: d2b_contracts::unsafe_local_wire::RealmAccentColor::new("#336699")
+                .unwrap(),
         }
     }
 
@@ -1059,8 +1672,281 @@ mod tests {
             args: vec![canary.to_owned()],
             environment: BTreeMap::from([("PRIVATE".to_owned(), canary.to_owned())]),
             cwd: PathBuf::from(format!("/{canary}")),
+            graphical: None,
         };
         assert!(!format!("{spec:?}").contains(canary));
+        assert!(!format!("{:?}", launch("op-debug", canary)).contains(canary));
+    }
+
+    #[test]
+    fn graphical_spec_paths_and_proxy_arguments_are_strict_and_argv_free() {
+        let scratch = Scratch::new();
+        let mut spec = graphical_spec(scratch.0.clone());
+        let app_canary = "private-app-argv-canary";
+        let args = proxy_arguments(&spec).unwrap();
+        let rendered = args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+        assert!(!rendered.contains(app_canary));
+        for required in [
+            "--connect",
+            "--target",
+            "--provider-kind",
+            "unsafe-local",
+            "--border-enable",
+            "--border-color-active",
+            "#cc3344",
+            "--readiness-socket",
+            "--first-client-timeout-ms",
+            "--clipd-bridge-user-uid",
+        ] {
+            assert!(rendered.contains(required), "{required}");
+        }
+        assert!(spec.display.ends_with("/wayland.sock"));
+        assert_eq!(
+            spec.private_directory().unwrap().parent(),
+            Some(scratch.0.as_path())
+        );
+
+        for invalid in [
+            "/absolute/wayland.sock",
+            "../wayland.sock",
+            "d2b-unsafe-local-00112233445566778899aabbccddeeff/../wayland.sock",
+            "d2b-unsafe-local-short/wayland.sock",
+        ] {
+            spec.display = invalid.to_owned();
+            assert_eq!(spec.validate(), Err(RuntimeError::ProxyUnavailable));
+        }
+        assert!(SUPERVISOR_START_TIMEOUT > FIRST_CLIENT_TIMEOUT);
+    }
+
+    #[test]
+    fn readiness_validation_rejects_order_identity_protocol_and_failure_drift() {
+        let scratch = Scratch::new();
+        let spec = graphical_spec(scratch.0.clone());
+        let listener_event = ready(&spec, ProxyReadinessStage::Listener);
+        assert_eq!(
+            validate_readiness_event(&listener_event, ProxyReadinessStage::Upstream, &spec),
+            Err(RuntimeError::WaylandUnavailable)
+        );
+
+        let mut mismatch = ready(&spec, ProxyReadinessStage::Upstream);
+        mismatch.target = WorkloadTarget::parse("other.host.d2b").unwrap();
+        assert_eq!(
+            validate_readiness_event(&mismatch, ProxyReadinessStage::Upstream, &spec),
+            Err(RuntimeError::WaylandUnavailable)
+        );
+        mismatch = ready(&spec, ProxyReadinessStage::Upstream);
+        mismatch.protocol_version += 1;
+        assert!(validate_readiness_event(&mismatch, ProxyReadinessStage::Upstream, &spec).is_err());
+        mismatch = ready(&spec, ProxyReadinessStage::FirstClient);
+        mismatch.state = ProxyReadinessState::Failed;
+        assert_eq!(
+            validate_readiness_event(&mismatch, ProxyReadinessStage::FirstClient, &spec),
+            Err(RuntimeError::FirstClientTimeout)
+        );
+    }
+
+    #[test]
+    fn readiness_parser_is_bounded_and_rejects_malformed_frames() {
+        let scratch = Scratch::new();
+        let socket = scratch.0.join("unused.sock");
+        let listener = UnixListener::bind(socket).unwrap();
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        let mut channel = ReadinessChannel {
+            listener: &listener,
+            stream: Some(reader),
+            buffered: Vec::new(),
+            expected_uid: Uid::current().as_raw(),
+        };
+        writer.write_all(b"{not-json}\n").unwrap();
+        assert_eq!(channel.read_event(), Err(RuntimeError::ProxyUnavailable));
+
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        let mut channel = ReadinessChannel {
+            listener: &listener,
+            stream: Some(reader),
+            buffered: Vec::new(),
+            expected_uid: Uid::current().as_raw(),
+        };
+        writer
+            .write_all(&vec![b'x'; MAX_READINESS_EVENT_BYTES + 1])
+            .unwrap();
+        assert_eq!(channel.read_event(), Err(RuntimeError::ProxyUnavailable));
+    }
+
+    #[test]
+    fn fake_proxy_and_app_complete_typed_readiness_and_cleanup() {
+        let scratch = Scratch::new();
+        let spec = graphical_spec(scratch.0.clone());
+        let private_directory = spec.private_directory().unwrap();
+        let runtime = PrivateGraphicalDirectory::prepare(&spec).unwrap();
+        let metadata = fs::symlink_metadata(&private_directory).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+        let (mut readiness_writer, readiness_reader) = UnixStream::pair().unwrap();
+        readiness_reader.set_nonblocking(true).unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&readiness_reader)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        let unused_listener = UnixListener::bind(scratch.0.join("unused.sock")).unwrap();
+        let wayland_path = PathBuf::from(&spec.display);
+        let generated_private_directory = wayland_path.parent().unwrap().to_path_buf();
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&generated_private_directory).unwrap();
+
+        let proxy_spec = spec.clone();
+        let proxy_wayland_path = wayland_path.clone();
+        let proxy = std::thread::spawn(move || {
+            for stage in [ProxyReadinessStage::Upstream, ProxyReadinessStage::Listener] {
+                serde_json::to_writer(&mut readiness_writer, &ready(&proxy_spec, stage)).unwrap();
+                readiness_writer.write_all(b"\n").unwrap();
+            }
+            let listener = UnixListener::bind(proxy_wayland_path).unwrap();
+            let _client = listener.accept().unwrap().0;
+            serde_json::to_writer(
+                &mut readiness_writer,
+                &ready(&proxy_spec, ProxyReadinessStage::FirstClient),
+            )
+            .unwrap();
+            readiness_writer.write_all(b"\n").unwrap();
+        });
+        let mut channel = ReadinessChannel {
+            listener: &unused_listener,
+            stream: Some(readiness_reader),
+            buffered: Vec::new(),
+            expected_uid: Uid::current().as_raw(),
+        };
+        let event = read_test_event(&mut channel);
+        validate_readiness_event(&event, ProxyReadinessStage::Upstream, &spec).unwrap();
+        let event = read_test_event(&mut channel);
+        validate_readiness_event(&event, ProxyReadinessStage::Listener, &spec).unwrap();
+
+        let app_path = PathBuf::from(&spec.display);
+        let app = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match UnixStream::connect(&app_path) {
+                    Ok(stream) => return stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+        });
+        let event = read_test_event(&mut channel);
+        validate_readiness_event(&event, ProxyReadinessStage::FirstClient, &spec).unwrap();
+        drop(app.join().unwrap());
+        proxy.join().unwrap();
+        drop(channel);
+        drop(runtime);
+        assert!(!private_directory.exists());
+        fs::remove_file(&wayland_path).unwrap();
+        fs::remove_dir(&generated_private_directory).unwrap();
+    }
+
+    #[test]
+    fn plain_supervisor_behavior_is_unchanged() {
+        let spec = SupervisorSpec {
+            program: std::env::current_exe().unwrap(),
+            args: vec!["--list".to_owned()],
+            environment: BTreeMap::new(),
+            cwd: std::env::current_dir().unwrap(),
+            graphical: None,
+        };
+        let mut ack = Vec::new();
+        run_plain_supervisor(&spec, &mut ack).unwrap();
+        assert_eq!(ack, [1]);
+    }
+
+    #[test]
+    fn first_client_wait_fails_immediately_when_app_exits() {
+        let scratch = Scratch::new();
+        let spec = graphical_spec(scratch.0.clone());
+        let listener = UnixListener::bind(scratch.0.join("readiness.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut channel = ReadinessChannel::new(&listener, Uid::current().as_raw()).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut proxy = Command::new(&executable)
+            .args(["--exact", "runtime::tests::test_child_hold", "--nocapture"])
+            .env("D2B_TEST_HOLD", "1")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut app = Command::new(executable)
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            channel.expect(
+                ProxyReadinessStage::FirstClient,
+                &spec,
+                Instant::now() + FIRST_CLIENT_TIMEOUT,
+                &mut proxy,
+                Some(&mut app),
+            ),
+            Err(RuntimeError::FirstClientTimeout)
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        terminate_and_reap(&mut proxy);
+        terminate_and_reap(&mut app);
+    }
+
+    #[test]
+    fn readiness_wait_uses_an_absolute_deadline() {
+        let scratch = Scratch::new();
+        let spec = graphical_spec(scratch.0.clone());
+        let listener = UnixListener::bind(scratch.0.join("readiness.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut channel = ReadinessChannel::new(&listener, Uid::current().as_raw()).unwrap();
+        let mut proxy = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "runtime::tests::test_child_hold", "--nocapture"])
+            .env("D2B_TEST_HOLD", "1")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            channel.expect(
+                ProxyReadinessStage::Upstream,
+                &spec,
+                Instant::now() + Duration::from_millis(30),
+                &mut proxy,
+                None,
+            ),
+            Err(RuntimeError::WaylandUnavailable)
+        );
+        assert!(started.elapsed() < Duration::from_millis(250));
+        terminate_and_reap(&mut proxy);
+    }
+
+    #[test]
+    fn test_child_hold() {
+        if std::env::var_os("D2B_TEST_HOLD").is_some() {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+
+    #[test]
+    fn immutable_proxy_path_rejects_mutable_and_non_executable_paths() {
+        assert_eq!(
+            validate_immutable_proxy_binary(Path::new("/usr/bin/d2b-wayland-proxy")),
+            Err(RuntimeError::ProxyUnavailable)
+        );
+        assert_eq!(
+            validate_immutable_proxy_binary(Path::new("relative/proxy")),
+            Err(RuntimeError::ProxyUnavailable)
+        );
     }
 
     #[test]

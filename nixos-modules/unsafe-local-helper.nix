@@ -64,7 +64,7 @@ in
       unitConfig.ConditionGroup = "d2b-unsafe-local";
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper";
+        ExecStart = "${helperPackage}/bin/d2b-unsafe-local-helper --wayland-proxy ${cfg._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy";
         Restart = "on-failure";
         RestartSec = "5s";
         Slice = "app.slice";
