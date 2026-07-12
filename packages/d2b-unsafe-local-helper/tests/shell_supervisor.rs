@@ -368,6 +368,17 @@ fn real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope() {
 
 #[test]
 fn helper_runtime_creates_persists_and_reconstructs_real_supervisor() {
+    exercise_helper_runtime_reconstruction();
+}
+
+#[test]
+fn repeated_missing_socket_kill_cleans_scope_ledger() {
+    for _ in 0..8 {
+        exercise_helper_runtime_reconstruction();
+    }
+}
+
+fn exercise_helper_runtime_reconstruction() {
     if get_current_uid() == 0 {
         return;
     }
