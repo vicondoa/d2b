@@ -368,21 +368,22 @@ fn real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope() {
 
 #[test]
 fn helper_runtime_creates_persists_and_reconstructs_real_supervisor() {
-    exercise_helper_runtime_reconstruction();
+    let scratch = Scratch::new();
+    exercise_helper_runtime_reconstruction(&scratch, "single");
 }
 
 #[test]
 fn repeated_missing_socket_kill_cleans_scope_ledger() {
-    for _ in 0..8 {
-        exercise_helper_runtime_reconstruction();
+    let scratch = Scratch::new();
+    for iteration in 0..8 {
+        exercise_helper_runtime_reconstruction(&scratch, &format!("stress-{iteration}"));
     }
 }
 
-fn exercise_helper_runtime_reconstruction() {
+fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &str) {
     if get_current_uid() == 0 {
         return;
     }
-    let scratch = Scratch::new();
     let user = get_user_by_uid(get_current_uid()).unwrap();
     let mut environment = BTreeMap::from([
         (
@@ -419,8 +420,9 @@ fn exercise_helper_runtime_reconstruction() {
     )
     .unwrap();
     let workload = workload();
+    let create_operation = format!("op-runtime-create-{operation_suffix}");
     let created = runtime
-        .shell(attach_request("op-runtime-create", workload.clone(), false))
+        .shell(attach_request(&create_operation, workload.clone(), false))
         .unwrap();
     let (frame, fd) = created.into_parts();
     assert!(matches!(frame, UnsafeLocalHelperToDaemon::TerminalReady(_)));
@@ -457,22 +459,24 @@ fn exercise_helper_runtime_reconstruction() {
     let snapshot = reconstructed.snapshot(11).unwrap();
     assert_eq!(snapshot.scopes.len(), 1);
     assert!(snapshot.scopes[0].persistent_shell.is_some());
+    let reattach_operation = format!("op-runtime-reattach-{operation_suffix}");
     let reattached = reconstructed
-        .shell(attach_request(
-            "op-runtime-reattach",
-            workload.clone(),
-            true,
-        ))
+        .shell(attach_request(&reattach_operation, workload.clone(), true))
         .unwrap();
     let (_, fd) = reattached.into_parts();
     drop(fd);
 
     let socket = shell_socket(&scratch.path).expect("supervisor socket");
     fs::remove_file(socket).unwrap();
+    assert!(
+        !has_shell_socket(&scratch.path),
+        "missing-socket kill precondition was not established"
+    );
+    let kill_operation = format!("op-runtime-kill-{operation_suffix}");
     let killed = reconstructed
         .shell(HelperShellRequest::Kill {
             request_id: 4,
-            operation_id: OperationId::parse("op-runtime-kill").unwrap(),
+            operation_id: OperationId::parse(kill_operation).unwrap(),
             workload,
             policy: shell_policy(),
             name: ShellName::new("host").unwrap(),

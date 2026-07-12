@@ -98,6 +98,13 @@ are denied (`defaultForUnknown: deny`).
 > The existing shutdown guard remains responsible for ensuring the hook exits
 > without mutation during ordinary daemon restarts.
 
+> **Configured launch is a public daemon operation, not a broker operation.**
+> `launch` is authorized per workload/realm for the `d2b-launcher` and
+> `d2b-admin` classes, is audited as a destructive runtime action, has no secret
+> access, and does not require the privileged broker. It therefore appears in
+> `PrivilegesJson.publicOperations` and the generated
+> `OperationAuthz.operation` enum, but not in the broker-only catalog below.
+
 ## Operation catalog (PROTOCOL_VERSION = 2)
 
 The currently implemented broker operation catalog. Every row carries
