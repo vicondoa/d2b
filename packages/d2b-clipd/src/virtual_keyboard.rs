@@ -11,11 +11,14 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
 };
 
+// The protocol carries Linux evdev codes. KEY_V keeps proxied clients correct
+// even when their compositor-facing keyboard retains its existing full keymap.
+const PASTE_KEY_CODE: u32 = 47;
 const PASTE_KEYMAP: &[u8] = b"xkb_keymap {\n\
 xkb_keycodes \"d2b\" {\n\
 minimum = 8;\n\
-maximum = 10;\n\
-<D2B1> = 9;\n\
+maximum = 56;\n\
+<D2B1> = 55;\n\
 };\n\
 xkb_types \"d2b\" { include \"complete\" };\n\
 xkb_compatibility \"d2b\" { include \"complete\" };\n\
@@ -69,13 +72,13 @@ pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
         .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
 
-    keyboard.key(0, 1, 1);
+    keyboard.key(0, PASTE_KEY_CODE, 1);
     event_queue
         .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
     std::thread::sleep(Duration::from_millis(2));
 
-    keyboard.key(0, 1, 0);
+    keyboard.key(0, PASTE_KEY_CODE, 0);
     event_queue
         .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
@@ -125,6 +128,8 @@ mod tests {
     #[test]
     fn paste_keymap_contains_only_synthetic_control_v_keys() {
         let keymap = std::str::from_utf8(PASTE_KEYMAP).expect("utf8 keymap");
+        assert_eq!(PASTE_KEY_CODE, 47);
+        assert!(keymap.contains("<D2B1> = 55"));
         assert!(keymap.contains("[v]"));
         assert!(!keymap.contains("Control_L"));
         assert!(!keymap.contains("D2B2"));
