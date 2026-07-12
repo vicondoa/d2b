@@ -184,11 +184,7 @@ mod tests {
         let read = ring.read(0, 32, true, Duration::from_secs(1));
         assert_eq!(read.data, b"ready");
         assert!(!read.timed_out);
-        let eof = if read.eof {
-            read
-        } else {
-            ring.read(read.next_cursor, 32, true, Duration::from_secs(1))
-        };
+        let eof = ring.read(read.next_cursor, 32, true, Duration::from_secs(1));
         writer.join().unwrap();
         assert!(eof.data.is_empty());
         assert!(eof.eof);
