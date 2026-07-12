@@ -222,6 +222,7 @@ struct SupervisorState {
     attachment: Mutex<Option<AttachmentSlot>>,
     next_attachment: AtomicU64,
     kill_requested: AtomicBool,
+    kill_wakeup: UnixStream,
     stdin_closed: AtomicBool,
     terminal_workers: Arc<(Mutex<usize>, Condvar)>,
     control_connections: AtomicUsize,
@@ -240,7 +241,7 @@ impl fmt::Debug for SupervisorState {
 }
 
 impl SupervisorState {
-    fn new(master: OwnedFd, ring: Arc<OutputRing>) -> Self {
+    fn new(master: OwnedFd, ring: Arc<OutputRing>, kill_wakeup: UnixStream) -> Self {
         Self {
             ring,
             master: Mutex::new(Some(master)),
@@ -249,6 +250,7 @@ impl SupervisorState {
             attachment: Mutex::new(None),
             next_attachment: AtomicU64::new(0),
             kill_requested: AtomicBool::new(false),
+            kill_wakeup,
             stdin_closed: AtomicBool::new(false),
             terminal_workers: Arc::new((Mutex::new(0), Condvar::new())),
             control_connections: AtomicUsize::new(0),
@@ -364,6 +366,8 @@ impl SupervisorState {
 
     fn finish_kill(&self) {
         self.kill_requested.store(true, Ordering::Release);
+        let mut wakeup = &self.kill_wakeup;
+        let _ = wakeup.write(&[1]);
         self.process_changed.notify_all();
     }
 
@@ -464,13 +468,29 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
     ioctl_fionbio(&master, true).map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
     let ring =
         Arc::new(OutputRing::new(spec.output_ring_bytes).ok_or(ShellSupervisorError::InvalidSpec)?);
-    let state = Arc::new(SupervisorState::new(master, Arc::clone(&ring)));
+    let (kill_wakeup_read, kill_wakeup_write) =
+        UnixStream::pair().map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
+    kill_wakeup_read
+        .set_nonblocking(true)
+        .map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
+    kill_wakeup_write
+        .set_nonblocking(true)
+        .map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
+    let state = Arc::new(SupervisorState::new(
+        master,
+        Arc::clone(&ring),
+        kill_wakeup_write,
+    ));
     drop(spec);
     start_pty_reader(Arc::clone(&state));
     write_ready(1)?;
 
     while !state.kill_requested.load(Ordering::Acquire) {
-        let listener_ready = poll_readable(listener.listener().as_fd())?;
+        let listener_ready =
+            poll_listener_or_kill(listener.listener().as_fd(), kill_wakeup_read.as_fd())?;
+        if state.kill_requested.load(Ordering::Acquire) {
+            break;
+        }
         if listener_ready {
             match listener.listener().accept() {
                 Ok((stream, _)) => {
@@ -508,6 +528,7 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
             }),
         }
     }
+    drop(listener);
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         match child.try_wait() {
@@ -519,8 +540,39 @@ pub(crate) fn run_shell_supervisor() -> Result<(), ShellSupervisorError> {
             Err(_) => break,
         }
     }
-    drop(listener);
     Ok(())
+}
+
+fn poll_listener_or_kill(
+    listener: std::os::fd::BorrowedFd<'_>,
+    kill_wakeup: std::os::fd::BorrowedFd<'_>,
+) -> Result<bool, ShellSupervisorError> {
+    let timeout = PollTimeout::try_from(SUPERVISOR_POLL_TIMEOUT)
+        .map_err(|_| ShellSupervisorError::RuntimeUnavailable)?;
+    let interests = PollFlags::POLLIN | PollFlags::POLLERR | PollFlags::POLLHUP;
+    let mut fds = [
+        PollFd::new(listener, interests),
+        PollFd::new(kill_wakeup, interests),
+    ];
+    loop {
+        match poll(&mut fds, timeout) {
+            Ok(_) => break,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return Err(ShellSupervisorError::RuntimeUnavailable),
+        }
+    }
+    let kill_events = fds[1].revents().unwrap_or(PollFlags::empty());
+    if kill_events.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL) {
+        return Err(ShellSupervisorError::RuntimeUnavailable);
+    }
+    if kill_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP) {
+        return Ok(false);
+    }
+    let listener_events = fds[0].revents().unwrap_or(PollFlags::empty());
+    if listener_events.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL) {
+        return Err(ShellSupervisorError::RuntimeUnavailable);
+    }
+    Ok(listener_events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP))
 }
 
 fn poll_readable(fd: std::os::fd::BorrowedFd<'_>) -> Result<bool, ShellSupervisorError> {
@@ -1122,7 +1174,12 @@ mod tests {
     fn input_offsets_and_control_sequences_are_strictly_monotonic() {
         let master =
             openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
-        let state = SupervisorState::new(master, Arc::new(OutputRing::new(1024).unwrap()));
+        let (_kill_wakeup_read, kill_wakeup_write) = UnixStream::pair().unwrap();
+        let state = SupervisorState::new(
+            master,
+            Arc::new(OutputRing::new(1024).unwrap()),
+            kill_wakeup_write,
+        );
         let protocol = Mutex::new(AttachmentProtocolState::default());
 
         let mismatch = HelperTerminalRequest::WriteStdin(HelperTerminalWriteStdin {

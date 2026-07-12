@@ -457,6 +457,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "launch",
+        "workload/configured launch",
+        "per-workload/per-realm",
+        &["d2b-launcher", "d2b-admin"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::No,
+        AuditMode::Yes,
+    ),
+    row(
         "exec",
         "VM/process",
         "per-VM",

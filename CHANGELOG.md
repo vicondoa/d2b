@@ -10,10 +10,28 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added proposed ADR 0045, defining parent-owned workload-hosted realm
+  controllers; explicit runtime, infrastructure, transport, substrate,
+  credential, and display provider responsibilities; type-first sortable
+  provider crates; generic Unix/vsock/direct/Azure-Relay byte transports;
+  Noise-authenticated component sessions with ttrpc/protobuf control services;
+  Entra and YubiKey credential placement; and policy-authorized peer shortcuts
+  over inherited shared transport fabrics.
+
 ### Fixed
 
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
-  socket cleanup the same bounded reconciliation horizon used by the runtime.
+  socket cleanup the same bounded reconciliation horizon used by the runtime,
+  waking the supervisor accept loop so its owned listener unlinks before forced
+  scope teardown, and ensuring a missing/replaced control socket cannot block
+  verified scope collection or ledger cleanup.
+
+- Fixed the provider-neutral `launch` command missing from the public
+  authorization matrix and generated privileges schema. Configured launches
+  remain scoped per workload/realm to launcher or admin callers, audited, and
+  broker-free.
 
 ## [1.4.0] - 2026-07-12
 

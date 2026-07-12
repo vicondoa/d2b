@@ -248,6 +248,7 @@
             "keys list",
             "keys rotate",
             "keys show",
+            "launch",
             "list",
             "migrate",
             "op",

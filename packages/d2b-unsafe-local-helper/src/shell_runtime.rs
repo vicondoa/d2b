@@ -541,12 +541,10 @@ fn kill<M: UserScopeManager>(
     }
     let killed = match inspection.state {
         HelperScopeState::Starting | HelperScopeState::Active => {
-            let response = supervisor_action(runtime, &scope, SupervisorAction::Kill)?;
-            if !matches!(response.result, SupervisorResult::KillAccepted) {
-                return Err(RuntimeError::ShellUnavailable);
-            }
-            // The verified supervisor has acknowledged Kill. If systemd drops
-            // the now-empty scope before collection, do not signal a replacement.
+            // A missing or replaced control socket cannot make a verified scope
+            // unkillable. Attempt graceful supervisor shutdown, then collect
+            // the exact scope regardless of the control result.
+            let _ = supervisor_action(runtime, &scope, SupervisorAction::Kill);
             if let Err(error) = collect_verified_scope(runtime, &verified)
                 && error != RuntimeError::ScopeIdentityMismatch
             {
