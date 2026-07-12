@@ -21,6 +21,7 @@ use rustix::{
 const TERMINAL_RUNTIME_DIR: &str = "d2b-wayland-proxy";
 const SOCKET_MODE: u32 = 0o600;
 const DIR_MODE: u32 = 0o700;
+const MAX_UNIX_SOCKET_PATH_BYTES: usize = 107;
 
 #[derive(Debug)]
 pub struct TerminalRuntime {
@@ -70,13 +71,10 @@ impl TerminalRuntime {
         validate_identity_component(identity_component)?;
         validate_token(token)?;
         ensure_runtime_parent(runtime_dir)?;
-        let root = runtime_dir
-            .join(TERMINAL_RUNTIME_DIR)
-            .join(identity_component);
+        let (root, listen_socket, mux_socket) =
+            terminal_runtime_paths(runtime_dir, identity_component, token)?;
         ensure_private_dir(&root)?;
 
-        let listen_socket = root.join(format!("wayland-{token}.sock"));
-        let mux_socket = root.join(format!("wezterm-mux-{token}.sock"));
         unlink_stale_socket(&listen_socket)?;
         unlink_stale_socket(&mux_socket)?;
 
@@ -87,6 +85,27 @@ impl TerminalRuntime {
             mux_socket,
         })
     }
+}
+
+fn terminal_runtime_paths(
+    runtime_dir: &Path,
+    identity_component: &str,
+    token: &str,
+) -> io::Result<(PathBuf, PathBuf, PathBuf)> {
+    let root = runtime_dir
+        .join(TERMINAL_RUNTIME_DIR)
+        .join(identity_component);
+    let listen_socket = root.join(format!("w-{token}"));
+    let mux_socket = root.join(format!("m-{token}"));
+    for path in [&listen_socket, &mux_socket] {
+        if path.as_os_str().as_encoded_bytes().len() > MAX_UNIX_SOCKET_PATH_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "terminal runtime socket path exceeds the Unix socket limit",
+            ));
+        }
+    }
+    Ok((root, listen_socket, mux_socket))
 }
 
 impl Drop for TerminalRuntime {
@@ -299,16 +318,28 @@ mod tests {
             runtime.listen_socket(),
             root.join(TERMINAL_RUNTIME_DIR)
                 .join("work")
-                .join("wayland-abc123.sock")
+                .join("w-abc123")
         );
         assert_eq!(
             runtime.mux_socket(),
             root.join(TERMINAL_RUNTIME_DIR)
                 .join("work")
-                .join("wezterm-mux-abc123.sock")
+                .join("m-abc123")
         );
         drop(runtime);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn terminal_runtime_bounds_canonical_target_socket_paths() {
+        let (_, listen_socket, mux_socket) = terminal_runtime_paths(
+            Path::new("/run/user/1000"),
+            "endpoint-fc002cd9909aab17c2232e85",
+            "00112233445566778899aabbccddeeff",
+        )
+        .expect("canonical target paths");
+        assert!(listen_socket.as_os_str().as_encoded_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES);
+        assert!(mux_socket.as_os_str().as_encoded_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES);
     }
 
     #[test]

@@ -537,32 +537,53 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         fingerprint: [u8; 32],
         reservation: LaunchReservation,
     ) -> Result<HelperOperationResult, RuntimeError> {
-        let environment = self.manager.manager_environment()?;
+        let environment = self.manager.manager_environment().map_err(|error| {
+            eprintln!("unsafe-local launch setup failed: manager-environment ({error:?})");
+            RuntimeError::from(error)
+        })?;
         let argv = request.argv.as_slice();
-        let program = environment.resolve_program(&argv[0])?;
+        let program = environment.resolve_program(&argv[0]).map_err(|error| {
+            eprintln!("unsafe-local launch setup failed: executable");
+            RuntimeError::from(error)
+        })?;
         let graphical = if request.graphical {
-            let runtime_directory = environment.runtime_directory()?;
-            validate_runtime_directory(&runtime_directory, self.uid)
-                .map_err(|_| RuntimeError::EnvironmentInvalid)?;
-            let wayland_proxy_binary = self
-                .wayland_proxy_binary
-                .clone()
-                .ok_or(RuntimeError::ProxyUnavailable)?;
-            Some(GraphicalSupervisorSpec::new(
-                wayland_proxy_binary,
-                runtime_directory,
-                environment.wayland_display()?.to_owned(),
-                request.workload.target().clone(),
-                request.realm_accent_color.clone(),
-                self.uid,
-            )?)
+            let runtime_directory = environment.runtime_directory().map_err(|error| {
+                eprintln!("unsafe-local launch setup failed: runtime-directory");
+                RuntimeError::from(error)
+            })?;
+            validate_runtime_directory(&runtime_directory, self.uid).map_err(|_| {
+                eprintln!("unsafe-local launch setup failed: runtime-directory-validation");
+                RuntimeError::EnvironmentInvalid
+            })?;
+            let wayland_proxy_binary = self.wayland_proxy_binary.clone().ok_or_else(|| {
+                eprintln!("unsafe-local launch setup failed: proxy-binary");
+                RuntimeError::ProxyUnavailable
+            })?;
+            Some(
+                GraphicalSupervisorSpec::new(
+                    wayland_proxy_binary,
+                    runtime_directory,
+                    environment.wayland_display()?.to_owned(),
+                    request.workload.target().clone(),
+                    request.realm_accent_color.clone(),
+                    self.uid,
+                )
+                .inspect_err(|error| {
+                    eprintln!("unsafe-local launch setup failed: graphical-spec ({error:?})");
+                })?,
+            )
         } else {
             None
         };
-        let child_environment = environment.child_entries(
-            request.graphical,
-            graphical.as_ref().map(|g| g.display.as_str()),
-        )?;
+        let child_environment = environment
+            .child_entries(
+                request.graphical,
+                graphical.as_ref().map(|g| g.display.as_str()),
+            )
+            .map_err(|error| {
+                eprintln!("unsafe-local launch setup failed: child-environment");
+                RuntimeError::from(error)
+            })?;
         let spec = SupervisorSpec {
             program,
             args: argv[1..].to_vec(),
@@ -845,7 +866,7 @@ impl BlockedSupervisor {
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .map_err(|_| RuntimeError::ScopeCreateFailed)?;
         let mut stdin = child.stdin.take().ok_or(RuntimeError::Internal)?;

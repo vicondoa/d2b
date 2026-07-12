@@ -12,12 +12,16 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Bounded host-terminal Wayland and mux socket paths for canonical targets so
+  provider-neutral host shells do not exceed Linux `sun_path`.
 - Fixed graphical unsafe-local launches by having the same verified user scope
   supervise the Wayland proxy and configured application. The helper now uses
   an immutable proxy binary, a private per-launch runtime directory, strict
   typed readiness through first-client connection, realm-colored identity
   rails, and same-UID clipboard attribution without a direct compositor
   fallback. Private helper protocol v3 carries the validated realm accent.
+- Accepted owner-only-writable XDG runtime directories with read/execute ACL
+  traversal while keeping every unsafe-local proxy directory private `0700`.
 
 ### Added
 

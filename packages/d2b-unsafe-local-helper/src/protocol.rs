@@ -187,6 +187,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                             let response = match runtime.launch(request) {
                                 Ok(result) => UnsafeLocalHelperToDaemon::Operation(result),
                                 Err(error) => {
+                                    eprintln!("unsafe-local launch failed: {error:?}");
                                     rejection(request_id, operation_id, failure_code(error))
                                 }
                             };

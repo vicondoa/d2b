@@ -32,9 +32,10 @@ fn main() {
     }
     let cli = Cli::parse();
     let result = match cli.command {
-        Some(Command::ScopeSupervisor) => {
-            run_scope_supervisor().map_err(|_| "scope runtime failed")
-        }
+        Some(Command::ScopeSupervisor) => run_scope_supervisor().map_err(|error| {
+            eprintln!("scope runtime failed: {error:?}");
+            "scope runtime failed"
+        }),
         Some(Command::ShellSupervisor) => {
             d2b_unsafe_local_helper::run_shell_supervisor().map_err(|_| "shell runtime failed")
         }
