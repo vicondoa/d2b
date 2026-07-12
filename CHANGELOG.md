@@ -10,6 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stabilized shell-supervisor teardown coverage by allowing its asynchronous
+  socket cleanup the same bounded reconciliation horizon used by the runtime.
+
 ## [1.4.0] - 2026-07-12
 
 ### Added
