@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Wait for the captured Niri destination to regain focus after the exclusive
+  clipboard picker closes before replaying paste, and fail visibly on a bounded
+  timeout instead of dropping `Ctrl+V` against an unfocused surface.
 - Bounded host-terminal Wayland and mux socket paths for canonical targets so
   provider-neutral host shells do not exceed Linux `sun_path`.
 - Fixed graphical unsafe-local launches by having the same verified user scope

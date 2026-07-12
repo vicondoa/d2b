@@ -65,6 +65,8 @@ const ACCEPT_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
 const ACCEPT_WARN_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const ASYNC_MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const PASTE_FOCUS_RESTORE_TIMEOUT: Duration = Duration::from_secs(2);
+const PASTE_FOCUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 static HELPER_THREADS: AtomicUsize = AtomicUsize::new(0);
 
@@ -155,7 +157,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let (niri_tx, niri_rx) = mpsc::channel::<NiriMessage>();
 
     // ── Host clipboard state ─────────────────────────────────────────────────
-    let niri_query = NiriQueryProvider::new(niri_socket);
+    let niri_query = NiriQueryProvider::new(niri_socket.clone());
     let attributor = HostClipboardAttributor::new(niri_query);
     let mut host_clipboard: HostClipboard<NiriQueryProvider> = HostClipboard::new(attributor);
 
@@ -187,10 +189,6 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_peers)?;
 
     // ── Niri IPC event stream thread ─────────────────────────────────────────
-    let niri_socket = args
-        .niri_socket
-        .clone()
-        .or_else(|| std::env::var("NIRI_SOCKET").ok().map(PathBuf::from));
     if let Some(ref socket) = niri_socket {
         spawn_niri_event_thread(socket.clone(), niri_tx);
     } else {
@@ -225,6 +223,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         control_accept_backoff_until: None,
         bridge_accept_backoff_until: None,
         data_control: &mut data_control,
+        niri_socket,
         niri_rx,
         host_clipboard: &mut host_clipboard,
         supervisor: &mut supervisor,
@@ -388,6 +387,7 @@ struct EventLoop<'a> {
     control_accept_backoff_until: Option<Instant>,
     bridge_accept_backoff_until: Option<Instant>,
     data_control: &'a mut DataControlClient,
+    niri_socket: Option<PathBuf>,
     niri_rx: mpsc::Receiver<NiriMessage>,
     host_clipboard: &'a mut HostClipboard<NiriQueryProvider>,
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
@@ -662,6 +662,7 @@ impl EventLoop<'_> {
                                 notifier: self.notifier,
                                 fallback: self.fallback,
                                 supervisor: self.supervisor,
+                                niri_socket: self.niri_socket.clone(),
                             };
                             handle_picker_message(message, &mut context);
                         }
@@ -2584,6 +2585,7 @@ struct PickerMessageContext<'a> {
     notifier: &'a mut DesktopNotifier,
     fallback: &'a mut FallbackArming,
     supervisor: &'a mut PickerSupervisor<CommandPickerSpawner>,
+    niri_socket: Option<PathBuf>,
 }
 
 fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMessageContext<'_>) {
@@ -2603,14 +2605,22 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
                 context.published_selection,
             ) {
                 Ok(()) => {
+                    let replay_target = match context.fallback.state() {
+                        FallbackState::PickerOpen { target }
+                        | FallbackState::Armed { target, .. } => Some(target.clone()),
+                        FallbackState::Idle => None,
+                    };
+                    let niri_socket = context.niri_socket.clone();
                     notify_bridge_selection_refresh(context.bridge_streams);
                     let _ = context.fallback.cancel_picker();
                     let _ = context.supervisor.cancel_active(ReasonCode::Allowed);
                     if let Err(error) = std::thread::Builder::new()
                         .name("d2b-clipd-paste-replay".to_owned())
-                        .spawn(|| {
-                            std::thread::sleep(Duration::from_millis(20));
-                            if let Err(error) = d2b_clipd::virtual_keyboard::paste_ctrl_v() {
+                        .spawn(move || {
+                            if let Err(error) = replay_paste_after_focus(
+                                niri_socket.as_deref(),
+                                replay_target.as_ref(),
+                            ) {
                                 log::warn!("d2b-clipd: host instant paste failed: {error}");
                                 let mut notifier = DesktopNotifier;
                                 d2b_clipd::notifications::emit_user_visible_failure(
@@ -2646,6 +2656,66 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
             log::debug!("d2b-clipd: ignored duplicate picker client_hello");
         }
     }
+}
+
+fn replay_paste_after_focus(
+    niri_socket: Option<&Path>,
+    target: Option<&FocusedWindowSnapshot>,
+) -> Result<(), String> {
+    let socket = niri_socket.ok_or_else(|| "niri socket is unavailable".to_owned())?;
+    let target = target.ok_or_else(|| "paste target is unavailable".to_owned())?;
+    wait_for_target_focus(
+        target,
+        PASTE_FOCUS_RESTORE_TIMEOUT,
+        PASTE_FOCUS_POLL_INTERVAL,
+        || query_focused_window_snapshot(socket),
+    )?;
+    d2b_clipd::virtual_keyboard::paste_ctrl_v().map_err(|error| error.to_string())
+}
+
+fn wait_for_target_focus<F>(
+    target: &FocusedWindowSnapshot,
+    timeout: Duration,
+    poll_interval: Duration,
+    mut query: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> Result<Option<FocusedWindowSnapshot>, String>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if query()?
+            .as_ref()
+            .is_some_and(|focused| target.same_target(focused))
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("focused destination was not restored before timeout".to_owned());
+        }
+        std::thread::sleep(poll_interval);
+    }
+}
+
+fn query_focused_window_snapshot(socket: &Path) -> Result<Option<FocusedWindowSnapshot>, String> {
+    let mut client = NiriJsonClient::connect(
+        socket,
+        d2b_clipd::niri::DEFAULT_NIRI_MAX_LINE_BYTES,
+        Some(Duration::from_millis(250)),
+    )
+    .map_err(|error| error.to_string())?;
+    client
+        .query_focused_window()
+        .map(|window| {
+            window.map(|window| FocusedWindowSnapshot {
+                id: window.id,
+                app_id: window.app_id,
+                title: window.title,
+                workspace_id: window.workspace_id,
+                output_label: window.output_label,
+            })
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn publish_selected_entry_to_host(
@@ -3935,6 +4005,45 @@ mod tests {
         assert!(!published_selection_can_serve_bridge_paste(
             PublishedSelectionMode::Discovery
         ));
+    }
+
+    #[test]
+    fn paste_replay_waits_for_the_captured_destination_to_regain_focus() {
+        let target = FocusedWindowSnapshot {
+            id: Some(7),
+            app_id: Some("d2b.dev.firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+        let mut snapshots = VecDeque::from([
+            None,
+            Some(FocusedWindowSnapshot {
+                id: Some(8),
+                ..FocusedWindowSnapshot::default()
+            }),
+            Some(target.clone()),
+        ]);
+        let mut queries = 0;
+
+        wait_for_target_focus(&target, Duration::from_secs(1), Duration::ZERO, || {
+            queries += 1;
+            Ok(snapshots.pop_front().flatten())
+        })
+        .expect("target focus must be restored");
+
+        assert_eq!(queries, 3);
+    }
+
+    #[test]
+    fn paste_replay_fails_closed_when_focus_is_not_restored() {
+        let target = FocusedWindowSnapshot {
+            id: Some(7),
+            ..FocusedWindowSnapshot::default()
+        };
+
+        let error = wait_for_target_focus(&target, Duration::ZERO, Duration::ZERO, || Ok(None))
+            .expect_err("missing focus must fail");
+
+        assert_eq!(error, "focused destination was not restored before timeout");
     }
 
     #[test]
