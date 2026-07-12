@@ -1,4 +1,4 @@
-# ADR 0045: Workload-hosted realm controllers and shared-relay shortcuts
+# ADR 0045: Provider and transport framework
 
 - Status: Proposed
 - Date: 2026-07-10
@@ -8,7 +8,8 @@
   (unsafe-local runtime provider)
 - Related: [ADR 0010](0010-wire-protocol-and-typed-errors.md)
   (wire protocol and typed errors), [ADR 0028](0028-guest-control-plane-over-vsock.md)
-  (guest control plane over virtio-vsock), [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md)
+  (guest control plane over virtio-vsock),
+  [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md)
   (storage lifecycle, restart adoption, and synchronization),
   [ADR 0037](0037-local-hypervisor-runtime-seam.md)
   (local hypervisor runtime seam)
@@ -28,11 +29,20 @@ That leaves several ambiguities:
 - the controller VM can appear to be owned by the realm it must bring into
   existence, creating a lifecycle cycle;
 - `provider` can mean a workload runtime, infrastructure provisioner, realm
-  controller host, or relay transport;
+  controller host, transport, protocol codec, node client, or daemon-access
+  adapter;
 - the existing `d2b.realms.<realm>.providers` records do not distinguish those
   responsibilities;
-- relay configuration says how a realm is reachable, but not which workload
-  owns interactive credentials or opens the connector;
+- `d2b-realm-provider` exports provider authorities beside
+  `TransportProvider`, `ProtocolCodec`, `StreamMux`, daemon-access, and node
+  client traits even though those seams have different ownership;
+- Azure Relay already implements the generic `TransportProvider`, while the
+  narrower `RelayProvider` has no production implementation;
+- realm relay configuration says how a realm is reachable, but not how Unix
+  streams, vsock, direct TLS/QUIC, and Relay share one transport contract;
+- public daemon, realm-peer, and guest-control protocols independently
+  implement framing, version negotiation, authentication, capability exchange,
+  typed errors, deadlines, and request correlation;
 - ADR 0043 authorizes direct transport shortcuts only over native underlay
   reachability, even when every participant already uses one shared relay
   fabric.
@@ -77,7 +87,9 @@ D2b will use the following vocabulary:
 | --- | --- |
 | Workload runtime provider | Starts, stops, inspects, and executes one workload. |
 | Infrastructure provider | Provisions or adopts infrastructure on which workloads, including controller workloads, run. |
-| Relay provider | Supplies rendezvous and byte transport for authenticated d2b peer sessions. |
+| Transport provider | Produces connected bidirectional byte sessions over Unix streams, vsock, direct network transports, or relay fabrics. |
+| Component session | Adds fixed framing, protocol negotiation, authentication, encryption, peer identity, limits, and liveness above a byte transport. |
+| Service protocol | Defines typed daemon, realm, guest, or provider APIs above an authenticated component session. |
 | Workload role | Declares an authority-bearing function performed by a workload, such as running a realm controller. |
 
 The unqualified term `realm provider` is too ambiguous for a public schema and
@@ -86,7 +98,7 @@ provider trait, but each binding names the trait being used. For example:
 
 - `azure-vm` can provision a remote VM as an infrastructure provider and can
   supervise that VM as a workload runtime provider;
-- `azure-relay` is a relay provider;
+- `azure-relay` is a transport-provider implementation;
 - a VM created by `azure-vm` may carry the `realmController` workload role;
 - Cloud Hypervisor, QEMU, Bubblewrap, and Minijail are workload runtime
   providers, not realm controllers by themselves.
@@ -115,7 +127,7 @@ The selected provider crate namespaces are:
 | `d2b-provider` | Interface crate | In-process async Rust provider traits, typed registries, and runtime error wrappers over `d2b-contracts` types. Contains no duplicate contract DTO, provider SDK, or implementation. |
 | `d2b-provider-runtime-<implementation>` | `RuntimeProvider` | Plans, starts, stops, adopts, and inspects workloads. |
 | `d2b-provider-infrastructure-<implementation>` | `InfrastructureProvider` | Provisions, adopts, inspects, and deletes infrastructure that hosts workloads or realm controllers. |
-| `d2b-provider-relay-<implementation>` | `RelayProvider` | Opens relay sessions and creates or revokes scoped rendezvous bindings. |
+| `d2b-provider-transport-<implementation>` | `TransportProvider` | Connects or accepts bounded bidirectional byte sessions and advertises purpose, rendezvous, reconnect, and revocation capabilities. |
 | `d2b-provider-substrate-<implementation>` | `SubstrateProvider` | Checks and prepares a full-host OS substrate such as NixOS or generic Linux. |
 | `d2b-provider-credential-<implementation>` | `CredentialProvider` | Acquires or reports credentials inside the configured credential-owning workload without exporting them to the host. |
 | `d2b-provider-display-<implementation>` | `DisplayProvider` | Implements a reusable display/session adapter independent of one runtime backend. |
@@ -130,15 +142,17 @@ configured instance. The provider type is not repeated in that segment:
 - `d2b-provider-runtime-bubblewrap`;
 - `d2b-provider-runtime-azure-container-apps`;
 - `d2b-provider-infrastructure-azure-vm`;
-- `d2b-provider-relay-azure`;
+- `d2b-provider-transport-azure-relay`;
+- `d2b-provider-transport-unix-stream`;
+- `d2b-provider-transport-cloud-hypervisor-vsock`;
 - `d2b-provider-credential-entra`;
 - `d2b-provider-substrate-nixos`;
 - `d2b-provider-display-wayland`.
 
-For example, `d2b-provider-relay-azure` has
-`ProviderType::Relay` and implementation id `azure`; its complete public
-provider kind may still render as `azure-relay`. A configured deployment may
-then assign instance ids such as `work-relay` or `payments-relay` without
+For example, `d2b-provider-transport-azure-relay` has
+`ProviderType::Transport` and implementation id `azure-relay`; its public
+provider kind remains `azure-relay`. A configured deployment may then assign
+instance ids such as `work-transport` or `payments-transport` without
 changing the crate or implementation id.
 
 Abbreviated or axis-free crate names such as `d2b-provider-aca`,
@@ -162,8 +176,7 @@ capability; `common`, `util`, `manager`, and an axis-free
 This type-first grammar supersedes ADR 0035's examples
 `d2b-provider-hypervisor-<name>`, `d2b-provider-<name>`, and
 `d2b-constellation-transport-<name>`. Hypervisors are runtime providers and
-relay transports are relay providers, so they sort under the same type axes as
-their peers.
+relay, Unix-stream, and vsock transports sort under the common transport axis.
 
 ### Every provider implements a standard base interface
 
@@ -240,7 +253,7 @@ The closed primary provider types are:
 pub enum ProviderType {
     Runtime,
     Infrastructure,
-    Relay,
+    Transport,
     Substrate,
     Credential,
     Display,
@@ -271,10 +284,26 @@ The specialized interfaces extend `Provider`:
 | --- | --- |
 | `RuntimeProvider` | Capability description; plan; idempotent ensure/start; stop; inspect/adopt; destroy when the runtime owns durable workload state. |
 | `InfrastructureProvider` | Capability description; plan; apply; adopt; inspect; bootstrap binding; destroy. |
-| `RelayProvider` | Capability description; connect/listen; issue scoped rendezvous binding; revoke binding; inspect transport health. |
+| `TransportProvider` | Capability description; connect/listen; return a bounded byte session; issue and revoke a binding when supported; inspect transport health. |
 | `SubstrateProvider` | Capability description; check; plan remediation; apply only through the authorized substrate owner. |
 | `CredentialProvider` | Non-secret status; interaction requirement; acquire or refresh only for a co-located typed consumer; revoke. |
 | `DisplayProvider` | Capability description; open and close an already-authorized display session. |
+
+`TransportProvider` is the common byte-carriage authority. Its capability
+descriptor states:
+
+- accepted purposes (`realm-peer`, `workload-peer`, `daemon-access`,
+  `guest-control`, or `bootstrap`);
+- whether it can connect, listen, or provide rendezvous;
+- reconnect and liveness behavior;
+- whether established sessions support active revocation;
+- maximum session lifetime;
+- whether kernel peer evidence is available.
+
+Unix-stream, native-vsock, Cloud-Hypervisor-vsock, direct-TLS/QUIC, loopback,
+and Azure Relay implementations all return the same `TransportSession`. Relay
+authentication and rendezvous remain Azure-Relay implementation details; they
+never become d2b principal authentication.
 
 The existing local-only `RuntimeProvider` and provider-managed
 `WorkloadProvider` split is retired. Local VMMs, host-user runtimes, container
@@ -282,6 +311,43 @@ sandboxes, provider-managed sandboxes, and remote VM runtimes implement one
 `RuntimeProvider` lifecycle contract. Exec, persistent shell, display, console,
 audio, and guest-control remain optional capability interfaces rather than
 being folded into runtime lifecycle.
+
+### Provider and non-provider seams are explicit
+
+The current `d2b-realm-provider` surface mixes provider authorities with
+protocol machinery. The cutover classifies them as follows:
+
+| Current interface | Selected treatment |
+| --- | --- |
+| `HostSubstrateProvider` | Rename to primary `SubstrateProvider`. |
+| `RuntimeProvider` | Primary runtime provider. |
+| `WorkloadProvider` | Fold into `RuntimeProvider`; exec becomes an optional capability. |
+| `InfrastructureProvider` | Primary infrastructure provider. |
+| `CredentialProvider` | Primary credential provider. |
+| `DisplayProvider` | Primary display provider. |
+| `TransportProvider` / `TransportListener` | Primary transport provider plus supporting listener type. |
+| `RelayProvider` | Remove; relay rendezvous is a transport capability. |
+| `DurableExecutionProvider` | Optional runtime capability. |
+| `PersistentShellProvider` | Optional runtime capability. |
+| `GuestControlEndpointProvider` | Rename to optional `GuestControlEndpointResolver`; it discovers an endpoint and is not a primary provider. |
+| `ObservabilitySinkProvider` | Rename to `ObservabilitySink` until an independently configured external sink justifies a primary provider type. |
+| `NodeProvider` | Rename to `NodeClient` or `NodeInventory`; node registration and workload listing are realm services, not provider authority. |
+| `ProtocolCodec` | Move to the component-session/codec layer. |
+| `StreamMux` | Move to the component-session/realm-router layer. |
+| `DaemonAccessTransport` | Replace with daemon-access composition over `TransportProvider`. |
+| `DaemonAccessApi` | Keep as a semantic daemon service contract. |
+
+Internal dependency-injection seams such as `NodeRunner`, `ShellBackend`,
+`TerminalBackend`, `HostAudioController`, `ExecRuntime`, `LogStore`,
+`TokenSource`, `CapabilitiesProvider`, `ShellEventSink`, `CgroupBackend`,
+`NetlinkBackend`, and `ModprobeBackend` do not implement `Provider` and do not
+appear in provider registries. They are local strategies owned by a daemon,
+guest, broker, or test harness.
+
+Serialized runtime locality and driver values are descriptor dimensions, not
+provider types. `local`, `cloud-hypervisor`, `crosvm`, and `qemu` become
+`RuntimeLocality` and `RuntimeImplementationKind` fields rather than a second
+Rust type also named `RuntimeProvider`.
 
 `d2b-contracts` defines a bounded, serializable `ProviderOperationContext`
 containing:
@@ -344,19 +410,238 @@ Cloud implementation crates keep live tests explicitly opt-in. Hermetic
 conformance uses fake SDK clients and transports supplied by the implementation
 crate, while shared mocks and assertions remain in `d2b-provider-testkit`.
 
+### Transport is a byte-stream boundary only
+
+`TransportProvider` returns a connected, reliable, ordered, bidirectional byte
+session. It does not:
+
+- authenticate a d2b principal;
+- negotiate a d2b service or schema;
+- authorize an operation or stream;
+- interpret API payloads;
+- map Relay, TLS, vsock, or Unix identity to a daemon role;
+- bridge one transport to another.
+
+`TransportTarget` becomes a typed provider reference, opaque endpoint reference,
+and closed purpose rather than an unbounded endpoint string. Accepted sessions
+carry:
+
+- transport provider id and implementation kind;
+- opaque binding/session id;
+- closed transport purpose;
+- bounded local transport evidence when available;
+- active-revocation handle when advertised;
+- the connected byte stream.
+
+Transport evidence is not authorization. Unix `SO_PEERCRED`, a VMM process uid,
+vsock CID, TLS certificate, managed identity, Relay SAS, and rendezvous id have
+different meanings and are consumed only by the authenticator selected for the
+session purpose.
+
+The generic transport boundary includes:
+
+- Unix streams used for direct daemon or realm-peer connections;
+- native AF_VSOCK;
+- Cloud Hypervisor's host-to-guest vsock adapter after its `CONNECT`/`OK`
+  handshake;
+- loopback/local TCP conformance transports;
+- direct TLS/QUIC/WebSocket transports;
+- Azure Relay WebSocket rendezvous.
+
+The public daemon Unix listener, privileged broker socket, and unsafe-local
+helper remain specialized IPC endpoints where seqpacket boundaries,
+`SO_PEERCRED`, socket activation, `SCM_RIGHTS`, exact FD validation, or helper
+generation semantics are load-bearing. Their local framing helpers may be
+shared, but they do not implement `TransportProvider`.
+
+### One component-session protocol sits above transport
+
+D2b will add a standard component-session layer:
+
+```text
+TransportSession
+  -> ComponentSession
+       fixed preface and framing
+       protocol/service negotiation
+       Noise or local mechanism authentication
+       encryption and replay protection
+       peer identity and channel binding
+       capabilities and effective limits
+       keepalive, deadline, and close semantics
+    -> typed service protocol
+```
+
+Serialized session contracts live in `d2b-contracts::session`. The in-process
+state machine, authenticator traits, framing, and runtime contexts live in a
+bare `d2b-session` crate. `d2b-session` depends inward on contracts and crypto
+primitives; semantic daemon, realm, guest, and provider services depend on it.
+
+The bootstrap preface and handshake use one fixed canonical encoding. A peer
+does not encode the handshake through the codec it is attempting to negotiate.
+After authentication, the selected service may use protobuf or another
+explicitly negotiated codec.
+
+Noise handshake and transport records use fixed 16-bit length framing and stay
+within Noise's 65,535-byte message limit. ComponentSession fragments larger
+ttrpc or named-stream frames into bounded encrypted records and reassembles
+them only up to the negotiated d2b hard frame limit. Record sequence, fragment
+count, and total plaintext length are authenticated; truncation, duplication,
+reordering, or over-limit reassembly closes the session.
+
+The handshake exchanges and binds:
+
+- component-session protocol version;
+- session purpose and endpoint roles;
+- supported and selected service protocols;
+- supported and selected authentication mechanism;
+- codec id and schema fingerprint;
+- hard frame and stream limits;
+- positive capabilities;
+- both nonces;
+- transport channel-binding evidence;
+- expected realm, node, workload, or daemon identity where applicable.
+
+All offered and selected values are covered by the authentication transcript so
+an intermediary cannot downgrade authentication, codec, schema, limits, or
+capabilities. No semantic API request, event, or stream is exposed before the
+session reaches `Accepted`.
+
+### Noise is the standard non-local peer authenticator
+
+Non-local realm, controller, node, workload-agent, and provider-agent sessions
+use the [Noise Protocol Framework](https://noiseprotocol.org/) above the
+transport byte stream.
+
+The initial mechanism set is:
+
+| Mechanism | Purpose |
+| --- | --- |
+| `local-peercred` | Direct local Unix daemon access; kernel credentials are mapped by local daemon policy. |
+| `noise-realm` | Enrolled realm/controller/node/workload peers using realm-bound static keys and ephemeral session keys. |
+| `noise-guest-psk` | Guest-control sessions using the existing per-VM secret plus boot/CID/direction/purpose transcript claims. |
+| `noise-bootstrap` | One-time controller or child-realm enrollment bound to parent trust, operation id, expected resource, expiry, and replay nonce. |
+| `mutual-tls` | Optional direct daemon-access interoperability when a configured certificate authority owns the identity mapping. |
+
+The initial Noise profiles are:
+
+```text
+noise-realm     = Noise_KK_25519_ChaChaPoly_SHA256
+noise-bootstrap = Noise_IK_25519_ChaChaPoly_SHA256
+noise-guest-psk = Noise_NNpsk0_25519_ChaChaPoly_SHA256
+```
+
+Changing a pattern or primitive suite is a component-session protocol-version
+change, not an implementation-local preference.
+
+Enrolled realm peers know each other's bound static transport keys and use
+`KK`. A bootstrapping child knows the parent's seed-provided static key and uses
+`IK`; the parent binds the newly presented child static key only after the
+operation/resource/enrollment checks succeed.
+
+Production endpoints never accept `none` or silently retry a weaker mechanism.
+The endpoint purpose fixes the minimum acceptable mechanism. Relay, managed
+identity, or TLS transport authentication may be included as channel-binding
+evidence, but never substitutes for the selected d2b peer authenticator.
+
+Noise static keys are not themselves realm identities. Enrollment binds each
+Noise public key to the canonical realm/node/workload identity and controller
+generation. The Noise handshake hash becomes the component-session channel
+binding used by service authorization and audit.
+
+### ttrpc/protobuf is the common control-RPC protocol
+
+Authenticated component sessions use
+[ttrpc](https://github.com/containerd/ttrpc/blob/main/PROTOCOL.md) framing and
+protobuf service definitions for bounded control RPCs. This reuses the existing
+guest-control dependency and supplies:
+
+- service and method dispatch;
+- request/response correlation;
+- unary and streaming frame forms;
+- protobuf schemas and generated Rust bindings;
+- explicit stream closure.
+
+The d2b hard frame cap remains 1 MiB even though ttrpc permits larger frames.
+Declared lengths above the negotiated d2b cap are rejected before allocation.
+
+Ttrpc is not the transport or security layer. Its specification intentionally
+omits authentication, unreliable-network recovery, ping/reset behavior, and
+flow control. ComponentSession therefore owns authentication, keepalive,
+connection generation, reconnect, hard limits, and session teardown.
+
+The initial services are:
+
+```text
+d2b.daemon.v1
+d2b.realm.v1
+d2b.guest.v1
+d2b.provider.v1
+```
+
+Every request envelope carries a bounded request id, correlation/trace context,
+service and method id, absolute deadline, and idempotency key when mutating.
+The authenticated principal is session state, not a caller-controlled request
+field. Required capability is derived from trusted service/method metadata.
+Responses use the shared typed error envelope.
+
+High-volume or reconnectable PTY, display, clipboard, file-copy, logs, audio,
+and port-forward data continues to use d2b's named stream mux. The mux binds
+each stream to an already-authorized operation, enforces credit/backpressure,
+and supplies resume/close semantics that ttrpc intentionally does not provide.
+Ttrpc is the control plane for opening and managing those streams, not a second
+unbounded data tunnel.
+
+Exactly one ComponentSession driver reads and writes the encrypted transport.
+Its post-auth record header distinguishes:
+
+```text
+session-control
+ttrpc-control
+named-stream
+```
+
+Ttrpc runs over one bounded virtual control channel and multiplexes RPC calls
+inside that channel. The d2b mux owns named data channels. Ttrpc and a named
+stream handler never read the underlying transport concurrently, and a blocked
+data stream cannot consume the reserved control credit required for
+cancellation, revocation, keepalive, or close.
+
+### Existing component protocols migrate behind the session layer
+
+- `PeerSession` version/codec/capability negotiation and
+  `SecurePeerSession` authentication/encryption merge into
+  `ComponentSession`.
+- Guest-control keeps its protobuf service semantics, while its nonce/HMAC
+  transcript becomes the `noise-guest-psk` authenticator and its vsock path
+  becomes a transport implementation.
+- `DaemonAccessTransport` implementations become daemon-access clients composed
+  over a selected `TransportProvider` and `ComponentSession`.
+- The local public Unix socket keeps direct `SO_PEERCRED` admission and its
+  compatibility wire until an explicit migration moves it to
+  `d2b.daemon.v1`.
+- `ProtocolCodec` moves to the session/codec boundary; semantic services do not
+  depend on concrete codec implementations.
+- `StreamMux` moves to `d2b-session` or `d2b-realm-router` and remains above
+  authenticated sessions.
+- Broker and unsafe-local helper protocols retain specialized seqpacket and FD
+  semantics. They may reuse shared IDs/errors but are not component-session
+  byte transports.
+
 ### Existing provider crates migrate explicitly
 
 The implementation cutover uses this map:
 
 | Current crate | Selected replacement |
 | --- | --- |
-| `d2b-realm-provider` | Split serialized DTOs/capabilities/stable errors into `d2b-contracts::provider`, in-process traits/registries into `d2b-provider`, and mocks/conformance into `d2b-provider-testkit`. |
+| `d2b-realm-provider` | Split serialized DTOs/capabilities/stable errors into `d2b-contracts::provider`, provider traits/registries into `d2b-provider`, session/codec/mux traits into `d2b-session` or realm-router, and mocks/conformance into `d2b-provider-testkit`. |
 | `d2b-host-providers` | Split into `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`, `d2b-provider-substrate-nixos`, `d2b-provider-substrate-linux`, and `d2b-provider-display-wayland`. |
 | `d2b-provider-aca` | `d2b-provider-runtime-azure-container-apps` |
-| `d2b-provider-relay` | `d2b-provider-relay-azure` |
+| `d2b-provider-relay` | `d2b-provider-transport-azure-relay` |
 | Provider conformance code in production crates | `d2b-provider-testkit` |
-| Loopback relay implementation used only by tests | `d2b-provider-testkit` |
-| Provider implementations in `d2b-realm-transport` | Move to the matching `d2b-provider-relay-<implementation>` crate; protocol-neutral session DTOs remain in realm-core. |
+| Loopback transport implementation used only by tests | `d2b-provider-testkit` |
+| Implementations in `d2b-realm-transport` | Move to matching `d2b-provider-transport-<implementation>` crates; move common session runtime to `d2b-session`; keep semantic route DTOs in realm-core. |
+| `d2b-realm-router::{PeerSession,SecurePeerSession}` | Merge into `d2b-session::ComponentSession`; keep realm route policy and operation-bound mux orchestration in realm-router. |
+| `d2b-daemon-access` transport implementations | Compose daemon-access service clients over typed transport providers and component sessions; keep local Unix compatibility admission until migrated. |
 | `d2b-gateway` | Move generic authorization, ledger, and session state into the realm controller/router crates; move provider-specific behavior into typed provider implementations; delete the gateway-named crate. |
 | `d2b-gateway-runtime` | Delete after the realm controller composes typed provider registries directly. |
 
@@ -371,6 +656,10 @@ The rename is one coordinated workspace cutover. No compatibility wrapper crates
 or re-export-only packages preserve the old names. Cargo manifests, lockfiles,
 Nix package construction, source policy, docs, tests, and dependency-direction
 gates move together.
+
+The generic error code `relay-unavailable` becomes `transport-unavailable`.
+Azure Relay authentication, rendezvous, or provider-specific failures retain
+typed Azure-Relay diagnostic classes beneath that transport-level result.
 
 ADR 0044's no-isolation warning remains mandatory, but this ADR separates that
 warning from the runtime-provider identifier:
@@ -402,6 +691,7 @@ identifier here does not claim current support.
 | Cloud VM | `aws-ec2`, `azure-vm`, `gcp-compute-engine`, `openstack-nova`, `oracle-compute`, `alibaba-ecs`, `ibm-vpc`, `digitalocean-droplet`, `hetzner-cloud`, `akamai-linode`, `vultr`, `scaleway-instance` |
 | Managed cloud sandbox | `aws-fargate`, `azure-container-apps`, `azure-container-apps-sessions`, `gcp-cloud-run`, `fly-machines`, `e2b`, `modal`, `daytona`, `codesandbox`, `github-codespaces` |
 | Generic scheduler | `kubernetes-pod`, `nomad-allocation` |
+| Transport | `unix-stream`, `native-vsock`, `cloud-hypervisor-vsock`, `direct-tls`, `quic`, `azure-relay` |
 
 Adapters that do not support d2b's semantic operation or stream contracts
 advertise only the capabilities they actually implement. Brand or product
@@ -524,7 +814,7 @@ The parent materializes the role by:
 - installing the realm-scoped controller implementation in the guest;
 - injecting the parent realm public trust anchor and one-time enrollment
   material;
-- providing non-secret provider and relay configuration references;
+- providing non-secret provider and transport configuration references;
 - preparing the child realm's bootstrap network attachment;
 - starting the controller workload before publishing the child route;
 - authenticating the controller generation over the standard realm protocol;
@@ -549,6 +839,9 @@ share after the controller acknowledges consumption. The seed contains the
 parent public trust anchor, expected controller identity coordinates, operation
 binding, expiry, and replay nonce. It is not a Nix-store artifact, persistent
 virtiofs share, command-line secret, or general guest-control channel.
+After consuming the seed, parent and controller establish a
+Cloud-Hypervisor-vsock transport and complete `noise-bootstrap`; ordinary realm
+or guest service traffic is unavailable until that ComponentSession succeeds.
 
 The child realm identity private key is generated inside the controller
 workload. It is never rendered into Nix, the host bundle, cloud-init plaintext,
@@ -638,11 +931,11 @@ parent public key, rendezvous reference, expiry, replay nonce, and expected
 resource binding through the provider's approved bootstrap mechanism. The new
 VM authenticates to Relay with its managed identity, proves the expected cloud
 resource binding, generates its realm key, and completes the d2b enrollment
-handshake. The rendezvous is revoked before the normal realm route is
-published. No inbound route to the local parent and no pre-existing child route
-is required.
+through the `noise-bootstrap` ComponentSession mechanism. The rendezvous is
+revoked before the normal realm route is published. No inbound route to the
+local parent and no pre-existing child route is required.
 
-### Provider-agent and relay-connector placement is derived
+### Provider-agent and transport-connector placement is derived
 
 Three responsibilities may be co-located but are not the same role:
 
@@ -650,17 +943,17 @@ Three responsibilities may be co-located but are not the same role:
 | --- | --- |
 | Realm controller | Realm policy, registry, audit, routing, and semantic operations. |
 | Infrastructure provider executor | Provider API calls and lifecycle of provider-hosted workloads. |
-| Relay connector | Relay authentication and outbound transport session. |
+| Transport connector | Provider-specific transport authentication and outbound session establishment. |
 
 Only `roles.realmController` is asserted directly by a generic workload.
-Infrastructure-provider and relay-connector behavior is derived from the
-provider or relay binding that references the executor workload. This avoids
+Infrastructure-provider and transport-connector behavior is derived from the
+provider or transport binding that references the executor workload. This avoids
 two independently configurable declarations claiming the same authority.
 
 For a local controller, all three responsibilities may live in one dedicated,
 Entra-managed controller VM. For a remote controller, a local Entra-managed VM
-may remain the provider executor and Relay connector while the remote VM owns
-the realm controller:
+may remain the provider executor and Azure Relay transport connector while the
+remote VM owns the realm controller:
 
 ```text
 local parent realm
@@ -677,28 +970,28 @@ when that VM is parent-owned and policy explicitly accepts the availability
 and blast-radius tradeoff. A dedicated Entra/Intune-managed connector or
 controller workload is preferred.
 
-### Realm relay configuration remains the transport source of truth
+### Realm transport configuration is the connectivity source of truth
 
-Relay placement is configured from `d2b.realms.<realm>.relay`; a separate
+Connectivity is configured from `d2b.realms.<realm>.transport`; a separate
 gateway or realm-entrypoint object is not introduced.
 
-The relay schema is extended conceptually as follows. `relay.provider` is a
-reference to a typed `relayProviders` instance, not an inline provider kind:
+`transport.provider` is a reference to a typed `transportProviders` instance,
+not an inline provider kind:
 
 ```nix
-d2b.realms.work.relayProviders.azure-work = {
+d2b.realms.work.transportProviders.azure-work = {
   kind = "azure-relay";
 
   connector = {
     workload = "work-connector.local-root.d2b";
     credentialRef = "entra-work-relay";
-    authentication = "entra-user";
+    transportAuthentication = "entra-user";
   };
 
-  controllerAuthentication = "managed-identity";
+  controllerTransportAuthentication = "managed-identity";
 };
 
-d2b.realms.work.relay = {
+d2b.realms.work.transport = {
   enable = true;
   provider = "azure-work";
   fabricRef = "work-relay";
@@ -706,27 +999,31 @@ d2b.realms.work.relay = {
   peerShortcuts.enable = true;
 };
 
-d2b.realms.payments.relay.inheritFrom = "work";
+d2b.realms.payments.transport.inheritFrom = "work";
 ```
+
+The two `*TransportAuthentication` fields authenticate endpoints to Azure
+Relay only. The d2b peers still complete `noise-realm` ComponentSession
+authentication before semantic traffic.
 
 `fabricRef`, endpoint references, and credential references are opaque,
 non-secret identifiers. The connector resolves its credential reference inside
 the selected workload. The host and parent bundle never resolve or copy the
 credential.
 
-Nested realms may inherit the same relay provider and fabric from an ancestor,
-but they receive distinct peer identities and scoped transport credentials.
-Inheritance does not share controller token caches, realm private keys, or a
-single authorization identity.
+Nested realms may inherit the same transport provider and fabric from an
+ancestor, but they receive distinct peer identities and scoped transport
+credentials. Inheritance does not share controller token caches, realm private
+keys, or a single authorization identity.
 
 If both peers have direct authenticated connectivity, they may use a direct
 transport without a connector workload. If Relay authentication or work
 credentials are required, the configured connector owns that side of the
 transport. There is no root, `sudo`, host-token, or direct-network fallback.
 
-### Shared-relay peer shortcuts separate control and data paths
+### Shared-transport peer shortcuts separate control and data paths
 
-Strict tree routing remains the authorization model. Shared-relay shortcuts
+Strict tree routing remains the authorization model. Shared-transport shortcuts
 optimize only the data path:
 
 ```text
@@ -734,7 +1031,7 @@ control:
   source -> source controller -> applicable ancestors -> target controller
 
 data after authorization:
-  source peer -> shared relay fabric -> target peer
+  source peer -> shared transport fabric -> target peer
 ```
 
 Every applicable source, ancestor, and target policy is evaluated before a
@@ -753,13 +1050,13 @@ The grant is scoped to:
 - issue and expiry times;
 - a replay nonce.
 
-The grant contains no token cache, Relay credential, raw endpoint, provider
+The grant contains no token cache, transport credential, raw endpoint, provider
 resource id, command payload, stream data, or user-supplied label.
 
 Source and target bind the grant digest into their end-to-end peer-session
-handshake. The relay adapter supplies an opaque, one-time rendezvous binding
-below the policy DTO. Session keys and d2b identities authenticate and encrypt
-the stream end to end; the relay authenticates transport access only.
+handshake. The transport provider supplies an opaque, one-time binding below
+the policy DTO. ComponentSession authenticates and encrypts the stream end to
+end; provider-specific transport authentication establishes reachability only.
 
 An established shortcut:
 
@@ -790,8 +1087,8 @@ converted into a successful completion. Participating peers always retain their
 own local establishment and teardown records.
 
 The endpoint-reported byte-count class is diagnostic and untrusted. It cannot
-prove how much data crossed the relay and must not drive security policy,
-billing, exfiltration detection, or compliance conclusions. A relay provider
+prove how much data crossed the transport and must not drive security policy,
+billing, exfiltration detection, or compliance conclusions. A transport provider
 may expose separate provider-attested counters when available, but those are a
 distinct typed observation with an explicit trust posture.
 
@@ -804,7 +1101,7 @@ generalizes that foundation to peer transport shortcuts:
 ```text
 PeerShortcutTransport
   = native-direct
-  | shared-relay
+  | shared-fabric
 ```
 
 Authorization metadata remains transport-address-free. Provider-specific
@@ -813,44 +1110,45 @@ shortcut id.
 
 This decision refines ADR 0043's restriction that direct shortcuts use only
 native underlay reachability. Native direct transport still must not add
-STUN/ICE, NAT traversal, a VPN, or an overlay. A `shared-relay` shortcut is
-allowed only when both peers already participate in the same configured relay
-fabric and the relay provider advertises shortcut support. It does not discover
-or construct a new network path.
+STUN/ICE, NAT traversal, a VPN, or an overlay. A `shared-fabric` shortcut is
+allowed only when both peers already participate in the same configured
+transport fabric and the transport provider advertises shortcut support. It
+does not discover or construct a new network path.
 
 Policy or route revocation applies to established streams, not only future
-rendezvous. A relay provider advertising `active-shortcut-revoke-v1` must close
-the established relay binding when the authorizing ancestor revokes it, while
+rendezvous. A transport provider advertising `active-shortcut-revoke-v1` must
+close the established binding when the authorizing ancestor revokes it, while
 both peer muxes close the named stream. Providers without active revocation may
-support shared-relay shortcuts only with a maximum 60-second session grant and
-policy-authorized renewal; expiration closes the stream before renewal. Relay
-token or listener revocation that affects only future connections is
-insufficient by itself.
+support shared-fabric shortcuts only with a maximum 60-second session grant and
+policy-authorized renewal; expiration closes the stream before renewal.
+Provider credential or listener revocation that affects only future
+connections is insufficient by itself.
 
 If a shortcut cannot be established, the operation follows an explicitly
-authorized parent relay path or fails with a typed transport error. There is no
+authorized parent transport path or fails with a typed transport error. There is no
 silent direct-network, provider-native, SSH, or generic tunnel fallback.
 
-### Workloads may participate directly in a shared relay
+### Workloads may participate directly in a shared transport
 
 Eliminating controller hops requires the source and target workload agents, not
-only their controllers, to participate in the relay fabric.
+only their controllers, to participate in the transport fabric.
 
-A workload may advertise `relay-client-v1` only when its runtime supplies a
+A workload may advertise `transport-client-v1` only when its runtime supplies a
 guestd-compatible or d2b peer agent. The controller delegates a short-lived,
-workload-scoped relay access grant or the workload authenticates independently
-through a provider-supported identity such as Azure Managed Identity.
+workload-scoped transport access grant or the workload authenticates the
+transport independently through a provider-supported identity such as Azure
+Managed Identity.
 
 The workload never receives:
 
-- the controller's Relay credential;
+- the controller's transport credential;
 - an Entra refresh token from another VM;
 - a realm identity private key;
 - authority to advertise descendants;
 - a grant broader than its workload identity and negotiated operations.
 
-If the relay provider cannot issue or validate a workload-scoped transport
-identity, that workload cannot use a direct shared-relay shortcut. Its traffic
+If the transport provider cannot issue or validate a workload-scoped transport
+identity, that workload cannot use a direct shared-fabric shortcut. Its traffic
 continues through the authorized controller/connector path.
 
 ### Entra, YubiKey, browser, and developer authentication
@@ -929,25 +1227,35 @@ Implementation must preserve all of the following:
 
 1. A controller role is parent-authorized configuration, not a capability a
    guest can self-assert.
-2. Controller, provider-executor, and relay-connector peer identities are
+2. Controller, provider-executor, and transport-connector peer identities are
    authenticated before any state lookup, token resolution, provisioning, or
    route publication.
-3. Provider and Relay tokens stay in the configured credential-owning workload.
-4. Entra, managed identity, and Relay identities are never mapped to local
-   daemon roles or broker authorization.
+3. Provider and transport tokens stay in the configured credential-owning workload.
+4. Entra, managed identity, TLS, Relay, vsock, and Unix transport identities
+   are never mapped to local daemon roles or broker authorization.
 5. The remote controller re-originates privileged local effects through its own
    broker; no remote peer receives the broker wire protocol.
 6. A parent may stop or replace the controller workload but cannot use its
    storage ledger as authority to repair child realm state.
-7. One shared relay fabric does not merge realm policy, identity, audit, or
-   credential domains.
+7. Transport reachability does not expose semantic traffic before
+   ComponentSession authentication and does not merge realm policy, identity,
+   audit, or credential domains.
 8. Shortcut authorization follows the same parent/child policy chain as the
    non-shortcut route.
-9. Raw Relay endpoints, provider resource ids, token subjects, user ids, device
-   ids, command data, and stream payloads are forbidden as metric labels.
+9. Raw transport endpoints, provider resource ids, token subjects, user ids,
+   device ids, command data, and stream payloads are forbidden as metric labels.
 10. Ambiguous controller identity, route generation, shortcut state, or
     infrastructure ownership is preserved and reported degraded rather than
     guessed, killed by PID, or broadly cleaned up.
+11. Noise static private keys stay inside their realm/workload identity
+    boundary. Ephemeral keys, transport cipher state, record nonces, sockets,
+    and session keys are never persisted or adopted across reconnect.
+12. The selected authentication mechanism, service protocol, codec, schema,
+    limits, and transport channel binding are covered by the authenticated
+    session transcript; downgrade or mismatch fails before API dispatch.
+13. API requests inherit the authenticated session principal. A payload cannot
+    replace or widen that identity, and method-required capabilities are
+    derived from trusted service metadata.
 
 ## Audit retention and export
 
@@ -971,22 +1279,29 @@ forced loss makes export impossible, replacement may proceed only through an
 explicit recovery operation that emits an `audit-gap` event and reports the
 realm degraded until acknowledged. Shortcut grants, peer close reports, policy
 decisions, credential interaction boundaries, and provider lifecycle
-operations are included in the retained/exported audit sequence.
+operations are included in the retained/exported audit sequence. Component
+session establishment, selected mechanism/service classes, rejection class,
+replay, downgrade refusal, and terminal reason are audited with bounded
+identities; keys, proofs, nonces, raw endpoints, and payloads are excluded.
 
 ## Failure and continuation behavior
 
 - If an infrastructure-provider executor is unavailable, existing remote
   controllers continue running, but create, power, replace, and delete
   operations fail visibly.
-- If a local Relay connector is unavailable, the remote realm may continue
+- If a local transport connector is unavailable, the remote realm may continue
   operating, but local reachability through that connector is unavailable.
 - If the remote controller is unavailable, the realm is unavailable even when
   its infrastructure and Relay endpoint still exist.
-- If Relay is unavailable, no provider-native, SSH, or direct-network fallback
-  is attempted unless a separately configured and authorized transport exists.
+- If the selected transport is unavailable, no provider-native, SSH, or
+  alternate-network fallback is attempted unless a separately configured and
+  authorized transport binding exists.
 - Daemon, connector, and controller restarts are continuation events.
   Reconnection uses realm identity, controller generation, operation ids, route
   generations, and shortcut ids rather than persisted sockets or pidfds.
+- Every reconnect performs a fresh Noise or local-auth handshake. In-flight
+  ttrpc calls fail or retry through operation idempotency; named streams resume
+  only through their explicit generation/cursor contract.
 - Expired or superseded shortcut grants are not adopted.
 - Losing or replacing persistent controller identity is an explicit
   re-enrollment event, not an automatic repair.
@@ -996,19 +1311,23 @@ operations are included in the retained/exported audit sequence.
 Implementation requires coordinated changes across:
 
 - the canonical `d2b-contracts::provider` DTO and schema module;
+- the canonical `d2b-contracts::session` handshake, authentication, envelope,
+  limits, and typed-error module;
 - the `d2b-provider` base and specialized provider interfaces;
+- the `d2b-session` component-session runtime and authenticator interfaces;
+- ttrpc/protobuf daemon, realm, guest, and provider service contracts;
 - type-first provider implementation crates and typed registries;
 - `d2b-provider-testkit` conformance suites and provider naming policy;
 - `d2b.realms.<realm>.workloads.<workload>.roles.realmController`;
 - typed runtime and infrastructure provider bindings replacing the ambiguous
   inert provider record;
-- `d2b.realms.<realm>.relay` provider, fabric inheritance, connector, and
+- `d2b.realms.<realm>.transport` provider, fabric inheritance, connector, and
   shortcut policy;
-- workload, controller, provider-executor, and relay-client capability
+- workload, controller, provider-executor, and transport-client capability
   advertisements;
 - controller-workload bootstrap and generation DTOs;
 - peer shortcut authorization and transport-binding DTOs;
-- realm-controller, workload, and relay status output;
+- realm-controller, workload, session, and transport status output;
 - bundle artifacts, generated schemas, reference documentation, and migration
   guidance.
 
@@ -1032,6 +1351,9 @@ Implementation is incomplete without:
 - dependency-direction tests proving every
   `d2b-provider-<type>-<implementation>` crate is a leaf adapter that does not
   depend on `d2bd`, `d2b-priv-broker`, or another provider implementation;
+- dependency-direction tests proving `d2b-session` depends only on contracts,
+  provider interfaces, codec-neutral service DTOs, and approved crypto/runtime
+  primitives, never daemon, guest, broker, or concrete transport code;
 - policy tests proving provider implementations reuse
   `d2b-contracts::provider` DTOs rather than declaring shadow serialized types;
 - conformance tests for every registered provider's primary interface and
@@ -1041,10 +1363,30 @@ Implementation is incomplete without:
   downcasting;
 - contract tests proving `ProviderOperationContext` remains serializable and
   runtime cancellation/deadline state exists only in `ProviderCallContext`;
+- transport conformance tests for Unix-stream, native-vsock,
+  Cloud-Hypervisor-vsock, loopback, direct-network, and Azure-Relay adapters,
+  including purpose gating, bounded endpoints, liveness, reconnect, and active
+  revocation claims;
+- component-session tests for fixed bootstrap framing, Noise transcript
+  binding, downgrade rejection, channel binding, replay, hard limits,
+  keepalive, close, record fragmentation/reassembly, and forbidden pre-auth
+  semantic traffic;
+- fixed Noise profile test vectors plus fuzz/property tests for handshake and
+  encrypted-record parsers, including truncation, duplicate/reordered
+  fragments, oversized ttrpc frames, nonce exhaustion, and reconnect;
+- authenticator tests for local peer credentials, realm Noise keys, guest PSKs,
+  one-time bootstrap, and optional mTLS, including rejection of `none` and
+  cross-purpose credential reuse;
+- ttrpc/protobuf contract tests for all four service ids, method-derived
+  capabilities, deadlines, idempotency, typed errors, and operation-bound named
+  stream opens, with the d2b 1 MiB cap enforced before allocation;
+- source-policy tests proving public daemon, broker, and unsafe-local helper
+  seqpacket/SCM_RIGHTS endpoints are not silently registered as generic byte
+  transports;
 - Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
   cycle rejection, scalar-only `forRealm`, provider capability gating, typed
-  relay-provider references, ancestor-only relay inheritance, and derived
-  placement;
+  transport-provider references, ancestor-only transport inheritance, and
+  derived placement;
 - runtime route tests proving competing, partitioned, or otherwise ambiguous
   controller generations publish no route, report the realm degraded, and
   reject superseded generation grants until parent-authorized reconciliation;
@@ -1064,20 +1406,20 @@ Implementation is incomplete without:
   self-managed user namespace modes;
 - provider-executor tests proving credentials are resolved only inside the
   selected workload;
-- Relay inheritance tests proving nested realms receive distinct identities and
-  no copied credential references;
-- route-engine tests for shared-relay shortcut authorization, replay,
+- transport inheritance tests proving nested realms receive distinct identities
+  and no copied credential references;
+- route-engine tests for shared-fabric shortcut authorization, replay,
   expiration, policy epoch changes, route revocation, signed endpoint-close
   reports, untrusted endpoint byte counts, missing-report expiry, active
   shortcut revocation, maximum-lifetime fallback, and teardown;
 - end-to-end tests proving shortcut bytes bypass intermediate controllers while
   every policy boundary records the decision;
 - negative end-to-end tests proving shortcut failure either uses the already
-  authorized parent relay route or returns a typed transport error without
+  authorized parent transport route or returns a typed transport error without
   probing direct networks, SSH, provider-native APIs, generic TCP, or tunnels;
-- negative tests proving a relay-authenticated peer is not local `Admin`;
-- negative tests proving no remote realm, workload, relay, or provider peer can
-  receive or invoke the local privileged broker wire protocol;
+- negative tests proving a transport-authenticated peer is not local `Admin`;
+- negative tests proving no remote realm, workload, transport, or provider peer
+  can receive or invoke the local privileged broker wire protocol;
 - YubiKey tests proving controller, browser, and developer ceremonies require
   trusted per-ceremony intent, serialize without token-cache sharing, reject
   destructive/unknown CTAP commands, cancel on disconnect, and release leases
@@ -1102,14 +1444,18 @@ Implementation is incomplete without:
   and conformance contract.
 - Existing contract ownership is preserved: provider implementations and
   traits share one serialized DTO/schema source in `d2b-contracts`.
+- Unix, vsock, direct-network, and Azure Relay connectivity share one byte
+  transport contract without sharing authentication semantics.
+- Noise-authenticated ComponentSession and ttrpc/protobuf services replace
+  duplicated framing, hello, authentication, and request-correlation code.
 - Local and remote realm controllers use one configuration and protocol model.
 - Controller hosting lifecycle cannot become self-referential.
-- Provider, Relay, and controller responsibilities have explicit credential and
-  authority boundaries.
-- Nested realms can share one relay fabric without forcing stream bytes through
-  every controller.
+- Provider, transport, session, and controller responsibilities have explicit
+  credential and authority boundaries.
+- Nested realms can share one transport fabric without forcing stream bytes
+  through every controller.
 - The existing route-shortcut policy engine remains useful and gains a
-  provider-neutral relay transport binding.
+  provider-neutral transport binding.
 - One physical FIDO key can serve multiple work VMs while each retains an
   independent Entra session.
 
@@ -1119,11 +1465,16 @@ Implementation is incomplete without:
   current inert `providers` records.
 - The workspace-wide provider rename is intentionally disruptive and must update
   every manifest, Nix build, policy gate, and documentation reference together.
+- Component-session migration touches public daemon, realm-peer, guest-control,
+  codec, mux, generated protobuf, and error contracts and therefore requires a
+  coordinated versioned cutover.
+- Noise key enrollment and rotation become new persistent identity lifecycle
+  responsibilities.
 - Remote controllers need a parent-owned provider executor even after
   enrollment.
-- Direct workload shortcuts require relay-capable guest agents and scoped
+- Direct workload shortcuts require transport-capable guest agents and scoped
   transport identities.
-- Shared-relay revocation and audit are more complex than hop-by-hop byte
+- Shared-transport revocation and audit are more complex than hop-by-hop byte
   forwarding.
 - A controller requiring interactive Entra renewal may temporarily block
   provider operations even while the realm itself remains reachable.
@@ -1162,6 +1513,55 @@ Tokio/runtime concerns from becoming part of the wire-contract layer while
 still requiring every trait method to consume and return canonical
 `d2b-contracts` types.
 
+### Use 9P as the component API
+
+Rejected as the authoritative control protocol. 9P supplies bounded binary
+messages, version/msize negotiation, concurrent request tags, `Tflush`
+cancellation, and authentication fids, but its semantic model is
+attach/walk/open/read/write/clunk over a file tree. `Tauth` deliberately leaves
+the authentication exchange unspecified, and 9P supplies no encryption,
+realm/node/workload identity, method-derived capability policy, idempotency,
+typed operation errors, or native event/stream semantics.
+
+A future read-only or tightly constrained filesystem projection of d2b status,
+logs, or artifacts may use 9P. Such a projection is a client of typed d2b
+services and never becomes repair or authorization authority.
+
+### Use gRPC over HTTP/2
+
+Rejected for the internal component baseline. gRPC provides mature streaming,
+flow control, deadlines, cancellation, metadata, and mTLS, but requires the
+HTTP/2 protocol stack. Carrying HTTP/2 inside Cloud-Hypervisor-vsock and Azure
+Relay streams would duplicate d2b transport/session/mux concerns and increase
+dependency and parser attack surface. A future external API gateway may expose
+gRPC without changing the internal component session.
+
+### Use Cap'n Proto RPC
+
+Rejected for this cutover. Cap'n Proto supports arbitrary streams,
+capability-secure object references, multiplexing, and promise pipelining, but
+adopting its distributed-object model would redesign d2b authorization around
+delegable connection-scoped object capabilities. Its automatic direct
+third-party connectivity also requires constraints beyond the selected strict
+realm tree. The current operation/idempotency/audit model remains canonical.
+
+### Use the full libp2p or SSH stack
+
+Rejected. Both provide proven layered transport authentication and stream
+multiplexing, but their product models are broader than d2b's requirements.
+Libp2p brings swarm, peer discovery, multiaddress, and optional NAT-traversal
+concepts that conflict with strict realm-tree routing. SSH brings user-login,
+shell, exec, and generic forwarding semantics that d2b explicitly excludes from
+its control plane. D2b follows the useful transport -> Noise/TLS -> protocol
+negotiation -> mux layering without adopting either runtime.
+
+### Use ttrpc without ComponentSession
+
+Rejected. Ttrpc intentionally targets reliable low-latency process connections
+and omits authentication, handshake, ping/reset, network recovery, and flow
+control. It is selected only as the typed control-RPC framing and service layer
+inside an authenticated, bounded ComponentSession.
+
 ### Keep gateway VMs as a separate object
 
 Rejected. It duplicates workload lifecycle, runtime-provider, component,
@@ -1197,14 +1597,14 @@ Rejected as the only data path. Controllers remain policy decision points, but
 forcing them into the byte path adds latency, bandwidth cost, and cascading
 failure without strengthening an already-authorized end-to-end stream.
 
-### Treat shared Relay membership as authorization
+### Treat shared transport membership as authorization
 
-Rejected. Relay credentials establish transport access only. Realm keys,
+Rejected. Transport credentials establish transport access only. Realm keys,
 controller generations, tree policy, operation capabilities, and scoped
 shortcut grants remain authoritative.
 
 ### Add a generic network tunnel for nested realms
 
 Rejected. D2b routes semantic operations and named streams, not arbitrary
-cross-realm IP traffic. Shared-relay shortcuts are operation-scoped and do not
+cross-realm IP traffic. Shared-fabric shortcuts are operation-scoped and do not
 create a VPN or alternate realm topology.

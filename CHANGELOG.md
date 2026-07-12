@@ -36,11 +36,12 @@ deprecations ship one minor release before removal.
   `unsafe-local-shell-v1` feature token.
 
 - Added proposed ADR 0045, defining parent-owned workload-hosted realm
-  controllers, explicit runtime/infrastructure/relay provider responsibilities,
-  type-first sortable provider crate names with mandatory standard interfaces
-  and conformance suites backed by canonical provider DTOs in `d2b-contracts`,
-  Entra and YubiKey credential placement, and policy-authorized peer shortcuts
-  over inherited shared relay fabrics for nested realms.
+  controllers; explicit runtime, infrastructure, transport, substrate,
+  credential, and display provider responsibilities; type-first sortable
+  provider crates; generic Unix/vsock/direct/Azure-Relay byte transports;
+  Noise-authenticated component sessions with ttrpc/protobuf control services;
+  Entra and YubiKey credential placement; and policy-authorized peer shortcuts
+  over inherited shared transport fabrics.
 
 - Added feature-negotiated provider-neutral workload list, status, and configured
   launch dispatch. `d2b launch` resolves targets and default/sole items from
