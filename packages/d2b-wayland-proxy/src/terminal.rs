@@ -343,6 +343,14 @@ mod tests {
     }
 
     #[test]
+    fn terminal_runtime_rejects_socket_paths_beyond_sun_path() {
+        let runtime_dir = PathBuf::from("/").join("r".repeat(MAX_UNIX_SOCKET_PATH_BYTES));
+        let error = terminal_runtime_paths(&runtime_dir, "work", "abc123")
+            .expect_err("oversized socket path");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn terminal_runtime_unlinks_stale_socket_but_not_regular_file() {
         let root = test_root("stale");
         let first =

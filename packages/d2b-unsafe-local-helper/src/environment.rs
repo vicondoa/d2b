@@ -241,6 +241,27 @@ mod tests {
     }
 
     #[test]
+    fn wayland_display_accepts_socket_basename_and_rejects_invalid_values() {
+        let with_display = |display: Option<&str>| ManagerEnvironment {
+            entries: display
+                .map(|value| BTreeMap::from([("WAYLAND_DISPLAY".to_owned(), value.to_owned())]))
+                .unwrap_or_default(),
+            encoded_bytes: 0,
+        };
+
+        assert_eq!(
+            with_display(Some("wayland-1")).wayland_display(),
+            Ok("wayland-1")
+        );
+        for display in [None, Some(""), Some("wayland\0-1"), Some("../wayland-1")] {
+            assert_eq!(
+                with_display(display).wayland_display(),
+                Err(EnvironmentError::WaylandUnavailable)
+            );
+        }
+    }
+
+    #[test]
     fn malformed_or_ambiguous_environment_fails_closed() {
         assert_eq!(
             ManagerEnvironment::parse(vec!["NO_EQUALS".to_owned()]),

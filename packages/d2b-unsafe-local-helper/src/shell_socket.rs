@@ -245,6 +245,16 @@ mod tests {
     }
 
     #[test]
+    fn supervisor_socket_path_rejects_paths_beyond_sun_path() {
+        let directory = PathBuf::from("/").join("r".repeat(MAX_SOCKET_PATH_BYTES));
+        let id = HelperSupervisorId::new("path-boundary").unwrap();
+        assert_eq!(
+            supervisor_socket_path(&directory, &id),
+            Err(ShellSocketError::PathInvalid)
+        );
+    }
+
+    #[test]
     fn bind_never_follows_preexisting_symlink() {
         use std::os::unix::fs::symlink;
 
