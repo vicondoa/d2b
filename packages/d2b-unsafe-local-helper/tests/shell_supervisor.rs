@@ -456,6 +456,8 @@ fn helper_runtime_creates_persists_and_reconstructs_real_supervisor() {
     let (_, fd) = reattached.into_parts();
     drop(fd);
 
+    let socket = shell_socket(&scratch.path).expect("supervisor socket");
+    fs::remove_file(socket).unwrap();
     let killed = reconstructed
         .shell(HelperShellRequest::Kill {
             request_id: 4,
@@ -469,6 +471,7 @@ fn helper_runtime_creates_persists_and_reconstructs_real_supervisor() {
         killed.into_parts().0,
         UnsafeLocalHelperToDaemon::Shell(_)
     ));
+    assert!(reconstructed.snapshot(12).unwrap().scopes.is_empty());
     let deadline = Instant::now() + Duration::from_secs(5);
     while has_shell_socket(&scratch.path) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -522,6 +525,20 @@ fn has_shell_socket(directory: &Path) -> bool {
                 .file_type()
                 .map(|file_type| file_type.is_socket())
                 .unwrap_or(false)
+        })
+}
+
+fn shell_socket(directory: &Path) -> Option<PathBuf> {
+    fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            entry
+                .file_type()
+                .ok()
+                .filter(|file_type| file_type.is_socket())
+                .map(|_| entry.path())
         })
 }
 

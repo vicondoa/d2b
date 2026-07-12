@@ -24,8 +24,9 @@ deprecations ship one minor release before removal.
 
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
-  then reconciling the exact captured socket inode after forced scope teardown
-  without unlinking a replacement socket.
+  waking the supervisor accept loop so its owned listener unlinks before forced
+  scope teardown, and ensuring a missing/replaced control socket cannot block
+  verified scope collection or ledger cleanup.
 
 - Fixed the provider-neutral `launch` command missing from the public
   authorization matrix and generated privileges schema. Configured launches

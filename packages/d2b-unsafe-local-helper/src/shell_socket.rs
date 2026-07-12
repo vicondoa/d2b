@@ -18,22 +18,8 @@ pub(crate) enum ShellSocketError {
     PathInvalid,
     AlreadyExists,
     BindFailed,
-    CleanupFailed,
     OwnershipMismatch,
     ConnectFailed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShellSocketIdentity {
-    device: u64,
-    inode: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellSocketCleanup {
-    Removed,
-    Missing,
-    PreservedReplacement,
 }
 
 pub(crate) fn validate_runtime_directory(
@@ -177,52 +163,6 @@ pub(crate) fn connect_owned_stream(
     Ok(stream)
 }
 
-pub(crate) fn owned_shell_socket_identity(
-    runtime_directory: &Path,
-    supervisor_id: &HelperSupervisorId,
-    expected_uid: u32,
-) -> Result<ShellSocketIdentity, ShellSocketError> {
-    validate_runtime_directory(runtime_directory, expected_uid)?;
-    let path = supervisor_socket_path(runtime_directory, supervisor_id)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| ShellSocketError::OwnershipMismatch)?;
-    if !metadata.file_type().is_socket()
-        || metadata.uid() != expected_uid
-        || metadata.permissions().mode() & 0o7777 != 0o600
-    {
-        return Err(ShellSocketError::OwnershipMismatch);
-    }
-    Ok(ShellSocketIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
-}
-
-pub(crate) fn remove_owned_shell_socket(
-    runtime_directory: &Path,
-    supervisor_id: &HelperSupervisorId,
-    expected_uid: u32,
-    identity: ShellSocketIdentity,
-) -> Result<ShellSocketCleanup, ShellSocketError> {
-    validate_runtime_directory(runtime_directory, expected_uid)?;
-    let path = supervisor_socket_path(runtime_directory, supervisor_id)?;
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ShellSocketCleanup::Missing);
-        }
-        Err(_) => return Err(ShellSocketError::CleanupFailed),
-    };
-    if !metadata.file_type().is_socket()
-        || metadata.uid() != expected_uid
-        || metadata.dev() != identity.device
-        || metadata.ino() != identity.inode
-    {
-        return Ok(ShellSocketCleanup::PreservedReplacement);
-    }
-    fs::remove_file(path).map_err(|_| ShellSocketError::CleanupFailed)?;
-    Ok(ShellSocketCleanup::Removed)
-}
-
 fn remove_if_exact_socket(path: &Path, owner_uid: u32, identity: Option<(u64, u64)>) {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return;
@@ -340,34 +280,12 @@ mod tests {
         let id = HelperSupervisorId::new("replacement-test").unwrap();
         let path = supervisor_socket_path(&directory, &id).unwrap();
         let owned = OwnedShellListener::bind(&directory, &id, uid).unwrap();
-        let identity = owned_shell_socket_identity(&directory, &id, uid).unwrap();
         fs::remove_file(&path).unwrap();
         let replacement = UnixListener::bind(&path).unwrap();
-        assert_eq!(
-            remove_owned_shell_socket(&directory, &id, uid, identity).unwrap(),
-            ShellSocketCleanup::PreservedReplacement
-        );
         drop(owned);
         assert!(fs::symlink_metadata(&path).unwrap().file_type().is_socket());
         drop(replacement);
         fs::remove_file(path).unwrap();
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn explicit_cleanup_removes_only_captured_socket_inode() {
-        let directory = scratch();
-        let uid = Uid::current().as_raw();
-        let id = HelperSupervisorId::new("explicit-cleanup-test").unwrap();
-        let path = supervisor_socket_path(&directory, &id).unwrap();
-        let owned = OwnedShellListener::bind(&directory, &id, uid).unwrap();
-        let identity = owned_shell_socket_identity(&directory, &id, uid).unwrap();
-        assert_eq!(
-            remove_owned_shell_socket(&directory, &id, uid, identity).unwrap(),
-            ShellSocketCleanup::Removed
-        );
-        assert!(!path.exists());
-        drop(owned);
         fs::remove_dir_all(directory).unwrap();
     }
 }
