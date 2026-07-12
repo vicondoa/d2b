@@ -412,7 +412,7 @@ fn create_and_attach<M: UserScopeManager>(
     if user.home_dir() != runtime.shell_home || !user.shell().is_absolute() {
         return Err(RuntimeError::InvalidIdentity);
     }
-    let child_environment = environment.child_entries(false, None)?;
+    let child_environment = environment.persistent_shell_entries();
     let supervisor_id = random_supervisor_id()?;
     supervisor_socket_path(&runtime_directory, &supervisor_id)
         .map_err(|_| RuntimeError::EnvironmentInvalid)?;

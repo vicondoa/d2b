@@ -22,6 +22,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed unsafe-local persistent shells inheriting `TERM=dumb` from the systemd
+  user manager by supplying a fixed true-color terminal baseline while
+  preserving the rest of the manager environment and login-shell startup.
+
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
   waking the supervisor accept loop so its owned listener unlinks before forced
