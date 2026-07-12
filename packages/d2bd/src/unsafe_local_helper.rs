@@ -1345,6 +1345,7 @@ fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], HelperR
         &request.item_id,
         &request.argv,
         request.graphical,
+        &request.realm_accent_color,
     ))
     .map_err(|_| HelperRegistryError::InvalidFrame)?;
     Ok(Sha256::digest(encoded).into())
@@ -1498,6 +1499,36 @@ mod tests {
                 1000,
                 "op-1".to_owned(),
                 launch_fingerprint(&different).unwrap(),
+                3
+            ),
+            Err(HelperRegistryError::OperationIdConflict)
+        ));
+    }
+
+    #[test]
+    fn operation_ledger_rejects_reuse_with_changed_realm_accent() {
+        let mut ledger = OperationLedger::default();
+        let mut first = launch(1, "accent-op", "program");
+        first.graphical = true;
+        let fingerprint = launch_fingerprint(&first).unwrap();
+        assert!(matches!(
+            ledger
+                .begin(1000, "accent-op".to_owned(), fingerprint, 1)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
+        ledger.complete(1000, "accent-op", completed(&first), 2);
+
+        let mut changed = first.clone();
+        changed.request_id = 2;
+        changed.realm_accent_color =
+            d2b_contracts::unsafe_local_wire::RealmAccentColor::new("#cc3300").unwrap();
+
+        assert!(matches!(
+            ledger.begin(
+                1000,
+                "accent-op".to_owned(),
+                launch_fingerprint(&changed).unwrap(),
                 3
             ),
             Err(HelperRegistryError::OperationIdConflict)

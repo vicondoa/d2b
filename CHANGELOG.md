@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Included realm accent color in daemon-side unsafe-local launch fingerprints so
+  operation-id reuse with changed graphical identity fails as a conflict.
 - Corrected desktop terminal composition guidance so WeezTerm follows only the
   inputs its flake actually exposes.
 - Wait for the captured Niri destination to regain focus after the exclusive
