@@ -27,6 +27,11 @@ deprecations ship one minor release before removal.
   then reconciling the exact captured socket inode after forced scope teardown
   without unlinking a replacement socket.
 
+- Fixed the provider-neutral `launch` command missing from the public
+  authorization matrix and generated privileges schema. Configured launches
+  remain scoped per workload/realm to launcher or admin callers, audited, and
+  broker-free.
+
 ## [1.4.0] - 2026-07-12
 
 ### Added

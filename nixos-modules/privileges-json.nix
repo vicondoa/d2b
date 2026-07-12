@@ -420,6 +420,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "launch",
+    "subject": "workload/configured launch",
+    "scope": "per-workload/per-realm",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "exec",
     "subject": "VM/process",
     "scope": "per-VM",
