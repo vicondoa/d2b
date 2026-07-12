@@ -31,10 +31,13 @@ pub(crate) fn validate_runtime_directory(
     }
     let metadata =
         fs::symlink_metadata(directory).map_err(|_| ShellSocketError::RuntimeDirectoryInvalid)?;
+    let mode = metadata.permissions().mode() & 0o7777;
     if !metadata.file_type().is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != expected_uid
-        || metadata.permissions().mode() & 0o7777 != 0o700
+        || mode & 0o700 != 0o700
+        || mode & 0o027 != 0
+        || mode & 0o7000 != 0
     {
         return Err(ShellSocketError::RuntimeDirectoryInvalid);
     }
@@ -218,15 +221,37 @@ mod tests {
     }
 
     #[test]
+    fn runtime_directory_allows_acl_traversal_without_group_write() {
+        let directory = scratch();
+        let uid = Uid::current().as_raw();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(validate_runtime_directory(&directory, uid), Ok(()));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn runtime_directory_rejects_symlink_and_permissive_mode() {
         let directory = scratch();
         let uid = Uid::current().as_raw();
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(
-            validate_runtime_directory(&directory, uid),
-            Err(ShellSocketError::RuntimeDirectoryInvalid)
-        );
+        for mode in [0o770, 0o755, 0o1750] {
+            fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(
+                validate_runtime_directory(&directory, uid),
+                Err(ShellSocketError::RuntimeDirectoryInvalid),
+                "{mode:o}"
+            );
+        }
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn supervisor_socket_path_rejects_paths_beyond_sun_path() {
+        let directory = PathBuf::from("/").join("r".repeat(MAX_SOCKET_PATH_BYTES));
+        let id = HelperSupervisorId::new("path-boundary").unwrap();
+        assert_eq!(
+            supervisor_socket_path(&directory, &id),
+            Err(ShellSocketError::PathInvalid)
+        );
     }
 
     #[test]

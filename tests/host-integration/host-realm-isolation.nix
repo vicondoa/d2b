@@ -18,18 +18,24 @@ pkgs.testers.runNixOSTest {
       ];
 
       d2b.site.usePrebuiltHostTools = false;
-      d2b.gateways.work = {
+      d2b.realms.work = {
+        placement = "gateway-vm";
         env = "work";
-        index = 20;
-        relay.namespace = "relns-example.servicebus.windows.net";
-        relay.entity = "hc-d2b-display";
-        aca = {
-          subscription = "00000000-0000-0000-0000-000000000000";
-          resourceGroup = "rg-d2b-centralus";
-          sandboxGroup = "casbx-d2b-demo";
-          region = "centralus";
-          image = "registry.example.invalid/d2b-wayland:mi";
-          diskName = "d2b-wayland-mi";
+        network = {
+          envs = [ "work" ];
+          mode = "inherit-env";
+        };
+        relay = {
+          enable = true;
+          mode = "static";
+          endpoints = [ "relns-example.servicebus.windows.net/hc-d2b-display" ];
+          credentialRef = "gateway-state:work-relay";
+        };
+        providers.aca = {
+          kind = "aca";
+          placement = "provider-agent";
+          capabilityRefs = [ "aca" "relay" ];
+          configRef = "gateway:work-aca-non-secret";
         };
       };
     };
@@ -44,14 +50,15 @@ pkgs.testers.runNixOSTest {
     machine.succeed(f"test -r {policy}")
     machine.succeed(
       f"jq -e '.mode == \"host-realm-relay-deny\" "
-      f"and (.gatewayInterfaces == [\"work-l20\"]) "
+      f"and (.gatewayInterfaces == []) "
       f"and (.diagnostics.redacted == true) "
       f"and (.diagnostics.rateLimited == true)' {policy}"
     )
     policy_forbidden = [
       "relns-example.servicebus.windows.net",
       "hc-d2b-display",
-      "registry.example.invalid/d2b-wayland:mi",
+      "gateway-state:work-relay",
+      "gateway:work-aca-non-secret",
       "/var/lib/d2b/gateways/work/credential.sealed.json",
       "/var/lib/d2b/gateways/work/seal.key",
       "SharedAccessKey",

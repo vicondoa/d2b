@@ -1151,6 +1151,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",
+ "d2b-wayland-proxy",
  "getrandom 0.2.17",
  "nix 0.29.0",
  "rustix 0.38.44",

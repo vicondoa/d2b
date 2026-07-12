@@ -3635,6 +3635,7 @@ fn dispatch_unsafe_local_launcher(
         item_id: resolved.item_id.clone(),
         argv: resolved.argv.clone(),
         graphical: resolved.graphical,
+        realm_accent_color: resolved.realm_accent_color.clone(),
     };
     let result = state
         .unsafe_local_helpers

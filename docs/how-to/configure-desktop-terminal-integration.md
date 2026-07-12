@@ -76,16 +76,15 @@ desktop companions share the same `d2b-toolkit` input:
     weezterm = {
       url = "github:vicondoa/weezterm";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.d2b-toolkit.follows = "d2b-toolkit";
     };
   };
 }
 ```
 
-When iterating locally, replace the `url` values with `path:/...` but keep the
-same `inputs.<name>.follows` lines. That keeps package builds, Home Manager
-evaluation, and toolkit path-dependency rewrites on one nixpkgs and toolkit
-revision.
+When iterating locally, replace the `url` values with `path:/...` but keep each
+input's existing `follows` lines. WeezTerm follows `nixpkgs` only because it
+does not expose a toolkit input. This keeps package builds, Home Manager
+evaluation, and toolkit path-dependency rewrites on compatible revisions.
 
 ## Import the Home Manager module
 

@@ -405,8 +405,9 @@ Optional **desktop companion** pieces also live in sibling flakes:
 Consumer flakes that combine these pieces keep a single nixpkgs and toolkit
 revision by using `inputs.d2b.inputs.nixpkgs.follows = "nixpkgs"`,
 `inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs"`, and
-`inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit"` (same for
-WeezTerm). The exact copy-paste boilerplate lives in
+`inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit"`. WeezTerm
+follows only `nixpkgs`; its flake does not expose a toolkit input. The exact
+copy-paste boilerplate lives in
 [`docs/how-to/configure-desktop-terminal-integration.md`](./docs/how-to/configure-desktop-terminal-integration.md).
 
 The composition pattern is intentionally one-way: d2b core does not import
