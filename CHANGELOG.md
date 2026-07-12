@@ -12,6 +12,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Corrected desktop terminal composition guidance so WeezTerm follows only the
+  inputs its flake actually exposes.
 - Wait for the captured Niri destination to regain focus after the exclusive
   clipboard picker closes before replaying paste, and fail visibly on a bounded
   timeout instead of dropping `Ctrl+V` against an unfocused surface. The
