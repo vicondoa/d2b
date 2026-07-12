@@ -1419,6 +1419,23 @@ success-shaped compatibility fallback is added. Every migration error names
 the obsolete option or value, its exact replacement, and the provider/realm
 migration guide.
 
+The same clean cutover applies to transport and session contracts:
+
+- `relayProviders` and `d2b.realms.<realm>.relay` fail with migration errors
+  naming `transportProviders` and `d2b.realms.<realm>.transport`;
+- `ProviderType::Relay`, `RelayProvider`, and `relay-unavailable` are rejected
+  rather than aliased to their transport replacements;
+- pre-ComponentSession realm-peer or guest-control wire generations fail with
+  typed version/migration errors and cannot negotiate a weaker legacy session;
+- a controller that lacks the required ComponentSession transport/auth/service
+  capabilities is not admitted and publishes no route;
+- old and new realm/session generations may be drained side-by-side as separate
+  deployments, but they never form a mixed authenticated topology.
+
+The local public Unix compatibility wire remains a local daemon-access surface
+only until its explicit migration. It is never accepted as a remote realm,
+controller, guest, or provider session fallback.
+
 ## Validation requirements
 
 Implementation is incomplete without:
@@ -1483,6 +1500,12 @@ Implementation is incomplete without:
 - Nix evaluation tests proving obsolete `unsafe-local` provider-kind values,
   inert provider records, old gateway declarations, and compatibility aliases
   fail with the documented actionable migration errors;
+- versioned cutover tests proving legacy `relayProviders`/`realm.relay`,
+  `ProviderType::Relay`, `RelayProvider`, and `relay-unavailable` inputs fail
+  with exact transport migration guidance;
+- wire-skew tests proving pre-ComponentSession handshakes, unmigrated
+  controllers, and mixed old/new realm generations cannot publish routes or
+  fall back to legacy auth/protocol paths;
 - tests proving a controller cannot control its own substrate;
 - bootstrap tests proving the local pre-guestd seed share and remote temporary
   relay rendezvous carry only bounded operation-bound enrollment material, are
