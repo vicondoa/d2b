@@ -3,7 +3,8 @@ use crate::runtime::{
     ShellOperationBegin, persist_ledger,
 };
 use crate::shell_socket::{
-    connect_owned_stream, supervisor_socket_path, validate_runtime_directory,
+    ShellSocketCleanup, ShellSocketIdentity, connect_owned_stream, owned_shell_socket_identity,
+    remove_owned_shell_socket, supervisor_socket_path, validate_runtime_directory,
 };
 use crate::shell_supervisor::{
     BlockedShellSupervisor, DEFAULT_SHELL_OUTPUT_RING_BYTES, MAX_HELPER_SHELL_OUTPUT_BYTES,
@@ -539,6 +540,7 @@ fn kill<M: UserScopeManager>(
     if !inspection.identity_matches {
         return Err(RuntimeError::ScopeIdentityMismatch);
     }
+    let socket_cleanup = capture_shell_socket_cleanup(runtime, &scope, inspection.state)?;
     let killed = match inspection.state {
         HelperScopeState::Starting | HelperScopeState::Active => {
             let response = supervisor_action(runtime, &scope, SupervisorAction::Kill)?;
@@ -565,6 +567,16 @@ fn kill<M: UserScopeManager>(
         HelperScopeState::Exited => false,
         HelperScopeState::Degraded => return Err(RuntimeError::ScopeIdentityMismatch),
     };
+    if let Some((runtime_directory, supervisor_id, identity)) = socket_cleanup {
+        match remove_owned_shell_socket(&runtime_directory, &supervisor_id, runtime.uid, identity)
+            .map_err(|_| RuntimeError::ShellUnavailable)?
+        {
+            ShellSocketCleanup::Removed | ShellSocketCleanup::Missing => {}
+            ShellSocketCleanup::PreservedReplacement => {
+                return Err(RuntimeError::ScopeIdentityMismatch);
+            }
+        }
+    }
     remove_shell_scope(runtime, &scope)?;
 
     let response = HelperShellResponse::Kill(HelperShellKillResponse {
@@ -582,6 +594,29 @@ fn kill<M: UserScopeManager>(
         .map_err(|_| RuntimeError::Internal)?
         .complete_shell_operation(&operation_id, reservation, None, Some(response.clone()))?;
     Ok(ShellDispatch::shell(response))
+}
+
+fn capture_shell_socket_cleanup<M: UserScopeManager>(
+    runtime: &ScopeRuntime<M>,
+    scope: &PersistedScope,
+    state: HelperScopeState,
+) -> Result<Option<(std::path::PathBuf, HelperSupervisorId, ShellSocketIdentity)>, RuntimeError> {
+    let metadata = scope
+        .persistent_shell
+        .as_ref()
+        .ok_or(RuntimeError::ShellUnavailable)?;
+    let runtime_directory = runtime.manager.manager_environment()?.runtime_directory()?;
+    match owned_shell_socket_identity(&runtime_directory, &metadata.supervisor_id, runtime.uid) {
+        Ok(identity) => Ok(Some((
+            runtime_directory,
+            metadata.supervisor_id.clone(),
+            identity,
+        ))),
+        Err(_) if state == HelperScopeState::Stopping || state == HelperScopeState::Exited => {
+            Ok(None)
+        }
+        Err(_) => Err(RuntimeError::ShellUnavailable),
+    }
 }
 
 fn replay_attach<M: UserScopeManager>(

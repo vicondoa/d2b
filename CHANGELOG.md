@@ -23,7 +23,9 @@ deprecations ship one minor release before removal.
 ### Fixed
 
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
-  socket cleanup the same bounded reconciliation horizon used by the runtime.
+  socket cleanup the same bounded reconciliation horizon used by the runtime,
+  then reconciling the exact captured socket inode after forced scope teardown
+  without unlinking a replacement socket.
 
 ## [1.4.0] - 2026-07-12
 
