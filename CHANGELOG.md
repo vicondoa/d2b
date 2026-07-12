@@ -24,6 +24,8 @@ deprecations ship one minor release before removal.
 
 - Made the mkfs diagnostic bound test exercise the formatter directly instead
   of depending on unrelated existing-image repair stages.
+- Made output-ring wake coverage observe data and EOF as separate valid
+  notifications instead of racing both producer events into one read.
 
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
