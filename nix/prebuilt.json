@@ -1,11 +1,30 @@
 {
-  "version": "1.3.1",
+  "version": "1.4.0",
   "system": "x86_64-linux",
   "binaries": {
-    "d2b": {"url": "https://github.com/vicondoa/d2b/releases/download/v1.3.1/d2b-1.3.1-x86_64-linux.tar.gz", "hash": "sha256-RfwEsXtUxzVnZrmVmkHNtqiHxdIp6Sjr75ixPRslDKE="},
-    "d2b-activation-helper": {"url": "https://github.com/vicondoa/d2b/releases/download/v1.3.1/d2b-activation-helper-1.3.1-x86_64-linux.tar.gz", "hash": "sha256-0u6PjHxQtAKwjbctSYK1WFcZRsnb+QdLvmRxp+ZdvPU="},
-    "d2bd": {"url": "https://github.com/vicondoa/d2b/releases/download/v1.3.1/d2bd-1.3.1-x86_64-linux.tar.gz", "hash": "sha256-BX9/h+Gy6atGbhZ+3M8HC2Sh377udNZiyUugmufPEAE="},
-    "d2b-priv-broker": {"url": "https://github.com/vicondoa/d2b/releases/download/v1.3.1/d2b-priv-broker-1.3.1-x86_64-linux.tar.gz", "hash": "sha256-xGi3najDZgekJXTkZkqK4h1XFp/v63fo7q7t0Kuv4dc="},
-    "d2b-wayland-filter": {"url": "https://github.com/vicondoa/d2b/releases/download/v1.3.1/d2b-wayland-filter-1.3.1-x86_64-linux.tar.gz", "hash": "sha256-76BsbCokOvd8DSE5yteucTRM1Uku+j76amVGdaMkfXI="}
+    "d2b": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-2BRAIc8DRG9bpaYHLUzwkhl56ZZC9VUtWPn3GqUpPNc="
+    },
+    "d2b-activation-helper": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-activation-helper-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-cGzwcipd/i0ouj3gtambTVhwA+2X0E6pm64ZiAKkCfk="
+    },
+    "d2b-priv-broker": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-priv-broker-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-cJDh84Cm9jqluzvbRKHbU0ASF18Oof/wCHqhD7rUzxs="
+    },
+    "d2b-unsafe-local-helper": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-unsafe-local-helper-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-egmrzD2lxdHydGpVHyMNRCMLBe2gdjMx604kiG5kGUQ="
+    },
+    "d2b-wayland-proxy": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2b-wayland-proxy-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-nTJV4QDLOyVl/BsM7l9Bl8OyO4SLYiRY8Rlvgmwk3K4="
+    },
+    "d2bd": {
+      "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.0/d2bd-1.4.0-x86_64-linux.tar.gz",
+      "hash": "sha256-rM893EZS0h3N+LW+qdKDt8epatb0lOT/dyEFjtXCjCg="
+    }
   }
 }

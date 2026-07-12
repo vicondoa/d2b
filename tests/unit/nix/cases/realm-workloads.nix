@@ -1113,6 +1113,13 @@ in
         restart = service.serviceConfig.Restart;
         execStartHasHelper =
           lib.hasInfix "/bin/d2b-unsafe-local-helper" service.serviceConfig.ExecStart;
+        execStartHasImmutableProxy =
+          lib.hasInfix
+            (builtins.unsafeDiscardStringContext
+              "--wayland-proxy ${unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy}/bin/d2b-wayland-proxy")
+            (builtins.unsafeDiscardStringContext service.serviceConfig.ExecStart);
+        proxyPackageConfigured =
+          unsafeCfg.d2b._hostToolPackages.d2bWaylandProxy != null;
         daemonSocketPath = daemonConfig.unsafeLocalHelperSocketPath;
         daemonSocketGroup = daemonConfig.unsafeLocalHelperSocketGroup;
         daemonAllowedUsers = daemonConfig.unsafeLocalHelperUsers;
@@ -1133,6 +1140,8 @@ in
       conditionGroup = "d2b-unsafe-local";
       restart = "on-failure";
       execStartHasHelper = true;
+      execStartHasImmutableProxy = true;
+      proxyPackageConfigured = true;
       daemonSocketPath = "/run/d2b/unsafe-local-helper.sock";
       daemonSocketGroup = "d2b-unsafe-local";
       daemonAllowedUsers = [ "alice" ];

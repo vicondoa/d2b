@@ -187,6 +187,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                             let response = match runtime.launch(request) {
                                 Ok(result) => UnsafeLocalHelperToDaemon::Operation(result),
                                 Err(error) => {
+                                    eprintln!("unsafe-local launch failed: {error:?}");
                                     rejection(request_id, operation_id, failure_code(error))
                                 }
                             };
@@ -501,6 +502,8 @@ fn failure_code(error: RuntimeError) -> HelperFailureCode {
         }
         RuntimeError::ExecutableUnavailable => HelperFailureCode::ExecutableUnavailable,
         RuntimeError::ProxyUnavailable => HelperFailureCode::ProxyUnavailable,
+        RuntimeError::WaylandUnavailable => HelperFailureCode::WaylandUnavailable,
+        RuntimeError::FirstClientTimeout => HelperFailureCode::FirstClientTimeout,
         RuntimeError::ScopeCreateFailed => HelperFailureCode::ScopeCreateFailed,
         RuntimeError::ScopeIdentityMismatch => HelperFailureCode::ScopeIdentityMismatch,
         RuntimeError::OperationIdConflict => HelperFailureCode::OperationIdConflict,

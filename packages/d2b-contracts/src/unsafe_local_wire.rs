@@ -26,7 +26,7 @@ use schemars::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fmt;
 
-pub const UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION: u32 = 2;
+pub const UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION: u32 = 3;
 pub const UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION: u32 = 1;
 /// Every terminal-ready frame carries exactly one connected Unix stream fd.
 pub const UNSAFE_LOCAL_TERMINAL_FD_COUNT: usize = 1;
@@ -250,7 +250,7 @@ pub struct HelperSnapshot {
     pub scopes: Vec<HelperScopeSnapshot>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelperLaunchRequest {
     pub request_id: u64,
@@ -259,6 +259,59 @@ pub struct HelperLaunchRequest {
     pub item_id: ProtocolToken,
     pub argv: ConfiguredArgv,
     pub graphical: bool,
+    pub realm_accent_color: RealmAccentColor,
+}
+
+impl fmt::Debug for HelperLaunchRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HelperLaunchRequest")
+            .field("request_id", &self.request_id)
+            .field("operation_id", &self.operation_id)
+            .field("workload", &self.workload)
+            .field("item_id", &self.item_id)
+            .field("argv_count", &self.argv.as_slice().len())
+            .field("graphical", &self.graphical)
+            .field("realm_accent_color", &self.realm_accent_color)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct RealmAccentColor(#[schemars(regex(pattern = "^#[0-9a-f]{6}$"))] String);
+
+impl RealmAccentColor {
+    pub fn new(value: impl Into<String>) -> Result<Self, HelperFailureCode> {
+        let value = value.into();
+        let valid = value.len() == 7
+            && value.starts_with('#')
+            && value[1..]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        valid
+            .then_some(Self(value))
+            .ok_or(HelperFailureCode::InvalidRequest)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RealmAccentColor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RealmAccentColor(<validated>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for RealmAccentColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?)
+            .map_err(|_| serde::de::Error::custom("realm accent color must match ^#[0-9a-f]{6}$"))
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1482,11 +1535,32 @@ mod tests {
     }
 
     #[test]
-    fn helper_v1_is_rejected_while_terminal_v1_is_preserved() {
-        assert_eq!(UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, 2);
+    fn older_helper_versions_are_rejected_while_terminal_v1_is_preserved() {
+        assert_eq!(UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION, 3);
         assert!(!unsafe_local_helper_protocol_supported(1));
-        assert!(unsafe_local_helper_protocol_supported(2));
+        assert!(!unsafe_local_helper_protocol_supported(2));
+        assert!(unsafe_local_helper_protocol_supported(3));
         assert_eq!(UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION, 1);
+    }
+
+    #[test]
+    fn realm_accent_color_is_strict_and_canonical() {
+        let color = RealmAccentColor::new("#cc3344").unwrap();
+        assert_eq!(color.as_str(), "#cc3344");
+        for invalid in [
+            "cc3344",
+            "#CC3344",
+            "#123",
+            "#1234567",
+            "#12345g",
+            "#123456\n",
+        ] {
+            assert!(RealmAccentColor::new(invalid).is_err(), "{invalid:?}");
+            assert!(
+                serde_json::from_value::<RealmAccentColor>(serde_json::json!(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]

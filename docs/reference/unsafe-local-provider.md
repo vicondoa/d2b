@@ -122,9 +122,9 @@ host-local Unix binding. The helper lookup is keyed by the requester's
 remote, stale-helper, cross-UID, direct-compositor, root, SSH, and arbitrary
 command fallbacks are not available.
 
-The separate helper protocol is version 2 on the daemon-owned
+The separate helper protocol is version 3 on the daemon-owned
 `/run/d2b/unsafe-local-helper.sock` `SOCK_SEQPACKET` endpoint. Peer credentials,
-not a uid field, establish identity. Version 1 is rejected without a
+not a uid field, establish identity. Earlier versions are rejected without a
 compatibility fallback because the daemon and helper are installed together.
 Frames contain no uid, environment, cwd, or public-supplied command. Both peers
 request at least 256 KiB for
@@ -149,6 +149,12 @@ loop. The helper connects outward; `d2bd` does not discover a user bus or
 impersonate a user. Both peers verify `SO_PEERCRED`, and a valid reconnect
 atomically supersedes the prior generation for that UID.
 
+Supplementary groups are fixed when the login session starts. After enabling
+the first unsafe-local realm for a user, or adding that user to `allowedUsers`,
+the user must log out and back in before the helper can connect. The existing
+session remains fail-closed because neither its user manager nor helper
+processes have the new `d2b-unsafe-local` group.
+
 For each operation the helper reads
 `org.freedesktop.systemd1.Manager.Environment` from the current user manager.
 It rejects malformed or oversized data rather than trimming it, clears the
@@ -156,6 +162,18 @@ child's inherited environment, and copies the complete manager environment.
 Graphical operations additionally remove `DISPLAY` and require a proxy-owned
 `WAYLAND_DISPLAY`; if no proxy endpoint is ready, launch fails without a direct
 display fallback.
+
+The user service supplies the helper an immutable
+`d2b-wayland-proxy` Nix-store path. A graphical launch carries the validated
+realm accent color over private helper protocol v3. Its existing blocked
+supervisor creates one randomized mode-`0700` directory beneath the validated
+`XDG_RUNTIME_DIR`; the proxy display and mode-`0600` readiness socket live
+inside it. The supervisor starts the proxy in the same verified user scope,
+requires matching upstream and listener events before starting the application,
+and requires the matching first-client event before acknowledging launch. App
+exit concurrently aborts that wait. It then owns proxy termination, child
+reaping, and private-directory cleanup. Proxy and application therefore remain
+under the one persisted scope identity used for restart adoption.
 
 Every launched process begins behind a blocked supervisor. The helper calls
 `StartTransientUnit`, verifies the returned scope's `InvocationID` and exact

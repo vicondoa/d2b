@@ -33,6 +33,13 @@ in
       description = "Internal: resolved same-uid unsafe-local user helper package.";
     };
 
+    d2bWaylandProxy = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved immutable d2b Wayland proxy package.";
+    };
+
     d2bGatewayRuntime = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;

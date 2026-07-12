@@ -42,6 +42,11 @@ events to the helper. The helper starts the graphical application only after the
 upstream and listener are ready, and considers launch successful only after the
 first client connects. An unsafe-local proxy requires an explicit compositor
 upstream; failure never retries the application against the compositor directly.
+The blocked scope supervisor owns both proxy and application in one verified
+user scope. It creates a randomized mode-`0700` directory below the validated
+`XDG_RUNTIME_DIR`, places the proxy display and private readiness socket there,
+and removes the directory after both children are reaped. Launch fails
+immediately if the application exits while first-client readiness is pending.
 
 The clipboard bridge attributes an unsafe-local endpoint from that canonical
 target and provider identity. Window app ids and titles remain presentation

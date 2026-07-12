@@ -6,7 +6,7 @@ use std::{
 
 use d2b_contracts::{
     public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
-    unsafe_local_wire::HelperShellPolicy,
+    unsafe_local_wire::{HelperShellPolicy, RealmAccentColor},
 };
 use d2b_core::{
     bundle_resolver::BundleResolver,
@@ -147,6 +147,7 @@ pub(crate) struct ResolvedExec {
     pub item_id: ProtocolToken,
     pub argv: ConfiguredArgv,
     pub graphical: bool,
+    pub realm_accent_color: RealmAccentColor,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +336,8 @@ impl WorkloadCatalog {
             item_id: item_id.clone(),
             argv: private_exec.argv.clone(),
             graphical: private_exec.graphical,
+            realm_accent_color: RealmAccentColor::new(entry.metadata.realm_accent_color.clone())
+                .map_err(|_| CatalogError::ConfiguredItemMismatch)?,
         })
     }
 
@@ -826,6 +829,7 @@ mod tests {
                 "argv comes from the private artifact"
             );
             assert!(resolved.graphical);
+            assert_eq!(resolved.realm_accent_color.as_str(), "#336699");
             assert!(
                 matches!(
                     (&resolved.route, provider),
@@ -901,6 +905,19 @@ mod tests {
         assert_eq!(
             WorkloadCatalog::from_test_entries([entry.clone()])
                 .resolve_exec(Some(&tampered), &target, &item)
+                .unwrap_err(),
+            CatalogError::ConfiguredItemMismatch
+        );
+
+        let mut invalid_color = entry.clone();
+        invalid_color.metadata.realm_accent_color = "#ABCDEF".to_owned();
+        assert_eq!(
+            WorkloadCatalog::from_test_entries([invalid_color])
+                .resolve_exec(
+                    Some(&private_artifact(std::slice::from_ref(&entry))),
+                    &target,
+                    &item,
+                )
                 .unwrap_err(),
             CatalogError::ConfiguredItemMismatch
         );

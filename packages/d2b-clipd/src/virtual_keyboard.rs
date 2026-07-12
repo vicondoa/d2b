@@ -11,18 +11,19 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
 };
 
+// The protocol carries Linux evdev codes. KEY_V keeps proxied clients correct
+// even when their compositor-facing keyboard retains its existing full keymap.
+const PASTE_KEY_CODE: u32 = 47;
 const PASTE_KEYMAP: &[u8] = b"xkb_keymap {\n\
 xkb_keycodes \"d2b\" {\n\
 minimum = 8;\n\
-maximum = 11;\n\
-<D2B1> = 9;\n\
-<D2B2> = 10;\n\
+maximum = 56;\n\
+<D2B1> = 55;\n\
 };\n\
 xkb_types \"d2b\" { include \"complete\" };\n\
 xkb_compatibility \"d2b\" { include \"complete\" };\n\
 xkb_symbols \"d2b\" {\n\
-key <D2B1> {[Control_L]};\n\
-key <D2B2> {[v, V]};\n\
+key <D2B1> {[v]};\n\
 };\n\
 };\n\0";
 
@@ -66,27 +67,27 @@ pub fn paste_ctrl_v() -> Result<(), VirtualKeyboardError> {
         .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
 
-    keyboard.key(0, 1, 1);
     keyboard.modifiers(4, 0, 0, 0);
-    connection
-        .flush()
+    event_queue
+        .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
-    std::thread::sleep(Duration::from_millis(10));
 
-    keyboard.key(0, 2, 1);
-    connection
-        .flush()
+    keyboard.key(0, PASTE_KEY_CODE, 1);
+    event_queue
+        .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
-    std::thread::sleep(Duration::from_millis(6));
+    std::thread::sleep(Duration::from_millis(2));
 
-    keyboard.key(0, 2, 0);
-    connection
-        .flush()
+    keyboard.key(0, PASTE_KEY_CODE, 0);
+    event_queue
+        .roundtrip(&mut VirtualKeyboardState)
         .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
-    std::thread::sleep(Duration::from_millis(6));
+    std::thread::sleep(Duration::from_millis(2));
 
     keyboard.modifiers(0, 0, 0, 0);
-    keyboard.key(0, 1, 0);
+    event_queue
+        .roundtrip(&mut VirtualKeyboardState)
+        .map_err(|error| VirtualKeyboardError::Wayland(error.to_string()))?;
     keyboard.destroy();
     let _ = connection.flush();
 
@@ -127,8 +128,11 @@ mod tests {
     #[test]
     fn paste_keymap_contains_only_synthetic_control_v_keys() {
         let keymap = std::str::from_utf8(PASTE_KEYMAP).expect("utf8 keymap");
-        assert!(keymap.contains("Control_L"));
-        assert!(keymap.contains("[v, V]"));
+        assert_eq!(PASTE_KEY_CODE, 47);
+        assert!(keymap.contains("<D2B1> = 55"));
+        assert!(keymap.contains("[v]"));
+        assert!(!keymap.contains("Control_L"));
+        assert!(!keymap.contains("D2B2"));
         assert!(!keymap.contains("include \"evdev\""));
     }
 

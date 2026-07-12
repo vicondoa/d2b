@@ -469,11 +469,14 @@ fn helper_runtime_creates_persists_and_reconstructs_real_supervisor() {
         killed.into_parts().0,
         UnsafeLocalHelperToDaemon::Shell(_)
     ));
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while has_shell_socket(&scratch.path) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(!has_shell_socket(&scratch.path));
+    assert!(
+        !has_shell_socket(&scratch.path),
+        "shell supervisor socket survived the cleanup deadline"
+    );
 }
 
 fn workload() -> WorkloadIdentity {

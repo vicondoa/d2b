@@ -13,6 +13,8 @@ struct Cli {
     socket: PathBuf,
     #[arg(long, default_value = "d2bd")]
     daemon_user: String,
+    #[arg(long, value_name = "NIX_STORE_BINARY")]
+    wayland_proxy: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -30,14 +32,20 @@ fn main() {
     }
     let cli = Cli::parse();
     let result = match cli.command {
-        Some(Command::ScopeSupervisor) => {
-            run_scope_supervisor().map_err(|_| "scope runtime failed")
-        }
+        Some(Command::ScopeSupervisor) => run_scope_supervisor().map_err(|error| {
+            eprintln!("scope runtime failed: {error:?}");
+            "scope runtime failed"
+        }),
         Some(Command::ShellSupervisor) => {
             d2b_unsafe_local_helper::run_shell_supervisor().map_err(|_| "shell runtime failed")
         }
-        None => ScopeRuntime::new(SystemdUserScopeManager::new())
-            .map_err(|_| "helper runtime unavailable")
+        None => cli
+            .wayland_proxy
+            .ok_or("immutable Wayland proxy path is required")
+            .and_then(|proxy| {
+                ScopeRuntime::new(SystemdUserScopeManager::new(), proxy)
+                    .map_err(|_| "helper runtime unavailable")
+            })
             .and_then(|runtime| {
                 HelperClient::new(cli.socket, &cli.daemon_user, runtime)
                     .map_err(|_| "helper registration failed")
