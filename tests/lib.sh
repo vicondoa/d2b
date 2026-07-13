@@ -480,7 +480,12 @@ _d2b_cleanup_scratch() {
 
 d2b_mktemp() {
   local pattern="${1:?d2b_mktemp: missing pattern}" root scratch registry quoted_path
-  root=$(d2b_repo_root)
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    root="$D2B_VALIDATION_OUTPUT_DIR/test-scratch"
+    mkdir -p "$root" || return 1
+  else
+    root=$(d2b_repo_root)
+  fi
   scratch=$(mktemp -d -p "$root" "$pattern") || return 1
   registry=$(d2b_scratch_registry_path)
   : >> "$registry"

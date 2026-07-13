@@ -290,6 +290,8 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
     create_private_directory(&output_root.join("home"))?;
     create_private_directory(&output_root.join("cargo-home"))?;
     create_private_directory(&output_root.join("cargo-target"))?;
+    create_private_directory(&output_root.join("layer1-logs"))?;
+    create_private_directory(&output_root.join("test-scratch"))?;
     run_checked(
         runner,
         "git",
@@ -335,6 +337,10 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         (
             OsString::from("CARGO_HOME"),
             output_root.join("cargo-home").into_os_string(),
+        ),
+        (
+            OsString::from("D2B_LAYER1_LOG_DIR"),
+            output_root.join("layer1-logs").into_os_string(),
         ),
         (
             OsString::from("TMPDIR"),

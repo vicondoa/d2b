@@ -65,6 +65,8 @@ deprecations ship one minor release before removal.
   duplicate-free fingerprint declarations.
 - Kept signal and umask regression coverage Rust-native so the no-shell AST gate
   remains closed.
+- Routed Layer-1 logs and shell-test scratch state to the private validation
+  output root when the reviewed checkout is read-only.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
   procedures from the delivery contract reference.
 - Reconstructed merged stack prefixes from historical GitHub merge authority
