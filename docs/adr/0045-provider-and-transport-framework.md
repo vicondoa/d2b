@@ -1834,6 +1834,8 @@ let
   encode = domain: parts:
     "d2b-id-v2;${field domain}${builtins.toString (builtins.length parts)};"
     + builtins.concatStringsSep "" (builtins.map field parts);
+  mod = dividend: divisor:
+    dividend - (builtins.div dividend divisor) * divisor;
   hexNibble = {
     "0" = 0; "1" = 1; "2" = 2; "3" = 3;
     "4" = 4; "5" = 5; "6" = 6; "7" = 7;
@@ -1852,8 +1854,8 @@ let
     let
       byte = byteAt hex (builtins.div bit 8);
       divisor = builtins.elemAt powersOfTwo
-        (7 - builtins.mod bit 8);
-    in builtins.mod (builtins.div byte divisor) 2;
+        (7 - mod bit 8);
+    in mod (builtins.div byte divisor) 2;
   symbolAt = hex: index:
     let
       firstBit = index * 5;
