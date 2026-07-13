@@ -302,7 +302,7 @@ for feature_set in "${contract_feature_sets[@]}"; do
   log "--> d2b-contracts feature check ($label)"
   CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo check --locked --manifest-path "$manifest" -p d2b-contracts \
-      --no-default-features "${feature_args[@]}"
+      --no-default-features --all-targets "${feature_args[@]}"
 done
 ok "d2b-contracts feature matrix"
 

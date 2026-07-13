@@ -186,7 +186,7 @@ fn maintained_consumers_select_explicit_domain_features() {
 }
 
 #[test]
-fn v2_rails_are_independent_empty_modules_without_current_aliases() {
+fn v2_rails_are_independently_owned_without_current_aliases() {
     let lib = read_repo_file("packages/d2b-contracts/src/lib.rs");
     assert!(
         !lib.contains("pub use d2b_core::"),
@@ -203,15 +203,41 @@ fn v2_rails_are_independent_empty_modules_without_current_aliases() {
         assert!(lib.contains(&gate), "missing independent rail gate: {gate}");
         let source = read_repo_file(&format!("packages/d2b-contracts/src/{module}.rs"));
         for forbidden in [
-            "pub use", "crate::", "struct ", "enum ", "type ", "trait ", "const ", "static ",
+            "pub use",
+            "broker_wire",
+            "cli_output",
+            "guest_auth",
+            "guest_proto",
+            "guest_wire",
+            "public_wire",
+            "security_key",
+            "terminal_wire",
+            "unsafe_local_wire",
+            "usbip",
         ] {
             assert!(
                 !source.lines().any(|line| {
                     let line = line.trim_start();
                     !line.starts_with("//!") && line.contains(forbidden)
                 }),
-                "{module} must stay an empty ownership rail; found {forbidden:?}"
+                "{module} must not alias or re-export current contracts; found {forbidden:?}"
             );
         }
+    }
+
+    let manifest = read_repo_file("packages/d2b-contracts/Cargo.toml");
+    let schema = manifest
+        .split_once("schema = [")
+        .and_then(|(_, trailing)| trailing.split_once("]\n"))
+        .map(|(schema, _)| schema)
+        .expect("multiline schema feature");
+    for rail in [
+        "\"v2-identity\"",
+        "\"v2-component-session\"",
+        "\"v2-services\"",
+        "\"v2-provider\"",
+        "\"v2-state\"",
+    ] {
+        assert!(schema.contains(rail), "schema feature must include {rail}");
     }
 }

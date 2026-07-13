@@ -15,7 +15,7 @@ default = []
 common = ["dep:d2b-core", "dep:schemars", "dep:serde", "dep:serde_json"]
 guest-auth = []
 usbip = ["dep:serde"]
-security-key = ["dep:schemars", "dep:serde", "dep:serde_json"]
+security-key = ["dep:schemars", "dep:serde"]
 guest = [
     "common",
     "guest-auth",
@@ -35,14 +35,29 @@ public = [
 ]
 cli-output = ["public"]
 unsafe-local = ["public"]
+v2-identity = ["dep:schemars", "dep:serde", "dep:sha2"]
+v2-component-session = ["v2-identity", "dep:schemars", "dep:serde"]
+v2-provider = ["v2-component-session", "dep:schemars", "dep:serde"]
+v2-state = ["v2-identity", "dep:schemars", "dep:serde"]
+v2-services = [
+    "v2-component-session",
+    "v2-provider",
+    "v2-state",
+    "dep:protobuf",
+    "dep:schemars",
+    "dep:serde",
+]
 # Maintained code-generation/test union. Production consumers must select
 # domain features instead.
-schema = ["cli-output", "unsafe-local"]
-v2-identity = []
-v2-component-session = []
-v2-services = []
-v2-provider = []
-v2-state = []
+schema = [
+    "cli-output",
+    "unsafe-local",
+    "v2-identity",
+    "v2-component-session",
+    "v2-services",
+    "v2-provider",
+    "v2-state",
+]
 
 [dependencies]
 d2b-core = { workspace = true, optional = true }
@@ -51,6 +66,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 protobuf = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
@@ -58,3 +74,7 @@ serde_json.workspace = true
 [[test]]
 name = "version_skew"
 required-features = ["broker"]
+
+[[test]]
+name = "guest_proto_bindings"
+required-features = ["guest"]
