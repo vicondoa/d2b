@@ -12,7 +12,7 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 d2b_activate_rust_toolchain_path || true
 
 manifest="$ROOT/packages/Cargo.toml"
-workspace_target_dir=$(d2b_cargo_target_dir workspace)
+workspace_target_dir=${D2B_WORKSPACE_GATE_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}
 if [ ! -f "$manifest" ]; then
   fail "missing Rust workspace manifest: $manifest"
   exit 1
