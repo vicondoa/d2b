@@ -162,7 +162,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let mut options = CliOptions::parse(rest)?;
             let manifest_path = options.required_path("--manifest")?;
             options.finish()?;
-            let manifest: StackManifest = storage::read_json(&manifest_path)?;
+            let manifest: DeliveryManifest = storage::read_json(&manifest_path)?;
             manifest.validate()?;
             Ok(WorkflowOutput {
                 schema_version: DELIVERY_SCHEMA_VERSION,
@@ -179,9 +179,15 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let mut options = CliOptions::parse(rest)?;
             let manifest_path = options.required_path("--manifest")?;
             options.finish()?;
-            let manifest: StackManifest = storage::read_json(&manifest_path)?;
+            let manifest: DeliveryManifest = storage::read_json(&manifest_path)?;
             manifest.validate()?;
-            check_gh_stack_private_preview(&ProcessCommandOutput, &manifest.root_repository.name)?;
+            let repository = manifest
+                .authority_repository
+                .strip_prefix("github.com/")
+                .ok_or_else(|| {
+                    DeliveryError::new("authority repository is not hosted by GitHub")
+                })?;
+            check_gh_stack_private_preview(&ProcessCommandOutput, repository)?;
             Ok(WorkflowOutput {
                 schema_version: DELIVERY_SCHEMA_VERSION,
                 operation: "stack-capability".to_owned(),

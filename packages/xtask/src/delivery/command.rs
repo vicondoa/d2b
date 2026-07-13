@@ -1648,7 +1648,6 @@ mod tests {
     use std::{cell::RefCell, collections::VecDeque};
 
     use super::*;
-    use std::{cell::RefCell, collections::VecDeque};
 
     type CommandCall = (String, Vec<String>, Option<PathBuf>);
 
@@ -1658,10 +1657,10 @@ mod tests {
     }
 
     impl FakeCommand {
-        fn new(outputs: Vec<CommandOutput>) -> Self {
+        fn new(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
             Self {
                 calls: RefCell::new(Vec::new()),
-                outputs: RefCell::new(outputs.into()),
+                outputs: RefCell::new(outputs.into_iter().collect()),
             }
         }
     }
@@ -1751,37 +1750,6 @@ mod tests {
                 }
             }
         })
-    }
-
-    struct FakeCommand {
-        outputs: RefCell<VecDeque<CommandOutput>>,
-        calls: RefCell<Vec<(String, Vec<String>)>>,
-    }
-
-    impl FakeCommand {
-        fn new(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
-            Self {
-                outputs: RefCell::new(outputs.into_iter().collect()),
-                calls: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl CommandOutputAdapter for FakeCommand {
-        fn output(
-            &self,
-            program: &str,
-            args: &[String],
-            _cwd: Option<&Path>,
-        ) -> Result<CommandOutput> {
-            self.calls
-                .borrow_mut()
-                .push((program.to_owned(), args.to_vec()));
-            self.outputs
-                .borrow_mut()
-                .pop_front()
-                .ok_or_else(|| DeliveryError::new("missing fake command output"))
-        }
     }
 
     #[test]
@@ -2098,14 +2066,8 @@ mod tests {
     #[test]
     fn gh_stack_private_preview_probe_is_read_only_and_version_pinned() {
         let command = FakeCommand::new([
-            CommandOutput {
-                success: true,
-                stdout: b"gh stack version 0.0.7\n".to_vec(),
-            },
-            CommandOutput {
-                success: true,
-                stdout: b"[]\n".to_vec(),
-            },
+            successful_output(b"gh stack version 0.0.7\n".to_vec()),
+            successful_output(b"[]\n".to_vec()),
         ]);
 
         check_gh_stack_private_preview(&command, "example/d2b").expect("available");
@@ -2113,7 +2075,7 @@ mod tests {
         assert_eq!(
             *command.calls.borrow(),
             vec![
-                ("gh-stack".to_owned(), vec!["--version".to_owned()]),
+                ("gh-stack".to_owned(), vec!["--version".to_owned()], None),
                 (
                     "gh".to_owned(),
                     vec![
@@ -2122,6 +2084,7 @@ mod tests {
                         "GET".to_owned(),
                         "repos/example/d2b/cli_internal/pulls/stacks".to_owned(),
                     ],
+                    None,
                 ),
             ]
         );
@@ -2130,13 +2093,12 @@ mod tests {
     #[test]
     fn gh_stack_private_preview_failure_has_no_mutating_fallback() {
         let command = FakeCommand::new([
-            CommandOutput {
-                success: true,
-                stdout: b"gh stack version 0.0.7\n".to_vec(),
-            },
+            successful_output(b"gh stack version 0.0.7\n".to_vec()),
             CommandOutput {
                 success: false,
+                exit_code: Some(1),
                 stdout: Vec::new(),
+                stderr: Vec::new(),
             },
         ]);
 
@@ -2149,10 +2111,8 @@ mod tests {
 
     #[test]
     fn gh_stack_version_or_malformed_preview_response_fails_closed() {
-        let wrong_version = FakeCommand::new([CommandOutput {
-            success: true,
-            stdout: b"gh stack version 0.0.6\n".to_vec(),
-        }]);
+        let wrong_version =
+            FakeCommand::new([successful_output(b"gh stack version 0.0.6\n".to_vec())]);
         let error = check_gh_stack_private_preview(&wrong_version, "example/d2b")
             .expect_err("wrong version");
         assert!(
@@ -2162,14 +2122,8 @@ mod tests {
         );
 
         let malformed = FakeCommand::new([
-            CommandOutput {
-                success: true,
-                stdout: b"gh stack version 0.0.7\n".to_vec(),
-            },
-            CommandOutput {
-                success: true,
-                stdout: br#"{"unexpected":true}"#.to_vec(),
-            },
+            successful_output(b"gh stack version 0.0.7\n".to_vec()),
+            successful_output(br#"{"unexpected":true}"#.to_vec()),
         ]);
         let error =
             check_gh_stack_private_preview(&malformed, "example/d2b").expect_err("malformed");
@@ -2182,28 +2136,16 @@ mod tests {
             br#"[{"id":1,"pull_requests":[0]}]"#.as_slice(),
         ] {
             let malformed_array = FakeCommand::new([
-                CommandOutput {
-                    success: true,
-                    stdout: b"gh stack version 0.0.7\n".to_vec(),
-                },
-                CommandOutput {
-                    success: true,
-                    stdout: payload.to_vec(),
-                },
+                successful_output(b"gh stack version 0.0.7\n".to_vec()),
+                successful_output(payload.to_vec()),
             ]);
             check_gh_stack_private_preview(&malformed_array, "example/d2b")
                 .expect_err("malformed stack record");
         }
 
         let valid = FakeCommand::new([
-            CommandOutput {
-                success: true,
-                stdout: b"gh stack version 0.0.7\n".to_vec(),
-            },
-            CommandOutput {
-                success: true,
-                stdout: br#"[{"id":7,"pull_requests":[101,102]}]"#.to_vec(),
-            },
+            successful_output(b"gh stack version 0.0.7\n".to_vec()),
+            successful_output(br#"[{"id":7,"pull_requests":[101,102]}]"#.to_vec()),
         ]);
         check_gh_stack_private_preview(&valid, "example/d2b").expect("typed stack record");
     }
