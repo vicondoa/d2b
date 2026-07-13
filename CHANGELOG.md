@@ -48,6 +48,16 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Hardened delivery subprocess supervision against PID reuse, orphaned process
+  groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
+  lost bounded diagnostics.
+- Staged external attestations and panel receipts into private immutable state
+  before verification, retained bounded validation output, and made delivery
+  state access fd-relative with nonblocking OFD locks.
+- Made generated Layer-1 CI evaluate exact pull-request heads, redact workspace
+  paths from failure tails, and publish bounded failure summaries to GitHub.
+- Aligned delivery command documentation, Nix tool pinning, and the flake-check
+  matrix with the implemented fail-closed workflow.
 - Hardened Layer-1 scheduling and generated CI rollups against slot underfill,
   skippable-only dependency coverage, invalid workflow job IDs, option-like Make
   targets, and clean environments without `sccache`.
