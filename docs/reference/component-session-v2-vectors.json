@@ -1,0 +1,913 @@
+{
+  "contract": "d2b-component-session-v2-noise-vectors",
+  "formatVersion": 1,
+  "snowVersion": "0.10.0",
+  "vectors": [
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f1700a6241d6f1518c7f88076d88f384c171821b5479bfd6e6ac34cca",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a6461656d6f6e2d6c6f63616c",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3150bdb14cd450717654709a5acf0a4ed3cf5e0f8c4d9939c5b282bcd",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a6461656d6f6e2d6c6f63616c"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a6461656d6f6e2d6c6f63616c",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1969cfc52f3a2befb04b2d2288f9e31ddc794f963b4de4c3b1368b8fcbe"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a6461656d6f6e2d6c6f63616c",
+        "6163636570743a6461656d6f6e2d6c6f63616c"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "command-client",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d6461656d6f6e2d6c6f63616c3b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e6461656d6f6e2e76323b696e69746961746f723d636f6d6d616e642d636c69656e743b726573706f6e6465723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "daemon-local",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "local-root-controller",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.daemon.v2",
+      "transcriptHashHex": "e8635619ed5a8ada2f7b18a352be756b34504eabdeba647953c81e397be24823",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0313ac3f1b655d0685fa867f73bc5a8f935587c95ccfe9325781ce2ad9ea",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a70726f76696465722d6167656e74",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd30118d10fcb4f4f0927450facc8863eb83b18f8218ea7b4ef83a81ea1d02b",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a70726f76696465722d6167656e74"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a70726f76696465722d6167656e74",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab19688ef58e8a4b4b31af0d02e86411f00996b81d5abd47aa1bec47e69ca8d09"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a70726f76696465722d6167656e74",
+        "6163636570743a70726f76696465722d6167656e74"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "realm-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d70726f76696465722d6167656e743b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e70726f76696465722e76323b696e69746961746f723d7265616c6d2d636f6e74726f6c6c65723b726573706f6e6465723d70726f76696465722d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "provider-agent",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "provider-agent",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.provider.v2",
+      "transcriptHashHex": "759d90055f55a15d978457da30682342ea373176e39ce4ac0959e440576d5574",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0313aa3f1b6d5d13cdffcc786fa71d1804e93599dd8c058d3c1835ae13e1618661",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a70726976696c656765642d62726f6b6572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd30118d70fcb474f1c6f4045abd49d14c19e488cff5ad688afe70a3ed18901f955a6",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a70726976696c656765642d62726f6b6572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a70726976696c656765642d62726f6b6572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab19688ef5ee8a4bcb30fb8d564815d04b26348c0e43c5e9bdb65aa9a677b1f36572723"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a70726976696c656765642d62726f6b6572",
+        "6163636570743a70726976696c656765642d62726f6b6572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d70726976696c656765642d62726f6b65723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e62726f6b65722e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d6c6f63616c2d726f6f742d62726f6b65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "privileged-broker",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "local-root-broker",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.broker.v2",
+      "transcriptHashHex": "be52aa5977c4c1a80b0c63a7cdda127edcc38509e3caf3f9bfd3d51a8388eb2c",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0612a63b5f605f11c6ef943158e1ae2609d27fd5ff79dec583a0",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a757365722d6167656e74",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd30419db0b8f4a4d1e6450ffb17e3a01a7575bb8cf310da7fae986",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a757365722d6167656e74"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a757365722d6167656e74",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968dee52ece0b1b10db3c571c6416407ab1cca4240e3885df1d595"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a757365722d6167656e74",
+        "6163636570743a757365722d6167656e74"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "command-client",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d757365722d6167656e743b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e757365722e76323b696e69746961746f723d636f6d6d616e642d636c69656e743b726573706f6e6465723d757365722d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "user-agent",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "user-agent",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.user.v2",
+      "transcriptHashHex": "45f3c21c526b7e400a1ec0db08ddc491969a885bbeda53add2e85a732571627b",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0114ad3d1b6c5d59dbe2926e78a5125003f42c772458c83d1b1baab59ad9979d67d83263",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a72756e74696d652d73797374656d642d75736572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3031fd00dcb464f56795d1bbdc39f1b899966114f4cc7faf92db7c48240bfa7e70590f1f1",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a72756e74696d652d73797374656d642d75736572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a72756e74696d652d73797374656d642d75736572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968ae859eaa4bdb345aec83a974a06bd2b4f336f320497caad036dc396ee99a70e33c97176"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a72756e74696d652d73797374656d642d75736572",
+        "6163636570743a72756e74696d652d73797374656d642d75736572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d72756e74696d652d73797374656d642d757365723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e72756e74696d652e73797374656d642d757365722e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d72756e74696d652d73797374656d642d757365722d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "runtime-systemd-user",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "runtime-systemd-user-agent",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.runtime.systemd-user.v2",
+      "transcriptHashHex": "47b69811c0e7b795865daae014d7af2c1252fec5bd30a6891c0a523e53e8672e",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0009a6251e2c4b01d8fe936c74bb190f428c6af5d11f58b0f1059ad98a66a77c",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7368656c6c2d73757065727669736f72",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd30202db15ce06590e7a411abfcf8110d6429b7ce1c5e751a34ee34a09bb130a24",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a7368656c6c2d73757065727669736f72"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a7368656c6c2d73757065727669736f72",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968bf552f2a1fda51dadd43b954618b6740dba6fbf1e720a56d7dacabe3148ff65"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a7368656c6c2d73757065727669736f72",
+        "6163636570743a7368656c6c2d73757065727669736f72"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "runtime-systemd-user-agent",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d7368656c6c2d73757065727669736f723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e7368656c6c2e76323b696e69746961746f723d72756e74696d652d73797374656d642d757365722d6167656e743b726573706f6e6465723d7368656c6c2d73757065727669736f723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "shell-supervisor",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "shell-supervisor",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.shell.v2",
+      "transcriptHashHex": "52795028c65cd8f419675eeed5e0b95cc1c496494eb40a3c5f0aa8a558cdee75",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f100daa39106e5906ccb6827573bc04121a61a0a91b9a945d8ba24ac1307ce07db4",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a636c6970626f6172642d636f6e74726f6c",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd31206d709c0444b096e090ba6c8860dcb809d6adb65c5e455a543da1c0654394387",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a636c6970626f6172642d636f6e74726f6c"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a636c6970626f6172642d636f6e74726f6c",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1969bf15eeeafbfb71ab99c2a8c411fab6956416b6f3d92be95d1d3070904ed0857e2"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a636c6970626f6172642d636f6e74726f6c",
+        "6163636570743a636c6970626f6172642d636f6e74726f6c"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "user-agent",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d636c6970626f6172642d636f6e74726f6c3b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e636c6970626f6172642e76323b696e69746961746f723d757365722d6167656e743b726573706f6e6465723d636c6970626f6172642d6461656d6f6e3b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "clipboard-control",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "clipboard-daemon",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.clipboard.v2",
+      "transcriptHashHex": "58d972efaa90e5a733a4eff76899eda2cf52eead4c44a972cc6e8ee47cb61d36",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f100daa39106e5906ccb691737ea3130f3e0c28f54212c04cd9f7eb4440b72ae0",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a636c6970626f6172642d7069636b6572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd31206d709c0444b096e0918a0c5991ad66ddb2e672736f0970f5ab03571fb7d91",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a636c6970626f6172642d7069636b6572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a636c6970626f6172642d7069636b6572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1969bf15eeeafbfb71ab99c398a4c00bc74e8d0feb147ba39e3dba35acfd5a77b4d"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a636c6970626f6172642d7069636b6572",
+        "6163636570743a636c6970626f6172642d7069636b6572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "clipboard-daemon",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d636c6970626f6172642d7069636b65723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e636c6970626f6172642e7069636b65722e76323b696e69746961746f723d636c6970626f6172642d6461656d6f6e3b726573706f6e6465723d636c6970626f6172642d7069636b65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "clipboard-picker",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "clipboard-picker",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.clipboard.picker.v2",
+      "transcriptHashHex": "5f33d75dd5b1c5d6863dccc4ae606239adce1f3ed60280baf1da062b882cb2c7",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f100daa39106e5906ccb6836874ac1118714f69bf66a6ee1edd79b69e65212a36",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a636c6970626f6172642d627269646765",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd31206d709c0444b096e090abbcf9618c1880c96ca9ef1c8494b7f9cab00a8880f",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a636c6970626f6172642d627269646765"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a636c6970626f6172642d627269646765",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1969bf15eeeafbfb71ab99c2b91460fbe630d9ea3484bfec16fa838da6d98be19fa"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a636c6970626f6172642d627269646765",
+        "6163636570743a636c6970626f6172642d627269646765"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "wayland-proxy",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d636c6970626f6172642d6272696467653b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e636c6970626f6172642e76323b696e69746961746f723d7761796c616e642d70726f78793b726573706f6e6465723d636c6970626f6172642d6461656d6f6e3b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "clipboard-bridge",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "clipboard-daemon",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.clipboard.v2",
+      "transcriptHashHex": "2d72379c01f63f4d06ecf6d2d6b793f1b9121cd519a064879752975aa429a61d",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f1704b022066e4859c7f9927f6fbe130f3f6991f2c299243b96193451626ca27a",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a6465736b746f702d6f62736572766572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3150fcd12d6445a5665461bacd4841ad60b17f0e025a1dac91495dd9da6a9c61e",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a6465736b746f702d6f62736572766572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a6465736b746f702d6f62736572766572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1969cf844f5b9bfa645b2d33a865d1dbc7413852da900672c51d9614885d558409d"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a6465736b746f702d6f62736572766572",
+        "6163636570743a6465736b746f702d6f62736572766572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d6465736b746f702d6f627365727665723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e6e6f746966792e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d6465736b746f702d6f627365727665723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "desktop-observer",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "desktop-observer",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.notify.v2",
+      "transcriptHashHex": "87b052306a982000063913aa576735b300382a2c465bc22dc4231ddff9e4b1fb",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0004a03c00684c0d85f0846341063ffe2027d45586874c0579bcddcd",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a73656375726974792d6b6579",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3020fdd0cd0425e02274f0db0076104c774d128fccb365cadffeda07f",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a73656375726974792d6b6579"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a73656375726974792d6b6579",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968bf854ebbfb9a211f0da2c9a31a95a48eda1bce1e0dd6558f2059576"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a73656375726974792d6b6579",
+        "6163636570743a73656375726974792d6b6579"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "security-key-frontend",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d73656375726974792d6b65793b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e73656375726974792d6b65792e76323b696e69746961746f723d73656375726974792d6b65792d66726f6e74656e643b726573706f6e6465723d73656375726974792d6b65792d636f6e74726f6c6c65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "security-key",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "security-key-controller",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.security-key.v2",
+      "transcriptHashHex": "77aa56adb794b7031454474943e1bdc2f85e428d02d017c179a2efe1659d733f",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f1202b72004604c1dc7f5cc7278a406180483bb41bb68d84d129baae50879d40bc6",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a61637469766174696f6e2d68656c706572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd31009ca10d44a5e12654a45a1c39e0fc19e2ff7a757594d1f3a2ebe32757e30b029",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a61637469766174696f6e2d68656c706572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a61637469766174696f6e2d68656c706572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab19699fe43f7bbb1a201b2df648b4a07a963480682ad7ac3b3e41b2e744225d536a0c8"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a61637469766174696f6e2d68656c706572",
+        "6163636570743a61637469766174696f6e2d68656c706572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d61637469766174696f6e2d68656c7065723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e61637469766174696f6e2e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d61637469766174696f6e2d68656c7065723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "activation-helper",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "activation-helper",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.activation.v2",
+      "transcriptHashHex": "425aa43da4726a39e88400aa53361019f19ecd2c3a1de22ca820828a0e72b4f6",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0715ba641a645404cde9089852ab8d4133b39e831d4b59c93bd0",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7474792d68656c706572",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3051ec754ca4e460b6f567c243a30569f1f8afaad82e40ed1ce86",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a7474792d68656c706572"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a7474792d68656c706572",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968ce94eb3a5b5ba18b8c3b0002f3bdcc90db58378c951088221fa"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a7474792d68656c706572",
+        "6163636570743a7474792d68656c706572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "command-client",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d7474792d68656c7065723b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e7474792e76323b696e69746961746f723d636f6d6d616e642d636c69656e743b726573706f6e6465723d7474792d68656c7065723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "tty-helper",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "tty-helper",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.tty.v2",
+      "transcriptHashHex": "4b1bef0b31082d31b13c554e532bcba83084931e937fbbfcb9d0deeedf092bba",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "6a7ca547e4f3626049ebe830a9fa6236fc6f92df829c4f0400ba25136f5c59d8e98e626493e0b3656c24df1af71c192467927c22",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7761796c616e642d70726f7879",
+        "responderCiphertextHex": "d2cfda0811473265a6bad918d23227dac0075c94c7bfd3060bc715c3454e567a5607b1dfab7e3a366f7f931dfaf4681529ce7159",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a7761796c616e642d70726f7879"
+      },
+      "fixtureId": "component-session-v2-local-nn",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b146f666665723a7761796c616e642d70726f7879",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b72d9b8593ab1968ffc4ef2acbeb245adc3269b564142785a3be1d0fb6e129958dafe6e9f"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a7761796c616e642d70726f7879",
+        "6163636570743a7761796c616e642d70726f7879"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": null,
+      "initiatorStaticPublicHex": null,
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d7761796c616e642d70726f78793b707572706f73652d636c6173733d6c6f63616c3b736572766963653d6432622e7761796c616e642e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d7761796c616e642d70726f78793b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d7061636b65742d61746f6d6963",
+      "protocolName": "Noise_NN_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "wayland-proxy",
+      "purposeClass": "local",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "wayland-proxy",
+      "responderStaticPrivateHex": null,
+      "responderStaticPublicHex": null,
+      "servicePackage": "d2b.wayland.v2",
+      "transcriptHashHex": "05136c38369d55e6d0c7534fc216ddfa6c7dc559bbe9ec981b041e66cba3bf6e",
+      "transportKeysHex": {
+        "initiatorToResponder": "080e8d3a3cdf86d0f43256d8eeeabbf74d5c4564c90f3f13e3f8dc6d317d45c7",
+        "responderToInitiator": "05cff8dd234aaeb61f5a9e6f85e9715dd7094d8debce99a4700e2ea30110f51c"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "49b0f0f5f9cc84439a030a94949510769a16237ccc54162cfb8e71ce5336274e10408d47322c861fc3f7ab75481ec50dfba39b80",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a6461656d6f6e2d72656d6f7465",
+        "responderCiphertextHex": "79c490fd161f2215e55d2b538e1b3c10a2fe480bbc4db39f788daa137c6467069b7d2fa0dae2cae1be9b24dca3900f006f82780d",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a6461656d6f6e2d72656d6f7465"
+      },
+      "fixtureId": "component-session-v2-enrolled-kk",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1452e22d70852b6fc63d1b443b129135f207bc4306d033d99eeb220e70da2db25c4969e1",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b812eb8f35bef754d001cf897063652ea736d7b3dd667aa883f8a119c8dc7cbaae0c8d5de"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a6461656d6f6e2d72656d6f7465",
+        "6163636570743a6461656d6f6e2d72656d6f7465"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "remote-peer",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d6461656d6f6e2d72656d6f74653b707572706f73652d636c6173733d656e726f6c6c65643b736572766963653d6432622e6461656d6f6e2e76323b696e69746961746f723d72656d6f74652d706565723b726573706f6e6465723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_KK_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "daemon-remote",
+      "purposeClass": "enrolled",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "local-root-controller",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.daemon.v2",
+      "transcriptHashHex": "2a6918b2fb79ce0b79262507dfd585d326fc6d0b2afd1ec8d79ddb4192bdec5c",
+      "transportKeysHex": {
+        "initiatorToResponder": "d4d2025f2ac70462bdab562ed663e95c9c094f8fa742498c1a50601d8ec2e6a9",
+        "responderToInitiator": "5d62ed8ffe020be22774dc12710affb97817fbc6624b531be3adcc427778213a"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "49b0f0f5f9cc84439a030a94949510769a16237ccc54163aff8a70cc106b304e0fd5c1249066a2316cff2e344782dd00f1",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7265616c6d2d70656572",
+        "responderCiphertextHex": "79c490fd161f2215e55d2b538e1b3c10a2fe480bbc4db3897c89ab113f397006840b721b8d056244c0f53fabfd5525d14b",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a7265616c6d2d70656572"
+      },
+      "fixtureId": "component-session-v2-enrolled-kk",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1452e22d70852b79c2391a46784f8635edbd81e03dd41fe82409443165cfb111f5",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b812eb8f35bef755b0418f995456b45ea6c4883dcf342dd3c1ce046f5ad6ccacfd0"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a7265616c6d2d70656572",
+        "6163636570743a7265616c6d2d70656572"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "realm-controller",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d7265616c6d2d706565723b707572706f73652d636c6173733d656e726f6c6c65643b736572766963653d6432622e7265616c6d2e76323b696e69746961746f723d7265616c6d2d636f6e74726f6c6c65723b726573706f6e6465723d7265616c6d2d636f6e74726f6c6c65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_KK_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "realm-peer",
+      "purposeClass": "enrolled",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "realm-controller",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.realm.v2",
+      "transcriptHashHex": "35a6386b78896400bac4794c53772a51ee2ff51d563042f9968c5f21501a0d41",
+      "transportKeysHex": {
+        "initiatorToResponder": "d4d2025f2ac70462bdab562ed663e95c9c094f8fa742498c1a50601d8ec2e6a9",
+        "responderToInitiator": "5d62ed8ffe020be22774dc12710affb97817fbc6624b531be3adcc427778213a"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "49b0f0f5f9cc84439a030a94949510769a16237ccc54162fef8e6fd510783a45095d964e0c2b3dafd8d8273a27e1112fc2e21a3c",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a67756573742d636f6e74726f6c",
+        "responderCiphertextHex": "79c490fd161f2215e55d2b538e1b3c10a2fe480bbc4db39c6c8db4083f2a7a0d826034a9fc9a1009bf87b8727e461960d5d1166a",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a67756573742d636f6e74726f6c"
+      },
+      "fixtureId": "component-session-v2-enrolled-kk",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1452e22d70852b6cd23d055f785c8c3eeb1aa74a2fabfb776bbbb03a0464dc53f5a8a604",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b812eb8f35bef754e141ce68c45784fe16a706034fdf498413a0b47ddb288c4cae54b5476"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a67756573742d636f6e74726f6c",
+        "6163636570743a67756573742d636f6e74726f6c"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "realm-controller",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d67756573742d636f6e74726f6c3b707572706f73652d636c6173733d656e726f6c6c65643b736572766963653d6432622e67756573742e76323b696e69746961746f723d7265616c6d2d636f6e74726f6c6c65723b726573706f6e6465723d67756573742d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_KK_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "guest-control",
+      "purposeClass": "enrolled",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "guest-agent",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.guest.v2",
+      "transcriptHashHex": "95a60fbd9185e80d9f74b42f1aa225d045b60903b49df2391162f26bb9433819",
+      "transportKeysHex": {
+        "initiatorToResponder": "d4d2025f2ac70462bdab562ed663e95c9c094f8fa742498c1a50601d8ec2e6a9",
+        "responderToInitiator": "5d62ed8ffe020be22774dc12710affb97817fbc6624b531be3adcc427778213a"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "49b0f0f5f9cc84439a030a94949510769a16237ccc541638e8846ac8597e27061c489c4ca58a7836c46ffa1ceed16310acbf46b73b",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a70726f76696465722d6167656e74",
+        "responderCiphertextHex": "79c490fd161f2215e55d2b538e1b3c10a2fe480bbc4db38b6b87b115762c674e97753eab5973a2954dbce12198a35468ee9f97159a",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a70726f76696465722d6167656e74"
+      },
+      "fixtureId": "component-session-v2-enrolled-kk",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1452e22d70852b7bd5370042315a917dfe0fad484131f6fdf931bc347663588002a91ffa06",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b812eb8f35bef75591316e3910c7e52a27f656a366f6ac9fb68a60475506ffb66eb263fda34"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a70726f76696465722d6167656e74",
+        "6163636570743a70726f76696465722d6167656e74"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "realm-controller",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d70726f76696465722d6167656e743b707572706f73652d636c6173733d656e726f6c6c65643b736572766963653d6432622e70726f76696465722e76323b696e69746961746f723d7265616c6d2d636f6e74726f6c6c65723b726573706f6e6465723d70726f76696465722d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_KK_25519_ChaChaPoly_SHA256",
+      "pskHex": null,
+      "purpose": "provider-agent",
+      "purposeClass": "enrolled",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "provider-agent",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.provider.v2",
+      "transcriptHashHex": "803b2d9919c7c13c430fb4bf4688752d28f35425bf49efc62684d89319874fe6",
+      "transportKeysHex": {
+        "initiatorToResponder": "d4d2025f2ac70462bdab562ed663e95c9c094f8fa742498c1a50601d8ec2e6a9",
+        "responderToInitiator": "5d62ed8ffe020be22774dc12710affb97817fbc6624b531be3adcc427778213a"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "033d9422c98c4435014b62f49241d0ee5358a30d360c4b2f4a5eeb4d4facfe6836d576155412f5a2c5522d9ba9b22b3f3dee330320ce",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7265616c6d2d626f6f747374726170",
+        "responderCiphertextHex": "9a66376c2a3e58d884eb27848b430af8a50e22c7dec0d0ea05fda250c99c4ea0fe761d7a137404cc213e8141fcfb046f4f4c0035a8f5",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a7265616c6d2d626f6f747374726170"
+      },
+      "fixtureId": "component-session-v2-bootstrap-ikpsk2",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1422a32f05d40a96bfb8f06dd1ddc397afcea40c331abccc5138fc95f6d4dc916b9bb6b4c29758bb90be96d286af11941b70d8b26cc1911e2f6074c04764b756f054cfae2e3d75e05cc778386bdc6bd8e61088a5cc90",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b45574c42ed6e2225de4eda2ccad7adde2a2e652cef54610e6984296ca63c6c82ddcf3771011e"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a7265616c6d2d626f6f747374726170",
+        "6163636570743a7265616c6d2d626f6f747374726170"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "local-root-controller",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d7265616c6d2d626f6f7473747261703b707572706f73652d636c6173733d626f6f7473747261703b736572766963653d6432622e7265616c6d2e76323b696e69746961746f723d6c6f63616c2d726f6f742d636f6e74726f6c6c65723b726573706f6e6465723d7265616c6d2d636f6e74726f6c6c65723b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_IKpsk2_25519_ChaChaPoly_SHA256",
+      "pskHex": "5555555555555555555555555555555555555555555555555555555555555555",
+      "purpose": "realm-bootstrap",
+      "purposeClass": "bootstrap",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch",
+        "wrong-operation",
+        "expired-psk",
+        "psk-replay"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "realm-controller",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.realm.v2",
+      "transcriptHashHex": "de2a8ba011cd43d0872ee198d7af2d147be9e2805ef53f91dc63e0b905a72269",
+      "transportKeysHex": {
+        "initiatorToResponder": "e266b37eba64fd12fbbbf5009a7baadec18ce5bdd455d2273c9aee74d8b5420e",
+        "responderToInitiator": "142046e59faf31284c2ad23461cd32499ca0172c295682a52356f08b42378bdf"
+      }
+    },
+    {
+      "firstRecords": {
+        "initiatorCiphertextHex": "033d9422c98c4435014b62f49241d0ee5358a30d360c4b3a5a5af4544facfe6836d5761554121049e8afa47b13e77b12e4120515175e",
+        "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a67756573742d626f6f747374726170",
+        "responderCiphertextHex": "9a66376c2a3e58d884eb27848b430af8a50e22c7dec0d0ff15f9bd49c99c4ea0fe761d7a137405e8c48e2acdba1c9f78f13a8dc34afe",
+        "responderPlaintextHex": "66697273742d7265636f72643a726573706f6e6465723a67756573742d626f6f747374726170"
+      },
+      "fixtureId": "component-session-v2-bootstrap-ikpsk2",
+      "handshakeMessagesHex": [
+        "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1422a32f05d40a96bfb8f06dd1ddc397afcea40c331abccc5138fc95f6d4dc916bca00def374649189295916adab35b10670d8b26cc1910b3f646bd94764b756f054cfae2e3df4e1016c5b8fd8713a40950f4379c380",
+        "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b45574c42ed6e2230ce4ac535cad7adde2a2e652cef544524c36ed9d203a6976c60be3fff5a27"
+      ],
+      "handshakePayloadsHex": [
+        "6f666665723a67756573742d626f6f747374726170",
+        "6163636570743a67756573742d626f6f747374726170"
+      ],
+      "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorRole": "realm-controller",
+      "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
+      "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
+      "prologueHex": "6432622d636f6d706f6e656e742d73657373696f6e2d76323b707572706f73653d67756573742d626f6f7473747261703b707572706f73652d636c6173733d626f6f7473747261703b736572766963653d6432622e67756573742e76323b696e69746961746f723d7265616c6d2d636f6e74726f6c6c65723b726573706f6e6465723d67756573742d6167656e743b736368656d613d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313b6c696d6974733d64656661756c742d76323b6368616e6e656c3d323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323b67656e65726174696f6e3d313b6174746163686d656e74733d64697361626c6564",
+      "protocolName": "Noise_IKpsk2_25519_ChaChaPoly_SHA256",
+      "pskHex": "5555555555555555555555555555555555555555555555555555555555555555",
+      "purpose": "guest-bootstrap",
+      "purposeClass": "bootstrap",
+      "rejectionMutations": [
+        "transcript-downgrade",
+        "cross-purpose",
+        "purpose-class-mismatch",
+        "role-mismatch",
+        "schema-mismatch",
+        "limit-mismatch",
+        "channel-binding-mismatch",
+        "wrong-operation",
+        "expired-psk",
+        "psk-replay"
+      ],
+      "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderRole": "guest-agent",
+      "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
+      "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
+      "servicePackage": "d2b.guest.v2",
+      "transcriptHashHex": "27d7c4404d471aa35a85db6881cd361f39f23ebe33d3357bd0caff1b73609439",
+      "transportKeysHex": {
+        "initiatorToResponder": "e266b37eba64fd12fbbbf5009a7baadec18ce5bdd455d2273c9aee74d8b5420e",
+        "responderToInitiator": "142046e59faf31284c2ad23461cd32499ca0172c295682a52356f08b42378bdf"
+      }
+    }
+  ]
+}

@@ -85,6 +85,7 @@ schemars = { version = "0.8", features = ["derive"] }
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
 rtnetlink = "0.14"
 sha2 = "0.10"
+snow = { version = "=0.10.0", features = ["risky-raw-split"] }
 tokio = { version = "1", default-features = false }
 ttrpc = { version = "=0.9.0", default-features = false }
 ttrpc-codegen = "=0.6.0"
