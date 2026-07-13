@@ -1,12 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Condvar, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -18,6 +19,9 @@ use super::{
 
 static NEXT_LOG_DIR: AtomicU64 = AtomicU64::new(1);
 const FAILURE_TAIL_LINES: usize = 200;
+const SUMMARY_TAIL_LINES: usize = 40;
+const STEP_SUMMARY_MAX_BYTES: usize = 16 * 1024;
+const STEP_SUMMARY_TRUNCATED: &str = "\n\n_Additional output omitted._\n";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobStatus {
@@ -65,13 +69,70 @@ pub trait LocalJobRunner: Sync {
 }
 
 #[derive(Clone, Debug)]
+struct SummaryEntry {
+    job_id: String,
+    lines: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct WorkspaceRedactor {
+    roots: Vec<String>,
+}
+
+impl WorkspaceRedactor {
+    fn new(root: &Path, aliases: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut paths = Vec::new();
+        paths.push(root.to_path_buf());
+        paths.extend(aliases);
+
+        let mut roots = Vec::new();
+        for path in paths {
+            if let Some(absolute) = absolute_path(&path) {
+                push_root_variants(&mut roots, &absolute);
+            }
+            if let Ok(canonical) = fs::canonicalize(&path) {
+                push_root_variants(&mut roots, &canonical);
+            }
+        }
+        roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
+        roots.dedup();
+        Self { roots }
+    }
+
+    fn redact(&self, text: &str) -> String {
+        self.roots.iter().fold(text.to_owned(), |redacted, root| {
+            replace_path_root(&redacted, root)
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ProcessJobRunner {
     root: PathBuf,
+    redactor: WorkspaceRedactor,
+    step_summary: Option<PathBuf>,
+    summary_entries: Arc<Mutex<Vec<SummaryEntry>>>,
 }
 
 impl ProcessJobRunner {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        let workspace = env::var_os("GITHUB_WORKSPACE").map(PathBuf::from);
+        let step_summary = env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from);
+        Self::with_step_summary(root, workspace, step_summary)
+    }
+
+    fn with_step_summary(
+        root: PathBuf,
+        workspace: Option<PathBuf>,
+        step_summary: Option<PathBuf>,
+    ) -> Self {
+        let redactor = WorkspaceRedactor::new(&root, workspace);
+        Self {
+            root,
+            redactor,
+            step_summary,
+            summary_entries: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     fn run_process(&self, job_id: &str, job: &JobSpec) -> Result<i32> {
@@ -107,6 +168,7 @@ impl ProcessJobRunner {
         if status.success() {
             println!("ok: {target}");
             flush_stdout();
+            self.record_summary(job_id, Vec::new());
             if env::var("D2B_CHECK_KEEP_LOGS").as_deref() != Ok("1") {
                 let _ = fs::remove_file(&log_path);
                 let _ = fs::remove_dir(&log_dir);
@@ -115,19 +177,72 @@ impl ProcessJobRunner {
         }
 
         let code = status.code().unwrap_or(1);
-        eprintln!(
-            "FAIL: {target} (exit {code}); tail of {}:",
-            log_path.display()
-        );
+        let redacted_log_path = self.redactor.redact(&log_path.display().to_string());
+        eprintln!("FAIL: {target} (exit {code}); tail of {redacted_log_path}:");
         match tail_lines(&log_path, FAILURE_TAIL_LINES) {
             Ok(lines) => {
-                for line in lines {
+                let redacted = lines
+                    .into_iter()
+                    .map(|line| self.redactor.redact(&line))
+                    .collect::<Vec<_>>();
+                for line in &redacted {
                     eprintln!("{line}");
                 }
+                self.record_summary(
+                    job_id,
+                    redacted
+                        .into_iter()
+                        .rev()
+                        .take(SUMMARY_TAIL_LINES)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect(),
+                );
             }
-            Err(error) => eprintln!("could not read {}: {error}", log_path.display()),
+            Err(error) => {
+                let message = format!(
+                    "could not read {redacted_log_path}: {}",
+                    self.redactor.redact(&error.to_string())
+                );
+                eprintln!("{message}");
+                self.record_summary(job_id, vec![message]);
+            }
         }
         Ok(code)
+    }
+
+    fn record_summary(&self, job_id: &str, lines: Vec<String>) {
+        self.summary_entries
+            .lock()
+            .expect("Layer-1 summary entries lock")
+            .push(SummaryEntry {
+                job_id: job_id.to_owned(),
+                lines,
+            });
+    }
+
+    pub fn append_step_summary(&self, report: &ExecutionReport) -> Result<()> {
+        let Some(path) = &self.step_summary else {
+            return Ok(());
+        };
+        let entries = self
+            .summary_entries
+            .lock()
+            .expect("Layer-1 summary entries lock")
+            .clone();
+        let summary = render_step_summary(report, &entries, &self.redactor);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|error| {
+                Layer1Error::new(format!("cannot append GitHub step summary: {error}"))
+            })?;
+        file.write_all(summary.as_bytes()).map_err(|error| {
+            Layer1Error::new(format!("cannot append GitHub step summary: {error}"))
+        })
     }
 
     fn create_log(&self, job_id: &str) -> Result<(PathBuf, PathBuf)> {
@@ -177,12 +292,139 @@ impl ProcessJobRunner {
     }
 }
 
+fn absolute_path(path: &Path) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else {
+        env::current_dir().ok().map(|current| current.join(path))
+    }
+}
+
+fn push_root_variants(roots: &mut Vec<String>, path: &Path) {
+    let root = path.to_string_lossy();
+    let root = root.trim_end_matches('/');
+    if root.is_empty() {
+        return;
+    }
+    roots.push(root.to_owned());
+    roots.push(root.replace('/', r"\/"));
+
+    let shell_escaped = root
+        .chars()
+        .flat_map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '/' | '_' | '-' | '.') {
+                [None, Some(character)]
+            } else {
+                [Some('\\'), Some(character)]
+            }
+        })
+        .flatten()
+        .collect::<String>();
+    roots.push(shell_escaped.replace('/', r"\/"));
+    roots.push(shell_escaped);
+}
+
+fn replace_path_root(text: &str, root: &str) -> String {
+    let mut rendered = String::with_capacity(text.len());
+    let mut remainder = text;
+    while let Some(index) = remainder.find(root) {
+        let (prefix, candidate) = remainder.split_at(index);
+        rendered.push_str(prefix);
+        let suffix = &candidate[root.len()..];
+        let boundary = suffix.chars().next().is_none_or(
+            |character| !matches!(character, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | '-' | '.'),
+        );
+        if boundary {
+            rendered.push('.');
+        } else {
+            rendered.push_str(root);
+        }
+        remainder = suffix;
+    }
+    rendered.push_str(remainder);
+    rendered
+}
+
+fn render_step_summary(
+    report: &ExecutionReport,
+    entries: &[SummaryEntry],
+    redactor: &WorkspaceRedactor,
+) -> String {
+    let mut rendered = String::from("## Layer-1 outcome\n\n");
+    if report.failures.is_empty() {
+        rendered.push_str(&format!(
+            "✅ All {} Layer-1 jobs passed.\n",
+            report.outcomes.len()
+        ));
+    } else {
+        rendered.push_str(&format!(
+            "❌ {} of {} Layer-1 jobs did not pass.\n",
+            report.failures.len(),
+            report.outcomes.len()
+        ));
+        for outcome in &report.failures {
+            let status = match &outcome.status {
+                JobStatus::Failed(code) => format!("exit {code}"),
+                JobStatus::Blocked(dependencies) => {
+                    format!("blocked by {}", dependencies.join(", "))
+                }
+                JobStatus::Succeeded => "passed".to_owned(),
+            };
+            rendered.push_str(&format!("- `{}` ({status})\n", outcome.job_id));
+        }
+
+        let entries = entries
+            .iter()
+            .map(|entry| (entry.job_id.as_str(), entry))
+            .collect::<BTreeMap<_, _>>();
+        for outcome in &report.failures {
+            let JobStatus::Failed(code) = outcome.status else {
+                continue;
+            };
+            let Some(entry) = entries.get(outcome.job_id.as_str()) else {
+                continue;
+            };
+            rendered.push_str(&format!(
+                "\n<details><summary>Redacted tail for <code>{}</code> (exit {code})</summary>\n\n",
+                outcome.job_id
+            ));
+            if entry.lines.is_empty() {
+                rendered.push_str("    No log tail was captured.\n");
+            } else {
+                for line in &entry.lines {
+                    rendered.push_str("    ");
+                    rendered.push_str(&redactor.redact(line));
+                    rendered.push('\n');
+                }
+            }
+            rendered.push_str("\n</details>\n");
+        }
+    }
+
+    truncate_step_summary(redactor.redact(&rendered))
+}
+
+fn truncate_step_summary(mut summary: String) -> String {
+    if summary.len() <= STEP_SUMMARY_MAX_BYTES {
+        return summary;
+    }
+    let mut keep = STEP_SUMMARY_MAX_BYTES - STEP_SUMMARY_TRUNCATED.len();
+    while !summary.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    summary.truncate(keep);
+    summary.push_str(STEP_SUMMARY_TRUNCATED);
+    summary
+}
+
 impl LocalJobRunner for ProcessJobRunner {
     fn run(&self, job_id: &str, job: &JobSpec) -> i32 {
         match self.run_process(job_id, job) {
             Ok(code) => code,
             Err(error) => {
-                eprintln!("FAIL: Layer-1 job {job_id}: {error}");
+                let message = self.redactor.redact(&error.to_string());
+                eprintln!("FAIL: Layer-1 job {job_id}: {message}");
+                self.record_summary(job_id, vec![message]);
                 1
             }
         }
@@ -846,5 +1088,167 @@ mod tests {
         assert_eq!(resolve_max_jobs(None, None, 4).unwrap(), 4);
         assert!(resolve_max_jobs(Some("0"), None, 4).is_err());
         assert!(resolve_max_jobs(None, Some("many"), 4).is_err());
+    }
+
+    #[test]
+    fn workspace_redaction_preserves_relative_context_for_nested_and_escaped_paths() {
+        let root = PathBuf::from("/home/runner/work/d2b/d2b checkout");
+        let alias = PathBuf::from("/actions/workspace/d2b");
+        let redactor = WorkspaceRedactor::new(&root, [alias.clone()]);
+        let text = format!(
+            "nested: {}/packages/xtask/src/layer1/runner.rs\n\
+             shell: /home/runner/work/d2b/d2b\\ checkout/packages/a\\ b.rs\n\
+             combined: \\/home\\/runner\\/work\\/d2b\\/d2b\\ checkout\\/packages\\/nested.rs\n\
+             escaped: \\/actions\\/workspace\\/d2b\\/packages\\/xtask\\/Cargo.toml\n\
+             unrelated: /usr/lib/libc.so\n\
+             prefix: {}-archive",
+            root.display(),
+            alias.display()
+        );
+        let redacted = redactor.redact(&text);
+
+        assert!(!redacted.contains(&root.display().to_string()));
+        assert!(!redacted.contains(r"/home/runner/work/d2b/d2b\ checkout"));
+        assert!(!redacted.contains(r"\/home\/runner\/work\/d2b\/d2b\ checkout"));
+        assert!(!redacted.contains(r"\/actions\/workspace\/d2b"));
+        assert!(redacted.contains("nested: ./packages/xtask/src/layer1/runner.rs"));
+        assert!(redacted.contains("shell: ./packages/a\\ b.rs"));
+        assert!(redacted.contains(r"combined: .\/packages\/nested.rs"));
+        assert!(redacted.contains(r"escaped: .\/packages\/xtask\/Cargo.toml"));
+        assert!(redacted.contains("unrelated: /usr/lib/libc.so"));
+        assert!(redacted.contains("prefix: /actions/workspace/d2b-archive"));
+    }
+
+    #[test]
+    fn step_summary_reports_success_without_raw_logs() {
+        let report = ExecutionReport {
+            outcomes: vec![JobOutcome {
+                job_id: "test-rust".to_owned(),
+                make_target: "test-rust".to_owned(),
+                status: JobStatus::Succeeded,
+            }],
+            failures: Vec::new(),
+        };
+        let redactor = WorkspaceRedactor::new(Path::new("/checkout/d2b"), []);
+        let summary = render_step_summary(&report, &[], &redactor);
+
+        assert_eq!(
+            summary,
+            "## Layer-1 outcome\n\n✅ All 1 Layer-1 jobs passed.\n"
+        );
+    }
+
+    #[test]
+    fn step_summary_redacts_failed_job_tail_and_reports_blocked_jobs() {
+        let report = ExecutionReport {
+            outcomes: vec![
+                JobOutcome {
+                    job_id: "test-rust".to_owned(),
+                    make_target: "test-rust".to_owned(),
+                    status: JobStatus::Failed(17),
+                },
+                JobOutcome {
+                    job_id: "test-policy".to_owned(),
+                    make_target: "test-policy".to_owned(),
+                    status: JobStatus::Blocked(vec!["test-rust".to_owned()]),
+                },
+            ],
+            failures: vec![
+                JobOutcome {
+                    job_id: "test-rust".to_owned(),
+                    make_target: "test-rust".to_owned(),
+                    status: JobStatus::Failed(17),
+                },
+                JobOutcome {
+                    job_id: "test-policy".to_owned(),
+                    make_target: "test-policy".to_owned(),
+                    status: JobStatus::Blocked(vec!["test-rust".to_owned()]),
+                },
+            ],
+        };
+        let redactor = WorkspaceRedactor::new(
+            Path::new("/home/runner/work/d2b/d2b"),
+            [PathBuf::from("/actions/checkout")],
+        );
+        let entries = vec![SummaryEntry {
+            job_id: "test-rust".to_owned(),
+            lines: vec![
+                "at /home/runner/work/d2b/d2b/packages/xtask/src/main.rs:1".to_owned(),
+                "also /actions/checkout/packages/xtask/src/lib.rs".to_owned(),
+            ],
+        }];
+        let summary = render_step_summary(&report, &entries, &redactor);
+
+        assert!(summary.contains("❌ 2 of 2 Layer-1 jobs did not pass."));
+        assert!(summary.contains("`test-rust` (exit 17)"));
+        assert!(summary.contains("`test-policy` (blocked by test-rust)"));
+        assert!(summary.contains("at ./packages/xtask/src/main.rs:1"));
+        assert!(summary.contains("also ./packages/xtask/src/lib.rs"));
+        assert!(!summary.contains("/home/runner/work/d2b/d2b"));
+        assert!(!summary.contains("/actions/checkout"));
+    }
+
+    #[test]
+    fn step_summary_is_byte_bounded_after_path_redaction() {
+        let report = ExecutionReport {
+            outcomes: vec![JobOutcome {
+                job_id: "test-rust".to_owned(),
+                make_target: "test-rust".to_owned(),
+                status: JobStatus::Failed(1),
+            }],
+            failures: vec![JobOutcome {
+                job_id: "test-rust".to_owned(),
+                make_target: "test-rust".to_owned(),
+                status: JobStatus::Failed(1),
+            }],
+        };
+        let redactor = WorkspaceRedactor::new(Path::new("/secret/checkout"), []);
+        let entries = vec![SummaryEntry {
+            job_id: "test-rust".to_owned(),
+            lines: vec![format!(
+                "/secret/checkout/packages/{}",
+                "x".repeat(STEP_SUMMARY_MAX_BYTES * 2)
+            )],
+        }];
+        let summary = render_step_summary(&report, &entries, &redactor);
+
+        assert_eq!(summary.len(), STEP_SUMMARY_MAX_BYTES);
+        assert!(summary.ends_with(STEP_SUMMARY_TRUNCATED));
+        assert!(!summary.contains("/secret/checkout"));
+    }
+
+    #[test]
+    fn github_step_summary_is_appended_and_absence_is_a_noop() {
+        let sequence = NEXT_LOG_DIR.fetch_add(1, Ordering::Relaxed);
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/xtask-layer1-summary-tests")
+            .join(format!("{}.{}", std::process::id(), sequence));
+        fs::create_dir_all(&directory).expect("summary test directory");
+        let path = directory.join("summary.md");
+        fs::write(&path, "existing\n").expect("existing summary");
+        let report = ExecutionReport {
+            outcomes: vec![JobOutcome {
+                job_id: "test-rust".to_owned(),
+                make_target: "test-rust".to_owned(),
+                status: JobStatus::Succeeded,
+            }],
+            failures: Vec::new(),
+        };
+
+        let runner =
+            ProcessJobRunner::with_step_summary(directory.clone(), None, Some(path.clone()));
+        runner
+            .append_step_summary(&report)
+            .expect("append step summary");
+        let contents = fs::read_to_string(&path).expect("read step summary");
+        assert!(contents.starts_with("existing\n"));
+        assert!(contents.ends_with("✅ All 1 Layer-1 jobs passed.\n"));
+
+        let without_summary = ProcessJobRunner::with_step_summary(directory.clone(), None, None);
+        without_summary
+            .append_step_summary(&report)
+            .expect("missing summary is a no-op");
+
+        fs::remove_dir_all(directory).expect("remove summary test directory");
     }
 }
