@@ -69,6 +69,8 @@ deprecations ship one minor release before removal.
   output root when the reviewed checkout is read-only.
 - Routed pinned Cargo gate targets and proof sockets through writable,
   validation-owned paths while keeping Unix socket names short.
+- Kept tracked validation sources read-only while allowing only private,
+  ignored Cargo target directories to remain writable.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

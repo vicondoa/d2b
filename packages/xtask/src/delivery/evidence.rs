@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs::{self, File},
     os::{
@@ -324,8 +324,9 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         "cannot select validation checkout commit",
     )?;
     verify_checkout_identity(runner, &source, repository)?;
-    make_source_read_only(&source)?;
-    verify_source_read_only(&source)?;
+    let writable_targets = prepare_validation_target_dirs(&source)?;
+    make_source_read_only(&source, &writable_targets)?;
+    verify_source_read_only(&source, &writable_targets)?;
     let cwd = secure_repository_subdir(&source, Path::new(&required.cwd.path))?;
     let environment = BTreeMap::from([
         (
@@ -346,12 +347,9 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         ),
         (
             OsString::from("D2B_VALIDATION_SOCKET_DIR"),
-            socket_root.into_os_string(),
+            socket_root.as_os_str().to_owned(),
         ),
-        (
-            OsString::from("TMPDIR"),
-            output_root.join("tmp").into_os_string(),
-        ),
+        (OsString::from("TMPDIR"), socket_root.as_os_str().to_owned()),
         (
             OsString::from("HOME"),
             output_root.join("home").into_os_string(),
@@ -369,7 +367,7 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         },
     )?;
     verify_checkout_identity(runner, &source, repository)?;
-    verify_source_read_only(&source)?;
+    verify_source_read_only(&source, &writable_targets)?;
     let result = if output.success {
         EvidenceResult::Passed
     } else {
@@ -480,21 +478,73 @@ fn verify_checkout_identity<A: CommandOutputAdapter>(
     Ok(())
 }
 
-fn make_source_read_only(path: &Path) -> Result<()> {
-    let fd = open_tree_root(path)?;
-    chmod_tree_fd(&fd, false)
+fn prepare_validation_target_dirs(path: &Path) -> Result<BTreeSet<PathBuf>> {
+    fn visit(directory: &Path, targets: &mut BTreeSet<PathBuf>) -> Result<()> {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(DeliveryError::new("validation checkout contains a symlink"));
+            }
+            if metadata.is_dir() {
+                if entry.file_name() != ".git" {
+                    visit(&path, targets)?;
+                }
+            } else if metadata.is_file() && entry.file_name() == "Cargo.toml" {
+                let target = directory.join("target");
+                fs::create_dir_all(&target)?;
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+                targets.insert(target);
+            } else if !metadata.is_file() {
+                return Err(DeliveryError::new(
+                    "validation checkout contains a non-regular filesystem entry",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    let mut targets = BTreeSet::new();
+    visit(path, &mut targets)?;
+    Ok(targets)
 }
 
-fn verify_source_read_only(path: &Path) -> Result<()> {
+fn make_source_read_only(path: &Path, writable_targets: &BTreeSet<PathBuf>) -> Result<()> {
+    let fd = open_tree_root(path)?;
+    chmod_tree_fd(&fd, false)?;
+    for target in writable_targets {
+        make_tree_writable(target)?;
+    }
+    Ok(())
+}
+
+fn verify_source_read_only(path: &Path, writable_targets: &BTreeSet<PathBuf>) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || metadata.permissions().mode() & 0o222 != 0 {
+    if metadata.file_type().is_symlink() {
+        return Err(DeliveryError::new(
+            "validation checkout source contains a symlink",
+        ));
+    }
+    if writable_targets.contains(path) {
+        if !metadata.is_dir()
+            || metadata.permissions().mode() & 0o700 != 0o700
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(DeliveryError::new(
+                "validation Cargo target is not a private writable directory",
+            ));
+        }
+        return Ok(());
+    }
+    if metadata.permissions().mode() & 0o222 != 0 {
         return Err(DeliveryError::new(
             "validation checkout source is not read-only",
         ));
     }
     if metadata.is_dir() {
         for entry in fs::read_dir(path)? {
-            verify_source_read_only(&entry?.path())?;
+            verify_source_read_only(&entry?.path(), writable_targets)?;
         }
     } else if !metadata.is_file() {
         return Err(DeliveryError::new(
@@ -1235,7 +1285,7 @@ mod tests {
         fs::write(&target, b"target").expect("target");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
         symlink(&target, source.join("link")).expect("symlink");
-        let error = make_source_read_only(&source).expect_err("symlink rejected");
+        let error = make_source_read_only(&source, &BTreeSet::new()).expect_err("symlink rejected");
         assert!(error.to_string().contains("symlink"));
         assert_eq!(
             fs::metadata(&target)
@@ -1245,6 +1295,45 @@ mod tests {
                 & 0o777,
             0o600
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn validation_source_keeps_only_cargo_targets_writable() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository")
+            .parent()
+            .expect("repository parent")
+            .join(format!(".d2b-read-only-source-test-{}", std::process::id()));
+        let crate_dir = root.join("crate");
+        fs::create_dir_all(&crate_dir).expect("crate directory");
+        fs::write(crate_dir.join("Cargo.toml"), b"[package]\nname='fixture'\n").expect("manifest");
+        fs::write(crate_dir.join("src.rs"), b"fn main() {}\n").expect("source");
+
+        let targets = prepare_validation_target_dirs(&root).expect("prepare targets");
+        make_source_read_only(&root, &targets).expect("secure source");
+        verify_source_read_only(&root, &targets).expect("verify source");
+        assert_eq!(targets, BTreeSet::from([crate_dir.join("target")]));
+        assert_eq!(
+            fs::metadata(crate_dir.join("src.rs"))
+                .expect("source metadata")
+                .permissions()
+                .mode()
+                & 0o222,
+            0
+        );
+        assert_eq!(
+            fs::metadata(crate_dir.join("target"))
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        make_tree_writable(&root).expect("restore writable tree");
         fs::remove_dir_all(root).expect("cleanup");
     }
 
