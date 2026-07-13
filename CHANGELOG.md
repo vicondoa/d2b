@@ -28,6 +28,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Split `d2b-contracts` into default-empty, least-privilege feature families,
+  migrated every workspace consumer to explicit domains, and reserved
+  independent empty d2b 2.0 identity, component-session, service, provider,
+  and state contract rails.
 - Unified all maintained host and guest Rust crates at version 2.0.0 under one
   workspace, toolchain policy, dependency graph, and canonical lockfile while
   retaining focused broker feature and static guest validation.
