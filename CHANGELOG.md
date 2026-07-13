@@ -19,6 +19,8 @@ deprecations ship one minor release before removal.
   isolated targets in CI caching.
 - Reused an already-installed pinned Rust toolchain before attempting a network
   bootstrap.
+- Made broker audit tests reserve exclusive process-local scratch directories
+  before opening their logs.
 
 ## [1.4.1] - 2026-07-12
 
