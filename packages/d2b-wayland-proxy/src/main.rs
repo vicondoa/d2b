@@ -762,7 +762,7 @@ fn accept_loop(
             diag.borrow_mut().flush_suppressed();
             return 70;
         }
-        let (listener_ready, _state_ready, bridge_ready) = {
+        let (listener_ready, _state_ready, bridge_ready, _child_ready) = {
             let now = Instant::now();
             let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
             if !listener_in_backoff {
@@ -775,7 +775,6 @@ fn accept_loop(
                 listener_backoff_until,
                 clipboard_ref.bridge_retry_deadline(),
                 now,
-                terminal_child.is_some(),
             );
             let timeout = first_client_deadline
                 .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
@@ -783,10 +782,15 @@ fn accept_loop(
             let timeout = terminal_stable_at
                 .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
                 .unwrap_or(timeout);
-            let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
+            let mut poll_fds: SmallVec<[PollFd<'_>; 4]> = smallvec![
                 PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
+            let child_poll_index = terminal_child.as_ref().map(|child| {
+                let index = poll_fds.len();
+                poll_fds.push(PollFd::new(child.poll_fd(), PollFlags::IN));
+                index
+            });
             let bridge_poll_index = poll_fds.len();
             if let Some((bridge, flags)) = clipboard_ref.bridge_poll_stream_and_flags() {
                 poll_fds.push(PollFd::new(bridge, flags));
@@ -804,6 +808,9 @@ fn accept_loop(
                 !poll_fds[1].revents().is_empty(),
                 poll_fds
                     .get(bridge_poll_index)
+                    .is_some_and(|fd| !fd.revents().is_empty()),
+                child_poll_index
+                    .and_then(|index| poll_fds.get(index))
                     .is_some_and(|fd| !fd.revents().is_empty()),
             )
         };
@@ -958,7 +965,6 @@ fn accept_poll_timeout_ms(
     listener_backoff_until: Option<Instant>,
     bridge_retry_until: Option<Instant>,
     now: Instant,
-    watching_child: bool,
 ) -> i32 {
     let backoff_timeout = listener_backoff_until
         .map(|until| until.saturating_duration_since(now))
@@ -966,15 +972,9 @@ fn accept_poll_timeout_ms(
     let bridge_timeout = bridge_retry_until
         .map(|until| until.saturating_duration_since(now))
         .unwrap_or(diag_timeout);
-    let child_timeout = if watching_child {
-        Duration::from_millis(100)
-    } else {
-        diag_timeout
-    };
     diag_timeout
         .min(backoff_timeout)
         .min(bridge_timeout)
-        .min(child_timeout)
         .as_millis()
         .min(i32::MAX as u128) as i32
 }
@@ -1315,7 +1315,6 @@ mod tests {
                 Some(backoff_until),
                 None,
                 now,
-                false,
             ),
             50
         );
@@ -1325,7 +1324,6 @@ mod tests {
                 Some(now + Duration::from_secs(5)),
                 Some(now + Duration::from_millis(25)),
                 now,
-                false,
             ),
             25
         );
@@ -1339,17 +1337,8 @@ mod tests {
             now
         ));
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now, false),
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now),
             0
-        );
-    }
-
-    #[test]
-    fn child_watch_bounds_accept_poll_timeout() {
-        let now = Instant::now();
-        assert_eq!(
-            accept_poll_timeout_ms(Duration::from_secs(60), None, None, now, true),
-            100
         );
     }
 

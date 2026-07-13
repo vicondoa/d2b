@@ -23,7 +23,7 @@ deprecations ship one minor release before removal.
 - Delayed host-terminal first-client readiness until the terminal child remains
   alive through a bounded stabilization window, preventing desktop launchers
   from reporting success when WezTerm immediately rejects its configured
-  domain.
+  domain, and made child-exit observation event-driven through its pidfd.
 - Derived `persistent-shell` and `pty` workload capabilities from
   `shell.enable`, keeping provider-neutral desktop discovery consistent with
   the generated shell launcher item and guest runtime.

@@ -143,7 +143,7 @@ pub fn unlink_stale_socket_path(path: &Path) -> io::Result<()> {
 #[derive(Debug)]
 pub struct TerminalChild {
     child: Child,
-    _pidfd: OwnedFd,
+    pidfd: OwnedFd,
 }
 
 impl TerminalChild {
@@ -161,8 +161,12 @@ impl TerminalChild {
         })?;
         Ok(Self {
             child,
-            _pidfd: pidfd,
+            pidfd,
         })
+    }
+
+    pub fn poll_fd(&self) -> &OwnedFd {
+        &self.pidfd
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
