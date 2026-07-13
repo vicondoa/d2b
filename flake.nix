@@ -1102,8 +1102,11 @@
             mkdir -p "$ws/.cargo"
             printf '%s\n' "$vendor_cfg" > "$ws/.cargo/config.toml"
             echo "==> cargo deny check ($label)"
-            cargo-deny --manifest-path "$ws/$manifest" \
-              check --config "$deny_cfg" bans licenses sources
+            (
+              cd "$ws"
+              cargo-deny --manifest-path "$manifest" \
+                check --config "$deny_cfg" bans licenses sources
+            )
             rm -rf "$ws"
           }
 
@@ -1137,9 +1140,12 @@
           chmod -R u+w "$ws"
           mkdir -p "$ws/.cargo"
           printf '%s\n' '${workspaceVendorConfig}' > "$ws/.cargo/config.toml"
-          cargo-deny --manifest-path "$ws/d2b-guest-shell-runner/Cargo.toml" \
-            check --config "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml" \
-            bans licenses sources
+          (
+            cd "$ws"
+            cargo-deny --manifest-path "d2b-guest-shell-runner/Cargo.toml" \
+              check --config "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml" \
+              bans licenses sources
+          )
           echo ok > "$out"
         '';
 
@@ -1175,10 +1181,12 @@
             chmod -R u+w "$TMPDIR/workspace"
             printf '%s\n' '${workspaceVendorConfig}' > "$TMPDIR/workspace/.cargo/config.toml"
             tree=$TMPDIR/guest.tree
-            cargo tree --locked --offline --manifest-path "$TMPDIR/workspace/Cargo.toml" \
-              --edges normal,build \
-              -p d2b-guestd -p d2b-userd -p d2b-exec-runner -p d2b-sk-frontend \
-              > "$tree"
+            (
+              cd "$TMPDIR/workspace"
+              cargo tree --locked --offline --manifest-path Cargo.toml \
+                --edges normal,build \
+                -p d2b-guestd -p d2b-userd -p d2b-exec-runner -p d2b-sk-frontend
+            ) > "$tree"
             if grep -E '(^|[[:space:]])(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd) v' "$tree"; then
               echo "guest static dependency closure contains a native-link/build-script dependency" >&2
               exit 1
@@ -1194,9 +1202,12 @@
             chmod -R u+w "$TMPDIR/workspace"
             printf '%s\n' '${workspaceVendorConfig}' > "$TMPDIR/workspace/.cargo/config.toml"
             tree=$TMPDIR/guest-shell-runner.tree
-            cargo tree --locked --offline --manifest-path "$TMPDIR/workspace/Cargo.toml" \
-              -p d2b-guest-shell-runner --features real-libshpool \
-              --edges normal,build > "$tree"
+            (
+              cd "$TMPDIR/workspace"
+              cargo tree --locked --offline --manifest-path Cargo.toml \
+                -p d2b-guest-shell-runner --features real-libshpool \
+                --edges normal,build
+            ) > "$tree"
             if grep -E '(^|[[:space:]])(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2) v' "$tree"; then
               echo "guest shell runner closure contains a forbidden dynamic/PAM/systemd dependency" >&2
               exit 1
