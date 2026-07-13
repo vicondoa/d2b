@@ -25,6 +25,7 @@ fn wave_help_lists_the_end_to_end_machine_readable_workflow() {
         "panel-request",
         "panel-attest",
         "seal",
+        "verify",
         "eligibility",
         "history-proof",
         "retarget-preflight",
@@ -48,7 +49,36 @@ fn wave_help_lists_the_end_to_end_machine_readable_workflow() {
         merge["purpose"]
             .as_str()
             .expect("purpose")
-            .contains("expected-head")
+            .contains("exact base+head CAS")
+    );
+    let panel = commands
+        .iter()
+        .find(|command| command["name"] == "panel-attest")
+        .expect("panel help");
+    assert!(
+        panel["required_options"]
+            .as_array()
+            .expect("panel options")
+            .iter()
+            .any(|option| option == "--trust-root")
+    );
+    let import = commands
+        .iter()
+        .find(|command| command["name"] == "validation-import")
+        .expect("validation import help");
+    assert!(
+        import["required_options"]
+            .as_array()
+            .expect("import options")
+            .iter()
+            .any(|option| option == "--bundle")
+    );
+    assert!(
+        import["required_options"]
+            .as_array()
+            .expect("import options")
+            .iter()
+            .any(|option| option == "--artifact")
     );
 }
 

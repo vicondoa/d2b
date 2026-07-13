@@ -26,7 +26,10 @@ pub use evidence::{
     run_validation, verify_evidence,
 };
 pub use model::*;
-pub use panel::{PanelAttestation, PanelRequest, create_panel_request, validate_and_store_panel};
+pub use panel::{
+    OpenSslPanelReceiptVerifier, PanelAttestation, PanelRequest, create_panel_request,
+    validate_and_store_panel,
+};
 pub use seal::{
     HistoryProof, PanelPayloadBinding, ValidationPayloadBinding, WaveSeal, construct_history_proof,
     construct_seal, verify_history_only_equivalence, verify_history_proof, verify_seal,
@@ -119,6 +122,8 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
     let probe = GitProbe::new(command);
     let graph = GhStackSource::new(&command);
     let github = GhStatusSource::new(&command);
+    let ci_verifier = GithubAttestationVerifier::new(&command);
+    let panel_verifier = OpenSslPanelReceiptVerifier::new(&command);
     match args {
         [area, action] if area == "wave" && action == "help" => Ok(WorkflowOutput {
             schema_version: DELIVERY_SCHEMA_VERSION,
@@ -133,6 +138,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
                 "panel-request".to_owned(),
                 "panel-attest".to_owned(),
                 "seal".to_owned(),
+                "verify".to_owned(),
                 "eligibility".to_owned(),
                 "history-proof".to_owned(),
                 "retarget-preflight".to_owned(),
@@ -141,7 +147,10 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             integration_points: vec![
                 "checked-in-authoritative-manifest".to_owned(),
                 "gh-stack-view-json".to_owned(),
-                "github-pr-check-attestation".to_owned(),
+                "github-check-suite-run-authority".to_owned(),
+                "offline-github-attestation-bundle".to_owned(),
+                "signed-external-panel-receipts".to_owned(),
+                "exact-base-head-merge-authority".to_owned(),
                 "external-layer1-renderer".to_owned(),
             ],
             commands: workflow_command_help(),
@@ -176,17 +185,18 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
         [area, action, rest @ ..] if area == "wave" && action == "validation-import" => {
             let mut options = CliOptions::parse(rest)?;
             let snapshot = options.required_path("--snapshot")?;
-            let attestation = options.required_path("--attestation")?;
+            let artifact = options.required_path("--artifact")?;
+            let bundle = options.required_path("--bundle")?;
             let payload = options.optional_path("--payload")?;
             let roots = options.repository_roots()?;
             options.finish()?;
-            let verifier = GithubAttestationVerifier::new(&command);
             let path = import_ci_evidence(
                 &probe,
-                &verifier,
+                &ci_verifier,
                 &roots,
                 &snapshot,
-                &attestation,
+                &artifact,
+                &bundle,
                 payload.as_deref(),
             )?;
             output_for_artifact("validation-import", &path)
@@ -203,9 +213,17 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let mut options = CliOptions::parse(rest)?;
             let snapshot = options.required_path("--snapshot")?;
             let records = options.required_path("--records")?;
+            let trust_root = options.required_path("--trust-root")?;
             let roots = options.repository_roots()?;
             options.finish()?;
-            validate_and_store_panel(&probe, &roots, &snapshot, &records)?;
+            validate_and_store_panel(
+                &probe,
+                &panel_verifier,
+                &roots,
+                &snapshot,
+                &records,
+                &trust_root,
+            )?;
             output_for_candidate("panel-attest", &snapshot, None)
         }
         [area, action, rest @ ..] if area == "wave" && action == "seal" => {
@@ -213,7 +231,14 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let snapshot = options.required_path("--snapshot")?;
             let roots = options.repository_roots()?;
             options.finish()?;
-            let path = construct_seal(&probe, &github, &roots, &snapshot)?;
+            let path = construct_seal(
+                &probe,
+                &github,
+                &ci_verifier,
+                &panel_verifier,
+                &roots,
+                &snapshot,
+            )?;
             output_for_artifact("seal", &path)
         }
         [area, action, rest @ ..] if area == "wave" && action == "verify" => {
@@ -221,7 +246,14 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let seal = options.required_path("--seal")?;
             let roots = options.repository_roots()?;
             options.finish()?;
-            let verified = verify_seal(&probe, &github, &roots, &seal)?;
+            let verified = verify_seal(
+                &probe,
+                &github,
+                &ci_verifier,
+                &panel_verifier,
+                &roots,
+                &seal,
+            )?;
             Ok(WorkflowOutput {
                 schema_version: DELIVERY_SCHEMA_VERSION,
                 operation: "verify".to_owned(),
@@ -242,7 +274,14 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let new_snapshot = options.required_path("--new-snapshot")?;
             let roots = options.repository_roots()?;
             options.finish()?;
-            let path = construct_history_proof(&probe, &roots, &old_seal, &new_snapshot)?;
+            let path = construct_history_proof(
+                &probe,
+                &ci_verifier,
+                &panel_verifier,
+                &roots,
+                &old_seal,
+                &new_snapshot,
+            )?;
             output_for_artifact(action, &path)
         }
         [area, action, rest @ ..] if area == "wave" && action == "eligibility" => {
@@ -254,9 +293,25 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let roots = options.repository_roots()?;
             options.finish()?;
             let eligible = match (snapshot, proof) {
-                (None, None) => check_merge_eligibility(&probe, &github, &roots, &seal, &target)?,
+                (None, None) => check_merge_eligibility(
+                    &probe,
+                    &github,
+                    &ci_verifier,
+                    &panel_verifier,
+                    &roots,
+                    &seal,
+                    &target,
+                )?,
                 (Some(snapshot), Some(proof)) => check_history_merge_eligibility(
-                    &probe, &github, &roots, &seal, &snapshot, &proof, &target,
+                    &probe,
+                    &github,
+                    &ci_verifier,
+                    &panel_verifier,
+                    &roots,
+                    &seal,
+                    &snapshot,
+                    &proof,
+                    &target,
                 )?,
                 _ => {
                     return Err(DeliveryError::new(
@@ -276,9 +331,27 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             options.finish()?;
             let merger = GhMergeSource::new(&command);
             let merged = match (snapshot, proof) {
-                (None, None) => atomic_merge(&probe, &github, &merger, &roots, &seal, &target)?,
+                (None, None) => atomic_merge(
+                    &probe,
+                    &github,
+                    &ci_verifier,
+                    &panel_verifier,
+                    &merger,
+                    &roots,
+                    &seal,
+                    &target,
+                )?,
                 (Some(snapshot), Some(proof)) => atomic_history_merge(
-                    &probe, &github, &merger, &roots, &seal, &snapshot, &proof, &target,
+                    &probe,
+                    &github,
+                    &ci_verifier,
+                    &panel_verifier,
+                    &merger,
+                    &roots,
+                    &seal,
+                    &snapshot,
+                    &proof,
+                    &target,
                 )?,
                 _ => {
                     return Err(DeliveryError::new(
@@ -361,16 +434,17 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
         ),
         (
             "validation-run",
-            "Execute one authoritative argv with bounded output and capture derived evidence.",
+            "Execute one authoritative argv in a read-only detached checkout, post-check it, and capture bounded evidence.",
             &["--snapshot", "--validation", "--repo"],
             &[],
         ),
         (
             "validation-import",
-            "Verify and import a GitHub CI attestation and optional retrievable payload.",
+            "Offline-verify and retain a GitHub CI artifact plus signed attestation bundle and optional payload.",
             &[
                 "--snapshot",
-                "--attestation",
+                "--artifact",
+                "--bundle",
                 "--repo",
             ],
             &["--payload"],
@@ -383,19 +457,19 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
         ),
         (
             "panel-attest",
-            "Validate and store ten external panel-run attestations.",
-            &["--snapshot", "--records", "--repo"],
+            "Verify and retain ten externally signed panel receipts against an out-of-band trust root.",
+            &["--snapshot", "--records", "--trust-root", "--repo"],
             &[],
         ),
         (
             "seal",
-            "Bind passing evidence, panel attestations, and exact live PR/check authority.",
+            "Bind passing evidence, signed panel receipts, exact PRs, and nested GitHub check-suite run authority.",
             &["--snapshot", "--repo"],
             &[],
         ),
         (
             "verify",
-            "Re-verify a seal against current refs and live GitHub authority.",
+            "Re-verify retained CI bundles and panel signatures plus current refs and GitHub authority.",
             &["--seal", "--repo"],
             &[],
         ),
@@ -407,7 +481,7 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
         ),
         (
             "history-proof",
-            "Prove a new verified snapshot is content-identical to an original seal.",
+            "Prove commit-history or merged-stack progression with content identity and require newer CI run IDs and timestamps.",
             &["--old-seal", "--new-snapshot", "--repo"],
             &[],
         ),
@@ -419,7 +493,7 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
         ),
         (
             "merge",
-            "Recheck base/head/checks immediately and merge with expected-head protection.",
+            "Recheck authority and fail closed unless the backend provides exact base+head CAS or verified merge-group authority.",
             &["--seal", "--target", "--repo"],
             &["--new-snapshot", "--history-proof"],
         ),

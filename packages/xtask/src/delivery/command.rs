@@ -1,13 +1,15 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fs,
     io::Read,
-    os::unix::process::CommandExt,
+    os::{fd::AsFd, unix::process::CommandExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
     },
     thread,
     time::{Duration, Instant},
@@ -62,8 +64,43 @@ pub trait CommandOutputAdapter {
         limits: CommandLimits,
     ) -> Result<CommandOutput>;
 
+    fn output_with_environment(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        environment: &BTreeMap<OsString, OsString>,
+        limits: CommandLimits,
+    ) -> Result<CommandOutput> {
+        let _ = environment;
+        self.output_with_limits(program, args, cwd, limits)
+    }
+
     fn output(&self, program: &str, args: &[String], cwd: Option<&Path>) -> Result<CommandOutput> {
         self.output_with_limits(program, args, cwd, CommandLimits::default())
+    }
+}
+
+impl<A: CommandOutputAdapter + ?Sized> CommandOutputAdapter for &A {
+    fn output_with_limits(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        limits: CommandLimits,
+    ) -> Result<CommandOutput> {
+        (**self).output_with_limits(program, args, cwd, limits)
+    }
+
+    fn output_with_environment(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        environment: &BTreeMap<OsString, OsString>,
+        limits: CommandLimits,
+    ) -> Result<CommandOutput> {
+        (**self).output_with_environment(program, args, cwd, environment, limits)
     }
 }
 
@@ -76,6 +113,17 @@ impl CommandOutputAdapter for ProcessCommandOutput {
         program: &str,
         args: &[String],
         cwd: Option<&Path>,
+        limits: CommandLimits,
+    ) -> Result<CommandOutput> {
+        self.output_with_environment(program, args, cwd, &BTreeMap::new(), limits)
+    }
+
+    fn output_with_environment(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        environment: &BTreeMap<OsString, OsString>,
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
         if limits.stdout_bytes == 0
@@ -96,9 +144,11 @@ impl CommandOutputAdapter for ProcessCommandOutput {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        command.envs(environment);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
+        let started = Instant::now();
         let mut child = command
             .spawn()
             .map_err(|error| DeliveryError::new(format!("could not execute {program}: {error}")))?;
@@ -115,17 +165,40 @@ impl CommandOutputAdapter for ProcessCommandOutput {
             .ok_or_else(|| DeliveryError::new("child stderr pipe was not available"))?;
         let stdout_overflow = Arc::new(AtomicBool::new(false));
         let stderr_overflow = Arc::new(AtomicBool::new(false));
-        let stdout_reader = spawn_capped_reader(stdout, limits.stdout_bytes, &stdout_overflow);
-        let stderr_reader = spawn_capped_reader(stderr, limits.stderr_bytes, &stderr_overflow);
+        let cancel_readers = Arc::new(AtomicBool::new(false));
+        let (stdout_reader, stdout_rx) = spawn_capped_reader(
+            stdout,
+            limits.stdout_bytes,
+            &stdout_overflow,
+            &cancel_readers,
+        );
+        let (stderr_reader, stderr_rx) = spawn_capped_reader(
+            stderr,
+            limits.stderr_bytes,
+            &stderr_overflow,
+            &cancel_readers,
+        );
 
-        let started = Instant::now();
         let mut timed_out = false;
-        let status = loop {
-            if stdout_overflow.load(Ordering::Acquire)
-                || stderr_overflow.load(Ordering::Acquire)
-                || started.elapsed() >= limits.timeout
-            {
-                timed_out = started.elapsed() >= limits.timeout;
+        let mut terminated = false;
+        let mut status = None;
+        let mut stdout_result = None;
+        let mut stderr_result = None;
+        loop {
+            receive_reader(&stdout_rx, &mut stdout_result)?;
+            receive_reader(&stderr_rx, &mut stderr_result)?;
+            if status.is_none() {
+                status = child.try_wait().map_err(|error| {
+                    DeliveryError::new(format!("could not poll {program}: {error}"))
+                })?;
+            }
+            let deadline_reached = started.elapsed() >= limits.timeout;
+            let overflowed =
+                stdout_overflow.load(Ordering::Acquire) || stderr_overflow.load(Ordering::Acquire);
+            if (deadline_reached || overflowed) && !terminated {
+                timed_out = deadline_reached;
+                terminated = true;
+                cancel_readers.store(true, Ordering::Release);
                 if let Some(process_group) = process_group {
                     let _ = rustix::process::kill_process_group(
                         process_group,
@@ -133,25 +206,27 @@ impl CommandOutputAdapter for ProcessCommandOutput {
                     );
                 }
                 let _ = child.kill();
-                break child.wait().map_err(|error| {
-                    DeliveryError::new(format!("could not reap {program}: {error}"))
-                })?;
             }
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|error| DeliveryError::new(format!("could not poll {program}: {error}")))?
-            {
-                break status;
+            if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
+                break;
             }
             thread::sleep(Duration::from_millis(5));
+        }
+        let status = match status {
+            Some(status) => status,
+            None => child.wait().map_err(|error| {
+                DeliveryError::new(format!("could not reap {program}: {error}"))
+            })?,
         };
 
-        let stdout = stdout_reader
+        let stdout = stdout_result.expect("reader completion was checked")?;
+        let stderr = stderr_result.expect("reader completion was checked")?;
+        stdout_reader
             .join()
-            .map_err(|_| DeliveryError::new("stdout reader panicked"))??;
-        let stderr = stderr_reader
+            .map_err(|_| DeliveryError::new("stdout reader panicked"))?;
+        stderr_reader
             .join()
-            .map_err(|_| DeliveryError::new("stderr reader panicked"))??;
+            .map_err(|_| DeliveryError::new("stderr reader panicked"))?;
         if timed_out {
             return Err(DeliveryError::new(format!(
                 "{program} exceeded its command timeout"
@@ -178,31 +253,79 @@ impl CommandOutputAdapter for ProcessCommandOutput {
     }
 }
 
-fn spawn_capped_reader<R: Read + Send + 'static>(
+fn spawn_capped_reader<R: Read + AsFd + Send + 'static>(
     mut reader: R,
     limit: usize,
     overflow: &Arc<AtomicBool>,
-) -> thread::JoinHandle<Result<Vec<u8>>> {
+    cancel: &Arc<AtomicBool>,
+) -> (thread::JoinHandle<()>, Receiver<Result<Vec<u8>>>) {
     let overflow = Arc::clone(overflow);
-    thread::spawn(move || {
-        let mut output = Vec::with_capacity(limit.min(64 * 1024));
-        let mut buffer = [0_u8; 8192];
-        loop {
-            let read = reader.read(&mut buffer).map_err(|error| {
-                DeliveryError::new(format!("cannot read child output: {error}"))
+    let cancel = Arc::clone(cancel);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let handle = thread::spawn(move || {
+        let result = (|| {
+            let flags = rustix::fs::fcntl_getfl(&reader).map_err(|error| {
+                DeliveryError::new(format!("cannot inspect child output pipe: {error}"))
             })?;
-            if read == 0 {
-                break;
+            rustix::fs::fcntl_setfl(&reader, flags | rustix::fs::OFlags::NONBLOCK).map_err(
+                |error| {
+                    DeliveryError::new(format!(
+                        "cannot make child output pipe nonblocking: {error}"
+                    ))
+                },
+            )?;
+            let mut output = Vec::with_capacity(limit.min(64 * 1024));
+            let mut buffer = [0_u8; 8192];
+            loop {
+                if cancel.load(Ordering::Acquire) {
+                    break;
+                }
+                let read = match reader.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(DeliveryError::new(format!(
+                            "cannot read child output: {error}"
+                        )));
+                    }
+                };
+                if read == 0 {
+                    break;
+                }
+                let remaining = limit.saturating_sub(output.len());
+                output.extend_from_slice(&buffer[..read.min(remaining)]);
+                if read > remaining {
+                    overflow.store(true, Ordering::Release);
+                    break;
+                }
             }
-            let remaining = limit.saturating_sub(output.len());
-            output.extend_from_slice(&buffer[..read.min(remaining)]);
-            if read > remaining {
-                overflow.store(true, Ordering::Release);
-                break;
-            }
+            Ok(output)
+        })();
+        let _ = tx.send(result);
+    });
+    (handle, rx)
+}
+
+fn receive_reader(
+    receiver: &Receiver<Result<Vec<u8>>>,
+    slot: &mut Option<Result<Vec<u8>>>,
+) -> Result<()> {
+    if slot.is_some() {
+        return Ok(());
+    }
+    match receiver.try_recv() {
+        Ok(result) => {
+            *slot = Some(result);
+            Ok(())
         }
-        Ok(output)
-    })
+        Err(TryRecvError::Empty) => Ok(()),
+        Err(TryRecvError::Disconnected) => Err(DeliveryError::new(
+            "child output reader disconnected before completion",
+        )),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -222,6 +345,13 @@ pub trait RepositoryProbe {
     fn is_dirty(&self, root: &Path) -> Result<bool>;
     fn is_ancestor(&self, root: &Path, ancestor: &str, descendant: &str) -> Result<bool>;
     fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob>;
+    fn canonical_diff(
+        &self,
+        root: &Path,
+        base_oid: &str,
+        head_oid: &str,
+        paths: &[PathBuf],
+    ) -> Result<Vec<u8>>;
     fn prospective_merge_tree(&self, root: &Path, base_oid: &str, head_oid: &str)
     -> Result<String>;
 }
@@ -476,6 +606,53 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
         })
     }
 
+    fn canonical_diff(
+        &self,
+        root: &Path,
+        base_oid: &str,
+        head_oid: &str,
+        paths: &[PathBuf],
+    ) -> Result<Vec<u8>> {
+        validate_hash(base_oid, "diff base OID")?;
+        validate_hash(head_oid, "diff head OID")?;
+        let mut arguments = vec![
+            "diff".to_owned(),
+            "--binary".to_owned(),
+            "--no-ext-diff".to_owned(),
+            "--no-renames".to_owned(),
+            "--full-index".to_owned(),
+            "--src-prefix=a/".to_owned(),
+            "--dst-prefix=b/".to_owned(),
+            base_oid.to_owned(),
+            head_oid.to_owned(),
+        ];
+        if !paths.is_empty() {
+            arguments.push("--".to_owned());
+            let mut normalized = paths.to_vec();
+            normalized.sort();
+            normalized.dedup();
+            for path in normalized {
+                super::model::validate_repo_relative_path(&path)?;
+                arguments.push(format!(":(literal){}", path_string(&path)?));
+            }
+        }
+        let output = self.git_output(
+            root,
+            &arguments,
+            CommandLimits {
+                stdout_bytes: MAX_GIT_BLOB_BYTES,
+                stderr_bytes: DEFAULT_COMMAND_OUTPUT_BYTES,
+                timeout: DEFAULT_COMMAND_TIMEOUT,
+            },
+        )?;
+        if !output.success {
+            return Err(DeliveryError::new(
+                "cannot compute canonical base-to-head Git diff",
+            ));
+        }
+        Ok(output.stdout)
+    }
+
     fn prospective_merge_tree(
         &self,
         root: &Path,
@@ -560,10 +737,16 @@ pub enum ObservedCheckState {
 pub struct ObservedCheck {
     pub name: String,
     pub publisher: CheckPublisher,
+    pub check_run_id: Option<u64>,
+    pub workflow_run_id: Option<u64>,
     pub status: String,
     pub conclusion: String,
     pub state: ObservedCheckState,
     pub commit_oid: String,
+    pub started_at_unix_seconds: u64,
+    pub completed_at_unix_seconds: Option<u64>,
+    pub workflow_created_at_unix_seconds: Option<u64>,
+    pub workflow_updated_at_unix_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -578,7 +761,21 @@ pub struct PullRequestStatus {
     pub head_repository: String,
     pub head_ref: String,
     pub head_oid: String,
+    pub merge_commit_oid: Option<String>,
+    pub merge_commit_tree_oid: Option<String>,
+    pub is_in_merge_queue: bool,
+    pub is_merge_queue_enabled: bool,
+    pub merge_queue_entry: Option<ObservedMergeQueueEntry>,
     pub checks: Vec<ObservedCheck>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedMergeQueueEntry {
+    pub id: String,
+    pub state: String,
+    pub base_oid: String,
+    pub head_oid: String,
 }
 
 pub trait PullRequestStatusSource {
@@ -601,13 +798,26 @@ const PR_STATUS_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!
     nameWithOwner
     pullRequest(number:$number){
       number state mergeStateStatus baseRefName baseRefOid headRefName headRefOid
+      isInMergeQueue isMergeQueueEnabled
+      mergeQueueEntry{id state baseCommit{oid} headCommit{oid}}
       headRepository{nameWithOwner}
+      mergeCommit{oid tree{oid}}
       commits(last:1){
         nodes{commit{oid statusCheckRollup{contexts(first:100){
           nodes{
             __typename
-            ... on CheckRun{name status conclusion workflow{name databaseId} app{slug databaseId} commit{oid}}
-            ... on StatusContext{context state creator{login} commit{oid}}
+            ... on CheckRun{
+              databaseId name status conclusion startedAt completedAt
+              checkSuite{
+                app{slug databaseId}
+                commit{oid}
+                workflowRun{
+                  databaseId createdAt updatedAt
+                  workflow{name databaseId}
+                }
+              }
+            }
+            ... on StatusContext{context state createdAt creator{login} commit{oid}}
           }
           pageInfo{hasNextPage}
         }}}}
@@ -679,7 +889,39 @@ struct GraphQlPullRequest {
     head_ref_oid: String,
     #[serde(rename = "headRepository")]
     head_repository: GraphQlName,
+    #[serde(rename = "mergeCommit")]
+    merge_commit: Option<GraphQlMergeCommit>,
+    #[serde(rename = "isInMergeQueue")]
+    is_in_merge_queue: bool,
+    #[serde(rename = "isMergeQueueEnabled")]
+    is_merge_queue_enabled: bool,
+    #[serde(rename = "mergeQueueEntry")]
+    merge_queue_entry: Option<GraphQlMergeQueueEntry>,
     commits: GraphQlCommits,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphQlMergeCommit {
+    oid: String,
+    tree: GraphQlOid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphQlMergeQueueEntry {
+    id: String,
+    state: String,
+    #[serde(rename = "baseCommit")]
+    base_commit: Option<GraphQlOid>,
+    #[serde(rename = "headCommit")]
+    head_commit: Option<GraphQlOid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphQlOid {
+    oid: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,6 +1007,24 @@ pub(crate) fn parse_gh_status(
             )));
         }
     };
+    let (merge_commit_oid, merge_commit_tree_oid) = match (state, &pr.merge_commit) {
+        (PullRequestState::Merged, Some(commit)) => {
+            validate_hash(&commit.oid, "GitHub merge commit OID")?;
+            validate_hash(&commit.tree.oid, "GitHub merge commit tree OID")?;
+            (Some(commit.oid.clone()), Some(commit.tree.oid.clone()))
+        }
+        (PullRequestState::Merged, None) => {
+            return Err(DeliveryError::new(
+                "merged GitHub PR has no exact merge commit authority",
+            ));
+        }
+        (_, None) => (None, None),
+        (_, Some(_)) => {
+            return Err(DeliveryError::new(
+                "unmerged GitHub PR unexpectedly has merge commit authority",
+            ));
+        }
+    };
     if pr.commits.nodes.len() != 1 {
         return Err(DeliveryError::new(
             "GitHub status response must contain exactly one latest commit",
@@ -801,6 +1061,39 @@ pub(crate) fn parse_gh_status(
     validate_hash(&pr.head_ref_oid, "GitHub head OID")?;
     validate_git_ref(&pr.base_ref_name, "GitHub base ref")?;
     validate_git_ref(&pr.head_ref_name, "GitHub head ref")?;
+    let merge_queue_entry = match pr.merge_queue_entry {
+        Some(entry) => {
+            if !pr.is_in_merge_queue {
+                return Err(DeliveryError::new(
+                    "GitHub returned a merge-queue entry for a PR outside the queue",
+                ));
+            }
+            let base_oid = entry
+                .base_commit
+                .ok_or_else(|| DeliveryError::new("merge-queue entry has no base commit"))?
+                .oid;
+            let head_oid = entry
+                .head_commit
+                .ok_or_else(|| DeliveryError::new("merge-queue entry has no head commit"))?
+                .oid;
+            validate_bounded_github_value(&entry.id, "merge-queue entry ID")?;
+            validate_bounded_github_value(&entry.state, "merge-queue entry state")?;
+            validate_hash(&base_oid, "merge-queue base OID")?;
+            validate_hash(&head_oid, "merge-queue head OID")?;
+            Some(ObservedMergeQueueEntry {
+                id: entry.id,
+                state: entry.state,
+                base_oid,
+                head_oid,
+            })
+        }
+        None if pr.is_in_merge_queue => {
+            return Err(DeliveryError::new(
+                "GitHub reports a queued PR without exact merge-queue authority",
+            ));
+        }
+        None => None,
+    };
     Ok(PullRequestStatus {
         repository: repository.to_owned(),
         number: pr.number,
@@ -811,8 +1104,23 @@ pub(crate) fn parse_gh_status(
         head_repository: logical_github_id(&pr.head_repository.name_with_owner),
         head_ref: pr.head_ref_name,
         head_oid: pr.head_ref_oid,
+        merge_commit_oid,
+        merge_commit_tree_oid,
+        is_in_merge_queue: pr.is_in_merge_queue,
+        is_merge_queue_enabled: pr.is_merge_queue_enabled,
+        merge_queue_entry,
         checks,
     })
+}
+
+fn validate_bounded_github_value(value: &str, label: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.len() > super::model::MAX_STRING_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(DeliveryError::new(format!("invalid GitHub {label}")));
+    }
+    Ok(())
 }
 
 fn parse_check(value: &serde_json::Value, outer_commit: &str) -> Result<ObservedCheck> {
@@ -820,30 +1128,39 @@ fn parse_check(value: &serde_json::Value, outer_commit: &str) -> Result<Observed
         .as_object()
         .ok_or_else(|| DeliveryError::new("GitHub check entry is not an object"))?;
     let kind = required_string(object, "__typename")?;
-    let commit_oid = object
-        .get("commit")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|commit| commit.get("oid"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| DeliveryError::new("GitHub check has no commit association"))?;
-    if commit_oid != outer_commit {
-        return Err(DeliveryError::new(
-            "GitHub check is associated with a different commit",
-        ));
-    }
     let check = match kind {
         "CheckRun" => {
+            let suite = object
+                .get("checkSuite")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| DeliveryError::new("GitHub check run has no checkSuite"))?;
+            let commit_oid = nested_string(suite, "commit", "oid")?;
+            if commit_oid != outer_commit {
+                return Err(DeliveryError::new(
+                    "GitHub check suite is associated with a different commit",
+                ));
+            }
             let name = required_string(object, "name")?.to_owned();
+            let check_run_id = required_u64(object, "databaseId")?;
             let status = required_string(object, "status")?.to_owned();
             let conclusion = object
                 .get("conclusion")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("NONE")
                 .to_owned();
-            let (workflow, workflow_id) = optional_workflow(object)?;
-            let app_slug = nested_string(object, "app", "slug")?.to_owned();
-            let app_id = nested_u64(object, "app", "databaseId")?;
+            let started_at_unix_seconds =
+                parse_github_timestamp(required_string(object, "startedAt")?)?;
+            let completed_at_unix_seconds = optional_timestamp(object, "completedAt")?;
+            let (workflow, workflow_id, workflow_run_id, workflow_created, workflow_updated) =
+                optional_workflow_run(suite)?;
+            let app_slug = nested_string(suite, "app", "slug")?.to_owned();
+            let app_id = nested_u64(suite, "app", "databaseId")?;
             let state = check_run_state(&status, &conclusion)?;
+            if state == ObservedCheckState::Successful && completed_at_unix_seconds.is_none() {
+                return Err(DeliveryError::new(
+                    "successful GitHub check run has no completion timestamp",
+                ));
+            }
             ObservedCheck {
                 name,
                 publisher: CheckPublisher {
@@ -853,16 +1170,29 @@ fn parse_check(value: &serde_json::Value, outer_commit: &str) -> Result<Observed
                     workflow,
                     workflow_id,
                 },
+                check_run_id: Some(check_run_id),
+                workflow_run_id,
                 status,
                 conclusion,
                 state,
                 commit_oid: commit_oid.to_owned(),
+                started_at_unix_seconds,
+                completed_at_unix_seconds,
+                workflow_created_at_unix_seconds: workflow_created,
+                workflow_updated_at_unix_seconds: workflow_updated,
             }
         }
         "StatusContext" => {
+            let commit_oid = nested_string(object, "commit", "oid")?;
+            if commit_oid != outer_commit {
+                return Err(DeliveryError::new(
+                    "GitHub status context is associated with a different commit",
+                ));
+            }
             let name = required_string(object, "context")?.to_owned();
             let status = required_string(object, "state")?.to_owned();
             let app_slug = nested_string(object, "creator", "login")?.to_owned();
+            let created_at = parse_github_timestamp(required_string(object, "createdAt")?)?;
             let state = match status.as_str() {
                 "SUCCESS" => ObservedCheckState::Successful,
                 "PENDING" | "EXPECTED" => ObservedCheckState::Pending,
@@ -882,10 +1212,16 @@ fn parse_check(value: &serde_json::Value, outer_commit: &str) -> Result<Observed
                     workflow: "status-context".to_owned(),
                     workflow_id: 0,
                 },
+                check_run_id: None,
+                workflow_run_id: None,
                 status: status.clone(),
                 conclusion: status,
                 state,
                 commit_oid: commit_oid.to_owned(),
+                started_at_unix_seconds: created_at,
+                completed_at_unix_seconds: Some(created_at),
+                workflow_created_at_unix_seconds: None,
+                workflow_updated_at_unix_seconds: None,
             }
         }
         other => {
@@ -964,10 +1300,34 @@ fn nested_u64(
         })
 }
 
-fn optional_workflow(object: &serde_json::Map<String, serde_json::Value>) -> Result<(String, u64)> {
-    match object.get("workflow") {
-        None | Some(serde_json::Value::Null) => Ok(("none".to_owned(), 0)),
-        Some(serde_json::Value::Object(workflow)) => {
+fn required_u64(object: &serde_json::Map<String, serde_json::Value>, field: &str) -> Result<u64> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value != 0)
+        .ok_or_else(|| DeliveryError::new(format!("GitHub check has no {field}")))
+}
+
+type WorkflowRunIdentity = (String, u64, Option<u64>, Option<u64>, Option<u64>);
+
+fn optional_workflow_run(
+    check_suite: &serde_json::Map<String, serde_json::Value>,
+) -> Result<WorkflowRunIdentity> {
+    match check_suite.get("workflowRun") {
+        None | Some(serde_json::Value::Null) => Ok(("none".to_owned(), 0, None, None, None)),
+        Some(serde_json::Value::Object(run)) => {
+            let run_id = required_u64(run, "databaseId")?;
+            let created = parse_github_timestamp(required_string(run, "createdAt")?)?;
+            let updated = parse_github_timestamp(required_string(run, "updatedAt")?)?;
+            if updated < created {
+                return Err(DeliveryError::new(
+                    "GitHub workflow run timestamps are out of order",
+                ));
+            }
+            let workflow = run
+                .get("workflow")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| DeliveryError::new("GitHub workflow run has no workflow"))?;
             let name = workflow
                 .get("name")
                 .and_then(serde_json::Value::as_str)
@@ -978,19 +1338,108 @@ fn optional_workflow(object: &serde_json::Map<String, serde_json::Value>) -> Res
                 .and_then(serde_json::Value::as_u64)
                 .filter(|id| *id != 0)
                 .ok_or_else(|| DeliveryError::new("GitHub check workflow has no databaseId"))?;
-            Ok((name.to_owned(), id))
+            Ok((
+                name.to_owned(),
+                id,
+                Some(run_id),
+                Some(created),
+                Some(updated),
+            ))
         }
         Some(_) => Err(DeliveryError::new(
-            "GitHub check workflow is not an object or null",
+            "GitHub check workflowRun is not an object or null",
         )),
     }
 }
 
+fn optional_timestamp(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u64>> {
+    match object.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(value)) => parse_github_timestamp(value).map(Some),
+        Some(_) => Err(DeliveryError::new(format!(
+            "GitHub check {field} is not a timestamp or null"
+        ))),
+    }
+}
+
+pub(crate) fn parse_github_timestamp(value: &str) -> Result<u64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return Err(DeliveryError::new(
+            "GitHub timestamp is not canonical UTC RFC3339",
+        ));
+    }
+    let year = decimal(bytes, 0, 4)? as i64;
+    let month = decimal(bytes, 5, 2)? as i64;
+    let day = decimal(bytes, 8, 2)? as i64;
+    let hour = decimal(bytes, 11, 2)? as i64;
+    let minute = decimal(bytes, 14, 2)? as i64;
+    let second = decimal(bytes, 17, 2)? as i64;
+    if !(1..=12).contains(&month)
+        || day == 0
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return Err(DeliveryError::new("GitHub timestamp is out of range"));
+    }
+    let days = days_from_civil(year, month, day);
+    if days < 0 {
+        return Err(DeliveryError::new(
+            "GitHub timestamp predates the Unix epoch",
+        ));
+    }
+    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second)
+        .map_err(|_| DeliveryError::new("GitHub timestamp exceeds supported range"))
+}
+
+fn decimal(bytes: &[u8], offset: usize, length: usize) -> Result<u32> {
+    bytes[offset..offset + length]
+        .iter()
+        .try_fold(0_u32, |value, byte| {
+            byte.is_ascii_digit()
+                .then(|| value * 10 + u32::from(byte - b'0'))
+                .ok_or_else(|| DeliveryError::new("GitHub timestamp contains a non-digit"))
+        })
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 pub trait PullRequestMerger {
-    fn merge_with_expected_head(
+    fn merge_with_expected_base_and_head(
         &self,
         repository: &str,
         pr: u64,
+        expected_base: &str,
         expected_head: &str,
     ) -> Result<()>;
 }
@@ -1007,34 +1456,23 @@ impl<'a, A> GhMergeSource<'a, A> {
 }
 
 impl<A: CommandOutputAdapter> PullRequestMerger for GhMergeSource<'_, A> {
-    fn merge_with_expected_head(
+    fn merge_with_expected_base_and_head(
         &self,
         repository: &str,
         pr: u64,
+        expected_base: &str,
         expected_head: &str,
     ) -> Result<()> {
         validate_repository_id(repository)?;
-        validate_hash(expected_head, "expected merge head")?;
-        let output = self.command.output(
-            "gh",
-            &[
-                "pr".to_owned(),
-                "merge".to_owned(),
-                pr.to_string(),
-                "--repo".to_owned(),
-                github_repo_arg(repository)?,
-                "--merge".to_owned(),
-                "--match-head-commit".to_owned(),
-                expected_head.to_owned(),
-            ],
-            None,
-        )?;
-        if !output.success {
-            return Err(DeliveryError::new(format!(
-                "atomic GitHub merge failed for {repository}#{pr}"
-            )));
+        if pr == 0 {
+            return Err(DeliveryError::new("merge PR number must be non-zero"));
         }
-        Ok(())
+        validate_hash(expected_base, "expected merge base")?;
+        validate_hash(expected_head, "expected merge head")?;
+        let _ = &self.command;
+        Err(DeliveryError::new(format!(
+            "refusing GitHub merge for {repository}#{pr}: gh exposes expected-head protection but no exact base+head compare-and-swap or verified merge-group authority"
+        )))
     }
 }
 
@@ -1047,11 +1485,6 @@ fn github_owner_name(repository: &str) -> Result<(&str, &str)> {
     Err(DeliveryError::new(format!(
         "GitHub repository identity must be github.com/owner/name: {repository}"
     )))
-}
-
-fn github_repo_arg(repository: &str) -> Result<String> {
-    let (owner, name) = github_owner_name(repository)?;
-    Ok(format!("{owner}/{name}"))
 }
 
 fn logical_github_id(name_with_owner: &str) -> String {
@@ -1198,6 +1631,10 @@ mod tests {
                         "headRefName": "feature",
                         "headRefOid": "b".repeat(40),
                         "headRepository": {"nameWithOwner": "example/d2b"},
+                        "mergeCommit": null,
+                        "isInMergeQueue": false,
+                        "isMergeQueueEnabled": false,
+                        "mergeQueueEntry": null,
                         "commits": {"nodes": [{
                             "commit": {
                                 "oid": "b".repeat(40),
@@ -1219,12 +1656,22 @@ mod tests {
     fn check(name: &str, app: &str, status: &str, conclusion: &str) -> serde_json::Value {
         serde_json::json!({
             "__typename": "CheckRun",
+            "databaseId": 9876,
             "name": name,
             "status": status,
             "conclusion": conclusion,
-            "workflow": {"name": "Layer 1", "databaseId": 321},
-            "app": {"slug": app, "databaseId": 15368},
-            "commit": {"oid": "b".repeat(40)}
+            "startedAt": "2026-07-13T10:00:00Z",
+            "completedAt": "2026-07-13T10:01:00Z",
+            "checkSuite": {
+                "app": {"slug": app, "databaseId": 15368},
+                "commit": {"oid": "b".repeat(40)},
+                "workflowRun": {
+                    "databaseId": 6543,
+                    "createdAt": "2026-07-13T09:59:00Z",
+                    "updatedAt": "2026-07-13T10:01:00Z",
+                    "workflow": {"name": "Layer 1", "databaseId": 321}
+                }
+            }
         })
     }
 
@@ -1244,6 +1691,12 @@ mod tests {
         assert_eq!(status.head_oid, "b".repeat(40));
         assert_eq!(status.checks[0].publisher.app_slug, "github-actions");
         assert_eq!(status.checks[0].state, ObservedCheckState::Successful);
+        assert_eq!(status.checks[0].check_run_id, Some(9876));
+        assert_eq!(status.checks[0].workflow_run_id, Some(6543));
+        assert_eq!(
+            status.checks[0].completed_at_unix_seconds,
+            Some(1_783_936_860)
+        );
     }
 
     #[test]
@@ -1306,6 +1759,44 @@ mod tests {
             .expect_err("timeout");
         assert!(timeout.to_string().contains("timeout"));
         assert!(started.elapsed() < Duration::from_secs(1));
+
+        let started = Instant::now();
+        let descendant = runner
+            .output_with_limits(
+                "sh",
+                &[
+                    "-c".to_owned(),
+                    "(sleep 30) & printf parent-complete".to_owned(),
+                ],
+                None,
+                CommandLimits {
+                    stdout_bytes: 64,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_millis(50),
+                },
+            )
+            .expect_err("descendant retained output pipe");
+        assert!(descendant.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let started = Instant::now();
+        let escaped_pipe = runner
+            .output_with_limits(
+                "sh",
+                &[
+                    "-c".to_owned(),
+                    "setsid sh -c 'exec sleep 0.25' & printf parent-complete".to_owned(),
+                ],
+                None,
+                CommandLimits {
+                    stdout_bytes: 64,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_millis(20),
+                },
+            )
+            .expect_err("detached descendant retained output pipe");
+        assert!(escaped_pipe.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 
     #[test]
@@ -1358,22 +1849,13 @@ mod tests {
     }
 
     #[test]
-    fn github_status_and_merge_adapters_bind_exact_oids_and_expected_head() {
-        let command = FakeCommand::new(vec![
-            successful_output(graphql(serde_json::json!([check(
-                "check",
-                "github-actions",
-                "COMPLETED",
-                "SUCCESS"
-            )]))),
-            successful_output(vec![]),
-        ]);
+    fn github_status_query_uses_real_check_suite_schema() {
+        let command = FakeCommand::new(vec![successful_output(graphql(serde_json::json!([
+            check("check", "github-actions", "COMPLETED", "SUCCESS")
+        ])))]);
         GhStatusSource::new(&command)
             .status("github.com/example/d2b", 42)
             .expect("status");
-        GhMergeSource::new(&command)
-            .merge_with_expected_head("github.com/example/d2b", 42, &"b".repeat(40))
-            .expect("merge");
         let calls = command.calls.borrow();
         let query = calls[0].1.join(" ");
         for field in [
@@ -1382,16 +1864,125 @@ mod tests {
             "status",
             "conclusion",
             "workflow",
+            "workflowRun",
+            "checkSuite",
+            "databaseId",
+            "startedAt",
+            "completedAt",
+            "createdAt",
+            "updatedAt",
+            "isInMergeQueue",
+            "isMergeQueueEnabled",
+            "mergeQueueEntry",
+            "mergeCommit",
+            "baseCommit",
+            "headCommit",
+            "tree",
             "app",
             "commit",
         ] {
             assert!(query.contains(field), "query omitted {field}");
         }
+        assert!(!query.contains("CheckRun{name status conclusion workflow"));
+        assert!(!query.contains("conclusion workflow{name"));
+        assert!(!query.contains("databaseId} app{"));
+    }
+
+    #[test]
+    fn merge_queue_authority_is_complete_or_rejected() {
+        let mut queued: serde_json::Value =
+            serde_json::from_slice(&graphql(serde_json::json!([check(
+                "check",
+                "github-actions",
+                "COMPLETED",
+                "SUCCESS"
+            )])))
+            .expect("fixture JSON");
+        queued
+            .pointer_mut("/data/repository/pullRequest")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("pull request")
+            .insert("isInMergeQueue".to_owned(), serde_json::json!(true));
+        let missing = serde_json::to_vec(&queued).expect("queued JSON");
+        let error = parse_gh_status("github.com/example/d2b", 42, &missing)
+            .expect_err("missing queue authority");
         assert!(
-            calls[1]
-                .1
-                .windows(2)
-                .any(|pair| { pair[0] == "--match-head-commit" && pair[1] == "b".repeat(40) })
+            error
+                .to_string()
+                .contains("without exact merge-queue authority")
         );
+
+        queued
+            .pointer_mut("/data/repository/pullRequest")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("pull request")
+            .insert(
+                "mergeQueueEntry".to_owned(),
+                serde_json::json!({
+                    "id": "MQE_example",
+                    "state": "AWAITING_CHECKS",
+                    "baseCommit": {"oid": "a".repeat(40)},
+                    "headCommit": {"oid": "c".repeat(40)}
+                }),
+            );
+        let complete = parse_gh_status(
+            "github.com/example/d2b",
+            42,
+            &serde_json::to_vec(&queued).expect("queued JSON"),
+        )
+        .expect("complete queue authority");
+        assert!(complete.is_in_merge_queue);
+        assert_eq!(
+            complete.merge_queue_entry.expect("queue entry").base_oid,
+            "a".repeat(40)
+        );
+    }
+
+    #[test]
+    fn merged_pr_fixture_carries_exact_merge_commit_and_tree() {
+        let mut merged: serde_json::Value =
+            serde_json::from_slice(&graphql(serde_json::json!([check(
+                "check",
+                "github-actions",
+                "COMPLETED",
+                "SUCCESS"
+            )])))
+            .expect("fixture JSON");
+        let pull_request = merged
+            .pointer_mut("/data/repository/pullRequest")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("pull request");
+        pull_request.insert("state".to_owned(), serde_json::json!("MERGED"));
+        pull_request.insert(
+            "mergeCommit".to_owned(),
+            serde_json::json!({
+                "oid": "c".repeat(40),
+                "tree": {"oid": "d".repeat(40)}
+            }),
+        );
+        let status = parse_gh_status(
+            "github.com/example/d2b",
+            42,
+            &serde_json::to_vec(&merged).expect("merged JSON"),
+        )
+        .expect("merged status");
+        assert_eq!(status.state, PullRequestState::Merged);
+        assert_eq!(status.merge_commit_oid, Some("c".repeat(40)));
+        assert_eq!(status.merge_commit_tree_oid, Some("d".repeat(40)));
+    }
+
+    #[test]
+    fn gh_merge_adapter_refuses_head_only_authority() {
+        let command = FakeCommand::new(vec![]);
+        let error = GhMergeSource::new(&command)
+            .merge_with_expected_base_and_head(
+                "github.com/example/d2b",
+                42,
+                &"a".repeat(40),
+                &"b".repeat(40),
+            )
+            .expect_err("no base compare-and-swap");
+        assert!(error.to_string().contains("base+head compare-and-swap"));
+        assert!(command.calls.borrow().is_empty());
     }
 }

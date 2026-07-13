@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -9,14 +10,14 @@ use serde::{Deserialize, Serialize};
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{ObservedCheckState, PullRequestStatus, PullRequestStatusSource, RepositoryProbe},
-    evidence::{EvidenceProvenance, verify_evidence_in_context},
+    evidence::{CiAttestationVerifier, EvidenceProvenance, verify_evidence_in_context},
     model::{
-        EvidenceResult, Fingerprint, HISTORY_PROOF_ARTIFACT_KIND, MAX_CHECKS, PANEL_ROLES,
-        PanelRole, RepositoryBinding, RequiredCheck, RequiredValidation, SEAL_ARTIFACT_KIND,
-        StackNode, WaveSnapshot, ensure_schema, validate_bounded_string, validate_identifier,
-        validate_sha256,
+        CheckPublisherKind, EvidenceResult, Fingerprint, HISTORY_PROOF_ARTIFACT_KIND, MAX_CHECKS,
+        PANEL_ROLES, PanelRole, PullRequestState, RepositoryBinding, RepositoryRecord,
+        RequiredCheck, RequiredValidation, SEAL_ARTIFACT_KIND, StackNode, WaveSnapshot,
+        ensure_schema, validate_bounded_string, validate_identifier, validate_sha256,
     },
-    panel::read_stored_panel,
+    panel::{PanelReceiptVerifier, read_stored_panel},
     snapshot::{CurrentVerification, SnapshotContext, load_snapshot_context, verify_pr_identity},
     storage::{ensure_external_path, read_verified_json, verify_json_digest, write_immutable_json},
 };
@@ -49,7 +50,9 @@ pub struct ValidationPayloadBinding {
 #[serde(deny_unknown_fields)]
 pub struct PanelPayloadBinding {
     pub role: PanelRole,
-    pub sha256: String,
+    pub receipt_sha256: String,
+    pub signature_sha256: String,
+    pub trust_root_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -66,10 +69,14 @@ pub struct HistoryProof {
     pub old_snapshot_sha256: String,
     pub new_snapshot_sha256: String,
     pub old_seal_sha256: String,
-    pub old_repositories: Vec<RepositoryBinding>,
-    pub new_repositories: Vec<RepositoryBinding>,
+    pub transitioned_at_unix_seconds: u64,
+    pub transition_kind: HistoryTransitionKind,
+    pub old_repositories: Vec<RepositoryRecord>,
+    pub new_repositories: Vec<RepositoryRecord>,
+    pub repository_transitions: Vec<RepositoryTransition>,
     pub old_stack: Vec<StackNode>,
     pub new_stack: Vec<StackNode>,
+    pub stack_transitions: Vec<StackTransition>,
     pub unchanged_required_validations: Vec<RequiredValidation>,
     pub unchanged_required_checks: Vec<RequiredCheck>,
     pub unchanged_generated_artifacts: Vec<Fingerprint>,
@@ -79,9 +86,56 @@ pub struct HistoryProof {
     pub fresh_ci_required: bool,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryTransitionKind {
+    CommitHistory,
+    MergedStackProgression,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryTransition {
+    pub repository: String,
+    pub old_base_oid: String,
+    pub old_base_tree_oid: String,
+    pub new_base_oid: String,
+    pub new_base_tree_oid: String,
+    pub old_base_to_head_diff_sha256: String,
+    pub new_base_to_head_diff_sha256: String,
+    pub old_generated_diff_sha256: String,
+    pub new_generated_diff_sha256: String,
+    pub old_dependency_diff_sha256: String,
+    pub new_dependency_diff_sha256: String,
+    pub old_contract_diff_sha256: String,
+    pub new_contract_diff_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackTransition {
+    pub node: String,
+    pub old_state: PullRequestState,
+    pub new_state: PullRequestState,
+    pub old_base_ref: String,
+    pub old_base_oid: String,
+    pub new_base_ref: String,
+    pub new_base_oid: String,
+    pub old_head_oid: String,
+    pub new_head_oid: String,
+    pub old_head_tree_oid: String,
+    pub new_head_tree_oid: String,
+    pub old_merge_commit_oid: Option<String>,
+    pub new_merge_commit_oid: Option<String>,
+    pub old_merge_commit_tree_oid: Option<String>,
+    pub new_merge_commit_tree_oid: Option<String>,
+}
+
 pub fn construct_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     snapshot_path: &Path,
 ) -> Result<PathBuf> {
@@ -91,8 +145,8 @@ pub fn construct_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
         snapshot_path,
         CurrentVerification::ExactRefs,
     )?;
-    let validation_payloads = collect_validation_payloads(&context)?;
-    let panel_payloads = collect_panel_payloads(&context)?;
+    let validation_payloads = collect_validation_payloads(&context, ci_verifier)?;
+    let panel_payloads = collect_panel_payloads(&context, panel_verifier)?;
     let live_pull_requests = collect_live_prs(&context.snapshot, status_source)?;
     let seal = WaveSeal {
         artifact_kind: SEAL_ARTIFACT_KIND.to_owned(),
@@ -116,6 +170,8 @@ pub fn construct_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
 pub fn verify_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
 ) -> Result<WaveSeal> {
@@ -131,13 +187,15 @@ pub fn verify_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
             "live PR/check authority changed from the wave seal",
         ));
     }
-    verify_seal_payloads(&context, &seal)?;
+    verify_seal_payloads(&context, &seal, ci_verifier, panel_verifier)?;
     verify_json_digest(seal_path)?;
     Ok(seal)
 }
 
 pub(crate) fn verify_seal_recorded<P: RepositoryProbe>(
     probe: &P,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
 ) -> Result<(SnapshotContext, WaveSeal)> {
@@ -147,25 +205,41 @@ pub(crate) fn verify_seal_recorded<P: RepositoryProbe>(
         seal_path,
         CurrentVerification::RecordedObjects,
     )?;
-    verify_seal_payloads(&context, &seal)?;
+    verify_seal_payloads(&context, &seal, ci_verifier, panel_verifier)?;
     verify_json_digest(seal_path)?;
     Ok((context, seal))
 }
 
 pub fn construct_history_proof<P: RepositoryProbe>(
     probe: &P,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     old_seal_path: &Path,
     new_snapshot_path: &Path,
 ) -> Result<PathBuf> {
-    let (old_context, old_seal) = verify_seal_recorded(probe, repository_roots, old_seal_path)?;
+    let (old_context, old_seal) = verify_seal_recorded(
+        probe,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        old_seal_path,
+    )?;
     let new_context = load_snapshot_context(
         probe,
         repository_roots,
         new_snapshot_path,
         CurrentVerification::ExactRefs,
     )?;
-    verify_history_only_equivalence(&old_context.snapshot, &new_context.snapshot)?;
+    let transition_kind =
+        classify_history_transition(&old_context.snapshot, &new_context.snapshot)?;
+    verify_history_git_ancestry(
+        probe,
+        &old_context.snapshot,
+        &new_context.snapshot,
+        &new_context.repository_roots,
+        transition_kind,
+    )?;
     if old_context.snapshot.candidate_id == new_context.snapshot.candidate_id {
         return Err(DeliveryError::new(
             "history proof requires distinct old and new candidate IDs",
@@ -183,10 +257,17 @@ pub fn construct_history_proof<P: RepositoryProbe>(
         old_snapshot_sha256: old_context.digest,
         new_snapshot_sha256: new_context.digest,
         old_seal_sha256: verify_json_digest(old_seal_path)?,
-        old_repositories: old_seal.repository_set,
-        new_repositories: new_context.snapshot.repository_bindings(),
+        transitioned_at_unix_seconds: now_unix_seconds()?,
+        transition_kind,
+        old_repositories: old_context.snapshot.repository_set.clone(),
+        new_repositories: new_context.snapshot.repository_set.clone(),
+        repository_transitions: repository_transitions(
+            &old_context.snapshot,
+            &new_context.snapshot,
+        )?,
         old_stack: old_context.snapshot.stack.clone(),
         new_stack: new_context.snapshot.stack.clone(),
+        stack_transitions: stack_transitions(&old_context.snapshot, &new_context.snapshot)?,
         unchanged_required_validations: new_context.snapshot.required_validations.clone(),
         unchanged_required_checks: new_context.snapshot.required_checks.clone(),
         unchanged_generated_artifacts: new_context.snapshot.generated_artifacts.clone(),
@@ -203,6 +284,8 @@ pub fn construct_history_proof<P: RepositoryProbe>(
 
 pub fn verify_history_proof<P: RepositoryProbe>(
     probe: &P,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     old_seal_path: &Path,
     new_snapshot_path: &Path,
@@ -210,6 +293,8 @@ pub fn verify_history_proof<P: RepositoryProbe>(
 ) -> Result<(WaveSnapshot, WaveSeal, HistoryProof)> {
     let (context, seal, proof) = verify_history_proof_context(
         probe,
+        ci_verifier,
+        panel_verifier,
         repository_roots,
         old_seal_path,
         new_snapshot_path,
@@ -220,12 +305,20 @@ pub fn verify_history_proof<P: RepositoryProbe>(
 
 pub(crate) fn verify_history_proof_context<P: RepositoryProbe>(
     probe: &P,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     old_seal_path: &Path,
     new_snapshot_path: &Path,
     proof_path: &Path,
 ) -> Result<(SnapshotContext, WaveSeal, HistoryProof)> {
-    let (old_context, old_seal) = verify_seal_recorded(probe, repository_roots, old_seal_path)?;
+    let (old_context, old_seal) = verify_seal_recorded(
+        probe,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        old_seal_path,
+    )?;
     let new_context = load_snapshot_context(
         probe,
         repository_roots,
@@ -234,7 +327,15 @@ pub(crate) fn verify_history_proof_context<P: RepositoryProbe>(
     )?;
     let (proof, _proof_digest): (HistoryProof, String) = read_verified_json(proof_path)?;
     validate_history_proof_values(&proof)?;
-    verify_history_only_equivalence(&old_context.snapshot, &new_context.snapshot)?;
+    let transition_kind =
+        classify_history_transition(&old_context.snapshot, &new_context.snapshot)?;
+    verify_history_git_ancestry(
+        probe,
+        &old_context.snapshot,
+        &new_context.snapshot,
+        &new_context.repository_roots,
+        transition_kind,
+    )?;
     let expected_path = new_context.layout.history_proof();
     if super::storage::absolute_path(proof_path)? != super::storage::absolute_path(&expected_path)?
     {
@@ -251,10 +352,15 @@ pub(crate) fn verify_history_proof_context<P: RepositoryProbe>(
         || proof.old_snapshot_sha256 != old_context.digest
         || proof.new_snapshot_sha256 != new_context.digest
         || proof.old_seal_sha256 != verify_json_digest(old_seal_path)?
-        || proof.old_repositories != old_seal.repository_set
-        || proof.new_repositories != new_context.snapshot.repository_bindings()
+        || proof.transition_kind != transition_kind
+        || proof.old_repositories != old_context.snapshot.repository_set
+        || proof.new_repositories != new_context.snapshot.repository_set
+        || proof.repository_transitions
+            != repository_transitions(&old_context.snapshot, &new_context.snapshot)?
         || proof.old_stack != old_context.snapshot.stack
         || proof.new_stack != new_context.snapshot.stack
+        || proof.stack_transitions
+            != stack_transitions(&old_context.snapshot, &new_context.snapshot)?
         || proof.unchanged_required_validations != new_context.snapshot.required_validations
         || proof.unchanged_required_checks != new_context.snapshot.required_checks
         || proof.unchanged_generated_artifacts != new_context.snapshot.generated_artifacts
@@ -274,33 +380,25 @@ pub fn verify_history_only_equivalence(
     sealed: &WaveSnapshot,
     candidate: &WaveSnapshot,
 ) -> Result<()> {
+    classify_history_transition(sealed, candidate).map(|_| ())
+}
+
+fn classify_history_transition(
+    sealed: &WaveSnapshot,
+    candidate: &WaveSnapshot,
+) -> Result<HistoryTransitionKind> {
     sealed.validate()?;
     candidate.validate()?;
     if sealed.program != candidate.program
         || sealed.wave != candidate.wave
         || sealed.content_id != candidate.content_id
-        || sealed
-            .repository_set
-            .iter()
-            .map(|repository| {
-                (
-                    &repository.id,
-                    repository.object_format,
-                    &repository.integration_tree_oid,
-                )
-            })
-            .collect::<Vec<_>>()
-            != candidate
-                .repository_set
-                .iter()
-                .map(|repository| {
-                    (
-                        &repository.id,
-                        repository.object_format,
-                        &repository.integration_tree_oid,
-                    )
-                })
-                .collect::<Vec<_>>()
+        || sealed.panel_trust_root_sha256 != candidate.panel_trust_root_sha256
+        || sealed.authority.repository != candidate.authority.repository
+        || sealed.authority.ref_name != candidate.authority.ref_name
+        || sealed.authority.tree_oid != candidate.authority.tree_oid
+        || sealed.authority.manifest_path != candidate.authority.manifest_path
+        || sealed.authority.manifest_blob_oid != candidate.authority.manifest_blob_oid
+        || sealed.authority.manifest_sha256 != candidate.authority.manifest_sha256
         || sealed.required_validations != candidate.required_validations
         || sealed.required_checks != candidate.required_checks
         || sealed.generated_artifacts != candidate.generated_artifacts
@@ -311,7 +409,372 @@ pub fn verify_history_only_equivalence(
             "candidate is not history-only: content, dependencies, contracts, repository set, or required gates changed",
         ));
     }
+    let old_repositories = sealed
+        .repository_set
+        .iter()
+        .map(|repository| (repository.id.as_str(), repository))
+        .collect::<BTreeMap<_, _>>();
+    let new_repositories = candidate
+        .repository_set
+        .iter()
+        .map(|repository| (repository.id.as_str(), repository))
+        .collect::<BTreeMap<_, _>>();
+    if old_repositories.keys().collect::<Vec<_>>() != new_repositories.keys().collect::<Vec<_>>() {
+        return Err(DeliveryError::new(
+            "candidate repository set changed from the sealed candidate",
+        ));
+    }
+    for (id, old) in &old_repositories {
+        let new = new_repositories
+            .get(id)
+            .copied()
+            .expect("repository sets were compared");
+        if old.object_format != new.object_format
+            || old.trunk_ref != new.trunk_ref
+            || old.integration_ref != new.integration_ref
+            || old.integration_tree_oid != new.integration_tree_oid
+        {
+            return Err(DeliveryError::new(format!(
+                "repository {id} final tree or repository policy changed"
+            )));
+        }
+    }
+
+    let bases_unchanged = old_repositories.iter().all(|(id, old)| {
+        let new = new_repositories
+            .get(id)
+            .copied()
+            .expect("repository sets were compared");
+        old.trunk_oid == new.trunk_oid
+            && old.trunk_tree_oid == new.trunk_tree_oid
+            && old.base_to_head_diff_sha256 == new.base_to_head_diff_sha256
+            && old.generated_diff_sha256 == new.generated_diff_sha256
+            && old.dependency_diff_sha256 == new.dependency_diff_sha256
+            && old.contract_diff_sha256 == new.contract_diff_sha256
+    });
+    if bases_unchanged {
+        verify_commit_history_progression(sealed, candidate)?;
+        return Ok(HistoryTransitionKind::CommitHistory);
+    }
+
+    verify_merged_progression(sealed, candidate)?;
+    Ok(HistoryTransitionKind::MergedStackProgression)
+}
+
+fn verify_commit_history_progression(
+    sealed: &WaveSnapshot,
+    candidate: &WaveSnapshot,
+) -> Result<()> {
+    let old_nodes = sealed
+        .stack
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let new_nodes = candidate
+        .stack
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    if old_nodes.keys().collect::<Vec<_>>() != new_nodes.keys().collect::<Vec<_>>() {
+        return Err(DeliveryError::new(
+            "commit-history transition changed the configured stack node set",
+        ));
+    }
+    for (id, old) in old_nodes {
+        let new = new_nodes
+            .get(id)
+            .copied()
+            .expect("stack node sets were compared");
+        if old.repository != new.repository
+            || old.pr_number != new.pr_number
+            || old.expected_base_ref != new.expected_base_ref
+            || old.head_ref != new.head_ref
+            || old.head_tree_oid != new.head_tree_oid
+            || old.merge_commit_oid != new.merge_commit_oid
+            || old.merge_commit_tree_oid != new.merge_commit_tree_oid
+            || old.prospective_merge_tree_oid != new.prospective_merge_tree_oid
+            || old.snapshot_state != new.snapshot_state
+            || old.depends_on != new.depends_on
+        {
+            return Err(DeliveryError::new(format!(
+                "commit-history transition changed node {id} content, state, or policy"
+            )));
+        }
+    }
     Ok(())
+}
+
+fn verify_merged_progression(sealed: &WaveSnapshot, candidate: &WaveSnapshot) -> Result<()> {
+    let old_nodes = sealed
+        .stack
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let new_nodes = candidate
+        .stack
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    if old_nodes.keys().collect::<Vec<_>>() != new_nodes.keys().collect::<Vec<_>>() {
+        return Err(DeliveryError::new(
+            "merged progression changed the configured stack node set",
+        ));
+    }
+    let mut transitioned = BTreeSet::new();
+    for (id, old) in &old_nodes {
+        let new = new_nodes
+            .get(id)
+            .copied()
+            .expect("stack node sets were compared");
+        if old.repository != new.repository
+            || old.pr_number != new.pr_number
+            || old.head_ref != new.head_ref
+            || old.head_tree_oid != new.head_tree_oid
+            || old.depends_on != new.depends_on
+        {
+            return Err(DeliveryError::new(format!(
+                "merged progression changed node {id} identity or content"
+            )));
+        }
+        match (old.snapshot_state, new.snapshot_state) {
+            (PullRequestState::Open, PullRequestState::Merged) => {
+                if old.head_oid != new.head_oid
+                    || new.merge_commit_tree_oid.as_deref()
+                        != Some(old.prospective_merge_tree_oid.as_str())
+                {
+                    return Err(DeliveryError::new(format!(
+                        "merged node {id} changed head or has the wrong merge tree while transitioning"
+                    )));
+                }
+                transitioned.insert(*id);
+            }
+            (left, right) if left == right => {
+                if old.merge_commit_oid != new.merge_commit_oid
+                    || old.merge_commit_tree_oid != new.merge_commit_tree_oid
+                {
+                    return Err(DeliveryError::new(format!(
+                        "node {id} changed merge commit authority without transitioning"
+                    )));
+                }
+            }
+            _ => {
+                return Err(DeliveryError::new(format!(
+                    "node {id} has an unsupported history transition"
+                )));
+            }
+        }
+    }
+    if transitioned.is_empty() {
+        return Err(DeliveryError::new(
+            "base movement is not explained by an open-to-merged stack transition",
+        ));
+    }
+    for old_repository in &sealed.repository_set {
+        let new_repository = candidate
+            .repository_set
+            .iter()
+            .find(|repository| repository.id == old_repository.id)
+            .expect("repository sets were compared");
+        let old_open = sealed
+            .stack
+            .iter()
+            .filter(|node| {
+                node.repository == old_repository.id
+                    && node.snapshot_state == PullRequestState::Open
+            })
+            .collect::<Vec<_>>();
+        let transitioned_prefix = old_open
+            .iter()
+            .take_while(|node| transitioned.contains(node.id.as_str()))
+            .count();
+        if old_open
+            .iter()
+            .skip(transitioned_prefix)
+            .any(|node| transitioned.contains(node.id.as_str()))
+        {
+            return Err(DeliveryError::new(format!(
+                "repository {} merged nodes are not a contiguous stack prefix",
+                old_repository.id
+            )));
+        }
+        if old_repository.trunk_oid == new_repository.trunk_oid {
+            if transitioned_prefix != 0 {
+                return Err(DeliveryError::new(format!(
+                    "repository {} reports merged nodes without advancing its base",
+                    old_repository.id
+                )));
+            }
+            continue;
+        }
+        if transitioned_prefix == 0
+            || old_open[transitioned_prefix - 1].prospective_merge_tree_oid
+                != new_repository.trunk_tree_oid
+        {
+            return Err(DeliveryError::new(format!(
+                "repository {} base move is not the sealed prospective tree of its merged prefix",
+                old_repository.id
+            )));
+        }
+    }
+    for (id, old) in &old_nodes {
+        let new = new_nodes
+            .get(id)
+            .copied()
+            .expect("stack node sets were compared");
+        if old.snapshot_state == PullRequestState::Open
+            && new.snapshot_state == PullRequestState::Open
+            && (old.expected_base_oid != new.expected_base_oid
+                || old.expected_base_ref != new.expected_base_ref)
+        {
+            let retargeted_from_merged = old
+                .depends_on
+                .iter()
+                .filter(|dependency| transitioned.contains(dependency.as_str()))
+                .any(|dependency| old.expected_base_oid == old_nodes[dependency.as_str()].head_oid);
+            let repository = candidate
+                .repository_set
+                .iter()
+                .find(|repository| repository.id == new.repository)
+                .expect("node repository is present");
+            if !retargeted_from_merged
+                || new.expected_base_ref != repository.trunk_ref
+                || new.expected_base_oid != repository.trunk_oid
+            {
+                return Err(DeliveryError::new(format!(
+                    "active node {id} retarget is not explained by its merged predecessor"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_history_git_ancestry<P: RepositoryProbe>(
+    probe: &P,
+    sealed: &WaveSnapshot,
+    candidate: &WaveSnapshot,
+    roots: &BTreeMap<String, PathBuf>,
+    transition: HistoryTransitionKind,
+) -> Result<()> {
+    if transition != HistoryTransitionKind::MergedStackProgression {
+        return Ok(());
+    }
+    for old_repository in &sealed.repository_set {
+        let new_repository = candidate
+            .repository_set
+            .iter()
+            .find(|repository| repository.id == old_repository.id)
+            .ok_or_else(|| DeliveryError::new("history repository set is incomplete"))?;
+        if old_repository.trunk_oid == new_repository.trunk_oid {
+            continue;
+        }
+        let root = roots
+            .get(&old_repository.id)
+            .ok_or_else(|| DeliveryError::new("history repository checkout is missing"))?;
+        if !probe.is_ancestor(root, &old_repository.trunk_oid, &new_repository.trunk_oid)? {
+            return Err(DeliveryError::new(format!(
+                "repository {} new base does not descend from the sealed base",
+                old_repository.id
+            )));
+        }
+        for old_node in sealed.stack.iter().filter(|node| {
+            node.repository == old_repository.id
+                && node.snapshot_state == PullRequestState::Open
+                && candidate.stack.iter().any(|new_node| {
+                    new_node.id == node.id && new_node.snapshot_state == PullRequestState::Merged
+                })
+        }) {
+            let new_node = candidate
+                .stack
+                .iter()
+                .find(|node| node.id == old_node.id)
+                .expect("transitioned node is present");
+            let merge_commit = new_node.merge_commit_oid.as_ref().ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "merged stack node {} has no exact merge commit",
+                    old_node.id
+                ))
+            })?;
+            if !probe.is_ancestor(root, &old_repository.trunk_oid, merge_commit)?
+                || !probe.is_ancestor(root, merge_commit, &new_repository.trunk_oid)?
+            {
+                return Err(DeliveryError::new(format!(
+                    "merged stack node {} merge commit is outside the base progression",
+                    old_node.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn repository_transitions(
+    sealed: &WaveSnapshot,
+    candidate: &WaveSnapshot,
+) -> Result<Vec<RepositoryTransition>> {
+    let mut transitions = Vec::with_capacity(sealed.repository_set.len());
+    for old in &sealed.repository_set {
+        let new = candidate
+            .repository_set
+            .iter()
+            .find(|repository| repository.id == old.id)
+            .ok_or_else(|| DeliveryError::new("history repository transition is incomplete"))?;
+        transitions.push(RepositoryTransition {
+            repository: old.id.clone(),
+            old_base_oid: old.trunk_oid.clone(),
+            old_base_tree_oid: old.trunk_tree_oid.clone(),
+            new_base_oid: new.trunk_oid.clone(),
+            new_base_tree_oid: new.trunk_tree_oid.clone(),
+            old_base_to_head_diff_sha256: old.base_to_head_diff_sha256.clone(),
+            new_base_to_head_diff_sha256: new.base_to_head_diff_sha256.clone(),
+            old_generated_diff_sha256: old.generated_diff_sha256.clone(),
+            new_generated_diff_sha256: new.generated_diff_sha256.clone(),
+            old_dependency_diff_sha256: old.dependency_diff_sha256.clone(),
+            new_dependency_diff_sha256: new.dependency_diff_sha256.clone(),
+            old_contract_diff_sha256: old.contract_diff_sha256.clone(),
+            new_contract_diff_sha256: new.contract_diff_sha256.clone(),
+        });
+    }
+    Ok(transitions)
+}
+
+fn stack_transitions(
+    sealed: &WaveSnapshot,
+    candidate: &WaveSnapshot,
+) -> Result<Vec<StackTransition>> {
+    let mut transitions = Vec::with_capacity(sealed.stack.len());
+    for old in &sealed.stack {
+        let new = candidate
+            .stack
+            .iter()
+            .find(|node| node.id == old.id)
+            .ok_or_else(|| DeliveryError::new("history stack transition is incomplete"))?;
+        transitions.push(StackTransition {
+            node: old.id.clone(),
+            old_state: old.snapshot_state,
+            new_state: new.snapshot_state,
+            old_base_ref: old.expected_base_ref.clone(),
+            old_base_oid: old.expected_base_oid.clone(),
+            new_base_ref: new.expected_base_ref.clone(),
+            new_base_oid: new.expected_base_oid.clone(),
+            old_head_oid: old.head_oid.clone(),
+            new_head_oid: new.head_oid.clone(),
+            old_head_tree_oid: old.head_tree_oid.clone(),
+            new_head_tree_oid: new.head_tree_oid.clone(),
+            old_merge_commit_oid: old.merge_commit_oid.clone(),
+            new_merge_commit_oid: new.merge_commit_oid.clone(),
+            old_merge_commit_tree_oid: old.merge_commit_tree_oid.clone(),
+            new_merge_commit_tree_oid: new.merge_commit_tree_oid.clone(),
+        });
+    }
+    Ok(transitions)
+}
+
+fn now_unix_seconds() -> Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| DeliveryError::new("system time is before the Unix epoch"))
 }
 
 fn load_seal_context<P: RepositoryProbe>(
@@ -414,7 +877,9 @@ fn validate_payload_binding_sets(
     let expected_roles = PANEL_ROLES.into_iter().collect::<BTreeSet<_>>();
     let mut seen_roles = BTreeSet::new();
     for payload in panels {
-        validate_sha256(&payload.sha256, "panel payload digest")?;
+        validate_sha256(&payload.receipt_sha256, "panel receipt digest")?;
+        validate_sha256(&payload.signature_sha256, "panel signature digest")?;
+        validate_sha256(&payload.trust_root_sha256, "panel trust-root digest")?;
         if !seen_roles.insert(payload.role) {
             return Err(DeliveryError::new("seal repeats a panel role"));
         }
@@ -427,14 +892,19 @@ fn validate_payload_binding_sets(
     Ok(())
 }
 
-fn verify_seal_payloads(context: &SnapshotContext, seal: &WaveSeal) -> Result<()> {
-    let validations = collect_validation_payloads(context)?;
+fn verify_seal_payloads(
+    context: &SnapshotContext,
+    seal: &WaveSeal,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
+) -> Result<()> {
+    let validations = collect_validation_payloads(context, ci_verifier)?;
     if validations != seal.validation_payloads {
         return Err(DeliveryError::new(
             "seal validation payload bindings changed",
         ));
     }
-    let panels = collect_panel_payloads(context)?;
+    let panels = collect_panel_payloads(context, panel_verifier)?;
     if panels != seal.panel_payloads {
         return Err(DeliveryError::new("seal panel payload bindings changed"));
     }
@@ -449,6 +919,16 @@ fn collect_live_prs<S: PullRequestStatusSource>(
     for node in &snapshot.stack {
         let status = status_source.status(&node.repository, node.pr_number)?;
         verify_pr_identity(node, &status)?;
+        if status.state == PullRequestState::Open
+            && (status.is_in_merge_queue
+                || status.is_merge_queue_enabled
+                || status.merge_queue_entry.is_some())
+        {
+            return Err(DeliveryError::new(format!(
+                "open PR {}#{} uses a merge queue without exact merge-group authority",
+                node.repository, node.pr_number
+            )));
+        }
         if status.state == super::model::PullRequestState::Open && status.merge_state != "CLEAN" {
             return Err(DeliveryError::new(format!(
                 "open PR {}#{} merge state is not CLEAN",
@@ -494,6 +974,7 @@ pub(crate) fn verify_required_checks(
         validate_bounded_string(&check.status, "observed check status")?;
         validate_bounded_string(&check.conclusion, "observed check conclusion")?;
         check.publisher.validate()?;
+        validate_observed_check_authority(check)?;
         if !names.insert(check.name.as_str()) {
             return Err(DeliveryError::new(format!(
                 "duplicate same-name publisher for check {}",
@@ -556,7 +1037,69 @@ pub(crate) fn verify_required_checks(
     Ok(())
 }
 
-fn collect_validation_payloads(context: &SnapshotContext) -> Result<Vec<ValidationPayloadBinding>> {
+fn validate_observed_check_authority(check: &super::command::ObservedCheck) -> Result<()> {
+    match check.publisher.kind {
+        CheckPublisherKind::CheckRun => {
+            let Some(check_run_id) = check.check_run_id else {
+                return Err(DeliveryError::new(format!(
+                    "check run {} has no database ID",
+                    check.name
+                )));
+            };
+            let Some(completed) = check.completed_at_unix_seconds else {
+                return Err(DeliveryError::new(format!(
+                    "successful check run {} has no completion timestamp",
+                    check.name
+                )));
+            };
+            if check_run_id == 0
+                || check.started_at_unix_seconds == 0
+                || completed < check.started_at_unix_seconds
+            {
+                return Err(DeliveryError::new(format!(
+                    "check run {} has invalid run identity or timestamps",
+                    check.name
+                )));
+            }
+            match (
+                check.publisher.workflow_id,
+                check.workflow_run_id,
+                check.workflow_created_at_unix_seconds,
+                check.workflow_updated_at_unix_seconds,
+            ) {
+                (0, None, None, None) => {}
+                (workflow_id, Some(run_id), Some(created), Some(updated))
+                    if workflow_id != 0 && run_id != 0 && created != 0 && updated >= created => {}
+                _ => {
+                    return Err(DeliveryError::new(format!(
+                        "check run {} has incomplete workflow-run authority",
+                        check.name
+                    )));
+                }
+            }
+        }
+        CheckPublisherKind::StatusContext => {
+            if check.check_run_id.is_some()
+                || check.workflow_run_id.is_some()
+                || check.workflow_created_at_unix_seconds.is_some()
+                || check.workflow_updated_at_unix_seconds.is_some()
+                || check.started_at_unix_seconds == 0
+                || check.completed_at_unix_seconds != Some(check.started_at_unix_seconds)
+            {
+                return Err(DeliveryError::new(format!(
+                    "status context {} has invalid publisher authority",
+                    check.name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_validation_payloads(
+    context: &SnapshotContext,
+    verifier: &dyn CiAttestationVerifier,
+) -> Result<Vec<ValidationPayloadBinding>> {
     let directory = context.layout.evidence_dir();
     ensure_exact_json_set(
         &directory,
@@ -570,7 +1113,7 @@ fn collect_validation_payloads(context: &SnapshotContext) -> Result<Vec<Validati
     let mut payloads = Vec::new();
     for required in &context.snapshot.required_validations {
         let path = directory.join(format!("{}.json", required.id));
-        let record = verify_evidence_in_context(context, &path)?;
+        let record = verify_evidence_in_context(context, &path, verifier)?;
         if record.result != EvidenceResult::Passed {
             return Err(DeliveryError::new(format!(
                 "validation evidence {} is not passed",
@@ -590,23 +1133,24 @@ fn collect_validation_payloads(context: &SnapshotContext) -> Result<Vec<Validati
     Ok(payloads)
 }
 
-fn collect_panel_payloads(context: &SnapshotContext) -> Result<Vec<PanelPayloadBinding>> {
-    let records = read_stored_panel(context)?;
+fn collect_panel_payloads(
+    context: &SnapshotContext,
+    verifier: &dyn PanelReceiptVerifier,
+) -> Result<Vec<PanelPayloadBinding>> {
+    let records = read_stored_panel(context, verifier)?;
     let mut payloads = Vec::new();
     for record in records {
-        if !record.signoff {
+        if !record.claims.signoff {
             return Err(DeliveryError::new(format!(
                 "panel role {} has findings",
-                record.role.as_str()
+                record.claims.role.as_str()
             )));
         }
-        let path = context
-            .layout
-            .panel_dir()
-            .join(format!("{}.json", record.role.as_str()));
         payloads.push(PanelPayloadBinding {
-            role: record.role,
-            sha256: verify_json_digest(&path)?,
+            role: record.claims.role,
+            receipt_sha256: record.receipt_sha256,
+            signature_sha256: record.signature_sha256,
+            trust_root_sha256: record.trust_root_sha256,
         });
     }
     payloads.sort();
@@ -690,6 +1234,8 @@ fn validate_history_proof_values(proof: &HistoryProof) -> Result<()> {
     if proof.old_candidate_id == proof.new_candidate_id
         || proof.old_content_id != proof.new_content_id
         || !proof.fresh_ci_required
+        || proof.transitioned_at_unix_seconds == 0
+        || proof.transitioned_at_unix_seconds > now_unix_seconds()?.saturating_add(300)
         || proof.reused_panel_payloads.len() != PANEL_ROLES.len()
     {
         return Err(DeliveryError::new(
@@ -720,6 +1266,8 @@ mod tests {
             head_ref: "feature".to_owned(),
             head_oid: "b".repeat(40),
             head_tree_oid: "c".repeat(40),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
             prospective_merge_tree_oid: "c".repeat(40),
             prospective_content_id: "d".repeat(64),
             snapshot_state: PullRequestState::Open,
@@ -739,6 +1287,7 @@ mod tests {
             wave: "w1".to_owned(),
             candidate_id: "0".repeat(64),
             content_id: "0".repeat(64),
+            panel_trust_root_sha256: "a".repeat(64),
             authority: super::super::model::AuthorityBinding {
                 repository: "github.com/example/d2b".to_owned(),
                 ref_name: "feature".to_owned(),
@@ -757,6 +1306,10 @@ mod tests {
                 integration_ref: "feature".to_owned(),
                 integration_oid: "b".repeat(40),
                 integration_tree_oid: "c".repeat(40),
+                base_to_head_diff_sha256: "1".repeat(64),
+                generated_diff_sha256: "2".repeat(64),
+                dependency_diff_sha256: "3".repeat(64),
+                contract_diff_sha256: "4".repeat(64),
                 stack_graph_sha256: "1".repeat(64),
             }],
             stack: vec![node.clone()],
@@ -780,13 +1333,24 @@ mod tests {
             head_repository: node.repository.clone(),
             head_ref: node.head_ref.clone(),
             head_oid: node.head_oid.clone(),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
+            is_in_merge_queue: false,
+            is_merge_queue_enabled: false,
+            merge_queue_entry: None,
             checks: vec![ObservedCheck {
                 name: "check".to_owned(),
                 publisher,
+                check_run_id: Some(1),
+                workflow_run_id: Some(2),
                 status: "COMPLETED".to_owned(),
                 conclusion: "SUCCESS".to_owned(),
                 state: ObservedCheckState::Successful,
                 commit_oid: node.head_oid.clone(),
+                started_at_unix_seconds: 1,
+                completed_at_unix_seconds: Some(2),
+                workflow_created_at_unix_seconds: Some(1),
+                workflow_updated_at_unix_seconds: Some(2),
             }],
         };
         (snapshot, node, status)
@@ -809,10 +1373,16 @@ mod tests {
                 workflow: "Other".to_owned(),
                 workflow_id: 99,
             },
+            check_run_id: Some(3),
+            workflow_run_id: Some(4),
             status: "COMPLETED".to_owned(),
             conclusion: "FAILURE".to_owned(),
             state: ObservedCheckState::Failed,
             commit_oid: node.head_oid.clone(),
+            started_at_unix_seconds: 1,
+            completed_at_unix_seconds: Some(2),
+            workflow_created_at_unix_seconds: Some(1),
+            workflow_updated_at_unix_seconds: Some(2),
         });
         let error = verify_required_checks(&snapshot, &node, &status).expect_err("extra failed");
         assert!(error.to_string().contains("unknown or unlisted"));

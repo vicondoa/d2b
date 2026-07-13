@@ -12,9 +12,11 @@ pub const SNAPSHOT_ARTIFACT_KIND: &str = "d2b-delivery/wave-snapshot";
 pub const SEAL_ARTIFACT_KIND: &str = "d2b-delivery/wave-seal";
 pub const HISTORY_PROOF_ARTIFACT_KIND: &str = "d2b-delivery/history-proof";
 pub const PANEL_REQUEST_ARTIFACT_KIND: &str = "d2b-delivery/panel-request";
-pub const PANEL_ATTESTATION_ARTIFACT_KIND: &str = "d2b-delivery/panel-attestation";
+pub const PANEL_ATTESTATION_ARTIFACT_KIND: &str = "d2b-delivery/panel-receipt";
 pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
+pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
 pub const PANEL_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
+pub const PANEL_SIGNATURE_POLICY: &str = "rsa-sha256";
 pub const AUTHORITATIVE_MANIFEST_PATH: &str = "delivery/manifest.json";
 
 pub const MAX_REPOSITORIES: usize = 16;
@@ -55,6 +57,7 @@ pub struct DeliveryManifest {
     pub program: String,
     pub wave: String,
     pub authority_repository: String,
+    pub panel_trust_root_sha256: String,
     pub repositories: Vec<RepositoryPolicy>,
     pub stack_nodes: Vec<StackNodePolicy>,
     pub required_validations: Vec<RequiredValidation>,
@@ -73,6 +76,7 @@ impl DeliveryManifest {
         validate_identifier(&self.program, "program")?;
         validate_identifier(&self.wave, "wave")?;
         validate_repository_id(&self.authority_repository)?;
+        validate_sha256(&self.panel_trust_root_sha256, "panel trust-root digest")?;
         ensure_count(self.repositories.len(), 1, MAX_REPOSITORIES, "repositories")?;
         ensure_count(self.stack_nodes.len(), 1, MAX_STACK_NODES, "stack_nodes")?;
         ensure_count(
@@ -469,6 +473,9 @@ impl GhStackGraph {
                 )));
             }
             if branch.is_current {
+                if branch.is_merged {
+                    return Err(DeliveryError::new("gh-stack current branch must be active"));
+                }
                 current += 1;
                 if branch.name != self.current_branch {
                     return Err(DeliveryError::new(
@@ -488,6 +495,11 @@ impl GhStackGraph {
         if current != 1 {
             return Err(DeliveryError::new(
                 "gh-stack must identify exactly one current branch",
+            ));
+        }
+        if !self.branches.iter().any(|branch| !branch.is_merged) {
+            return Err(DeliveryError::new(
+                "gh-stack must contain at least one active branch",
             ));
         }
         Ok(())
@@ -570,6 +582,7 @@ pub struct WaveSnapshot {
     pub wave: String,
     pub candidate_id: String,
     pub content_id: String,
+    pub panel_trust_root_sha256: String,
     pub authority: AuthorityBinding,
     pub repository_set: Vec<RepositoryRecord>,
     pub stack: Vec<StackNode>,
@@ -590,6 +603,10 @@ impl WaveSnapshot {
         validate_identifier(&self.wave, "wave")?;
         validate_sha256(&self.candidate_id, "candidate ID")?;
         validate_sha256(&self.content_id, "content ID")?;
+        validate_sha256(
+            &self.panel_trust_root_sha256,
+            "snapshot panel trust-root digest",
+        )?;
         self.authority.validate()?;
         ensure_sorted_unique_by(
             &self.repository_set,
@@ -649,10 +666,13 @@ impl WaveSnapshot {
             let terminal = self
                 .stack
                 .iter()
-                .rfind(|node| node.repository == repository.id)
+                .rfind(|node| {
+                    node.repository == repository.id
+                        && node.snapshot_state == PullRequestState::Open
+                })
                 .ok_or_else(|| {
                     DeliveryError::new(format!(
-                        "repository {} has no snapshot stack nodes",
+                        "repository {} has no active snapshot stack nodes",
                         repository.id
                     ))
                 })?;
@@ -775,6 +795,7 @@ impl WaveSnapshot {
         struct CandidateMaterial<'a> {
             program: &'a str,
             wave: &'a str,
+            panel_trust_root_sha256: &'a str,
             authority: &'a AuthorityBinding,
             repository_set: &'a [RepositoryRecord],
             stack: &'a [StackNode],
@@ -789,6 +810,7 @@ impl WaveSnapshot {
             &CandidateMaterial {
                 program: &self.program,
                 wave: &self.wave,
+                panel_trust_root_sha256: &self.panel_trust_root_sha256,
                 authority: &self.authority,
                 repository_set: &self.repository_set,
                 stack: &self.stack,
@@ -806,11 +828,12 @@ impl WaveSnapshot {
         struct ContentRepository<'a> {
             id: &'a str,
             object_format: GitObjectFormat,
-            tree_oid: &'a str,
+            integration_tree_oid: &'a str,
         }
         #[derive(Serialize)]
         struct ContentMaterial<'a> {
             repositories: Vec<ContentRepository<'a>>,
+            panel_trust_root_sha256: &'a str,
             required_validations: &'a [RequiredValidation],
             required_checks: &'a [RequiredCheck],
             generated_artifacts: &'a [Fingerprint],
@@ -823,13 +846,14 @@ impl WaveSnapshot {
             .map(|repository| ContentRepository {
                 id: &repository.id,
                 object_format: repository.object_format,
-                tree_oid: &repository.integration_tree_oid,
+                integration_tree_oid: &repository.integration_tree_oid,
             })
             .collect();
         canonical_digest(
             b"d2b-delivery-content-v1\0",
             &ContentMaterial {
                 repositories,
+                panel_trust_root_sha256: &self.panel_trust_root_sha256,
                 required_validations: &self.required_validations,
                 required_checks: &self.required_checks,
                 generated_artifacts: &self.generated_artifacts,
@@ -875,6 +899,10 @@ pub struct RepositoryRecord {
     pub integration_ref: String,
     pub integration_oid: String,
     pub integration_tree_oid: String,
+    pub base_to_head_diff_sha256: String,
+    pub generated_diff_sha256: String,
+    pub dependency_diff_sha256: String,
+    pub contract_diff_sha256: String,
     pub stack_graph_sha256: String,
 }
 
@@ -895,6 +923,13 @@ impl RepositoryRecord {
             self.object_format,
             "integration tree",
         )?;
+        validate_sha256(&self.base_to_head_diff_sha256, "base-to-head diff digest")?;
+        validate_sha256(
+            &self.generated_diff_sha256,
+            "generated-artifact diff digest",
+        )?;
+        validate_sha256(&self.dependency_diff_sha256, "dependency diff digest")?;
+        validate_sha256(&self.contract_diff_sha256, "contract diff digest")?;
         validate_sha256(&self.stack_graph_sha256, "stack graph digest")
     }
 
@@ -951,6 +986,8 @@ pub struct StackNode {
     pub head_ref: String,
     pub head_oid: String,
     pub head_tree_oid: String,
+    pub merge_commit_oid: Option<String>,
+    pub merge_commit_tree_oid: Option<String>,
     pub prospective_merge_tree_oid: String,
     pub prospective_content_id: String,
     pub snapshot_state: PullRequestState,
@@ -977,6 +1014,29 @@ impl StackNode {
         validate_hash(&self.expected_base_oid, "expected base OID")?;
         validate_hash(&self.head_oid, "head OID")?;
         validate_hash(&self.head_tree_oid, "head tree OID")?;
+        match (
+            self.snapshot_state,
+            &self.merge_commit_oid,
+            &self.merge_commit_tree_oid,
+        ) {
+            (PullRequestState::Merged, Some(commit), Some(tree)) => {
+                validate_hash(commit, "merged PR commit OID")?;
+                validate_hash(tree, "merged PR commit tree OID")?;
+            }
+            (PullRequestState::Open, None, None) => {}
+            (PullRequestState::Closed, _, _) => {
+                return Err(DeliveryError::new(format!(
+                    "stack node {} cannot snapshot a closed PR",
+                    self.id
+                )));
+            }
+            _ => {
+                return Err(DeliveryError::new(format!(
+                    "stack node {} merge-commit authority disagrees with PR state",
+                    self.id
+                )));
+            }
+        }
         validate_hash(
             &self.prospective_merge_tree_oid,
             "prospective merge tree OID",

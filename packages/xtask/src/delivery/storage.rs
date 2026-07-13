@@ -105,6 +105,31 @@ impl StateLayout {
         self.candidate.join("panel")
     }
 
+    pub fn panel_trust_root(&self) -> PathBuf {
+        self.panel_dir().join("trust-root.pem")
+    }
+
+    pub fn ci_attestation_dir(&self) -> PathBuf {
+        self.candidate.join("ci-attestations")
+    }
+
+    pub fn ci_attestation_artifact(&self, validation_id: &str) -> PathBuf {
+        self.ci_attestation_dir()
+            .join(format!("{validation_id}.artifact.json"))
+    }
+
+    pub fn ci_attestation_bundle(&self, validation_id: &str) -> PathBuf {
+        self.ci_attestation_dir()
+            .join(format!("{validation_id}.bundle.jsonl"))
+    }
+
+    pub fn validation_execution_dir(&self, validation_id: &str, run_id: &str) -> PathBuf {
+        self.candidate
+            .join("execution")
+            .join(validation_id)
+            .join(run_id)
+    }
+
     pub fn panel_request(&self) -> PathBuf {
         self.candidate.join("panel-request.json")
     }
@@ -303,8 +328,22 @@ pub fn write_immutable_json<T: Serialize>(path: &Path, value: &T) -> Result<Stri
     Ok(digest)
 }
 
+pub fn retain_immutable_file(source: &Path, destination: &Path) -> Result<String> {
+    let bytes = read_limited(source, MAX_PAYLOAD_BYTES, false)?;
+    write_immutable(destination, &bytes)?;
+    let digest = sha256_bytes(&bytes);
+    let sidecar = digest_path(destination)?;
+    write_immutable(&sidecar, format!("{digest}\n").as_bytes())?;
+    Ok(digest)
+}
+
 pub fn verify_json_digest(path: &Path) -> Result<String> {
     let bytes = read_limited(path, MAX_JSON_BYTES, true)?;
+    verify_digest_bytes(path, &bytes)
+}
+
+pub fn verify_immutable_digest(path: &Path) -> Result<String> {
+    let bytes = read_limited(path, MAX_PAYLOAD_BYTES, true)?;
     verify_digest_bytes(path, &bytes)
 }
 
@@ -660,6 +699,10 @@ fn create_private_dir(path: &Path) -> Result<()> {
     file.set_permissions(fs::Permissions::from_mode(0o700))?;
     file.sync_all()?;
     Ok(())
+}
+
+pub fn create_private_directory(path: &Path) -> Result<()> {
+    create_private_dir(path)
 }
 
 fn open_parent(path: &Path, create: bool) -> Result<OwnedFd> {

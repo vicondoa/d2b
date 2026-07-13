@@ -255,6 +255,12 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
         let trunk_tree_oid = probe.tree_for_commit(root, trunk_oid)?;
         let integration_tree_oid = probe.tree_for_commit(root, integration_oid)?;
         let graph_bytes = serde_json::to_vec(graph)?;
+        let generated_paths =
+            fingerprint_paths(&authority.manifest.generated_artifacts, &policy.id);
+        let dependency_paths =
+            fingerprint_paths(&authority.manifest.dependency_fingerprints, &policy.id);
+        let contract_paths =
+            fingerprint_paths(&authority.manifest.contract_fingerprints, &policy.id);
         repository_set.push(RepositoryRecord {
             id: policy.id.clone(),
             object_format,
@@ -264,6 +270,33 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
             integration_ref: policy.integration_ref.clone(),
             integration_oid: integration_oid.clone(),
             integration_tree_oid,
+            base_to_head_diff_sha256: sha256_bytes(&probe.canonical_diff(
+                root,
+                trunk_oid,
+                integration_oid,
+                &[],
+            )?),
+            generated_diff_sha256: category_diff_digest(
+                probe,
+                root,
+                trunk_oid,
+                integration_oid,
+                &generated_paths,
+            )?,
+            dependency_diff_sha256: category_diff_digest(
+                probe,
+                root,
+                trunk_oid,
+                integration_oid,
+                &dependency_paths,
+            )?,
+            contract_diff_sha256: category_diff_digest(
+                probe,
+                root,
+                trunk_oid,
+                integration_oid,
+                &contract_paths,
+            )?,
             stack_graph_sha256: sha256_bytes(&graph_bytes),
         });
 
@@ -275,7 +308,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
             .map(|node| (node.branch.as_str(), node))
             .collect::<BTreeMap<_, _>>();
         let mut previous_node: Option<String> = None;
-        let mut previous_ref = policy.trunk_ref.as_str();
+        let mut previous_active_ref = policy.trunk_ref.as_str();
         for branch in &graph.branches {
             let node_policy = policies.get(branch.name.as_str()).copied().ok_or_else(|| {
                 DeliveryError::new(format!(
@@ -283,9 +316,26 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
                     branch.name
                 ))
             })?;
-            let head_oid = ref_oid(resolved, &branch.name)?;
-            let base_oid = ref_oid(resolved, previous_ref)?;
-            if &branch.head != head_oid || &branch.base != base_oid {
+            let head_oid = if branch.is_merged {
+                branch.head.as_str()
+            } else {
+                ref_oid(resolved, &branch.name)?.as_str()
+            };
+            let snapshot_state = if branch.is_merged {
+                PullRequestState::Merged
+            } else {
+                PullRequestState::Open
+            };
+            let status = status_source.status(&policy.id, node_policy.pr_number)?;
+            let (expected_base_ref, base_oid) = if branch.is_merged {
+                (status.base_ref.as_str(), branch.base.as_str())
+            } else {
+                (
+                    previous_active_ref,
+                    ref_oid(resolved, previous_active_ref)?.as_str(),
+                )
+            };
+            if branch.head != head_oid || branch.base != base_oid {
                 return Err(DeliveryError::new(format!(
                     "gh-stack OIDs for {} do not match exact local refs",
                     branch.name
@@ -294,28 +344,57 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
             if !probe.is_ancestor(root, base_oid, head_oid)? {
                 return Err(DeliveryError::new(format!(
                     "stack base {} is not an ancestor of {}",
-                    previous_ref, branch.name
+                    expected_base_ref, branch.name
                 )));
             }
             let head_tree_oid = probe.tree_for_commit(root, head_oid)?;
             let prospective_merge_tree_oid =
                 probe.prospective_merge_tree(root, base_oid, head_oid)?;
-            let status = status_source.status(&policy.id, node_policy.pr_number)?;
-            let snapshot_state = if branch.is_merged {
-                PullRequestState::Merged
-            } else {
-                PullRequestState::Open
-            };
             verify_pr_identity_fields(
                 node_policy.pr_number,
                 &policy.id,
-                previous_ref,
+                expected_base_ref,
                 base_oid,
                 &branch.name,
                 head_oid,
                 snapshot_state,
                 &status,
             )?;
+            let (merge_commit_oid, merge_commit_tree_oid) = match snapshot_state {
+                PullRequestState::Merged => {
+                    let commit = status.merge_commit_oid.clone().ok_or_else(|| {
+                        DeliveryError::new(format!(
+                            "merged stack node {} has no merge commit authority",
+                            node_policy.id
+                        ))
+                    })?;
+                    let tree = status.merge_commit_tree_oid.clone().ok_or_else(|| {
+                        DeliveryError::new(format!(
+                            "merged stack node {} has no merge tree authority",
+                            node_policy.id
+                        ))
+                    })?;
+                    if probe.tree_for_commit(root, &commit)? != tree {
+                        return Err(DeliveryError::new(format!(
+                            "merged stack node {} merge commit/tree authority is invalid",
+                            node_policy.id
+                        )));
+                    }
+                    if tree != prospective_merge_tree_oid {
+                        return Err(DeliveryError::new(format!(
+                            "merged stack node {} merge tree differs from its exact base/head merge",
+                            node_policy.id
+                        )));
+                    }
+                    (Some(commit), Some(tree))
+                }
+                PullRequestState::Open => (None, None),
+                PullRequestState::Closed => {
+                    return Err(DeliveryError::new(
+                        "closed PR cannot be collected into a stack snapshot",
+                    ));
+                }
+            };
             let mut depends_on = node_policy.external_dependencies.clone();
             if let Some(previous) = &previous_node {
                 depends_on.push(previous.clone());
@@ -326,11 +405,13 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
                 id: node_policy.id.clone(),
                 repository: policy.id.clone(),
                 pr_number: node_policy.pr_number,
-                expected_base_ref: previous_ref.to_owned(),
-                expected_base_oid: base_oid.clone(),
+                expected_base_ref: expected_base_ref.to_owned(),
+                expected_base_oid: base_oid.to_owned(),
                 head_ref: branch.name.clone(),
-                head_oid: head_oid.clone(),
+                head_oid: head_oid.to_owned(),
                 head_tree_oid: head_tree_oid.clone(),
+                merge_commit_oid,
+                merge_commit_tree_oid,
                 prospective_merge_tree_oid: prospective_merge_tree_oid.clone(),
                 prospective_content_id: prospective_content_id(
                     &policy.id,
@@ -344,7 +425,9 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
                 depends_on,
             });
             previous_node = Some(node_policy.id.clone());
-            previous_ref = &branch.name;
+            if !branch.is_merged {
+                previous_active_ref = &branch.name;
+            }
         }
     }
     repository_set.sort();
@@ -404,6 +487,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
         wave: authority.manifest.wave.clone(),
         candidate_id: "0".repeat(64),
         content_id: "0".repeat(64),
+        panel_trust_root_sha256: authority.manifest.panel_trust_root_sha256.clone(),
         authority: authority.binding.clone(),
         repository_set,
         stack,
@@ -511,6 +595,7 @@ fn verify_snapshot_objects<P: RepositoryProbe>(
                 repository.id
             )));
         }
+        verify_repository_diffs(probe, root, repository, snapshot)?;
     }
     verify_stack_objects(probe, snapshot, roots)?;
     verify_fingerprint_set(probe, &snapshot.generated_artifacts, snapshot, roots)?;
@@ -518,10 +603,69 @@ fn verify_snapshot_objects<P: RepositoryProbe>(
     verify_fingerprint_set(probe, &snapshot.contract_fingerprints, snapshot, roots)
 }
 
+fn verify_repository_diffs<P: RepositoryProbe>(
+    probe: &P,
+    root: &Path,
+    repository: &RepositoryRecord,
+    snapshot: &WaveSnapshot,
+) -> Result<()> {
+    let generated = fingerprint_paths_for_snapshot(&snapshot.generated_artifacts, &repository.id);
+    let dependencies =
+        fingerprint_paths_for_snapshot(&snapshot.dependency_fingerprints, &repository.id);
+    let contracts = fingerprint_paths_for_snapshot(&snapshot.contract_fingerprints, &repository.id);
+    let full = sha256_bytes(&probe.canonical_diff(
+        root,
+        &repository.trunk_oid,
+        &repository.integration_oid,
+        &[],
+    )?);
+    let generated = category_diff_digest(
+        probe,
+        root,
+        &repository.trunk_oid,
+        &repository.integration_oid,
+        &generated,
+    )?;
+    let dependencies = category_diff_digest(
+        probe,
+        root,
+        &repository.trunk_oid,
+        &repository.integration_oid,
+        &dependencies,
+    )?;
+    let contracts = category_diff_digest(
+        probe,
+        root,
+        &repository.trunk_oid,
+        &repository.integration_oid,
+        &contracts,
+    )?;
+    if full != repository.base_to_head_diff_sha256
+        || generated != repository.generated_diff_sha256
+        || dependencies != repository.dependency_diff_sha256
+        || contracts != repository.contract_diff_sha256
+    {
+        return Err(DeliveryError::new(format!(
+            "repository {} base-relative diff identity changed",
+            repository.id
+        )));
+    }
+    Ok(())
+}
+
+fn fingerprint_paths_for_snapshot(fingerprints: &[Fingerprint], repository: &str) -> Vec<PathBuf> {
+    fingerprints
+        .iter()
+        .filter(|fingerprint| fingerprint.repository == repository)
+        .map(|fingerprint| PathBuf::from(&fingerprint.path))
+        .collect()
+}
+
 fn verify_manifest_snapshot(manifest: &DeliveryManifest, snapshot: &WaveSnapshot) -> Result<()> {
     if manifest.program != snapshot.program
         || manifest.wave != snapshot.wave
         || manifest.authority_repository != snapshot.authority.repository
+        || manifest.panel_trust_root_sha256 != snapshot.panel_trust_root_sha256
     {
         return Err(DeliveryError::new(
             "snapshot identity differs from checked-in delivery manifest",
@@ -663,9 +807,18 @@ fn verify_stack_objects<P: RepositoryProbe>(
         let mut expected_base_ref = repository.trunk_ref.as_str();
         let mut expected_base_oid = repository.trunk_oid.as_str();
         for node in nodes {
-            if node.expected_base_ref != expected_base_ref
-                || node.expected_base_oid != expected_base_oid
+            if (node.snapshot_state == PullRequestState::Open
+                && (node.expected_base_ref != expected_base_ref
+                    || node.expected_base_oid != expected_base_oid))
                 || probe.tree_for_commit(root, &node.head_oid)? != node.head_tree_oid
+                || match (&node.merge_commit_oid, &node.merge_commit_tree_oid) {
+                    (Some(commit), Some(tree)) => {
+                        probe.tree_for_commit(root, commit)? != *tree
+                            || tree != &node.prospective_merge_tree_oid
+                    }
+                    (None, None) => false,
+                    _ => true,
+                }
                 || !probe.is_ancestor(root, &node.expected_base_oid, &node.head_oid)?
                 || probe.prospective_merge_tree(root, &node.expected_base_oid, &node.head_oid)?
                     != node.prospective_merge_tree_oid
@@ -689,8 +842,10 @@ fn verify_stack_objects<P: RepositoryProbe>(
                     node.id
                 )));
             }
-            expected_base_ref = &node.head_ref;
-            expected_base_oid = &node.head_oid;
+            if node.snapshot_state == PullRequestState::Open {
+                expected_base_ref = &node.head_ref;
+                expected_base_oid = &node.head_oid;
+            }
         }
     }
     Ok(())
@@ -710,11 +865,9 @@ fn verify_exact_refs<P: RepositoryProbe>(
                 repository.integration_oid.as_str(),
             ),
         ]);
-        for node in snapshot
-            .stack
-            .iter()
-            .filter(|node| node.repository == repository.id)
-        {
+        for node in snapshot.stack.iter().filter(|node| {
+            node.repository == repository.id && node.snapshot_state == PullRequestState::Open
+        }) {
             expected.insert(node.head_ref.as_str(), node.head_oid.as_str());
         }
         for (reference, oid) in expected {
@@ -743,11 +896,12 @@ fn verify_graph_policy(
     }
     if graph
         .branches
-        .last()
+        .iter()
+        .rfind(|branch| !branch.is_merged)
         .is_none_or(|branch| branch.name != repository.integration_ref)
     {
         return Err(DeliveryError::new(format!(
-            "gh-stack terminal node for {} is not integration_ref {}",
+            "gh-stack active terminal node for {} is not integration_ref {}",
             repository.id, repository.integration_ref
         )));
     }
@@ -794,7 +948,9 @@ fn resolve_candidate_refs<P: RepositoryProbe>(
             repository.integration_ref.as_str(),
         ]);
         for branch in &graph.branches {
-            references.insert(branch.name.as_str());
+            if !branch.is_merged {
+                references.insert(branch.name.as_str());
+            }
         }
         let mut resolved = BTreeMap::new();
         for reference in references {
@@ -809,6 +965,29 @@ fn resolve_candidate_refs<P: RepositoryProbe>(
         all.insert(repository.id.clone(), resolved);
     }
     Ok(all)
+}
+
+fn fingerprint_paths(specs: &[FingerprintSpec], repository: &str) -> Vec<PathBuf> {
+    specs
+        .iter()
+        .filter(|spec| spec.repository == repository)
+        .map(|spec| PathBuf::from(&spec.path))
+        .collect()
+}
+
+fn category_diff_digest<P: RepositoryProbe>(
+    probe: &P,
+    root: &Path,
+    base_oid: &str,
+    head_oid: &str,
+    paths: &[PathBuf],
+) -> Result<String> {
+    if paths.is_empty() {
+        return Ok(sha256_bytes(b"d2b-delivery-empty-path-diff-v1\0"));
+    }
+    Ok(sha256_bytes(
+        &probe.canonical_diff(root, base_oid, head_oid, paths)?,
+    ))
 }
 
 fn fingerprint_specs<P: RepositoryProbe>(
@@ -885,7 +1064,16 @@ pub(crate) fn verify_pr_identity(node: &StackNode, status: &PullRequestStatus) -
         &node.head_oid,
         node.snapshot_state,
         status,
-    )
+    )?;
+    if node.merge_commit_oid != status.merge_commit_oid
+        || node.merge_commit_tree_oid != status.merge_commit_tree_oid
+    {
+        return Err(DeliveryError::new(format!(
+            "live PR {}#{} merge commit authority changed",
+            node.repository, node.pr_number
+        )));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -911,6 +1099,28 @@ fn verify_pr_identity_fields(
         return Err(DeliveryError::new(format!(
             "live PR {repository}#{pr_number} does not exactly match snapshot base/head identity"
         )));
+    }
+    match state {
+        PullRequestState::Merged
+            if status.merge_commit_oid.is_none() || status.merge_commit_tree_oid.is_none() =>
+        {
+            return Err(DeliveryError::new(format!(
+                "live merged PR {repository}#{pr_number} has no exact merge commit authority"
+            )));
+        }
+        PullRequestState::Open
+            if status.merge_commit_oid.is_some() || status.merge_commit_tree_oid.is_some() =>
+        {
+            return Err(DeliveryError::new(format!(
+                "live open PR {repository}#{pr_number} unexpectedly has merge commit authority"
+            )));
+        }
+        PullRequestState::Closed => {
+            return Err(DeliveryError::new(format!(
+                "live PR {repository}#{pr_number} is closed without merge"
+            )));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -1047,6 +1257,7 @@ mod tests {
             program: "adr0045".to_owned(),
             wave: "w1".to_owned(),
             authority_repository: "github.com/example/d2b".to_owned(),
+            panel_trust_root_sha256: "a".repeat(64),
             repositories: vec![RepositoryPolicy {
                 id: "github.com/example/d2b".to_owned(),
                 object_format: GitObjectFormat::Sha1,

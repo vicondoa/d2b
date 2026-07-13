@@ -1,5 +1,8 @@
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
+    fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -10,7 +13,10 @@ use sha2::{Digest, Sha256};
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
-    command::{CommandLimits, CommandOutputAdapter, DEFAULT_COMMAND_OUTPUT_BYTES, RepositoryProbe},
+    command::{
+        CommandLimits, CommandOutputAdapter, DEFAULT_COMMAND_OUTPUT_BYTES, GitProbe,
+        RepositoryProbe,
+    },
     model::{
         EVIDENCE_ARTIFACT_KIND, EvidenceResult, LogicalPath, RepositoryBinding,
         ValidationAuthority, ensure_schema, validate_bounded_string, validate_identifier,
@@ -18,8 +24,9 @@ use super::{
     },
     snapshot::{CurrentVerification, SnapshotContext, load_snapshot_context},
     storage::{
-        ensure_external_path, read_json, read_json_with_digest, read_verified_json,
-        reject_delivery_payload, secure_repository_subdir, sha256_file, validate_payload_locator,
+        create_private_directory, ensure_external_path, read_json, read_json_with_digest,
+        read_verified_json, reject_delivery_payload, retain_immutable_file,
+        secure_repository_subdir, sha256_file, validate_payload_locator, verify_immutable_digest,
         write_immutable_json,
     },
 };
@@ -36,6 +43,7 @@ pub struct EvidenceRecord {
     pub argv: Vec<String>,
     pub cwd: LogicalPath,
     pub repository_set: Vec<RepositoryBinding>,
+    pub checkout: Option<ValidationCheckoutBinding>,
     pub result: EvidenceResult,
     pub exit_code: Option<i32>,
     pub captured_at_unix_seconds: u64,
@@ -45,7 +53,17 @@ pub struct EvidenceRecord {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValidationCheckoutBinding {
+    pub repository: String,
+    pub commit_oid: String,
+    pub tree_oid: String,
+    pub source_read_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)]
 pub enum EvidenceProvenance {
     LocalRunner {
         runner: String,
@@ -63,7 +81,10 @@ pub enum EvidenceProvenance {
         signer_workflow: String,
         source_digest: String,
         source_ref: String,
-        attestation_sha256: String,
+        conclusion: String,
+        attestation_locator: String,
+        attestation_artifact_sha256: String,
+        attestation_bundle_sha256: String,
     },
 }
 
@@ -96,7 +117,8 @@ pub struct CiAttestationClaims {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCiAttestation {
     pub claims: CiAttestationClaims,
-    pub attestation_sha256: String,
+    pub artifact_sha256: String,
+    pub bundle_sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,7 +132,8 @@ pub struct CiAttestationPolicy {
 pub trait CiAttestationVerifier {
     fn verify(
         &self,
-        attestation_path: &Path,
+        artifact_path: &Path,
+        bundle_path: &Path,
         policy: &CiAttestationPolicy,
     ) -> Result<VerifiedCiAttestation>;
 }
@@ -129,21 +152,26 @@ impl<'a, A> GithubAttestationVerifier<'a, A> {
 impl<A: CommandOutputAdapter> CiAttestationVerifier for GithubAttestationVerifier<'_, A> {
     fn verify(
         &self,
-        attestation_path: &Path,
+        artifact_path: &Path,
+        bundle_path: &Path,
         policy: &CiAttestationPolicy,
     ) -> Result<VerifiedCiAttestation> {
         let repository = github_repo_arg(&policy.repository)?;
-        let path = path_string(attestation_path)?;
+        let artifact = path_string(artifact_path)?;
+        let bundle = path_string(bundle_path)?;
         let (claims_before, digest_before): (CiAttestationClaims, String) =
-            read_json_with_digest(attestation_path)?;
+            read_json_with_digest(artifact_path)?;
+        let bundle_before = sha256_file(bundle_path)?;
         let output = self.command.output(
             "gh",
             &[
                 "attestation".to_owned(),
                 "verify".to_owned(),
-                path,
+                artifact,
                 "--repo".to_owned(),
                 repository,
+                "--bundle".to_owned(),
+                bundle,
                 "--format".to_owned(),
                 "json".to_owned(),
                 "--signer-workflow".to_owned(),
@@ -171,15 +199,20 @@ impl<A: CommandOutputAdapter> CiAttestationVerifier for GithubAttestationVerifie
             ));
         }
         let (claims_after, digest_after): (CiAttestationClaims, String) =
-            read_json_with_digest(attestation_path)?;
-        if digest_before != digest_after || claims_before != claims_after {
+            read_json_with_digest(artifact_path)?;
+        let bundle_after = sha256_file(bundle_path)?;
+        if digest_before != digest_after
+            || bundle_before != bundle_after
+            || claims_before != claims_after
+        {
             return Err(DeliveryError::new(
-                "GitHub attestation changed while it was being verified",
+                "GitHub attestation artifact or bundle changed while it was being verified",
             ));
         }
         Ok(VerifiedCiAttestation {
             claims: claims_after,
-            attestation_sha256: digest_after,
+            artifact_sha256: digest_after,
+            bundle_sha256: bundle_after,
         })
     }
 }
@@ -222,17 +255,88 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         .repository_roots
         .get(&required.cwd.repository)
         .ok_or_else(|| DeliveryError::new("validation cwd repository mapping is missing"))?;
-    let cwd = secure_repository_subdir(repository_root, Path::new(&required.cwd.path))?;
-    let output = runner.output_with_limits(
+    let repository = context
+        .snapshot
+        .repository_set
+        .iter()
+        .find(|repository| repository.id == required.cwd.repository)
+        .ok_or_else(|| DeliveryError::new("validation repository binding is missing"))?;
+    let run_id = local_run_id()?;
+    let execution_root = context
+        .layout
+        .validation_execution_dir(validation_id, &run_id);
+    create_private_directory(&execution_root)?;
+    let execution = ValidationExecution::new(execution_root.clone());
+    let source = execution_root.join("source");
+    let output_root = execution_root.join("output");
+    create_private_directory(&output_root)?;
+    create_private_directory(&output_root.join("tmp"))?;
+    create_private_directory(&output_root.join("home"))?;
+    create_private_directory(&output_root.join("cargo-target"))?;
+    run_checked(
+        runner,
+        "git",
+        &[
+            "clone".to_owned(),
+            "--no-hardlinks".to_owned(),
+            "--no-checkout".to_owned(),
+            "--quiet".to_owned(),
+            "--".to_owned(),
+            path_string(repository_root)?,
+            path_string(&source)?,
+        ],
+        None,
+        "cannot create detached validation checkout",
+    )?;
+    run_checked(
+        runner,
+        "git",
+        &[
+            "-C".to_owned(),
+            path_string(&source)?,
+            "checkout".to_owned(),
+            "--detach".to_owned(),
+            "--quiet".to_owned(),
+            repository.integration_oid.clone(),
+        ],
+        None,
+        "cannot select validation checkout commit",
+    )?;
+    verify_checkout_identity(runner, &source, repository)?;
+    make_source_read_only(&source)?;
+    verify_source_read_only(&source)?;
+    let cwd = secure_repository_subdir(&source, Path::new(&required.cwd.path))?;
+    let environment = BTreeMap::from([
+        (
+            OsString::from("D2B_VALIDATION_OUTPUT_DIR"),
+            output_root.as_os_str().to_owned(),
+        ),
+        (
+            OsString::from("CARGO_TARGET_DIR"),
+            output_root.join("cargo-target").into_os_string(),
+        ),
+        (
+            OsString::from("TMPDIR"),
+            output_root.join("tmp").into_os_string(),
+        ),
+        (
+            OsString::from("HOME"),
+            output_root.join("home").into_os_string(),
+        ),
+    ]);
+    let output = runner.output_with_environment(
         &required.argv[0],
         &required.argv[1..],
         Some(&cwd),
+        &environment,
         CommandLimits {
             stdout_bytes: DEFAULT_COMMAND_OUTPUT_BYTES,
             stderr_bytes: DEFAULT_COMMAND_OUTPUT_BYTES,
             timeout: Duration::from_secs(required.timeout_seconds),
         },
     )?;
+    verify_checkout_identity(runner, &source, repository)?;
+    verify_source_read_only(&source)?;
     let result = if output.success {
         EvidenceResult::Passed
     } else {
@@ -249,6 +353,12 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         argv: required.argv.clone(),
         cwd: required.cwd.clone(),
         repository_set: context.snapshot.repository_bindings(),
+        checkout: Some(ValidationCheckoutBinding {
+            repository: repository.id.clone(),
+            commit_oid: repository.integration_oid.clone(),
+            tree_oid: repository.integration_tree_oid.clone(),
+            source_read_only: true,
+        }),
         result,
         exit_code: output.exit_code,
         captured_at_unix_seconds: now_unix_seconds()?,
@@ -257,13 +367,121 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         provenance: EvidenceProvenance::LocalRunner {
             runner: "xtask-local".to_owned(),
             runner_version: env!("CARGO_PKG_VERSION").to_owned(),
-            run_id: local_run_id()?,
+            run_id,
         },
     };
     validate_record(&context, &record)?;
+    drop(execution);
     let path = evidence_path(&context, validation_id);
     write_immutable_json(&path, &record)?;
     Ok(path)
+}
+
+struct ValidationExecution {
+    root: PathBuf,
+}
+
+impl ValidationExecution {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+}
+
+impl Drop for ValidationExecution {
+    fn drop(&mut self) {
+        let _ = make_tree_writable(&self.root);
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn run_checked<A: CommandOutputAdapter>(
+    runner: &A,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    message: &str,
+) -> Result<()> {
+    let output = runner.output(program, args, cwd)?;
+    if !output.success {
+        return Err(DeliveryError::new(message));
+    }
+    Ok(())
+}
+
+fn verify_checkout_identity<A: CommandOutputAdapter>(
+    runner: &A,
+    source: &Path,
+    repository: &super::model::RepositoryRecord,
+) -> Result<()> {
+    let probe = GitProbe::new(runner);
+    let commit = probe.resolve_commit(source, "HEAD")?;
+    let tree = probe.tree_for_commit(source, &commit)?;
+    if commit != repository.integration_oid
+        || tree != repository.integration_tree_oid
+        || probe.is_dirty(source)?
+    {
+        return Err(DeliveryError::new(
+            "detached validation checkout identity or cleanliness changed",
+        ));
+    }
+    Ok(())
+}
+
+fn make_source_read_only(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(DeliveryError::new("validation checkout contains a symlink"));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            make_source_read_only(&entry?.path())?;
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o500))?;
+    } else if metadata.is_file() {
+        let mode = if metadata.permissions().mode() & 0o111 == 0 {
+            0o400
+        } else {
+            0o500
+        };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    } else {
+        return Err(DeliveryError::new(
+            "validation checkout contains a non-regular filesystem entry",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_source_read_only(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || metadata.permissions().mode() & 0o222 != 0 {
+        return Err(DeliveryError::new(
+            "validation checkout source is not read-only",
+        ));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            verify_source_read_only(&entry?.path())?;
+        }
+    } else if !metadata.is_file() {
+        return Err(DeliveryError::new(
+            "validation checkout contains a non-regular filesystem entry",
+        ));
+    }
+    Ok(())
+}
+
+fn make_tree_writable(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        for entry in fs::read_dir(path)? {
+            make_tree_writable(&entry?.path())?;
+        }
+    } else if metadata.is_file() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
@@ -271,7 +489,8 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
     verifier: &V,
     repository_roots: &BTreeMap<String, PathBuf>,
     snapshot_path: &Path,
-    attestation_path: &Path,
+    artifact_path: &Path,
+    bundle_path: &Path,
     payload_path: Option<&Path>,
 ) -> Result<PathBuf> {
     let context = load_snapshot_context(
@@ -280,9 +499,17 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
         snapshot_path,
         CurrentVerification::ExactRefs,
     )?;
-    ensure_external_path(attestation_path, &context.external_exclusions)?;
-    reject_delivery_payload(attestation_path, &context.layout.root)?;
-    let asserted_claims: CiAttestationClaims = read_json(attestation_path)?;
+    ensure_external_path(artifact_path, &context.external_exclusions)?;
+    ensure_external_path(bundle_path, &context.external_exclusions)?;
+    reject_delivery_payload(artifact_path, &context.layout.root)?;
+    reject_delivery_payload(bundle_path, &context.layout.root)?;
+    if super::storage::absolute_path(artifact_path)? == super::storage::absolute_path(bundle_path)?
+    {
+        return Err(DeliveryError::new(
+            "CI attestation artifact and bundle must be distinct files",
+        ));
+    }
+    let asserted_claims: CiAttestationClaims = read_json(artifact_path)?;
     let required = required_validation(&context, &asserted_claims.validation_id)?;
     if required.authority != ValidationAuthority::GithubAttestation {
         return Err(DeliveryError::new(format!(
@@ -305,7 +532,7 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
             .clone()
             .ok_or_else(|| DeliveryError::new("CI signer workflow policy is absent"))?,
     };
-    let verified = verifier.verify(attestation_path, &policy)?;
+    let verified = verifier.verify(artifact_path, bundle_path, &policy)?;
     let claims = verified.claims;
     if claims != asserted_claims {
         return Err(DeliveryError::new(
@@ -322,11 +549,28 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
             ));
         }
     }
+    let retained_artifact = context
+        .layout
+        .ci_attestation_artifact(&claims.validation_id);
+    let retained_bundle = context.layout.ci_attestation_bundle(&claims.validation_id);
+    let retained_artifact_digest = retain_immutable_file(artifact_path, &retained_artifact)?;
+    let retained_bundle_digest = retain_immutable_file(bundle_path, &retained_bundle)?;
+    if retained_artifact_digest != verified.artifact_sha256
+        || retained_bundle_digest != verified.bundle_sha256
+    {
+        return Err(DeliveryError::new(
+            "retained CI attestation artifact or bundle differs from verified inputs",
+        ));
+    }
     let result = if claims.exit_code == 0 && claims.conclusion == "success" {
         EvidenceResult::Passed
     } else {
         EvidenceResult::Failed
     };
+    let attestation_locator = format!(
+        "github-attestation://{}/{}",
+        claims.repository, verified.bundle_sha256
+    );
     let record = EvidenceRecord {
         artifact_kind: EVIDENCE_ARTIFACT_KIND.to_owned(),
         schema_version: DELIVERY_SCHEMA_VERSION,
@@ -337,6 +581,7 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
         argv: claims.argv,
         cwd: claims.cwd,
         repository_set: claims.repository_set,
+        checkout: None,
         result,
         exit_code: Some(claims.exit_code),
         captured_at_unix_seconds: claims.captured_at_unix_seconds,
@@ -353,7 +598,10 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
             signer_workflow: policy.signer_workflow,
             source_digest: policy.source_digest,
             source_ref: policy.source_ref,
-            attestation_sha256: verified.attestation_sha256,
+            conclusion: claims.conclusion,
+            attestation_locator,
+            attestation_artifact_sha256: verified.artifact_sha256,
+            attestation_bundle_sha256: verified.bundle_sha256,
         },
     };
     validate_record(&context, &record)?;
@@ -364,6 +612,7 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
 
 pub fn verify_evidence<P: RepositoryProbe>(
     probe: &P,
+    verifier: &dyn CiAttestationVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     snapshot_path: &Path,
     evidence_path: &Path,
@@ -374,12 +623,13 @@ pub fn verify_evidence<P: RepositoryProbe>(
         snapshot_path,
         CurrentVerification::ExactRefs,
     )?;
-    verify_evidence_in_context(&context, evidence_path)
+    verify_evidence_in_context(&context, evidence_path, verifier)
 }
 
 pub(crate) fn verify_evidence_in_context(
     context: &SnapshotContext,
     path: &Path,
+    verifier: &dyn CiAttestationVerifier,
 ) -> Result<EvidenceRecord> {
     ensure_external_path(path, &context.external_exclusions)?;
     let (record, _digest): (EvidenceRecord, String) = read_verified_json(path)?;
@@ -390,6 +640,7 @@ pub(crate) fn verify_evidence_in_context(
             "evidence path is outside its candidate validation directory",
         ));
     }
+    reverify_ci_attestation(context, &record, verifier)?;
     Ok(record)
 }
 
@@ -448,6 +699,87 @@ fn validate_ci_claims(
     Ok(())
 }
 
+fn reverify_ci_attestation(
+    context: &SnapshotContext,
+    record: &EvidenceRecord,
+    verifier: &dyn CiAttestationVerifier,
+) -> Result<()> {
+    let EvidenceProvenance::GithubAttestation {
+        repository,
+        run_id,
+        check_run_id,
+        app_slug,
+        app_id,
+        workflow,
+        workflow_id,
+        signer_workflow,
+        source_digest,
+        source_ref,
+        conclusion,
+        attestation_locator,
+        attestation_artifact_sha256,
+        attestation_bundle_sha256,
+    } = &record.provenance
+    else {
+        return Ok(());
+    };
+    let required = required_validation(context, &record.id)?;
+    let policy = CiAttestationPolicy {
+        repository: repository.clone(),
+        source_digest: source_digest.clone(),
+        source_ref: source_ref.clone(),
+        signer_workflow: signer_workflow.clone(),
+    };
+    let retained_artifact = context.layout.ci_attestation_artifact(&record.id);
+    let retained_bundle = context.layout.ci_attestation_bundle(&record.id);
+    ensure_external_path(&retained_artifact, &context.external_exclusions)?;
+    ensure_external_path(&retained_bundle, &context.external_exclusions)?;
+    if verify_immutable_digest(&retained_artifact)? != *attestation_artifact_sha256
+        || verify_immutable_digest(&retained_bundle)? != *attestation_bundle_sha256
+    {
+        return Err(DeliveryError::new(
+            "retained CI attestation artifact or bundle digest changed",
+        ));
+    }
+    let verified = verifier.verify(&retained_artifact, &retained_bundle, &policy)?;
+    if verified.artifact_sha256 != *attestation_artifact_sha256
+        || verified.bundle_sha256 != *attestation_bundle_sha256
+    {
+        return Err(DeliveryError::new(
+            "CI attestation verifier returned different artifact or bundle digests",
+        ));
+    }
+    validate_ci_claims(context, required, &verified.claims)?;
+    let claims = &verified.claims;
+    let expected_locator = format!("github-attestation://{repository}/{attestation_bundle_sha256}");
+    if claims.candidate_id != record.candidate_id
+        || claims.content_id != record.content_id
+        || claims.snapshot_sha256 != record.snapshot_sha256
+        || claims.validation_id != record.id
+        || claims.argv != record.argv
+        || claims.cwd != record.cwd
+        || claims.repository_set != record.repository_set
+        || Some(claims.exit_code) != record.exit_code
+        || claims.captured_at_unix_seconds != record.captured_at_unix_seconds
+        || claims.payload_locator != record.payload_locator
+        || claims.payload_sha256 != record.payload_sha256
+        || &claims.repository != repository
+        || &claims.run_id != run_id
+        || &claims.check_run_id != check_run_id
+        || &claims.app_slug != app_slug
+        || claims.app_id != *app_id
+        || &claims.workflow != workflow
+        || claims.workflow_id != *workflow_id
+        || &claims.conclusion != conclusion
+        || attestation_locator != &expected_locator
+    {
+        return Err(DeliveryError::new(
+            "reverified CI attestation does not reproduce the derived evidence record",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_record(context: &SnapshotContext, record: &EvidenceRecord) -> Result<()> {
     if record.artifact_kind != EVIDENCE_ARTIFACT_KIND {
         return Err(DeliveryError::new("invalid evidence artifact_kind"));
@@ -471,6 +803,25 @@ pub(crate) fn validate_record(context: &SnapshotContext, record: &EvidenceRecord
         return Err(DeliveryError::new(
             "evidence does not exactly match candidate authority",
         ));
+    }
+    let repository = context
+        .snapshot
+        .repository_set
+        .iter()
+        .find(|repository| repository.id == required.cwd.repository)
+        .ok_or_else(|| DeliveryError::new("evidence checkout repository is absent"))?;
+    match (required.authority, &record.checkout) {
+        (ValidationAuthority::LocalRunner, Some(checkout))
+            if checkout.repository == repository.id
+                && checkout.commit_oid == repository.integration_oid
+                && checkout.tree_oid == repository.integration_tree_oid
+                && checkout.source_read_only => {}
+        (ValidationAuthority::GithubAttestation, None) => {}
+        _ => {
+            return Err(DeliveryError::new(
+                "evidence checkout binding does not match validation authority",
+            ));
+        }
     }
     match (&record.provenance, required.authority) {
         (
@@ -501,7 +852,10 @@ pub(crate) fn validate_record(context: &SnapshotContext, record: &EvidenceRecord
                 signer_workflow,
                 source_digest,
                 source_ref,
-                attestation_sha256,
+                conclusion,
+                attestation_locator,
+                attestation_artifact_sha256,
+                attestation_bundle_sha256,
             },
             ValidationAuthority::GithubAttestation,
         ) => {
@@ -529,7 +883,26 @@ pub(crate) fn validate_record(context: &SnapshotContext, record: &EvidenceRecord
                 ));
             }
             validate_bounded_string(workflow, "CI workflow")?;
-            validate_sha256(attestation_sha256, "CI attestation digest")?;
+            validate_bounded_string(conclusion, "CI conclusion")?;
+            if (record.result == EvidenceResult::Passed)
+                != (record.exit_code == Some(0) && conclusion == "success")
+            {
+                return Err(DeliveryError::new(
+                    "CI evidence result differs from its signed conclusion",
+                ));
+            }
+            if !attestation_locator.starts_with("github-attestation://")
+                || attestation_locator.len() > 512
+                || attestation_locator.contains("..")
+                || attestation_locator.contains(char::is_whitespace)
+            {
+                return Err(DeliveryError::new("CI attestation locator is invalid"));
+            }
+            validate_sha256(
+                attestation_artifact_sha256,
+                "CI attestation artifact digest",
+            )?;
+            validate_sha256(attestation_bundle_sha256, "CI attestation bundle digest")?;
         }
         _ => {
             return Err(DeliveryError::new(
@@ -689,6 +1062,10 @@ mod tests {
             ".d2b-ci-attestation-test-{}.json",
             std::process::id()
         ));
+        let bundle = root.join(format!(
+            ".d2b-ci-attestation-test-{}.bundle.jsonl",
+            std::process::id()
+        ));
         let claims = CiAttestationClaims {
             candidate_id: "a".repeat(64),
             content_id: "b".repeat(64),
@@ -723,6 +1100,11 @@ mod tests {
             serde_json::to_vec(&claims).expect("serialize claims"),
         )
         .expect("write claims");
+        fs::write(
+            &bundle,
+            b"{\"mediaType\":\"application/vnd.dev.sigstore.bundle+json\"}\n",
+        )
+        .expect("write bundle");
         let digest = sha256_file(&path).expect("claims digest");
         let output = serde_json::to_vec(&serde_json::json!([{
             "attestation": {},
@@ -749,7 +1131,7 @@ mod tests {
             signer_workflow: "github.com/example/d2b/.github/workflows/layer1.yml".to_owned(),
         };
         GithubAttestationVerifier::new(&command)
-            .verify(&path, &policy)
+            .verify(&path, &bundle, &policy)
             .expect("verified claims");
         let args = command.calls.borrow()[0].join(" ");
         for required in [
@@ -757,9 +1139,11 @@ mod tests {
             "--source-digest",
             "--source-ref",
             "--deny-self-hosted-runners",
+            "--bundle",
         ] {
             assert!(args.contains(required), "missing {required}");
         }
         fs::remove_file(path).expect("cleanup");
+        fs::remove_file(bundle).expect("cleanup");
     }
 }

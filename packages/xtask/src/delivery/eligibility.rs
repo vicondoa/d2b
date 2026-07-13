@@ -8,7 +8,9 @@ use serde::Serialize;
 use super::{
     DeliveryError, Result,
     command::{PullRequestMerger, PullRequestStatus, PullRequestStatusSource, RepositoryProbe},
+    evidence::CiAttestationVerifier,
     model::{PullRequestState, StackNode, WaveSnapshot},
+    panel::PanelReceiptVerifier,
     seal::{verify_history_proof_context, verify_required_checks, verify_seal},
     snapshot::verify_pr_identity,
 };
@@ -26,11 +28,20 @@ pub struct MergeEligibility {
 pub fn check_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
-    let seal = verify_seal(probe, status_source, repository_roots, seal_path)?;
+    let seal = verify_seal(
+        probe,
+        status_source,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        seal_path,
+    )?;
     let snapshot_path = seal_path
         .parent()
         .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
@@ -45,17 +56,22 @@ pub fn check_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn check_history_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     repository_roots: &BTreeMap<String, PathBuf>,
     old_seal_path: &Path,
     new_snapshot_path: &Path,
     proof_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
-    let (context, _old_seal, proof) = verify_history_proof_context(
+    let (context, old_seal, proof) = verify_history_proof_context(
         probe,
+        ci_verifier,
+        panel_verifier,
         repository_roots,
         old_seal_path,
         new_snapshot_path,
@@ -66,12 +82,21 @@ pub fn check_history_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusS
             "history proof does not require fresh CI",
         ));
     }
-    evaluate_merge_eligibility(&context.snapshot, None, status_source, target_node, true)
+    evaluate_merge_eligibility(
+        &context.snapshot,
+        Some(&old_seal.live_pull_requests),
+        status_source,
+        target_node,
+        true,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullRequestMerger>(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     merger: &M,
     repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
@@ -80,6 +105,8 @@ pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullReque
     let eligibility = check_merge_eligibility(
         probe,
         status_source,
+        ci_verifier,
+        panel_verifier,
         repository_roots,
         seal_path,
         target_node,
@@ -89,7 +116,7 @@ pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullReque
         .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
         .join("snapshot.json");
     let snapshot = super::snapshot::read_snapshot(&snapshot_path)?;
-    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, false)?;
+    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, None)?;
     Ok(eligibility)
 }
 
@@ -101,6 +128,8 @@ pub fn atomic_history_merge<
 >(
     probe: &P,
     status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
     merger: &M,
     repository_roots: &BTreeMap<String, PathBuf>,
     old_seal_path: &Path,
@@ -111,14 +140,30 @@ pub fn atomic_history_merge<
     let eligibility = check_history_merge_eligibility(
         probe,
         status_source,
+        ci_verifier,
+        panel_verifier,
         repository_roots,
         old_seal_path,
         new_snapshot_path,
         proof_path,
         target_node,
     )?;
-    let snapshot = super::snapshot::read_snapshot(new_snapshot_path)?;
-    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, true)?;
+    let (context, old_seal, _) = verify_history_proof_context(
+        probe,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        old_seal_path,
+        new_snapshot_path,
+        proof_path,
+    )?;
+    consume_atomic_merge(
+        &context.snapshot,
+        status_source,
+        merger,
+        &eligibility,
+        Some(&old_seal.live_pull_requests),
+    )?;
     Ok(eligibility)
 }
 
@@ -130,6 +175,11 @@ pub fn evaluate_merge_eligibility<S: PullRequestStatusSource>(
     fresh_ci_required: bool,
 ) -> Result<MergeEligibility> {
     snapshot.validate()?;
+    if fresh_ci_required && sealed_live.is_none() {
+        return Err(DeliveryError::new(
+            "fresh CI evaluation requires the verified sealed run baseline",
+        ));
+    }
     let nodes = snapshot
         .stack
         .iter()
@@ -139,34 +189,42 @@ pub fn evaluate_merge_eligibility<S: PullRequestStatusSource>(
         .get(target_node)
         .copied()
         .ok_or_else(|| DeliveryError::new(format!("unknown target stack node {target_node}")))?;
-    let sealed = sealed_live.map(|statuses| {
-        statuses
-            .iter()
-            .map(|status| ((status.repository.as_str(), status.number), status))
-            .collect::<BTreeMap<_, _>>()
-    });
+    let sealed = sealed_live
+        .map(|statuses| {
+            let by_pr = statuses
+                .iter()
+                .map(|status| ((status.repository.as_str(), status.number), status))
+                .collect::<BTreeMap<_, _>>();
+            if by_pr.len() != statuses.len() {
+                return Err(DeliveryError::new(
+                    "sealed CI baseline repeats a pull request",
+                ));
+            }
+            Ok(by_pr)
+        })
+        .transpose()?;
+    if sealed
+        .as_ref()
+        .is_some_and(|statuses| statuses.len() != snapshot.stack.len())
+    {
+        return Err(DeliveryError::new(
+            "sealed PR/check authority set does not match the snapshot stack",
+        ));
+    }
 
     let mut current = BTreeMap::new();
     for node in &snapshot.stack {
         let status = status_source.status(&node.repository, node.pr_number)?;
         verify_pr_identity(node, &status)?;
         verify_required_checks(snapshot, node, &status)?;
-        if fresh_ci_required
-            && !status
-                .checks
-                .iter()
-                .any(|check| check.commit_oid == node.head_oid)
-        {
-            return Err(DeliveryError::new(format!(
-                "history-only candidate {} is missing fresh CI on the new head",
-                node.id
-            )));
-        }
+        reject_unverified_merge_queue(node, &status)?;
         if let Some(sealed) = &sealed {
             let expected = sealed
                 .get(&(node.repository.as_str(), node.pr_number))
                 .ok_or_else(|| DeliveryError::new("seal is missing a live PR binding"))?;
-            if *expected != &status {
+            if fresh_ci_required {
+                verify_fresh_ci(snapshot, node, expected, &status)?;
+            } else if *expected != &status {
                 return Err(DeliveryError::new(format!(
                     "live PR {}#{} changed from seal",
                     node.repository, node.pr_number
@@ -216,7 +274,7 @@ fn consume_atomic_merge<S: PullRequestStatusSource, M: PullRequestMerger>(
     status_source: &S,
     merger: &M,
     eligibility: &MergeEligibility,
-    fresh_ci_required: bool,
+    fresh_ci_baseline: Option<&[PullRequestStatus]>,
 ) -> Result<()> {
     let node = snapshot
         .stack
@@ -226,6 +284,7 @@ fn consume_atomic_merge<S: PullRequestStatusSource, M: PullRequestMerger>(
     let immediate = status_source.status(&node.repository, node.pr_number)?;
     verify_pr_identity(node, &immediate)?;
     verify_required_checks(snapshot, node, &immediate)?;
+    reject_unverified_merge_queue(node, &immediate)?;
     if immediate.state != PullRequestState::Open || immediate.merge_state != "CLEAN" {
         return Err(DeliveryError::new(
             "target PR changed before atomic merge consumption",
@@ -238,21 +297,110 @@ fn consume_atomic_merge<S: PullRequestStatusSource, M: PullRequestMerger>(
             "target base/head moved before atomic merge consumption",
         ));
     }
-    if fresh_ci_required
-        && !immediate
-            .checks
+    if let Some(baseline) = fresh_ci_baseline {
+        let previous = baseline
             .iter()
-            .any(|check| check.commit_oid == eligibility.expected_head_oid)
-    {
-        return Err(DeliveryError::new(
-            "fresh CI disappeared before history-only merge",
-        ));
+            .find(|status| status.repository == node.repository && status.number == node.pr_number)
+            .ok_or_else(|| DeliveryError::new("fresh CI baseline is missing the target PR"))?;
+        verify_fresh_ci(snapshot, node, previous, &immediate)?;
     }
-    merger.merge_with_expected_head(
+    merger.merge_with_expected_base_and_head(
         &eligibility.repository,
         eligibility.pr_number,
+        &eligibility.expected_base_oid,
         &eligibility.expected_head_oid,
     )
+}
+
+fn reject_unverified_merge_queue(node: &StackNode, status: &PullRequestStatus) -> Result<()> {
+    if node.snapshot_state == PullRequestState::Open
+        && (status.is_in_merge_queue
+            || status.is_merge_queue_enabled
+            || status.merge_queue_entry.is_some())
+    {
+        return Err(DeliveryError::new(format!(
+            "target authority for {} uses a merge queue without an exact verified merge-group base+head",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+fn verify_fresh_ci(
+    snapshot: &WaveSnapshot,
+    node: &StackNode,
+    previous: &PullRequestStatus,
+    current: &PullRequestStatus,
+) -> Result<()> {
+    if node.snapshot_state != PullRequestState::Open {
+        return Ok(());
+    }
+    let required = snapshot
+        .required_checks
+        .iter()
+        .filter(|required| required.node == node.id);
+    for required in required {
+        let old = previous
+            .checks
+            .iter()
+            .find(|check| check.name == required.name && check.publisher == required.publisher)
+            .ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "sealed CI baseline is missing required check {}",
+                    required.name
+                ))
+            })?;
+        let new = current
+            .checks
+            .iter()
+            .find(|check| check.name == required.name && check.publisher == required.publisher)
+            .ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "history-only candidate is missing required check {}",
+                    required.name
+                ))
+            })?;
+        let (
+            Some(old_check_run),
+            Some(new_check_run),
+            Some(old_workflow_run),
+            Some(new_workflow_run),
+            Some(old_completed),
+            Some(new_completed),
+            Some(old_workflow_updated),
+            Some(new_workflow_created),
+            Some(new_workflow_updated),
+        ) = (
+            old.check_run_id,
+            new.check_run_id,
+            old.workflow_run_id,
+            new.workflow_run_id,
+            old.completed_at_unix_seconds,
+            new.completed_at_unix_seconds,
+            old.workflow_updated_at_unix_seconds,
+            new.workflow_created_at_unix_seconds,
+            new.workflow_updated_at_unix_seconds,
+        )
+        else {
+            return Err(DeliveryError::new(format!(
+                "required check {} has no verifiable GitHub run IDs and timestamps for fresh CI",
+                required.name
+            )));
+        };
+        if new_check_run <= old_check_run
+            || new_workflow_run <= old_workflow_run
+            || new.started_at_unix_seconds <= old_completed
+            || new_completed < new.started_at_unix_seconds
+            || new_workflow_created <= old_workflow_updated
+            || new_workflow_updated < new_workflow_created
+        {
+            return Err(DeliveryError::new(format!(
+                "required check {} did not advance to a fresh GitHub run after the sealed CI",
+                required.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn transitive_dependencies(
@@ -285,10 +433,11 @@ mod tests {
     }
 
     impl PullRequestMerger for RecordingMerger {
-        fn merge_with_expected_head(
+        fn merge_with_expected_base_and_head(
             &self,
             _repository: &str,
             _pr: u64,
+            _expected_base: &str,
             _expected_head: &str,
         ) -> Result<()> {
             self.calls.set(self.calls.get() + 1);

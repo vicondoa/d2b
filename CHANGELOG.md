@@ -22,7 +22,12 @@ deprecations ship one minor release before removal.
 - Bound delivery snapshots and seals to checked-in manifests, official
   `gh-stack` graphs, exact GitHub PR/check publishers and OIDs, verified
   validation and panel provenance, portable multi-repository content IDs,
-  private XDG state, history-only proofs, and expected-head atomic merges.
+  private XDG state, history-only proofs, and fail-closed merge authority.
+- Hardened delivery sealing with real nested GitHub check-suite metadata,
+  retained offline CI attestation bundles, provider-rooted signed panel
+  receipts, fresh history CI run identities, base-relative diff bindings,
+  squash/rebase/merge stack progression, immutable validation checkouts, and
+  exact base-and-head merge compare-and-swap requirements.
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
