@@ -203,7 +203,6 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
 fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     let tools = read_repo_file("pkgs/delivery-tools.nix");
     for pin in [
-        r#"ghVersion = "2.92.0";"#,
         r#"ghStackVersion = "0.0.7";"#,
         r#"cargoUdepsVersion = "0.1.61";"#,
         r#"cargoUdepsNightlyDate = "2025-12-01";"#,
@@ -228,6 +227,12 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     assert!(
         !tools.contains("curl") && !tools.contains("rustup"),
         "delivery tools must not download toolchains or binaries at runtime"
+    );
+    assert!(
+        tools.contains("ghUpstream = pkgs.gh;")
+            && tools.contains("inherit (ghUpstream) version;")
+            && !tools.contains("assert pkgs.gh.version"),
+        "GitHub CLI must come from the caller's nixpkgs without an exact-version eval assertion"
     );
 
     let flake = read_repo_file("flake.nix");
@@ -282,6 +287,8 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     );
     let lock = read_repo_file("flake.lock");
     for pin in [
+        r#""rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786""#,
+        r#""narHash": "sha256-tpyBcxPpcQb8ukyNF7DoCwfSY3VPsxHoYwj00Cayv5o=""#,
         r#""rev": "e013376c32a8fcf07ddb6ec71739552bc118b7bd""#,
         r#""narHash": "sha256-DsSIQSRMrLOz40LrGZ03sp2RlJ9sz3wKpd8XPTOzXnw=""#,
     ] {
@@ -351,9 +358,26 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
             && reference.contains("Use `$XDG_STATE_HOME/d2b/delivery`")
             && reference.contains("Git metadata is never delivery state")
             && reference.contains("must never be added\nto the reviewed tree")
-            && reference.contains(r#"--state-dir "$XDG_STATE_HOME/d2b/delivery""#),
+            && reference.contains(r#"--state-dir "$XDG_STATE_HOME/d2b/delivery""#)
+            && reference.contains("cargo xtask delivery wave validation-import")
+            && reference.contains("cargo xtask delivery wave verify")
+            && reference.contains("cargo xtask delivery wave eligibility")
+            && reference.contains("D2B_FLAKE_CHECK=delivery-tooling make test-flake"),
         "delivery reference must fail closed and keep evidence external"
     );
+    for stale in [
+        "evidence import",
+        "evidence verify",
+        "merge eligibility",
+        "--request",
+        "--evidence",
+        "--node",
+    ] {
+        assert!(
+            !reference.contains(stale),
+            "delivery reference contains stale CLI surface {stale}"
+        );
+    }
 }
 
 #[test]

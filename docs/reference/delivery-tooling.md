@@ -48,6 +48,13 @@ nix run .#delivery -- stack capability \
   --repository github.com/example/d2b
 ```
 
+The equivalent direct workspace invocation, run from `packages/`, is:
+
+```console
+cargo xtask delivery stack capability \
+  --repository github.com/example/d2b
+```
+
 The capability check accepts only official `gh-stack` `0.0.7` and performs a
 read-only query against GitHub's private-preview endpoint. Private-preview
 availability is mandatory and fail-closed: if the preview is disabled, the
@@ -64,19 +71,39 @@ gh stack submit
 
 ## External evidence and check summaries
 
-The Make-independent delivery app exposes these implemented tree-bound `xtask`
-commands. Select a secure external state directory explicitly:
+The Make-independent delivery app exposes the implemented tree-bound commands
+below. Select a secure external state directory explicitly. The flake app
+already selects the delivery executable, so its command starts with `wave`:
 
 ```console
 install -d -m 0700 "$XDG_STATE_HOME/d2b/delivery"
 nix run .#delivery -- wave snapshot \
-  --manifest "$MANIFEST" \
+  --authority-repository github.com/example/d2b \
+  --authority-ref refs/heads/main \
+  --manifest-path "$MANIFEST" \
+  --repo "d2b=$CHECKOUT" \
   --state-dir "$XDG_STATE_HOME/d2b/delivery"
-nix run .#delivery -- evidence import \
-  --snapshot "$SNAPSHOT" --request "$REQUEST"
-nix run .#delivery -- evidence verify \
-  --snapshot "$SNAPSHOT" --evidence "$EVIDENCE"
-nix run .#delivery -- merge eligibility --seal "$SEAL" --node "$NODE"
+nix run .#delivery -- wave validation-import \
+  --snapshot "$SNAPSHOT" --artifact "$ARTIFACT" --bundle "$BUNDLE" \
+  --payload "$PAYLOAD" --repo "d2b=$CHECKOUT"
+nix run .#delivery -- wave verify \
+  --seal "$SEAL" --repo "d2b=$CHECKOUT"
+nix run .#delivery -- wave eligibility \
+  --seal "$SEAL" --target "$TARGET" --repo "d2b=$CHECKOUT"
+```
+
+`--payload` is optional for `validation-import`. To invoke the same CLI from
+the Rust workspace instead, run from `packages/` and retain the mandatory
+`delivery` namespace:
+
+```console
+cargo xtask delivery wave validation-import \
+  --snapshot "$SNAPSHOT" --artifact "$ARTIFACT" --bundle "$BUNDLE" \
+  --repo "d2b=$CHECKOUT"
+cargo xtask delivery wave verify \
+  --seal "$SEAL" --repo "d2b=$CHECKOUT"
+cargo xtask delivery wave eligibility \
+  --seal "$SEAL" --target "$TARGET" --repo "d2b=$CHECKOUT"
 ```
 
 Use `$XDG_STATE_HOME/d2b/delivery` when `XDG_STATE_HOME` is available. Otherwise,
@@ -93,3 +120,15 @@ outcomes. A summary is status metadata, not validation or panel evidence, and
 cannot satisfy a seal. The merge-eligibility command independently reads
 GitHub's check rollup and fails closed for a missing, duplicate, pending,
 failed, or malformed required check.
+
+## Validation ownership
+
+When realized, the `delivery-tooling` flake check verifies the locked GitHub
+CLI, `gh-stack`, Rust toolchains, Cargo tools, offline workspace metadata, and
+native OpenSSL build inputs. On x86_64 Linux it is discovered and instantiated
+as its own hosted CI flake-check shard. `make check` performs the same no-build
+instantiation through the bounded local flake shards;
+`D2B_FLAKE_CHECK=delivery-tooling make test-flake` selects it directly. Build
+`.#checks.x86_64-linux.delivery-tooling` to realize the check. The committed
+x86_64 flake-check matrix pin makes additions or removals fail the drift gate
+until `make flake-matrix-pin` is reviewed.

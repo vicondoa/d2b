@@ -1,7 +1,6 @@
 { pkgs }:
 
 let
-  ghVersion = "2.92.0";
   ghStackVersion = "0.0.7";
   cargoUdepsVersion = "0.1.61";
   cargoUdepsNightlyDate = "2025-12-01";
@@ -47,7 +46,7 @@ let
     };
   };
 
-  ghUpstream = assert pkgs.gh.version == ghVersion; pkgs.gh;
+  ghUpstream = pkgs.gh;
   gh = pkgs.writeShellApplication {
     name = "gh";
     text = ''
@@ -58,7 +57,7 @@ let
       exec ${ghUpstream}/bin/gh "$@"
     '';
     passthru = {
-      version = ghVersion;
+      inherit (ghUpstream) version;
       upstream = ghUpstream;
       inherit ghStack;
     };
