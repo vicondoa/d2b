@@ -36,7 +36,7 @@ use them.
 | --- | --- | --- | --- |
 | `v2-identity` | `v2_identity` | `serde`, `schemars`, `sha2` | Identity contracts |
 | `v2-component-session` | `v2_component_session` | `v2-identity`, `serde`, `schemars` | Component-session contracts |
-| `v2-services` | `v2_services` | Component session, provider, state, protobuf, schema derives | Service contracts |
+| `v2-services` | `v2_services` | Component session, provider, state, async ttRPC/protobuf, schema derives | Service contracts |
 | `v2-provider` | `v2_provider` | Component session, identity, schema derives | Provider contracts |
 | `v2-state` | `v2_state` | Identity, schema derives | State and audit contracts |
 

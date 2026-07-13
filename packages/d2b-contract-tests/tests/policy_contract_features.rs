@@ -122,6 +122,7 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
 fn schema_and_protobuf_dependencies_are_optional_and_scoped() {
     let manifest = read_repo_file("packages/d2b-contracts/Cargo.toml");
     for dependency in [
+        "async-trait",
         "d2b-core",
         "d2b-realm-core",
         "serde",
@@ -129,6 +130,7 @@ fn schema_and_protobuf_dependencies_are_optional_and_scoped() {
         "schemars",
         "protobuf",
         "sha2",
+        "ttrpc",
     ] {
         let dependency_line = manifest
             .lines()
