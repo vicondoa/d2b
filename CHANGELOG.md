@@ -67,6 +67,8 @@ deprecations ship one minor release before removal.
   remains closed.
 - Routed Layer-1 logs and shell-test scratch state to the private validation
   output root when the reviewed checkout is read-only.
+- Routed pinned Cargo gate targets and proof sockets through writable,
+  validation-owned paths while keeping Unix socket names short.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

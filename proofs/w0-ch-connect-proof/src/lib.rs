@@ -28,7 +28,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(250);
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 async fn next_socket_path(prefix: &str) -> io::Result<PathBuf> {
-    let socket_dir = PathBuf::from("target").join("ps");
+    let socket_dir = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target").join("ps"));
     tokio::fs::create_dir_all(&socket_dir).await?;
     Ok(socket_dir.join(format!(
         "{}-{}-{}.sock",

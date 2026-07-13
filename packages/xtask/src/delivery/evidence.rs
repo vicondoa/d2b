@@ -282,7 +282,9 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         .layout
         .validation_execution_dir(validation_id, &run_id);
     create_private_directory(&execution_root)?;
-    let execution = ValidationExecution::new(execution_root.clone());
+    let socket_root = PathBuf::from("/tmp").join(format!("d2b-validation-{}", &run_id[..24]));
+    create_private_directory(&socket_root)?;
+    let execution = ValidationExecution::new(execution_root.clone(), socket_root.clone());
     let source = execution_root.join("source");
     let output_root = execution_root.join("output");
     create_private_directory(&output_root)?;
@@ -341,6 +343,10 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         (
             OsString::from("D2B_LAYER1_LOG_DIR"),
             output_root.join("layer1-logs").into_os_string(),
+        ),
+        (
+            OsString::from("D2B_VALIDATION_SOCKET_DIR"),
+            socket_root.into_os_string(),
         ),
         (
             OsString::from("TMPDIR"),
@@ -423,11 +429,12 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
 
 struct ValidationExecution {
     root: PathBuf,
+    socket_root: PathBuf,
 }
 
 impl ValidationExecution {
-    fn new(root: PathBuf) -> Self {
-        Self { root }
+    fn new(root: PathBuf, socket_root: PathBuf) -> Self {
+        Self { root, socket_root }
     }
 }
 
@@ -435,6 +442,8 @@ impl Drop for ValidationExecution {
     fn drop(&mut self) {
         let _ = make_tree_writable(&self.root);
         let _ = fs::remove_dir_all(&self.root);
+        let _ = make_tree_writable(&self.socket_root);
+        let _ = fs::remove_dir_all(&self.socket_root);
     }
 }
 
