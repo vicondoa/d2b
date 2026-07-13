@@ -295,13 +295,13 @@
               --prefix PATH : ${pkgs.lib.makeBinPath [
                 pkgs.git
                 deliveryTools.gh
-                deliveryTools.ghStack
+                deliveryTools.gitTown
               ]}
           '';
           meta.mainProgram = "xtask";
           passthru.rustToolchainVersion = deliveryTools.rustStableVersion;
         };
-        gh-stack = deliveryTools.ghStack;
+        git-town = deliveryTools.gitTown;
         cargo-udeps-nightly = deliveryTools.cargoUdepsNightly;
         cargo-semver-checks = deliveryTools.cargoSemverChecks;
 
@@ -332,7 +332,7 @@
             pkgs.stdenv.cc
             deliveryTools.stableRust
             deliveryTools.gh
-            deliveryTools.ghStack
+            deliveryTools.gitTown
             deliveryTools.cargoUdepsNightly
             deliveryTools.cargoSemverChecks
           ];
@@ -1399,14 +1399,14 @@
             pkgs.stdenv.cc
             deliveryTools.stableRust
             deliveryTools.gh
-            deliveryTools.ghStack
+            deliveryTools.gitTown
             deliveryTools.cargoUdepsNightly
             deliveryTools.cargoSemverChecks
           ];
           buildInputs = [ pkgs.openssl ];
         } ''
           gh --version | grep -F 'gh version 2.92.0'
-          gh-stack --version | grep -Fx 'gh stack version 0.0.7'
+          git-town --version | grep -Fx 'Git Town 23.0.1'
           cargo-udeps-nightly --version | grep -F 'cargo-udeps 0.1.61'
           cargo-semver-checks semver-checks --version \
             | grep -F 'cargo-semver-checks 0.47.0'
