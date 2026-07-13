@@ -24,6 +24,9 @@ deprecations ship one minor release before removal.
   alive through a bounded stabilization window, preventing desktop launchers
   from reporting success when WezTerm immediately rejects its configured
   domain.
+- Derived `persistent-shell` and `pty` workload capabilities from
+  `shell.enable`, keeping provider-neutral desktop discovery consistent with
+  the generated shell launcher item and guest runtime.
 - Removed stale per-VM observability relay sockets before broker spawn so a
   normal VM down/up cycle cannot fail with the relay address still in use.
 - Kept persistent-shell integration scratch paths within Linux UNIX-socket
