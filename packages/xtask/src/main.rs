@@ -336,6 +336,7 @@ struct RustItem {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "layer1" => xtask::layer1::run_cli(rest),
         [command, rest @ ..] if command == "delivery" => xtask::delivery::run_cli(rest),
         [command, ..]
             if ["stack", "wave", "evidence", "panel", "merge"].contains(&command.as_str()) =>
@@ -364,7 +365,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
+                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
             std::process::ExitCode::FAILURE
         }

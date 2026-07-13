@@ -19,6 +19,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Moved Layer-1 manifest validation, bounded local orchestration, flake-check
+  discovery, and generated workflow ownership from Python and Bash into Rust
+  `xtask`, and enabled the generated PR workflow for stacked non-main bases.
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,

@@ -17,6 +17,7 @@
 SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
 NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
+CARGO_XTASK := cd packages && cargo xtask
 
 # ===========================================================================
 # Test-rearchitecture interface. The targets are the stable contract; the
@@ -37,7 +38,7 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 ##          drift after the parallel phase. Tune with D2B_CHECK_JOBS and
 ##          D2B_FLAKE_JOBS.
 check:
-	bash tests/tools/layer1-jobs run-local
+	$(CARGO_XTASK) layer1 run-local
 
 ## check-static — legacy/full-static monolithic gate retained for explicit use.
 check-static:
@@ -77,10 +78,11 @@ check-tier0:
 test: test-unit test-integration
 
 test-unit:
-	bash tests/tools/layer1-jobs run-local --skip-preflight
+	$(CARGO_XTASK) layer1 run-local --skip-preflight
 
 # ===========================================================================
-# Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
+# Sub-targets. Test gates have corresponding tests/test-<name>.sh drivers;
+# manifest/check-discovery plumbing is owned by Rust xtask.
 # ===========================================================================
 
 ## test-lint — preflight + nix-instantiate --parse + shellcheck (no eval, no cargo).
@@ -111,7 +113,7 @@ test-flake:
 ## stdout (CI dynamic-matrix plumbing for the sharded test-flake; see
 ## .github/workflows/pr-l1-static-fast.yml). Invoke as `make -s test-flake-list`.
 test-flake-list:
-	@bash tests/test-flake-list.sh
+	@$(CARGO_XTASK) layer1 checks list
 
 ## test-nix-unit — build all sharded nix-unit corpus checks (focused convenience
 ## target; already covered by test-flake, so NOT in test-unit to avoid double work).
@@ -133,11 +135,11 @@ test-integration:
 
 ## layer1-workflow — regenerate the Layer-1 PR workflow from tests/layer1-jobs.json.
 layer1-workflow:
-	bash tests/tools/layer1-jobs render-workflow --write
+	$(CARGO_XTASK) layer1 workflow write
 
 ## layer1-workflow-check — fail if the generated Layer-1 PR workflow is stale.
 layer1-workflow-check:
-	bash tests/tools/layer1-jobs check-workflow
+	$(CARGO_XTASK) layer1 workflow check
 
 # ===========================================================================
 # Additional targets (helper utilities, legacy aliases, meta gates).
