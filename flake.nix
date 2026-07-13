@@ -636,7 +636,7 @@
         workspaceVendorConfig = ''
           [source.crates-io]
           replace-with = "vendored-sources"
-          [source."git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772"]
+          [source."git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772"]
           git = "https://github.com/vicondoa/wl-proxy.git"
           rev = "072945b59fef21a2a8166460454280d543f48772"
           replace-with = "vendored-sources"
