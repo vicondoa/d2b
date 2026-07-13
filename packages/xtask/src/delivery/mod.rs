@@ -9,7 +9,10 @@ pub mod seal;
 pub mod snapshot;
 pub mod storage;
 
-pub use command::{GhStatusSource, GitProbe, ProcessCommandOutput};
+pub use command::{
+    GH_STACK_VERSION, GhStatusSource, GitProbe, ProcessCommandOutput,
+    check_gh_stack_private_preview,
+};
 pub use eligibility::{check_merge_eligibility, evaluate_merge_eligibility};
 pub use evidence::{
     EvidenceImportRequest, EvidencePayloadSource, EvidenceRecord, import_evidence, verify_evidence,
@@ -83,6 +86,17 @@ fn run_cli_inner(args: &[String]) -> Result<String> {
             manifest.validate()?;
             Ok("delivery stack manifest is valid".to_owned())
         }
+        [area, action, rest @ ..] if area == "stack" && action == "capability" => {
+            let mut options = CliOptions::parse(rest)?;
+            let manifest_path = options.required_path("--manifest")?;
+            options.finish()?;
+            let manifest: StackManifest = storage::read_json(&manifest_path)?;
+            manifest.validate()?;
+            check_gh_stack_private_preview(&ProcessCommandOutput, &manifest.root_repository.name)?;
+            Ok(format!(
+                "official gh-stack {GH_STACK_VERSION} private preview is available"
+            ))
+        }
         [area, action, rest @ ..] if area == "wave" && action == "snapshot" => {
             let mut options = CliOptions::parse(rest)?;
             let manifest_path = options.required_path("--manifest")?;
@@ -155,7 +169,8 @@ fn run_cli_inner(args: &[String]) -> Result<String> {
             Ok(format!("stack node {node} is eligible to merge"))
         }
         _ => Err(DeliveryError::new(
-            "usage: cargo xtask [delivery] <stack validate --manifest PATH|wave snapshot \
+            "usage: cargo xtask [delivery] <stack validate --manifest PATH|stack capability \
+             --manifest PATH|wave snapshot \
              --manifest PATH [--state-dir PATH]|evidence import --snapshot PATH \
              --request PATH|evidence verify --snapshot PATH --evidence PATH|panel \
              validate --snapshot PATH --records DIR|wave seal --snapshot PATH|wave \

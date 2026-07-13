@@ -14,13 +14,22 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, home-manager, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, rust-overlay, ... }@inputs:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      deliveryPkgsFor = forAllSystems (system: import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      });
     in
     {
       # The public surface area — populated incrementally by the
@@ -44,6 +53,9 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        deliveryTools = import ./pkgs/delivery-tools.nix {
+          pkgs = deliveryPkgsFor.${system};
+        };
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
@@ -270,13 +282,55 @@
           doCheck = false;
           meta.mainProgram = "d2b-unsafe-local-helper";
         };
+        d2b-delivery = rustWorkspace {
+          pname = "d2b-delivery";
+          cargoBuildFlags = [ "--package" "xtask" "--bin" "xtask" ];
+          doCheck = false;
+          nativeBuildInputs = [ pkgs.makeWrapper pkgs.protobuf ];
+          postFixup = ''
+            wrapProgram "$out/bin/xtask" \
+              --prefix PATH : ${pkgs.lib.makeBinPath [
+                pkgs.git
+                deliveryTools.gh
+                deliveryTools.ghStack
+              ]}
+          '';
+          meta.mainProgram = "xtask";
+        };
+        gh-stack = deliveryTools.ghStack;
+        cargo-udeps-nightly = deliveryTools.cargoUdepsNightly;
+        cargo-semver-checks = deliveryTools.cargoSemverChecks;
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
       });
 
-      apps = forAllSystems (system: { });
+      apps = forAllSystems (system: {
+        delivery = {
+          type = "app";
+          program = "${self.packages.${system}.d2b-delivery}/bin/xtask";
+        };
+      });
+
+      devShells = forAllSystems (system: let
+        pkgs = deliveryPkgsFor.${system};
+        deliveryTools = import ./pkgs/delivery-tools.nix { inherit pkgs; };
+        shell = pkgs.mkShellNoCC {
+          packages = [
+            pkgs.git
+            pkgs.jq
+            deliveryTools.stableRust
+            deliveryTools.gh
+            deliveryTools.ghStack
+            deliveryTools.cargoUdepsNightly
+            deliveryTools.cargoSemverChecks
+          ];
+        };
+      in {
+        default = shell;
+        delivery = shell;
+      });
 
       # Container-based integration test images (the type-G layer), built by
       # Nix and run with podman, rootless. Exposed under `containerImages`,
@@ -381,6 +435,9 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        deliveryTools = import ./pkgs/delivery-tools.nix {
+          pkgs = deliveryPkgsFor.${system};
+        };
         d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
@@ -1322,6 +1379,26 @@
             fi
             echo ok > "$out"
           '';
+
+        delivery-tooling = pkgs.runCommand "d2b-delivery-tooling" {
+          nativeBuildInputs = [
+            deliveryTools.stableRust
+            deliveryTools.gh
+            deliveryTools.ghStack
+            deliveryTools.cargoUdepsNightly
+            deliveryTools.cargoSemverChecks
+          ];
+        } ''
+          gh --version | grep -F 'gh version 2.92.0'
+          gh-stack --version | grep -Fx 'gh stack version 0.0.7'
+          cargo-udeps-nightly --version | grep -F 'cargo-udeps 0.1.61'
+          cargo-semver-checks semver-checks --version \
+            | grep -F 'cargo-semver-checks 0.47.0'
+          rustc --version | grep -F 'rustc 1.94.1'
+          ${deliveryTools.nightlyRust}/bin/rustc --version \
+            | grep -E '^rustc 1\.93\.0-nightly \([0-9a-f]+ 2025-11-30\)$'
+          echo ok > "$out"
+        '';
 
         harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
           pkgs = nixpkgsFor.${system};

@@ -16,6 +16,11 @@ deprecations ship one minor release before removal.
   tree-addressed snapshots, hashed validation evidence, exact-role panel
   records, non-circular wave seals, history-only reuse proofs, and fail-closed
   merge eligibility.
+- Added reproducible delivery packages and a default development shell with
+  official `gh-stack`, GitHub CLI, pinned-nightly `cargo-udeps`, and
+  `cargo-semver-checks`; stacked-base PR workflows now emit tree-bound check
+  summaries, and private-preview unavailability fails closed without a custom
+  stack-mutation fallback.
 
 ### Changed
 

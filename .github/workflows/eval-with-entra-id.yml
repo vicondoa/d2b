@@ -2,8 +2,7 @@ name: eval-with-entra-id
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 permissions:
   contents: read
@@ -20,6 +19,7 @@ jobs:
             experimental-features = nix-command flakes
             access-tokens = github.com=${{ github.token }}
       - name: Eval with-entra-id example
+        id: eval
         run: |
           cd examples/with-entra-id
           rm -f flake.lock
@@ -27,3 +27,14 @@ jobs:
             --override-input nixpkgs github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb \
             --override-input entrablau github:vicondoa/entrablau.nix/bbefb679a5d92fd4eb939b0a6e289b22380dd4b1 \
             --override-input entrablau/himmelblau github:himmelblau-idm/himmelblau/b3c48849cc7b468e33b9e44bb1a1210e49e1391f
+      - name: Summarize checked tree
+        if: always()
+        env:
+          CHECKED_TREE: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVAL_OUTCOME: ${{ steps.eval.outcome }}
+        run: |
+          {
+            printf '## Entra ID example eval\n\n'
+            printf -- '- tree: `%s`\n' "$CHECKED_TREE"
+            printf -- '- eval: `%s`\n' "$EVAL_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
