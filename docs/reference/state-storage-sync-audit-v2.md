@@ -34,7 +34,13 @@ outcome, reason, remediation, policy, and state values are closed enums.
 
 `IdentityScope` is the only dynamic scope input. It uses `RealmId`,
 `WorkloadId`, `ProviderId`, and `RoleId`; local root is a closed singleton.
-`AuthorityRef` uses the same typed identities. Human realm/workload names,
+`AuthorityRef` uses the same typed identities. Workload authorities carry both
+the realm and workload IDs; role and provider authorities carry every ID in
+their scope. Every creation, reconciliation, repair, deletion, ownership, lock
+owner, and lock release authority must match the resource or lock
+`IdentityScope` exactly. An authority from another realm, workload, provider,
+or role is rejected even when its authority kind is otherwise correct.
+Human realm/workload names,
 configured provider labels, device or bus IDs, endpoints, commands, and
 user-supplied strings cannot enter a path contract.
 
@@ -55,8 +61,21 @@ one of these mandatory categories:
 | `audit` | local-root or realm audit |
 | `projection` | regenerable status projection |
 
-Every inventory must contain all ten categories. A row has one opaque resource
-ID, kind, identity scope, logical location, creation/reconcile/repair/delete
+`applicableScopes` is the closed identity set for one generated inventory. For
+each listed identity, the mandatory catalog requires exactly one matching
+category/location row:
+
+| Applicable scope | Mandatory category/location rows |
+| --- | --- |
+| local root | `local-root` / `host-broker` |
+| realm | `realm` / `realm-controller`; `lock` / `runtime-locks`; `quarantine` / `quarantine`; `audit` / `realm-audit`; `projection` / `projection` |
+| workload | `workload` / `workload-state`; `lease` / `runtime-leases` |
+| provider | `provider` / `provider-state` |
+| role | `runtime` / `runtime-role` |
+
+An omitted row, duplicate category/location/identity key, undeclared scope, or
+duplicate applicable scope fails validation. A row has one opaque resource ID,
+kind, identity scope, logical location, creation/reconcile/repair/delete
 policy and authority, persistence and secret class, exact mode/group policy,
 and restart/adoption policy. There is exactly one inode owner and one repair
 authority, and they must match. A diagnostic projection cannot be a repair
@@ -64,10 +83,15 @@ authority.
 
 ## Authoritative JSON
 
-`StateEnvelope<T>` binds the schema and config generation, monotonic state
-generation, writer authority, encoded byte count, checksum, and payload.
-Missing, oversized, zero-generation, wrong-version, or unknown-field input
-fails closed.
+`StateEnvelope<T>` validation consumes the actual canonical raw payload bytes
+and a canonical decoder. It requires a non-empty payload no larger than
+1,048,576 bytes, exact `encodedBytes`, and equality between the decoded value
+and `payload`. `checksum` is SHA-256 over the ASCII domain
+`d2b.v2.state-envelope.payload.sha256\0`, the payload length as an unsigned
+64-bit big-endian integer, and the exact raw payload bytes. A bit flip, length
+lie, noncanonical encoding, checksum mismatch, or decoded-value mismatch fails
+closed; validating structural envelope metadata alone is not an integrity
+decision.
 
 The durability state machine is ordered:
 
@@ -87,17 +111,27 @@ quarantined with a closed reason and remediation.
 
 ## Restart and adoption
 
-Restart discovery records bounded runner and resource observations. Runner
-evidence includes the typed role, candidate count, cgroup membership,
-executable fingerprint, configuration fingerprint, config generation, and
-generation verdict. `PidfdPersistence` has exactly one value:
+Restart discovery records bounded runner and resource observations and a
+nonzero completion timestamp. Runner evidence carries the realm, workload, and
+role IDs plus candidate count, cgroup identity, executable fingerprint,
+configuration fingerprint, config generation, and verdicts for every value.
+Adoption compares all of them with one `RunnerAdoptionTarget`.
+`PidfdPersistence` has exactly one value:
 `process-local-non-persistent`. Pidfds are reopened and never serialized.
 
-Adoption requires one candidate, all evidence matching, and a freshly opened
-pidfd. Any missing, mismatched, or multiple-candidate evidence is quarantined.
-Recovery ordering is fixed to `recover-before-cleanup`. Cleanup targets only
-one declared resource, role, or workload and requires an exact owner-absence
-proof. There is no realm-wide or runtime-root sweep target.
+Adoption requires one candidate, exact target scope and identities, all
+generation/configuration/executable/cgroup evidence matching, and a freshly
+opened pidfd. Any missing, mismatched, or multiple-candidate evidence must be
+quarantined.
+
+Recovery ordering is fixed to `recover-before-cleanup`. There is no completion
+boolean that can authorize deletion. A completed `RestartDiscovery` derives an
+`OwnerAbsenceProof` bound to its discovery ID, completion timestamp, config
+generation, and exact cleanup target. Cleanup replays validation against that
+same discovery and the expected current generation. Any exact live,
+mismatched, or ambiguous matching observation prohibits cleanup; missing
+target observations are incomplete evidence. Cleanup targets only one declared
+resource, role, or workload. There is no realm-wide or runtime-root sweep.
 
 ## Synchronization and leases
 
@@ -130,15 +164,36 @@ Records contain only:
 - previous/current digests and encoded byte count.
 
 There are no path, argv, command, endpoint, credential, proof, secret, or
-payload-byte fields. Segments validate contiguous sequence numbers and their
-internal hash chain. A sealed summary binds first/last sequence, previous and
-current segment digests, controller generation, timestamps, size, and prune
-state. Realm checkpoints additionally require a realm signature digest.
+payload-byte fields. Hashing is canonical, length-prefixed, SHA-256, and
+domain-separated:
 
-Retention is mandatory and bounded to at most 14 days; pruning requires a
-checkpoint. Export selects a sequence range and either redacted JSONL or a
+| Object | Domain |
+| --- | --- |
+| record | `d2b.v2.audit.record.sha256\0` |
+| segment | `d2b.v2.audit.segment.sha256\0` |
+| checkpoint | `d2b.v2.audit.checkpoint.sha256\0` |
+
+The record digest covers every record field except `recordHash`, including the
+previous hash and encoded byte count. The segment digest covers stream, owner,
+segment ID, exact range, previous segment digest, generation, timestamps,
+encoded size, prune status, count, and every verified record hash. Segment
+validation checks record contents, contiguous sequences, internal links, and
+the preceding segment link. The checkpoint digest covers stream, owner,
+checkpoint ID, covered sequence, segment digest, previous checkpoint digest,
+generation, and timestamp. Checkpoint validation checks segment coverage,
+checkpoint-chain continuity, and the signature over the computed checkpoint
+digest through `AuditCheckpointSignatureVerifier`. Syntactically valid
+arbitrary digests are not evidence.
+
+Retention is mandatory and bounded to at most 14 days. A prune decision
+consumes the actual verified target segment, its verified checkpoint, the
+preceding checkpoint when applicable, and the signature verifier. A stale,
+unrelated, unsigned, or range-mismatched checkpoint is rejected; there is no
+`checkpointPresent` boolean authority. Export selects a sequence range and either redacted JSONL or a
 checkpoint bundle without naming an output path. Missing sequence numbers
 create `AuditGap`; they cannot be represented as a successful continuation.
+Gap expected and observed sequences use the shared JSON-safe bounded integer
+type and cannot exceed `9007199254740991`.
 
 ## Projections
 

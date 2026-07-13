@@ -12,6 +12,7 @@ use std::{
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest as ShaDigest, Sha256};
 
 use crate::v2_identity::{ProviderId, RealmId, RoleId, WorkloadId};
 
@@ -43,9 +44,11 @@ pub enum StateContractError {
     EmptyInventory,
     DuplicateResourceId,
     DuplicateLockId,
-    MissingInventoryCategory,
+    MissingMandatoryResource,
+    DuplicateMandatoryResource,
     ScopeCategoryMismatch,
     LocationCategoryMismatch,
+    AuthorityScopeMismatch,
     RepairAuthorityMismatch,
     InvalidOfdPolicy,
     DuplicateLockOrder,
@@ -56,11 +59,11 @@ pub enum StateContractError {
     LeaseExpired,
     RestartEvidenceIncomplete,
     RestartAmbiguous,
-    CleanupBeforeRecovery,
     CleanupWithoutOwnerAbsenceProof,
     InvalidAtomicTransition,
     SuccessBeforeParentFsync,
-    EnvelopeChecksumMissing,
+    EnvelopeChecksumMismatch,
+    EnvelopePayloadMismatch,
     AuditOwnerMismatch,
     AuditStreamMismatch,
     AuditSequenceMismatch,
@@ -83,9 +86,11 @@ impl fmt::Display for StateContractError {
             Self::EmptyInventory => "state inventory is empty",
             Self::DuplicateResourceId => "duplicate storage resource id",
             Self::DuplicateLockId => "duplicate synchronization lock id",
-            Self::MissingInventoryCategory => "storage inventory category is missing",
+            Self::MissingMandatoryResource => "mandatory storage resource is missing",
+            Self::DuplicateMandatoryResource => "mandatory storage resource is duplicated",
             Self::ScopeCategoryMismatch => "storage category and identity scope differ",
             Self::LocationCategoryMismatch => "storage category and logical location differ",
+            Self::AuthorityScopeMismatch => "authority and identity scope differ",
             Self::RepairAuthorityMismatch => "storage owner and repair authority differ",
             Self::InvalidOfdPolicy => "OFD lock policy is not fail-closed",
             Self::DuplicateLockOrder => "duplicate global lock order",
@@ -96,13 +101,15 @@ impl fmt::Display for StateContractError {
             Self::LeaseExpired => "lease is expired or revoked",
             Self::RestartEvidenceIncomplete => "restart evidence is incomplete",
             Self::RestartAmbiguous => "restart observation is ambiguous",
-            Self::CleanupBeforeRecovery => "cleanup was requested before recovery",
             Self::CleanupWithoutOwnerAbsenceProof => "cleanup lacks exact owner-absence proof",
             Self::InvalidAtomicTransition => "invalid atomic write phase transition",
             Self::SuccessBeforeParentFsync => {
                 "authoritative write cannot succeed before parent fsync"
             }
-            Self::EnvelopeChecksumMissing => "authoritative envelope checksum is missing",
+            Self::EnvelopeChecksumMismatch => "authoritative envelope checksum differs",
+            Self::EnvelopePayloadMismatch => {
+                "authoritative envelope payload bytes are not canonical or do not match"
+            }
             Self::AuditOwnerMismatch => "audit stream and owner differ",
             Self::AuditStreamMismatch => "audit stream mismatch",
             Self::AuditSequenceMismatch => "audit sequence mismatch",
@@ -205,6 +212,15 @@ impl Digest {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    fn from_bytes(bytes: [u8; 32]) -> Self {
+        let mut encoded = String::with_capacity(64);
+        for byte in bytes {
+            use fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        Self(encoded)
+    }
 }
 
 impl fmt::Debug for Digest {
@@ -248,6 +264,38 @@ impl<'de> Deserialize<'de> for Generation {
     {
         let value = u64::deserialize(deserializer)?;
         Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct SafeJsonInteger(#[schemars(range(min = 0, max = 9007199254740991_u64))] u64);
+
+impl SafeJsonInteger {
+    pub fn new(value: u64) -> Result<Self, StateContractError> {
+        ensure_safe_json_integer(value)?;
+        Ok(Self(value))
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SafeJsonInteger {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u64::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+fn ensure_safe_json_integer(value: u64) -> Result<(), StateContractError> {
+    if value <= MAX_SAFE_JSON_INTEGER {
+        Ok(())
+    } else {
+        Err(StateContractError::BoundExceeded)
     }
 }
 
@@ -295,6 +343,14 @@ pub enum AuthorityRef {
     RealmBroker {
         realm_id: RealmId,
     },
+    WorkloadController {
+        realm_id: RealmId,
+        workload_id: WorkloadId,
+    },
+    WorkloadBroker {
+        realm_id: RealmId,
+        workload_id: WorkloadId,
+    },
     WorkloadRole {
         realm_id: RealmId,
         workload_id: WorkloadId,
@@ -304,6 +360,65 @@ pub enum AuthorityRef {
         realm_id: RealmId,
         provider_id: ProviderId,
     },
+}
+
+fn authority_matches_scope(authority: &AuthorityRef, scope: &IdentityScope) -> bool {
+    match (authority, scope) {
+        (
+            AuthorityRef::Pid1 | AuthorityRef::LocalRootAllocator | AuthorityRef::LocalRootBroker,
+            IdentityScope::LocalRoot,
+        ) => true,
+        (
+            AuthorityRef::RealmController {
+                realm_id: authority,
+            }
+            | AuthorityRef::RealmBroker {
+                realm_id: authority,
+            },
+            IdentityScope::Realm { realm_id: scope },
+        ) => authority == scope,
+        (
+            AuthorityRef::WorkloadController {
+                realm_id: authority_realm,
+                workload_id: authority_workload,
+            }
+            | AuthorityRef::WorkloadBroker {
+                realm_id: authority_realm,
+                workload_id: authority_workload,
+            },
+            IdentityScope::Workload {
+                realm_id: scope_realm,
+                workload_id: scope_workload,
+            },
+        ) => authority_realm == scope_realm && authority_workload == scope_workload,
+        (
+            AuthorityRef::Provider {
+                realm_id: authority_realm,
+                provider_id: authority_provider,
+            },
+            IdentityScope::Provider {
+                realm_id: scope_realm,
+                provider_id: scope_provider,
+            },
+        ) => authority_realm == scope_realm && authority_provider == scope_provider,
+        (
+            AuthorityRef::WorkloadRole {
+                realm_id: authority_realm,
+                workload_id: authority_workload,
+                role_id: authority_role,
+            },
+            IdentityScope::Role {
+                realm_id: scope_realm,
+                workload_id: scope_workload,
+                role_id: scope_role,
+            },
+        ) => {
+            authority_realm == scope_realm
+                && authority_workload == scope_workload
+                && authority_role == scope_role
+        }
+        _ => false,
+    }
 }
 
 #[derive(
@@ -522,8 +637,79 @@ pub struct StorageInventory {
     pub schema_generation: u32,
     pub contract_fingerprint: Digest,
     #[schemars(length(min = 1, max = 4096))]
+    pub applicable_scopes: Vec<IdentityScope>,
+    #[schemars(length(min = 1, max = 4096))]
     pub resources: Vec<StorageResource>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MandatoryScopeKind {
+    LocalRoot,
+    Realm,
+    Workload,
+    Provider,
+    Role,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MandatoryResourceSpec {
+    pub category: StorageCategory,
+    pub logical_location: LogicalLocation,
+    scope_kind: MandatoryScopeKind,
+}
+
+pub const MANDATORY_RESOURCE_CATALOG: [MandatoryResourceSpec; 10] = [
+    MandatoryResourceSpec {
+        category: StorageCategory::LocalRoot,
+        logical_location: LogicalLocation::HostBroker,
+        scope_kind: MandatoryScopeKind::LocalRoot,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Realm,
+        logical_location: LogicalLocation::RealmController,
+        scope_kind: MandatoryScopeKind::Realm,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Lock,
+        logical_location: LogicalLocation::RuntimeLocks,
+        scope_kind: MandatoryScopeKind::Realm,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Quarantine,
+        logical_location: LogicalLocation::Quarantine,
+        scope_kind: MandatoryScopeKind::Realm,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Audit,
+        logical_location: LogicalLocation::RealmAudit,
+        scope_kind: MandatoryScopeKind::Realm,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Projection,
+        logical_location: LogicalLocation::Projection,
+        scope_kind: MandatoryScopeKind::Realm,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Workload,
+        logical_location: LogicalLocation::WorkloadState,
+        scope_kind: MandatoryScopeKind::Workload,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Lease,
+        logical_location: LogicalLocation::RuntimeLeases,
+        scope_kind: MandatoryScopeKind::Workload,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Provider,
+        logical_location: LogicalLocation::ProviderState,
+        scope_kind: MandatoryScopeKind::Provider,
+    },
+    MandatoryResourceSpec {
+        category: StorageCategory::Runtime,
+        logical_location: LogicalLocation::RuntimeRole,
+        scope_kind: MandatoryScopeKind::Role,
+    },
+];
 
 impl StorageInventory {
     pub fn validate(&self) -> Result<(), StateContractError> {
@@ -536,25 +722,82 @@ impl StorageInventory {
         if self.resources.len() > MAX_INVENTORY_ROWS {
             return Err(StateContractError::BoundExceeded);
         }
+        if self.applicable_scopes.is_empty()
+            || self.applicable_scopes.len() > MAX_INVENTORY_ROWS
+            || !self.applicable_scopes.contains(&IdentityScope::LocalRoot)
+        {
+            return Err(StateContractError::MissingMandatoryResource);
+        }
+        let applicable_scopes = self.applicable_scopes.iter().collect::<BTreeSet<_>>();
+        if applicable_scopes.len() != self.applicable_scopes.len() {
+            return Err(StateContractError::DuplicateMandatoryResource);
+        }
 
         let mut ids = BTreeSet::new();
-        let mut categories = BTreeSet::new();
+        let mut resource_keys = BTreeSet::new();
         for resource in &self.resources {
             if !ids.insert(resource.resource_id.as_str()) {
                 return Err(StateContractError::DuplicateResourceId);
             }
-            categories.insert(resource.category);
+            if !resource_keys.insert((
+                resource.category,
+                resource.logical_location,
+                &resource.scope,
+            )) {
+                return Err(StateContractError::DuplicateMandatoryResource);
+            }
             if resource.ownership.owner != resource.repair_authority {
                 return Err(StateContractError::RepairAuthorityMismatch);
             }
             validate_category_scope(resource)?;
             validate_category_location(resource)?;
+            if !applicable_scopes.contains(&resource.scope) {
+                return Err(StateContractError::ScopeCategoryMismatch);
+            }
+            for authority in [
+                &resource.creation_authority,
+                &resource.reconcile_authority,
+                &resource.repair_authority,
+                &resource.delete_authority,
+                &resource.ownership.owner,
+            ] {
+                if !authority_matches_scope(authority, &resource.scope) {
+                    return Err(StateContractError::AuthorityScopeMismatch);
+                }
+            }
         }
-        if StorageCategory::ALL
-            .into_iter()
-            .any(|category| !categories.contains(&category))
-        {
-            return Err(StateContractError::MissingInventoryCategory);
+        self.validate_mandatory_catalog()?;
+        Ok(())
+    }
+
+    fn validate_mandatory_catalog(&self) -> Result<(), StateContractError> {
+        for scope in &self.applicable_scopes {
+            let kind = match scope {
+                IdentityScope::LocalRoot => MandatoryScopeKind::LocalRoot,
+                IdentityScope::Realm { .. } => MandatoryScopeKind::Realm,
+                IdentityScope::Workload { .. } => MandatoryScopeKind::Workload,
+                IdentityScope::Provider { .. } => MandatoryScopeKind::Provider,
+                IdentityScope::Role { .. } => MandatoryScopeKind::Role,
+            };
+            for spec in MANDATORY_RESOURCE_CATALOG
+                .iter()
+                .filter(|spec| spec.scope_kind == kind)
+            {
+                let count = self
+                    .resources
+                    .iter()
+                    .filter(|resource| {
+                        resource.category == spec.category
+                            && resource.logical_location == spec.logical_location
+                            && &resource.scope == scope
+                    })
+                    .count();
+                match count {
+                    1 => {}
+                    0 => return Err(StateContractError::MissingMandatoryResource),
+                    _ => return Err(StateContractError::DuplicateMandatoryResource),
+                }
+            }
         }
         Ok(())
     }
@@ -639,8 +882,35 @@ pub struct StateEnvelope<T> {
     pub payload: T,
 }
 
-impl<T> StateEnvelope<T> {
-    pub fn validate_header(&self) -> Result<(), StateContractError> {
+pub trait CanonicalPayloadVerifier<T> {
+    fn decode_canonical(&self, raw_payload: &[u8]) -> Result<T, StateContractError>;
+}
+
+const STATE_PAYLOAD_DIGEST_DOMAIN: &[u8] = b"d2b.v2.state-envelope.payload.sha256\0";
+const AUDIT_RECORD_DIGEST_DOMAIN: &[u8] = b"d2b.v2.audit.record.sha256\0";
+const AUDIT_SEGMENT_DIGEST_DOMAIN: &[u8] = b"d2b.v2.audit.segment.sha256\0";
+const AUDIT_CHECKPOINT_DIGEST_DOMAIN: &[u8] = b"d2b.v2.audit.checkpoint.sha256\0";
+
+fn digest_domain_bytes(domain: &[u8], payload: &[u8]) -> Digest {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update((payload.len() as u64).to_be_bytes());
+    hasher.update(payload);
+    Digest::from_bytes(hasher.finalize().into())
+}
+
+pub fn state_payload_digest(raw_payload: &[u8]) -> Result<Digest, StateContractError> {
+    if raw_payload.is_empty() || raw_payload.len() as u64 > MAX_JSON_DOCUMENT_BYTES {
+        return Err(StateContractError::BoundExceeded);
+    }
+    Ok(digest_domain_bytes(
+        STATE_PAYLOAD_DIGEST_DOMAIN,
+        raw_payload,
+    ))
+}
+
+impl<T: PartialEq> StateEnvelope<T> {
+    fn validate_header(&self) -> Result<(), StateContractError> {
         if self.schema_version != STATE_SCHEMA_VERSION {
             return Err(StateContractError::UnsupportedSchemaVersion);
         }
@@ -660,6 +930,30 @@ impl<T> StateEnvelope<T> {
                 .checked_add(1)
                 .ok_or(StateContractError::BoundExceeded)?,
         )
+    }
+
+    pub fn validate_payload_bytes<V>(
+        &self,
+        raw_payload: &[u8],
+        verifier: &V,
+    ) -> Result<(), StateContractError>
+    where
+        V: CanonicalPayloadVerifier<T>,
+    {
+        self.validate_header()?;
+        let encoded_bytes =
+            u64::try_from(raw_payload.len()).map_err(|_| StateContractError::BoundExceeded)?;
+        if encoded_bytes != self.encoded_bytes || encoded_bytes > MAX_JSON_DOCUMENT_BYTES {
+            return Err(StateContractError::BoundExceeded);
+        }
+        if digest_domain_bytes(STATE_PAYLOAD_DIGEST_DOMAIN, raw_payload) != self.checksum {
+            return Err(StateContractError::EnvelopeChecksumMismatch);
+        }
+        let decoded = verifier.decode_canonical(raw_payload)?;
+        if decoded != self.payload {
+            return Err(StateContractError::EnvelopePayloadMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -765,10 +1059,13 @@ pub enum PidfdPersistence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunnerEvidence {
+    pub realm_id: RealmId,
+    pub workload_id: WorkloadId,
     pub role_id: RoleId,
     pub candidate_count: u16,
     pub pidfd_persistence: PidfdPersistence,
     pub identity: EvidenceVerdict,
+    pub cgroup_identity: Digest,
     pub cgroup_membership: EvidenceVerdict,
     pub executable_fingerprint: Digest,
     pub executable: EvidenceVerdict,
@@ -779,8 +1076,15 @@ pub struct RunnerEvidence {
 }
 
 impl RunnerEvidence {
-    pub fn is_exact(&self) -> bool {
+    pub fn is_exact_for(&self, target: &RunnerAdoptionTarget) -> bool {
         self.candidate_count == 1
+            && self.realm_id == target.realm_id
+            && self.workload_id == target.workload_id
+            && self.role_id == target.role_id
+            && self.cgroup_identity == target.cgroup_identity
+            && self.executable_fingerprint == target.executable_fingerprint
+            && self.configuration_fingerprint == target.configuration_fingerprint
+            && self.config_generation == target.config_generation
             && [
                 self.identity,
                 self.cgroup_membership,
@@ -790,6 +1094,41 @@ impl RunnerEvidence {
             ]
             .into_iter()
             .all(|verdict| verdict == EvidenceVerdict::Match)
+    }
+
+    fn proves_absence(&self) -> bool {
+        self.candidate_count == 0
+            && [
+                self.identity,
+                self.cgroup_membership,
+                self.executable,
+                self.configuration,
+                self.generation,
+            ]
+            .into_iter()
+            .all(|verdict| verdict == EvidenceVerdict::Missing)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerAdoptionTarget {
+    pub realm_id: RealmId,
+    pub workload_id: WorkloadId,
+    pub role_id: RoleId,
+    pub config_generation: Generation,
+    pub cgroup_identity: Digest,
+    pub executable_fingerprint: Digest,
+    pub configuration_fingerprint: Digest,
+}
+
+impl RunnerAdoptionTarget {
+    fn scope(&self) -> IdentityScope {
+        IdentityScope::Role {
+            realm_id: self.realm_id.clone(),
+            workload_id: self.workload_id.clone(),
+            role_id: self.role_id.clone(),
+        }
     }
 }
 
@@ -806,6 +1145,8 @@ pub struct RunnerObservation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceEvidence {
     pub resource_id: ResourceId,
+    pub scope: IdentityScope,
+    pub presence: EvidenceVerdict,
     pub owner_identity: EvidenceVerdict,
     pub ownership: EvidenceVerdict,
     pub configuration: EvidenceVerdict,
@@ -816,6 +1157,7 @@ pub struct ResourceEvidence {
 impl ResourceEvidence {
     pub fn is_exact(&self) -> bool {
         [
+            self.presence,
             self.owner_identity,
             self.ownership,
             self.configuration,
@@ -825,12 +1167,27 @@ impl ResourceEvidence {
         .into_iter()
         .all(|verdict| verdict == EvidenceVerdict::Match)
     }
+
+    fn proves_absence(&self) -> bool {
+        [
+            self.presence,
+            self.owner_identity,
+            self.ownership,
+            self.configuration,
+            self.generation,
+            self.lease,
+        ]
+        .into_iter()
+        .all(|verdict| verdict == EvidenceVerdict::Missing)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RestartDiscovery {
+    pub discovery_id: ResourceId,
     pub config_generation: Generation,
+    pub completed_at_unix_ms: SafeJsonInteger,
     #[schemars(length(max = 4096))]
     pub runners: Vec<RunnerObservation>,
     #[schemars(length(max = 4096))]
@@ -845,6 +1202,49 @@ impl RestartDiscovery {
             return Err(StateContractError::BoundExceeded);
         }
         Ok(())
+    }
+
+    pub fn prove_owner_absence(
+        &self,
+        target: CleanupTarget,
+    ) -> Result<OwnerAbsenceProof, StateContractError> {
+        self.validate_bounds()?;
+        if self.completed_at_unix_ms.get() == 0 {
+            return Err(StateContractError::RestartEvidenceIncomplete);
+        }
+
+        let mut matched = false;
+        for runner in &self.runners {
+            if target.includes_scope(&runner.scope) {
+                matched = true;
+                if !runner.evidence.proves_absence() {
+                    return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
+                }
+            }
+        }
+        for resource in &self.resources {
+            let target_matches = match &target {
+                CleanupTarget::Resource { resource_id } => &resource.resource_id == resource_id,
+                _ => target.includes_scope(&resource.scope),
+            };
+            if target_matches {
+                matched = true;
+                if !resource.proves_absence() {
+                    return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
+                }
+            }
+        }
+        if !matched {
+            return Err(StateContractError::RestartEvidenceIncomplete);
+        }
+
+        Ok(OwnerAbsenceProof {
+            discovery_id: self.discovery_id.clone(),
+            config_generation: self.config_generation,
+            completed_at_unix_ms: self.completed_at_unix_ms,
+            target,
+            evidence: AbsenceEvidence::CompletedDiscovery,
+        })
     }
 }
 
@@ -897,10 +1297,8 @@ pub enum Remediation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum OwnerAbsenceProof {
-    EmptyDeclaredCgroup,
-    ExitedFreshPidfd,
-    RevokedMatchingLease,
+pub enum AbsenceEvidence {
+    CompletedDiscovery,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -923,6 +1321,54 @@ pub enum CleanupTarget {
         realm_id: RealmId,
         workload_id: WorkloadId,
     },
+}
+
+impl CleanupTarget {
+    fn includes_scope(&self, scope: &IdentityScope) -> bool {
+        match (self, scope) {
+            (Self::Resource { .. }, _) => false,
+            (
+                Self::Role {
+                    realm_id: target_realm,
+                    workload_id: target_workload,
+                    role_id: target_role,
+                },
+                IdentityScope::Role {
+                    realm_id,
+                    workload_id,
+                    role_id,
+                },
+            ) => {
+                target_realm == realm_id && target_workload == workload_id && target_role == role_id
+            }
+            (
+                Self::Workload {
+                    realm_id: target_realm,
+                    workload_id: target_workload,
+                },
+                IdentityScope::Workload {
+                    realm_id,
+                    workload_id,
+                }
+                | IdentityScope::Role {
+                    realm_id,
+                    workload_id,
+                    ..
+                },
+            ) => target_realm == realm_id && target_workload == workload_id,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAbsenceProof {
+    pub discovery_id: ResourceId,
+    pub config_generation: Generation,
+    pub completed_at_unix_ms: SafeJsonInteger,
+    pub target: CleanupTarget,
+    pub evidence: AbsenceEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -951,7 +1397,6 @@ pub enum AdoptionDecision {
 pub struct RestartDecision {
     pub observation_id: ResourceId,
     pub ordering: RecoveryOrdering,
-    pub recovery_completed: bool,
     pub decision: AdoptionDecision,
 }
 
@@ -959,23 +1404,51 @@ impl RestartDecision {
     pub fn validate_for_runner(
         &self,
         observation: &RunnerObservation,
+        target: &RunnerAdoptionTarget,
     ) -> Result<(), StateContractError> {
         if self.observation_id != observation.observation_id {
             return Err(StateContractError::RestartEvidenceIncomplete);
         }
+        let exact =
+            observation.scope == target.scope() && observation.evidence.is_exact_for(target);
         match &self.decision {
             AdoptionDecision::Adopt { fresh_pidfd_opened } => {
-                if !observation.evidence.is_exact() {
+                if !exact {
                     return Err(StateContractError::RestartAmbiguous);
                 }
                 if !fresh_pidfd_opened {
                     return Err(StateContractError::RestartEvidenceIncomplete);
                 }
             }
-            AdoptionDecision::Cleanup { .. } if !self.recovery_completed => {
-                return Err(StateContractError::CleanupBeforeRecovery);
+            AdoptionDecision::Quarantine { .. } if exact => {
+                return Err(StateContractError::RestartEvidenceIncomplete);
             }
-            AdoptionDecision::Quarantine { .. } | AdoptionDecision::Cleanup { .. } => {}
+            AdoptionDecision::Cleanup { .. } => {
+                return Err(StateContractError::RestartAmbiguous);
+            }
+            AdoptionDecision::Quarantine { .. } => {}
+        }
+        Ok(())
+    }
+
+    pub fn validate_cleanup(
+        &self,
+        discovery: &RestartDiscovery,
+        expected_generation: Generation,
+    ) -> Result<(), StateContractError> {
+        let AdoptionDecision::Cleanup {
+            target,
+            owner_absence_proof,
+        } = &self.decision
+        else {
+            return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
+        };
+        let expected = discovery.prove_owner_absence(target.clone())?;
+        if owner_absence_proof != &expected
+            || owner_absence_proof.target != *target
+            || owner_absence_proof.config_generation != expected_generation
+        {
+            return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
         }
         Ok(())
     }
@@ -1086,6 +1559,11 @@ impl SyncInventory {
             }
             if lock.owner != lock.release_authority {
                 return Err(StateContractError::RepairAuthorityMismatch);
+            }
+            if !authority_matches_scope(&lock.owner, &lock.key.scope)
+                || !authority_matches_scope(&lock.release_authority, &lock.key.scope)
+            {
+                return Err(StateContractError::AuthorityScopeMismatch);
             }
             let scope_matches = matches!(
                 (&lock.key.class, &lock.key.scope),
@@ -1319,8 +1797,85 @@ pub struct AuditRecord {
     pub encoded_bytes: u32,
 }
 
+struct CanonicalHasher(Sha256);
+
+impl CanonicalHasher {
+    fn new(domain: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        Self(hasher)
+    }
+
+    fn bytes(&mut self, value: &[u8]) {
+        self.0.update((value.len() as u64).to_be_bytes());
+        self.0.update(value);
+    }
+
+    fn string(&mut self, value: &str) {
+        self.bytes(value.as_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.0.update(value.to_be_bytes());
+    }
+
+    fn optional_string(&mut self, value: Option<&str>) {
+        self.0.update([u8::from(value.is_some())]);
+        if let Some(value) = value {
+            self.string(value);
+        }
+    }
+
+    fn finish(self) -> Digest {
+        Digest::from_bytes(self.0.finalize().into())
+    }
+}
+
+fn hash_audit_stream(hasher: &mut CanonicalHasher, stream: &AuditStream) {
+    match stream {
+        AuditStream::LocalRoot => hasher.string("local-root"),
+        AuditStream::Realm { realm_id } => {
+            hasher.string("realm");
+            hasher.string(realm_id.as_str());
+        }
+    }
+}
+
+fn hash_audit_owner(hasher: &mut CanonicalHasher, owner: &AuditOwner) {
+    match owner {
+        AuditOwner::LocalRootBroker => hasher.string("local-root-broker"),
+        AuditOwner::RealmBroker { realm_id } => {
+            hasher.string("realm-broker");
+            hasher.string(realm_id.as_str());
+        }
+    }
+}
+
+fn hash_audit_actor(hasher: &mut CanonicalHasher, actor: &AuditActor) {
+    match actor {
+        AuditActor::LocalRootAllocator => hasher.string("local-root-allocator"),
+        AuditActor::LocalRootBroker => hasher.string("local-root-broker"),
+        AuditActor::RealmController { realm_id } => {
+            hasher.string("realm-controller");
+            hasher.string(realm_id.as_str());
+        }
+        AuditActor::RealmBroker { realm_id } => {
+            hasher.string("realm-broker");
+            hasher.string(realm_id.as_str());
+        }
+        AuditActor::Provider { provider_id } => {
+            hasher.string("provider");
+            hasher.string(provider_id.as_str());
+        }
+        AuditActor::WorkloadRole { role_id } => {
+            hasher.string("workload-role");
+            hasher.string(role_id.as_str());
+        }
+    }
+}
+
 impl AuditRecord {
-    pub fn validate_bounds(&self) -> Result<(), StateContractError> {
+    fn validate_bounds(&self) -> Result<(), StateContractError> {
         if self.schema_version != STATE_SCHEMA_VERSION {
             return Err(StateContractError::UnsupportedSchemaVersion);
         }
@@ -1332,6 +1887,82 @@ impl AuditRecord {
         }
         if self.encoded_bytes == 0 || self.encoded_bytes > MAX_AUDIT_RECORD_BYTES {
             return Err(StateContractError::BoundExceeded);
+        }
+        Ok(())
+    }
+
+    pub fn computed_hash(&self) -> Digest {
+        let mut hasher = CanonicalHasher::new(AUDIT_RECORD_DIGEST_DOMAIN);
+        hasher.u64(u64::from(self.schema_version));
+        hash_audit_stream(&mut hasher, &self.stream);
+        hasher.u64(self.sequence);
+        hasher.u64(self.occurred_at_unix_ms);
+        hasher.string(self.correlation.operation_id.as_str());
+        hasher.optional_string(
+            self.correlation
+                .session_id
+                .as_ref()
+                .map(CorrelationId::as_str),
+        );
+        hasher.optional_string(
+            self.correlation
+                .provider_id
+                .as_ref()
+                .map(ProviderId::as_str),
+        );
+        hash_audit_actor(&mut hasher, &self.actor);
+        hasher.string(match self.event {
+            AuditEvent::StorageCreate => "storage-create",
+            AuditEvent::StorageReconcile => "storage-reconcile",
+            AuditEvent::StorageRepair => "storage-repair",
+            AuditEvent::StorageDelete => "storage-delete",
+            AuditEvent::RestartDiscover => "restart-discover",
+            AuditEvent::RestartAdopt => "restart-adopt",
+            AuditEvent::RestartQuarantine => "restart-quarantine",
+            AuditEvent::LockAcquire => "lock-acquire",
+            AuditEvent::LockRelease => "lock-release",
+            AuditEvent::LeaseGrant => "lease-grant",
+            AuditEvent::LeaseRevoke => "lease-revoke",
+            AuditEvent::ProviderOperation => "provider-operation",
+            AuditEvent::SessionOperation => "session-operation",
+            AuditEvent::SegmentSeal => "segment-seal",
+            AuditEvent::Checkpoint => "checkpoint",
+            AuditEvent::GapDetected => "gap-detected",
+            AuditEvent::RetentionPrune => "retention-prune",
+            AuditEvent::Export => "export",
+        });
+        hasher.string(match self.outcome {
+            AuditOutcome::Succeeded => "succeeded",
+            AuditOutcome::Denied => "denied",
+            AuditOutcome::Failed => "failed",
+            AuditOutcome::Degraded => "degraded",
+            AuditOutcome::Quarantined => "quarantined",
+            AuditOutcome::Cancelled => "cancelled",
+        });
+        hasher.string(match self.reason {
+            AuditReason::PolicyAllowed => "policy-allowed",
+            AuditReason::PolicyDenied => "policy-denied",
+            AuditReason::IdentityVerified => "identity-verified",
+            AuditReason::IdentityMismatch => "identity-mismatch",
+            AuditReason::GenerationMismatch => "generation-mismatch",
+            AuditReason::OwnerAmbiguous => "owner-ambiguous",
+            AuditReason::StorageDrift => "storage-drift",
+            AuditReason::LockContended => "lock-contended",
+            AuditReason::LeaseExpired => "lease-expired",
+            AuditReason::CorruptState => "corrupt-state",
+            AuditReason::SequenceGap => "sequence-gap",
+            AuditReason::RetentionLimit => "retention-limit",
+            AuditReason::OperatorRequested => "operator-requested",
+        });
+        hasher.string(self.previous_hash.as_str());
+        hasher.u64(u64::from(self.encoded_bytes));
+        hasher.finish()
+    }
+
+    pub fn validate_integrity(&self) -> Result<(), StateContractError> {
+        self.validate_bounds()?;
+        if self.record_hash != self.computed_hash() {
+            return Err(StateContractError::AuditChainMismatch);
         }
         Ok(())
     }
@@ -1371,7 +2002,64 @@ pub struct AuditSegment {
 }
 
 impl AuditSegment {
+    pub fn computed_digest(&self) -> Digest {
+        let mut hasher = CanonicalHasher::new(AUDIT_SEGMENT_DIGEST_DOMAIN);
+        hash_audit_stream(&mut hasher, &self.summary.stream);
+        hash_audit_owner(&mut hasher, &self.summary.owner);
+        hasher.string(self.summary.segment_id.as_str());
+        hasher.u64(self.summary.first_sequence);
+        hasher.u64(self.summary.last_sequence);
+        hasher.string(self.summary.previous_segment_digest.as_str());
+        hasher.u64(self.summary.controller_generation.get());
+        hasher.u64(self.summary.created_at_unix_ms);
+        hasher.u64(self.summary.sealed_at_unix_ms);
+        hasher.u64(self.summary.encoded_bytes);
+        hasher.string(match self.summary.prune_status {
+            PruneStatus::Retained => "retained",
+            PruneStatus::EligibleAfterCheckpoint => "eligible-after-checkpoint",
+            PruneStatus::PrunedWithCheckpoint => "pruned-with-checkpoint",
+        });
+        hasher.u64(self.records.len() as u64);
+        for record in &self.records {
+            hasher.string(record.record_hash.as_str());
+        }
+        hasher.finish()
+    }
+
     pub fn validate(&self) -> Result<(), StateContractError> {
+        self.validate_internal()?;
+        if self.summary.first_sequence != 1
+            || !self
+                .summary
+                .previous_segment_digest
+                .as_str()
+                .bytes()
+                .all(|byte| byte == b'0')
+        {
+            return Err(StateContractError::AuditChainMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn validate_after(&self, previous: &AuditSegment) -> Result<(), StateContractError> {
+        previous.validate_internal()?;
+        self.validate_internal()?;
+        if self.summary.stream != previous.summary.stream
+            || self.summary.owner != previous.summary.owner
+            || self.summary.previous_segment_digest != previous.summary.segment_digest
+            || previous
+                .summary
+                .last_sequence
+                .checked_add(1)
+                .ok_or(StateContractError::BoundExceeded)?
+                != self.summary.first_sequence
+        {
+            return Err(StateContractError::AuditChainMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_internal(&self) -> Result<(), StateContractError> {
         validate_audit_owner(&self.summary.stream, &self.summary.owner)?;
         if self.records.is_empty()
             || self.records.len() > MAX_AUDIT_RECORDS_PER_SEGMENT
@@ -1392,7 +2080,7 @@ impl AuditSegment {
         let mut expected_sequence = self.summary.first_sequence;
         let mut previous_hash = &self.summary.previous_segment_digest;
         for record in &self.records {
-            record.validate_bounds()?;
+            record.validate_integrity()?;
             if record.stream != self.summary.stream {
                 return Err(StateContractError::AuditStreamMismatch);
             }
@@ -1407,9 +2095,10 @@ impl AuditSegment {
                 .ok_or(StateContractError::BoundExceeded)?;
             previous_hash = &record.record_hash;
         }
-        if self.records.last().map(|record| record.sequence) != Some(self.summary.last_sequence)
-            || previous_hash != &self.summary.segment_digest
-        {
+        if self.records.last().map(|record| record.sequence) != Some(self.summary.last_sequence) {
+            return Err(StateContractError::AuditChainMismatch);
+        }
+        if self.summary.segment_digest != self.computed_digest() {
             return Err(StateContractError::AuditChainMismatch);
         }
         Ok(())
@@ -1449,30 +2138,105 @@ pub struct AuditCheckpoint {
     pub realm_signature_digest: Option<Digest>,
 }
 
-impl AuditCheckpoint {
-    pub fn validate_for_segment(
+pub trait AuditCheckpointSignatureVerifier {
+    fn verify_realm_signature(
         &self,
-        segment: &AuditSegmentSummary,
+        realm_id: &RealmId,
+        checkpoint_digest: &Digest,
+        signature_digest: &Digest,
+    ) -> bool;
+}
+
+impl AuditCheckpoint {
+    pub fn computed_digest(&self) -> Digest {
+        let mut hasher = CanonicalHasher::new(AUDIT_CHECKPOINT_DIGEST_DOMAIN);
+        hash_audit_stream(&mut hasher, &self.stream);
+        hash_audit_owner(&mut hasher, &self.owner);
+        hasher.string(self.checkpoint_id.as_str());
+        hasher.u64(self.through_sequence);
+        hasher.string(self.segment_digest.as_str());
+        hasher.string(self.previous_checkpoint_digest.as_str());
+        hasher.u64(self.controller_generation.get());
+        hasher.u64(self.created_at_unix_ms);
+        hasher.finish()
+    }
+
+    pub fn verify_for_segment<V: AuditCheckpointSignatureVerifier>(
+        &self,
+        segment: &AuditSegment,
+        previous_checkpoint: Option<&AuditCheckpoint>,
+        signature_verifier: &V,
     ) -> Result<(), StateContractError> {
+        segment.validate_internal()?;
         validate_audit_owner(&self.stream, &self.owner)?;
         if self.through_sequence == 0
             || self.through_sequence > MAX_SAFE_JSON_INTEGER
             || self.created_at_unix_ms > MAX_SAFE_JSON_INTEGER
-            || self.stream != segment.stream
-            || self.through_sequence != segment.last_sequence
-            || self.segment_digest != segment.segment_digest
-            || self.controller_generation != segment.controller_generation
+            || self.stream != segment.summary.stream
+            || self.owner != segment.summary.owner
+            || self.through_sequence != segment.summary.last_sequence
+            || self.segment_digest != segment.summary.segment_digest
+            || self.controller_generation != segment.summary.controller_generation
+            || self.created_at_unix_ms < segment.summary.sealed_at_unix_ms
+            || self.checkpoint_digest != self.computed_digest()
         {
             return Err(StateContractError::AuditCheckpointMismatch);
         }
-        match self.stream {
-            AuditStream::LocalRoot if self.realm_signature_digest.is_some() => {
-                Err(StateContractError::AuditCheckpointMismatch)
+
+        match previous_checkpoint {
+            Some(previous) => {
+                if previous.stream != self.stream
+                    || previous.owner != self.owner
+                    || previous.checkpoint_digest != previous.computed_digest()
+                    || self.previous_checkpoint_digest != previous.checkpoint_digest
+                    || previous
+                        .through_sequence
+                        .checked_add(1)
+                        .ok_or(StateContractError::BoundExceeded)?
+                        != segment.summary.first_sequence
+                    || segment.summary.previous_segment_digest != previous.segment_digest
+                {
+                    return Err(StateContractError::AuditCheckpointMismatch);
+                }
+                previous.verify_signature(signature_verifier)?;
             }
-            AuditStream::Realm { .. } if self.realm_signature_digest.is_none() => {
-                Err(StateContractError::AuditCheckpointMismatch)
+            None => {
+                if segment.summary.first_sequence != 1
+                    || !segment
+                        .summary
+                        .previous_segment_digest
+                        .as_str()
+                        .bytes()
+                        .all(|byte| byte == b'0')
+                    || !self
+                        .previous_checkpoint_digest
+                        .as_str()
+                        .bytes()
+                        .all(|byte| byte == b'0')
+                {
+                    return Err(StateContractError::AuditCheckpointMismatch);
+                }
             }
-            _ => Ok(()),
+        }
+        self.verify_signature(signature_verifier)
+    }
+
+    fn verify_signature<V: AuditCheckpointSignatureVerifier>(
+        &self,
+        signature_verifier: &V,
+    ) -> Result<(), StateContractError> {
+        match (&self.stream, &self.realm_signature_digest) {
+            (AuditStream::LocalRoot, None) => Ok(()),
+            (AuditStream::Realm { realm_id }, Some(signature))
+                if signature_verifier.verify_realm_signature(
+                    realm_id,
+                    &self.checkpoint_digest,
+                    signature,
+                ) =>
+            {
+                Ok(())
+            }
+            _ => Err(StateContractError::AuditCheckpointMismatch),
         }
     }
 }
@@ -1481,9 +2245,9 @@ impl AuditCheckpoint {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditGap {
     pub stream: AuditStream,
-    pub expected_sequence: u64,
-    pub observed_sequence: u64,
-    pub detected_at_unix_ms: u64,
+    pub expected_sequence: SafeJsonInteger,
+    pub observed_sequence: SafeJsonInteger,
+    pub detected_at_unix_ms: SafeJsonInteger,
     pub reason: AuditReason,
 }
 
@@ -1493,12 +2257,12 @@ pub fn detect_audit_gap(
     observed_sequence: u64,
     detected_at_unix_ms: u64,
 ) -> Result<Option<AuditGap>, StateContractError> {
-    if expected_sequence == 0
-        || observed_sequence == 0
-        || detected_at_unix_ms > MAX_SAFE_JSON_INTEGER
-    {
+    if expected_sequence == 0 || observed_sequence == 0 {
         return Err(StateContractError::BoundExceeded);
     }
+    let expected_sequence = SafeJsonInteger::new(expected_sequence)?;
+    let observed_sequence = SafeJsonInteger::new(observed_sequence)?;
+    let detected_at_unix_ms = SafeJsonInteger::new(detected_at_unix_ms)?;
     if observed_sequence < expected_sequence {
         return Err(StateContractError::AuditSequenceMismatch);
     }
@@ -1529,6 +2293,16 @@ pub enum AuditRetentionDecision {
     PruneCheckpointedSegment,
 }
 
+pub struct AuditRetentionEvidence<'a, V> {
+    pub age_days: u16,
+    pub segment_bytes: u64,
+    pub record_count: u32,
+    pub sealed_segment: Option<&'a AuditSegment>,
+    pub checkpoint: Option<&'a AuditCheckpoint>,
+    pub previous_checkpoint: Option<&'a AuditCheckpoint>,
+    pub signature_verifier: &'a V,
+}
+
 impl AuditRetentionPolicy {
     pub fn validate(&self) -> Result<(), StateContractError> {
         if !(1..=MAX_AUDIT_RETENTION_DAYS).contains(&self.max_age_days)
@@ -1543,27 +2317,59 @@ impl AuditRetentionPolicy {
         Ok(())
     }
 
-    pub fn decide(
+    pub fn decide<V: AuditCheckpointSignatureVerifier>(
         &self,
-        age_days: u16,
-        segment_bytes: u64,
-        record_count: u32,
-        sealed: bool,
-        checkpoint_present: bool,
+        evidence: AuditRetentionEvidence<'_, V>,
     ) -> Result<AuditRetentionDecision, StateContractError> {
         self.validate()?;
-        let over_limit = age_days >= self.max_age_days
-            || segment_bytes >= self.max_segment_bytes
-            || record_count >= self.max_records_per_segment;
+        let over_limit = evidence.age_days >= self.max_age_days
+            || evidence.segment_bytes >= self.max_segment_bytes
+            || evidence.record_count >= self.max_records_per_segment;
         if !over_limit {
             return Ok(AuditRetentionDecision::Retain);
         }
-        if !sealed {
+        let Some(segment) = evidence.sealed_segment else {
             return Ok(AuditRetentionDecision::SealCurrentSegment);
+        };
+        segment.validate_internal()?;
+        match evidence.previous_checkpoint {
+            Some(previous)
+                if previous.stream == segment.summary.stream
+                    && previous.owner == segment.summary.owner
+                    && previous.checkpoint_digest == previous.computed_digest()
+                    && previous.segment_digest == segment.summary.previous_segment_digest
+                    && previous
+                        .through_sequence
+                        .checked_add(1)
+                        .ok_or(StateContractError::BoundExceeded)?
+                        == segment.summary.first_sequence =>
+            {
+                previous.verify_signature(evidence.signature_verifier)?;
+            }
+            Some(_) => return Err(StateContractError::AuditCheckpointMismatch),
+            None if segment.summary.first_sequence == 1
+                && segment
+                    .summary
+                    .previous_segment_digest
+                    .as_str()
+                    .bytes()
+                    .all(|byte| byte == b'0') => {}
+            None => return Err(StateContractError::AuditCheckpointMismatch),
         }
-        if !checkpoint_present {
+        if segment.summary.encoded_bytes != evidence.segment_bytes
+            || segment.records.len() as u32 != evidence.record_count
+            || segment.summary.prune_status != PruneStatus::EligibleAfterCheckpoint
+        {
+            return Err(StateContractError::AuditCheckpointMismatch);
+        }
+        let Some(checkpoint) = evidence.checkpoint else {
             return Ok(AuditRetentionDecision::CreateCheckpoint);
-        }
+        };
+        checkpoint.verify_for_segment(
+            segment,
+            evidence.previous_checkpoint,
+            evidence.signature_verifier,
+        )?;
         Ok(AuditRetentionDecision::PruneCheckpointedSegment)
     }
 }

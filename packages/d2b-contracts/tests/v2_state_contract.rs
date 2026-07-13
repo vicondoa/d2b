@@ -1,7 +1,7 @@
 #![cfg(feature = "v2-state")]
 
 use d2b_contracts::{
-    v2_identity::{RealmId, RoleId},
+    v2_identity::{ProviderId, RealmId, RoleId, WorkloadId},
     v2_state::*,
 };
 use schemars::schema_for;
@@ -26,6 +26,30 @@ fn role_id() -> RoleId {
     RoleId::parse("7xrbjonser3hpi7hqojq").unwrap()
 }
 
+fn workload_id() -> WorkloadId {
+    WorkloadId::parse("q5h7jtqteem7kua4tfva").unwrap()
+}
+
+fn provider_id() -> ProviderId {
+    ProviderId::parse("f7z3k5e3awgn43aljt2a").unwrap()
+}
+
+fn other_realm_id() -> RealmId {
+    RealmId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap()
+}
+
+fn other_workload_id() -> WorkloadId {
+    WorkloadId::parse("baaaaaaaaaaaaaaaaaaq").unwrap()
+}
+
+fn other_provider_id() -> ProviderId {
+    ProviderId::parse("caaaaaaaaaaaaaaaaaaq").unwrap()
+}
+
+fn other_role_id() -> RoleId {
+    RoleId::parse("daaaaaaaaaaaaaaaaaaq").unwrap()
+}
+
 fn digest(value: &str) -> Digest {
     Digest::parse(value).unwrap()
 }
@@ -42,8 +66,8 @@ fn realm_owner() -> AuditOwner {
     }
 }
 
-fn audit_record(sequence: u64, previous_hash: &str, record_hash: &str) -> AuditRecord {
-    AuditRecord {
+fn audit_record(sequence: u64, previous_hash: Digest) -> AuditRecord {
+    let mut record = AuditRecord {
         schema_version: STATE_SCHEMA_VERSION,
         stream: realm_stream(),
         sequence,
@@ -59,14 +83,18 @@ fn audit_record(sequence: u64, previous_hash: &str, record_hash: &str) -> AuditR
         event: AuditEvent::StorageReconcile,
         outcome: AuditOutcome::Succeeded,
         reason: AuditReason::IdentityVerified,
-        previous_hash: digest(previous_hash),
-        record_hash: digest(record_hash),
+        previous_hash,
+        record_hash: digest(ZERO_DIGEST),
         encoded_bytes: 512,
-    }
+    };
+    record.record_hash = record.computed_hash();
+    record
 }
 
 fn audit_segment() -> AuditSegment {
-    AuditSegment {
+    let first = audit_record(1, digest(ZERO_DIGEST));
+    let second = audit_record(2, first.record_hash.clone());
+    let mut segment = AuditSegment {
         summary: AuditSegmentSummary {
             stream: realm_stream(),
             owner: realm_owner(),
@@ -74,25 +102,121 @@ fn audit_segment() -> AuditSegment {
             first_sequence: 1,
             last_sequence: 2,
             previous_segment_digest: digest(ZERO_DIGEST),
-            segment_digest: digest(TWO_DIGEST),
+            segment_digest: digest(ZERO_DIGEST),
             controller_generation: Generation::new(7).unwrap(),
             created_at_unix_ms: 10_000,
             sealed_at_unix_ms: 20_000,
             encoded_bytes: 1_024,
             prune_status: PruneStatus::EligibleAfterCheckpoint,
         },
-        records: vec![
-            audit_record(1, ZERO_DIGEST, ONE_DIGEST),
-            audit_record(2, ONE_DIGEST, TWO_DIGEST),
-        ],
+        records: vec![first, second],
+    };
+    segment.summary.segment_digest = segment.computed_digest();
+    segment
+}
+
+struct BoundSignatureVerifier;
+static BOUND_SIGNATURE_VERIFIER: BoundSignatureVerifier = BoundSignatureVerifier;
+
+impl AuditCheckpointSignatureVerifier for BoundSignatureVerifier {
+    fn verify_realm_signature(
+        &self,
+        _realm_id: &RealmId,
+        checkpoint_digest: &Digest,
+        signature_digest: &Digest,
+    ) -> bool {
+        checkpoint_digest == signature_digest
     }
+}
+
+fn retention_evidence<'a>(
+    age_days: u16,
+    segment_bytes: u64,
+    record_count: u32,
+    sealed_segment: Option<&'a AuditSegment>,
+    checkpoint: Option<&'a AuditCheckpoint>,
+    previous_checkpoint: Option<&'a AuditCheckpoint>,
+) -> AuditRetentionEvidence<'a, BoundSignatureVerifier> {
+    AuditRetentionEvidence {
+        age_days,
+        segment_bytes,
+        record_count,
+        sealed_segment,
+        checkpoint,
+        previous_checkpoint,
+        signature_verifier: &BOUND_SIGNATURE_VERIFIER,
+    }
+}
+
+fn checkpoint_for(segment: &AuditSegment) -> AuditCheckpoint {
+    let mut checkpoint = AuditCheckpoint {
+        stream: realm_stream(),
+        owner: realm_owner(),
+        checkpoint_id: ResourceId::parse("checkpoint-1").unwrap(),
+        through_sequence: segment.summary.last_sequence,
+        segment_digest: segment.summary.segment_digest.clone(),
+        previous_checkpoint_digest: digest(ZERO_DIGEST),
+        checkpoint_digest: digest(ZERO_DIGEST),
+        controller_generation: segment.summary.controller_generation,
+        created_at_unix_ms: segment.summary.sealed_at_unix_ms + 1,
+        realm_signature_digest: None,
+    };
+    checkpoint.checkpoint_digest = checkpoint.computed_digest();
+    checkpoint.realm_signature_digest = Some(checkpoint.checkpoint_digest.clone());
+    checkpoint
+}
+
+fn next_audit_segment(previous: &AuditSegment) -> AuditSegment {
+    let first_sequence = previous.summary.last_sequence + 1;
+    let first = audit_record(first_sequence, previous.summary.segment_digest.clone());
+    let second = audit_record(first_sequence + 1, first.record_hash.clone());
+    let mut segment = AuditSegment {
+        summary: AuditSegmentSummary {
+            stream: realm_stream(),
+            owner: realm_owner(),
+            segment_id: ResourceId::parse("segment-2").unwrap(),
+            first_sequence,
+            last_sequence: first_sequence + 1,
+            previous_segment_digest: previous.summary.segment_digest.clone(),
+            segment_digest: digest(ZERO_DIGEST),
+            controller_generation: Generation::new(7).unwrap(),
+            created_at_unix_ms: 21_000,
+            sealed_at_unix_ms: 30_000,
+            encoded_bytes: 1_024,
+            prune_status: PruneStatus::EligibleAfterCheckpoint,
+        },
+        records: vec![first, second],
+    };
+    segment.summary.segment_digest = segment.computed_digest();
+    segment
+}
+
+fn next_checkpoint(segment: &AuditSegment, previous: &AuditCheckpoint) -> AuditCheckpoint {
+    let mut checkpoint = AuditCheckpoint {
+        stream: realm_stream(),
+        owner: realm_owner(),
+        checkpoint_id: ResourceId::parse("checkpoint-2").unwrap(),
+        through_sequence: segment.summary.last_sequence,
+        segment_digest: segment.summary.segment_digest.clone(),
+        previous_checkpoint_digest: previous.checkpoint_digest.clone(),
+        checkpoint_digest: digest(ZERO_DIGEST),
+        controller_generation: segment.summary.controller_generation,
+        created_at_unix_ms: segment.summary.sealed_at_unix_ms + 1,
+        realm_signature_digest: None,
+    };
+    checkpoint.checkpoint_digest = checkpoint.computed_digest();
+    checkpoint.realm_signature_digest = Some(checkpoint.checkpoint_digest.clone());
+    checkpoint
 }
 
 #[test]
 fn fixture_is_complete_and_fingerprint_bound() {
     let contract = fixture();
     contract.validate().expect("complete fixture validates");
-    assert_eq!(contract.storage.resources.len(), StorageCategory::ALL.len());
+    assert_eq!(
+        contract.storage.resources.len(),
+        MANDATORY_RESOURCE_CATALOG.len()
+    );
     assert_eq!(contract.synchronization.locks.len(), 2);
     assert_eq!(contract.audit.streams.len(), 2);
 
@@ -144,6 +268,21 @@ fn schema_and_serde_are_closed_and_bounded() {
 
     assert!(Generation::new(0).is_err());
     assert!(Generation::new(MAX_SAFE_JSON_INTEGER + 1).is_err());
+    assert!(SafeJsonInteger::new(MAX_SAFE_JSON_INTEGER).is_ok());
+    assert!(SafeJsonInteger::new(MAX_SAFE_JSON_INTEGER + 1).is_err());
+    assert_eq!(
+        detect_audit_gap(
+            realm_stream(),
+            MAX_SAFE_JSON_INTEGER + 1,
+            MAX_SAFE_JSON_INTEGER + 1,
+            1
+        ),
+        Err(StateContractError::BoundExceeded)
+    );
+    assert_eq!(
+        detect_audit_gap(realm_stream(), 1, MAX_SAFE_JSON_INTEGER + 1, 1),
+        Err(StateContractError::BoundExceeded)
+    );
     assert!(ResourceId::parse("a").is_ok());
     assert!(ResourceId::parse("a".repeat(MAX_OPAQUE_ID_BYTES)).is_ok());
     assert!(ResourceId::parse("a".repeat(MAX_OPAQUE_ID_BYTES + 1)).is_err());
@@ -175,8 +314,16 @@ fn raw_names_and_paths_have_no_serialized_entry_point() {
     assert!(!serialized.contains("deviceId"));
 }
 
+fn set_all_storage_authorities(resource: &mut StorageResource, authority: AuthorityRef) {
+    resource.creation_authority = authority.clone();
+    resource.reconcile_authority = authority.clone();
+    resource.repair_authority = authority.clone();
+    resource.delete_authority = authority.clone();
+    resource.ownership.owner = authority;
+}
+
 #[test]
-fn storage_requires_unique_ids_categories_and_single_repair_owner() {
+fn storage_requires_the_complete_mandatory_identity_multiset() {
     let mut contract = fixture();
     contract
         .storage
@@ -187,21 +334,150 @@ fn storage_requires_unique_ids_categories_and_single_repair_owner() {
         Err(StateContractError::DuplicateResourceId)
     );
 
-    let mut contract = fixture();
-    contract
-        .storage
-        .resources
-        .retain(|resource| resource.category != StorageCategory::Projection);
-    assert_eq!(
-        contract.storage.validate(),
-        Err(StateContractError::MissingInventoryCategory)
-    );
+    for omitted in 0..MANDATORY_RESOURCE_CATALOG.len() {
+        let mut contract = fixture();
+        contract.storage.resources.remove(omitted);
+        assert_eq!(
+            contract.storage.validate(),
+            Err(StateContractError::MissingMandatoryResource),
+            "catalog row {omitted} must be mandatory"
+        );
+    }
 
     let mut contract = fixture();
-    contract.storage.resources[0].repair_authority = AuthorityRef::Pid1;
+    let mut duplicate_key = contract.storage.resources[0].clone();
+    duplicate_key.resource_id = ResourceId::parse("different-resource-id").unwrap();
+    contract.storage.resources.push(duplicate_key);
     assert_eq!(
         contract.storage.validate(),
-        Err(StateContractError::RepairAuthorityMismatch)
+        Err(StateContractError::DuplicateMandatoryResource)
+    );
+}
+
+#[test]
+fn every_storage_and_lock_authority_is_exactly_scope_bound() {
+    let valid_matrix = [
+        (
+            "local-root-broker-state",
+            vec![
+                AuthorityRef::Pid1,
+                AuthorityRef::LocalRootAllocator,
+                AuthorityRef::LocalRootBroker,
+            ],
+        ),
+        (
+            "realm-controller-state",
+            vec![
+                AuthorityRef::RealmController {
+                    realm_id: realm_id(),
+                },
+                AuthorityRef::RealmBroker {
+                    realm_id: realm_id(),
+                },
+            ],
+        ),
+        (
+            "workload-state",
+            vec![
+                AuthorityRef::WorkloadController {
+                    realm_id: realm_id(),
+                    workload_id: workload_id(),
+                },
+                AuthorityRef::WorkloadBroker {
+                    realm_id: realm_id(),
+                    workload_id: workload_id(),
+                },
+            ],
+        ),
+        (
+            "provider-state",
+            vec![AuthorityRef::Provider {
+                realm_id: realm_id(),
+                provider_id: provider_id(),
+            }],
+        ),
+        (
+            "role-runtime",
+            vec![AuthorityRef::WorkloadRole {
+                realm_id: realm_id(),
+                workload_id: workload_id(),
+                role_id: role_id(),
+            }],
+        ),
+    ];
+    for (resource_id, authorities) in valid_matrix {
+        for authority in authorities {
+            let mut contract = fixture();
+            let resource = contract
+                .storage
+                .resources
+                .iter_mut()
+                .find(|resource| resource.resource_id.as_str() == resource_id)
+                .unwrap();
+            set_all_storage_authorities(resource, authority);
+            contract.storage.validate().unwrap();
+        }
+    }
+
+    let invalid_authorities = [
+        AuthorityRef::LocalRootBroker,
+        AuthorityRef::RealmBroker {
+            realm_id: other_realm_id(),
+        },
+        AuthorityRef::WorkloadBroker {
+            realm_id: realm_id(),
+            workload_id: other_workload_id(),
+        },
+        AuthorityRef::Provider {
+            realm_id: realm_id(),
+            provider_id: other_provider_id(),
+        },
+        AuthorityRef::WorkloadRole {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+            role_id: other_role_id(),
+        },
+    ];
+    for resource_index in 0..fixture().storage.resources.len() {
+        for authority in invalid_authorities.iter().cloned() {
+            let mut contract = fixture();
+            let scope = contract.storage.resources[resource_index].scope.clone();
+            if scope == IdentityScope::LocalRoot
+                && matches!(
+                    authority,
+                    AuthorityRef::Pid1
+                        | AuthorityRef::LocalRootAllocator
+                        | AuthorityRef::LocalRootBroker
+                )
+            {
+                continue;
+            }
+            set_all_storage_authorities(&mut contract.storage.resources[resource_index], authority);
+            if contract.storage.validate().is_ok() {
+                panic!("cross-scope authority unexpectedly accepted for {scope:?}");
+            }
+        }
+    }
+
+    let mut synchronization = fixture().synchronization;
+    synchronization.locks[0].owner = AuthorityRef::RealmBroker {
+        realm_id: other_realm_id(),
+    };
+    synchronization.locks[0].release_authority = synchronization.locks[0].owner.clone();
+    assert_eq!(
+        synchronization.validate(),
+        Err(StateContractError::AuthorityScopeMismatch)
+    );
+
+    let mut synchronization = fixture().synchronization;
+    synchronization.locks[1].owner = AuthorityRef::WorkloadBroker {
+        realm_id: realm_id(),
+        workload_id: other_workload_id(),
+    };
+    synchronization.locks[1].release_authority = synchronization.locks[1].owner.clone();
+    assert_eq!(
+        synchronization.validate(),
+        Err(StateContractError::AuthorityScopeMismatch)
     );
 }
 
@@ -242,7 +518,20 @@ fn atomic_write_state_machine_has_only_prior_or_complete_outcomes() {
 }
 
 #[test]
-fn state_envelopes_enforce_header_bounds_and_monotonic_generation() {
+fn state_envelopes_verify_canonical_raw_bytes_length_checksum_and_payload() {
+    struct CanonicalJson;
+    impl CanonicalPayloadVerifier<Value> for CanonicalJson {
+        fn decode_canonical(&self, raw_payload: &[u8]) -> Result<Value, StateContractError> {
+            let decoded: Value = serde_json::from_slice(raw_payload)
+                .map_err(|_| StateContractError::EnvelopePayloadMismatch)?;
+            if serde_json::to_vec(&decoded).unwrap() != raw_payload {
+                return Err(StateContractError::EnvelopePayloadMismatch);
+            }
+            Ok(decoded)
+        }
+    }
+
+    let raw = br#"{"status":"ready"}"#;
     let envelope = StateEnvelope {
         schema_version: STATE_SCHEMA_VERSION,
         schema_generation: STATE_SCHEMA_GENERATION,
@@ -251,37 +540,62 @@ fn state_envelopes_enforce_header_bounds_and_monotonic_generation() {
         writer: AuthorityRef::RealmController {
             realm_id: realm_id(),
         },
-        encoded_bytes: MAX_JSON_DOCUMENT_BYTES,
-        checksum: digest(ZERO_DIGEST),
+        encoded_bytes: raw.len() as u64,
+        checksum: state_payload_digest(raw).unwrap(),
         payload: json!({"status": "ready"}),
     };
-    assert_eq!(envelope.validate_header(), Ok(()));
+    assert_eq!(envelope.validate_payload_bytes(raw, &CanonicalJson), Ok(()));
     assert_eq!(envelope.next_generation().unwrap().get(), 10);
 
-    let mut oversized = envelope;
-    oversized.encoded_bytes += 1;
+    let mut length_lie = envelope.clone();
+    length_lie.encoded_bytes += 1;
     assert_eq!(
-        oversized.validate_header(),
+        length_lie.validate_payload_bytes(raw, &CanonicalJson),
         Err(StateContractError::BoundExceeded)
+    );
+
+    let mut bit_flip = raw.to_vec();
+    *bit_flip.last_mut().unwrap() = b']';
+    assert_eq!(
+        envelope.validate_payload_bytes(&bit_flip, &CanonicalJson),
+        Err(StateContractError::EnvelopeChecksumMismatch)
+    );
+
+    let noncanonical = br#"{ "status": "ready" }"#;
+    let noncanonical_envelope = StateEnvelope {
+        encoded_bytes: noncanonical.len() as u64,
+        checksum: state_payload_digest(noncanonical).unwrap(),
+        ..envelope
+    };
+    assert_eq!(
+        noncanonical_envelope.validate_payload_bytes(noncanonical, &CanonicalJson),
+        Err(StateContractError::EnvelopePayloadMismatch)
     );
 }
 
 #[test]
-fn restart_adoption_rejects_ambiguity_and_requires_recovery_first() {
-    let observation = RunnerObservation {
+fn restart_adoption_requires_exact_role_scoped_target_evidence() {
+    let target = RunnerAdoptionTarget {
+        realm_id: realm_id(),
+        workload_id: workload_id(),
+        role_id: role_id(),
+        config_generation: Generation::new(3).unwrap(),
+        cgroup_identity: digest(TWO_DIGEST),
+        executable_fingerprint: digest(ZERO_DIGEST),
+        configuration_fingerprint: digest(ONE_DIGEST),
+    };
+    let exact = RunnerObservation {
         observation_id: ResourceId::parse("runner-observation").unwrap(),
-        scope: IdentityScope::Role {
-            realm_id: realm_id(),
-            workload_id: d2b_contracts::v2_identity::WorkloadId::parse("q5h7jtqteem7kua4tfva")
-                .unwrap(),
-            role_id: role_id(),
-        },
+        scope: target.scope_for_test(),
         observed_pid: 42,
         evidence: RunnerEvidence {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
             role_id: role_id(),
-            candidate_count: 2,
+            candidate_count: 1,
             pidfd_persistence: PidfdPersistence::ProcessLocalNonPersistent,
-            identity: EvidenceVerdict::Ambiguous,
+            identity: EvidenceVerdict::Match,
+            cgroup_identity: digest(TWO_DIGEST),
             cgroup_membership: EvidenceVerdict::Match,
             executable_fingerprint: digest(ZERO_DIGEST),
             executable: EvidenceVerdict::Match,
@@ -292,39 +606,193 @@ fn restart_adoption_rejects_ambiguity_and_requires_recovery_first() {
         },
     };
     let adopt = RestartDecision {
-        observation_id: observation.observation_id.clone(),
+        observation_id: exact.observation_id.clone(),
         ordering: RecoveryOrdering::RecoverBeforeCleanup,
-        recovery_completed: true,
         decision: AdoptionDecision::Adopt {
             fresh_pidfd_opened: true,
         },
     };
-    assert_eq!(
-        adopt.validate_for_runner(&observation),
-        Err(StateContractError::RestartAmbiguous)
-    );
+    assert_eq!(adopt.validate_for_runner(&exact, &target), Ok(()));
 
-    let cleanup = RestartDecision {
-        observation_id: observation.observation_id.clone(),
-        ordering: RecoveryOrdering::RecoverBeforeCleanup,
-        recovery_completed: false,
-        decision: AdoptionDecision::Cleanup {
-            target: CleanupTarget::Resource {
-                resource_id: ResourceId::parse("role-runtime").unwrap(),
-            },
-            owner_absence_proof: OwnerAbsenceProof::EmptyDeclaredCgroup,
-        },
+    let mut mismatches = Vec::new();
+    let mut mismatch = exact.clone();
+    mismatch.evidence.realm_id = other_realm_id();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.workload_id = other_workload_id();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.role_id = other_role_id();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.cgroup_identity = digest(ZERO_DIGEST);
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.executable_fingerprint = digest(ONE_DIGEST);
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.configuration_fingerprint = digest(TWO_DIGEST);
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.config_generation = Generation::new(2).unwrap();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.identity = EvidenceVerdict::Ambiguous;
+    mismatch.evidence.candidate_count = 2;
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.scope = IdentityScope::Role {
+        realm_id: realm_id(),
+        workload_id: workload_id(),
+        role_id: other_role_id(),
     };
-    assert_eq!(
-        cleanup.validate_for_runner(&observation),
-        Err(StateContractError::CleanupBeforeRecovery)
-    );
+    mismatches.push(mismatch);
+    for field in [
+        "identity",
+        "cgroup-membership",
+        "executable",
+        "configuration",
+        "generation",
+    ] {
+        let mut mismatch = exact.clone();
+        match field {
+            "identity" => mismatch.evidence.identity = EvidenceVerdict::Mismatch,
+            "cgroup-membership" => {
+                mismatch.evidence.cgroup_membership = EvidenceVerdict::Mismatch;
+            }
+            "executable" => mismatch.evidence.executable = EvidenceVerdict::Mismatch,
+            "configuration" => mismatch.evidence.configuration = EvidenceVerdict::Mismatch,
+            "generation" => mismatch.evidence.generation = EvidenceVerdict::Mismatch,
+            _ => unreachable!(),
+        }
+        mismatches.push(mismatch);
+    }
+    for mismatch in mismatches {
+        assert_eq!(
+            adopt.validate_for_runner(&mismatch, &target),
+            Err(StateContractError::RestartAmbiguous)
+        );
+        let quarantine = RestartDecision {
+            observation_id: mismatch.observation_id.clone(),
+            ordering: RecoveryOrdering::RecoverBeforeCleanup,
+            decision: AdoptionDecision::Quarantine {
+                reason: QuarantineReason::OwnerAmbiguous,
+                remediation: Remediation::InspectQuarantine,
+            },
+        };
+        assert_eq!(quarantine.validate_for_runner(&mismatch, &target), Ok(()));
+    }
 
-    let serialized = serde_json::to_string(&observation).unwrap();
+    let serialized = serde_json::to_string(&exact).unwrap();
     assert!(serialized.contains("process-local-non-persistent"));
     assert!(!serialized.contains("pidfd\":"));
     assert!(!serialized.contains("executablePath"));
     assert!(!serialized.contains("cgroupPath"));
+}
+
+trait TargetScopeForTest {
+    fn scope_for_test(&self) -> IdentityScope;
+}
+
+impl TargetScopeForTest for RunnerAdoptionTarget {
+    fn scope_for_test(&self) -> IdentityScope {
+        IdentityScope::Role {
+            realm_id: self.realm_id.clone(),
+            workload_id: self.workload_id.clone(),
+            role_id: self.role_id.clone(),
+        }
+    }
+}
+
+#[test]
+fn cleanup_requires_fresh_target_bound_completed_discovery_absence() {
+    let role_target = CleanupTarget::Role {
+        realm_id: realm_id(),
+        workload_id: workload_id(),
+        role_id: role_id(),
+    };
+    let absent = RunnerObservation {
+        observation_id: ResourceId::parse("runner-observation").unwrap(),
+        scope: IdentityScope::Role {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+            role_id: role_id(),
+        },
+        observed_pid: 0,
+        evidence: RunnerEvidence {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+            role_id: role_id(),
+            candidate_count: 0,
+            pidfd_persistence: PidfdPersistence::ProcessLocalNonPersistent,
+            identity: EvidenceVerdict::Missing,
+            cgroup_identity: digest(TWO_DIGEST),
+            cgroup_membership: EvidenceVerdict::Missing,
+            executable_fingerprint: digest(ZERO_DIGEST),
+            executable: EvidenceVerdict::Missing,
+            configuration_fingerprint: digest(ONE_DIGEST),
+            configuration: EvidenceVerdict::Missing,
+            config_generation: Generation::new(3).unwrap(),
+            generation: EvidenceVerdict::Missing,
+        },
+    };
+    let discovery = RestartDiscovery {
+        discovery_id: ResourceId::parse("discovery-1").unwrap(),
+        config_generation: Generation::new(3).unwrap(),
+        completed_at_unix_ms: SafeJsonInteger::new(20_000).unwrap(),
+        runners: vec![absent.clone()],
+        resources: vec![],
+    };
+    let proof = discovery.prove_owner_absence(role_target.clone()).unwrap();
+    let cleanup = RestartDecision {
+        observation_id: absent.observation_id.clone(),
+        ordering: RecoveryOrdering::RecoverBeforeCleanup,
+        decision: AdoptionDecision::Cleanup {
+            target: role_target.clone(),
+            owner_absence_proof: proof.clone(),
+        },
+    };
+    assert_eq!(
+        cleanup.validate_cleanup(&discovery, Generation::new(3).unwrap()),
+        Ok(())
+    );
+    assert_eq!(
+        cleanup.validate_cleanup(&discovery, Generation::new(2).unwrap()),
+        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+    );
+    let mut newer_discovery = discovery.clone();
+    newer_discovery.discovery_id = ResourceId::parse("discovery-2").unwrap();
+    newer_discovery.completed_at_unix_ms = SafeJsonInteger::new(21_000).unwrap();
+    assert_eq!(
+        cleanup.validate_cleanup(&newer_discovery, Generation::new(3).unwrap()),
+        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+    );
+
+    let wrong_target = RestartDecision {
+        observation_id: absent.observation_id.clone(),
+        ordering: RecoveryOrdering::RecoverBeforeCleanup,
+        decision: AdoptionDecision::Cleanup {
+            target: CleanupTarget::Workload {
+                realm_id: realm_id(),
+                workload_id: workload_id(),
+            },
+            owner_absence_proof: proof,
+        },
+    };
+    assert_eq!(
+        wrong_target.validate_cleanup(&discovery, Generation::new(3).unwrap()),
+        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+    );
+
+    for verdict in [EvidenceVerdict::Match, EvidenceVerdict::Ambiguous] {
+        let mut live_or_ambiguous = discovery.clone();
+        live_or_ambiguous.runners[0].evidence.candidate_count = 1;
+        live_or_ambiguous.runners[0].evidence.identity = verdict;
+        assert_eq!(
+            live_or_ambiguous.prove_owner_absence(role_target.clone()),
+            Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+        );
+    }
 }
 
 #[test]
@@ -396,27 +864,16 @@ fn audit_chain_checkpoint_gap_and_retention_are_explicit() {
     let segment = audit_segment();
     segment.validate().expect("valid segment chain");
 
-    let checkpoint = AuditCheckpoint {
-        stream: realm_stream(),
-        owner: realm_owner(),
-        checkpoint_id: ResourceId::parse("checkpoint-1").unwrap(),
-        through_sequence: 2,
-        segment_digest: digest(TWO_DIGEST),
-        previous_checkpoint_digest: digest(ZERO_DIGEST),
-        checkpoint_digest: digest(ONE_DIGEST),
-        controller_generation: Generation::new(7).unwrap(),
-        created_at_unix_ms: 21_000,
-        realm_signature_digest: Some(digest(TWO_DIGEST)),
-    };
+    let checkpoint = checkpoint_for(&segment);
     checkpoint
-        .validate_for_segment(&segment.summary)
+        .verify_for_segment(&segment, None, &BoundSignatureVerifier)
         .expect("realm checkpoint binds segment");
 
     let gap = detect_audit_gap(realm_stream(), 3, 5, 22_000)
         .unwrap()
         .expect("gap is explicit");
-    assert_eq!(gap.expected_sequence, 3);
-    assert_eq!(gap.observed_sequence, 5);
+    assert_eq!(gap.expected_sequence.get(), 3);
+    assert_eq!(gap.observed_sequence.get(), 5);
     assert_eq!(gap.reason, AuditReason::SequenceGap);
     assert!(
         detect_audit_gap(realm_stream(), 3, 3, 22_000)
@@ -433,19 +890,33 @@ fn audit_chain_checkpoint_gap_and_retention_are_explicit() {
 
     let mut retention = fixture().audit.streams[0].retention.clone();
     assert_eq!(
-        retention.decide(1, 1_024, 1, true, false),
+        retention.decide(retention_evidence(1, 1_024, 1, None, None, None)),
         Ok(AuditRetentionDecision::Retain)
     );
     assert_eq!(
-        retention.decide(14, 1_024, 1, false, false),
+        retention.decide(retention_evidence(14, 1_024, 1, None, None, None)),
         Ok(AuditRetentionDecision::SealCurrentSegment)
     );
     assert_eq!(
-        retention.decide(14, 1_024, 1, true, false),
+        retention.decide(retention_evidence(
+            14,
+            segment.summary.encoded_bytes,
+            segment.records.len() as u32,
+            Some(&segment),
+            None,
+            None,
+        )),
         Ok(AuditRetentionDecision::CreateCheckpoint)
     );
     assert_eq!(
-        retention.decide(14, 1_024, 1, true, true),
+        retention.decide(retention_evidence(
+            14,
+            segment.summary.encoded_bytes,
+            segment.records.len() as u32,
+            Some(&segment),
+            Some(&checkpoint),
+            None,
+        )),
         Ok(AuditRetentionDecision::PruneCheckpointedSegment)
     );
     retention.max_age_days = MAX_AUDIT_RETENTION_DAYS + 1;
@@ -474,8 +945,106 @@ fn audit_chain_checkpoint_gap_and_retention_are_explicit() {
 }
 
 #[test]
+fn audit_hashes_bind_contents_ranges_checkpoint_chain_and_signatures() {
+    let first_segment = audit_segment();
+    let first_checkpoint = checkpoint_for(&first_segment);
+    let second_segment = next_audit_segment(&first_segment);
+    let second_checkpoint = next_checkpoint(&second_segment, &first_checkpoint);
+    second_checkpoint
+        .verify_for_segment(
+            &second_segment,
+            Some(&first_checkpoint),
+            &BoundSignatureVerifier,
+        )
+        .unwrap();
+    second_segment.validate_after(&first_segment).unwrap();
+
+    let mut changed_record = first_segment.clone();
+    changed_record.records[0].event = AuditEvent::StorageDelete;
+    assert_eq!(
+        changed_record.validate(),
+        Err(StateContractError::AuditChainMismatch)
+    );
+
+    let mut arbitrary_record_digest = first_segment.clone();
+    arbitrary_record_digest.records[0].record_hash = digest(ONE_DIGEST);
+    assert_eq!(
+        arbitrary_record_digest.validate(),
+        Err(StateContractError::AuditChainMismatch)
+    );
+
+    let mut arbitrary_segment_root = first_segment.clone();
+    arbitrary_segment_root.summary.segment_digest = digest(TWO_DIGEST);
+    assert_eq!(
+        arbitrary_segment_root.validate(),
+        Err(StateContractError::AuditChainMismatch)
+    );
+
+    let mut wrong_range = second_segment.clone();
+    wrong_range.summary.first_sequence -= 1;
+    assert_eq!(
+        wrong_range.validate(),
+        Err(StateContractError::AuditSequenceMismatch)
+    );
+
+    let mut arbitrary_checkpoint_digest = first_checkpoint.clone();
+    arbitrary_checkpoint_digest.checkpoint_digest = digest(TWO_DIGEST);
+    assert_eq!(
+        arbitrary_checkpoint_digest.verify_for_segment(
+            &first_segment,
+            None,
+            &BoundSignatureVerifier
+        ),
+        Err(StateContractError::AuditCheckpointMismatch)
+    );
+
+    let mut unbound_signature = first_checkpoint.clone();
+    unbound_signature.realm_signature_digest = Some(digest(TWO_DIGEST));
+    assert_eq!(
+        unbound_signature.verify_for_segment(&first_segment, None, &BoundSignatureVerifier),
+        Err(StateContractError::AuditCheckpointMismatch)
+    );
+
+    assert_eq!(
+        second_checkpoint.verify_for_segment(&second_segment, None, &BoundSignatureVerifier),
+        Err(StateContractError::AuditCheckpointMismatch)
+    );
+
+    let mut unrelated_checkpoint = second_checkpoint.clone();
+    unrelated_checkpoint.segment_digest = first_segment.summary.segment_digest.clone();
+    unrelated_checkpoint.checkpoint_digest = unrelated_checkpoint.computed_digest();
+    unrelated_checkpoint.realm_signature_digest =
+        Some(unrelated_checkpoint.checkpoint_digest.clone());
+    let retention = fixture().audit.streams[1].retention.clone();
+    assert_eq!(
+        retention.decide(retention_evidence(
+            retention.max_age_days,
+            second_segment.summary.encoded_bytes,
+            second_segment.records.len() as u32,
+            Some(&second_segment),
+            Some(&unrelated_checkpoint),
+            Some(&first_checkpoint),
+        )),
+        Err(StateContractError::AuditCheckpointMismatch)
+    );
+
+    let stale_checkpoint = first_checkpoint.clone();
+    assert_eq!(
+        retention.decide(retention_evidence(
+            retention.max_age_days,
+            second_segment.summary.encoded_bytes,
+            second_segment.records.len() as u32,
+            Some(&second_segment),
+            Some(&stale_checkpoint),
+            Some(&first_checkpoint),
+        )),
+        Err(StateContractError::AuditCheckpointMismatch)
+    );
+}
+
+#[test]
 fn audit_is_redacted_bounded_and_has_closed_labels() {
-    let record = audit_record(1, ZERO_DIGEST, ONE_DIGEST);
+    let record = audit_record(1, digest(ZERO_DIGEST));
     let encoded = serde_json::to_string(&record).unwrap();
     for forbidden in [
         "path",
@@ -500,7 +1069,7 @@ fn audit_is_redacted_bounded_and_has_closed_labels() {
     let mut oversized = record;
     oversized.encoded_bytes = MAX_AUDIT_RECORD_BYTES + 1;
     assert_eq!(
-        oversized.validate_bounds(),
+        oversized.validate_integrity(),
         Err(StateContractError::BoundExceeded)
     );
 }

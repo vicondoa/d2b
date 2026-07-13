@@ -5,6 +5,26 @@
   "storage": {
     "schemaGeneration": 1,
     "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "applicableScopes": [
+      { "kind": "local-root" },
+      { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+      {
+        "kind": "workload",
+        "realmId": "yl2hpmks5td5dkeso6qq",
+        "workloadId": "q5h7jtqteem7kua4tfva"
+      },
+      {
+        "kind": "provider",
+        "realmId": "yl2hpmks5td5dkeso6qq",
+        "providerId": "f7z3k5e3awgn43aljt2a"
+      },
+      {
+        "kind": "role",
+        "realmId": "yl2hpmks5td5dkeso6qq",
+        "workloadId": "q5h7jtqteem7kua4tfva",
+        "roleId": "7xrbjonser3hpi7hqojq"
+      }
+    ],
     "resources": [
       {
         "resourceId": "local-root-broker-state",
@@ -84,25 +104,30 @@
         "repair": "repair-exact",
         "delete": "factory-reset-only",
         "creationAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "reconcileAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "repairAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "deleteAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "ownership": {
           "owner": {
-            "kind": "realm-broker",
-            "realmId": "yl2hpmks5td5dkeso6qq"
+            "kind": "workload-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq",
+            "workloadId": "q5h7jtqteem7kua4tfva"
           },
           "group": "realm-control",
           "mode": "0750"
@@ -268,25 +293,30 @@
         "repair": "quarantine",
         "delete": "after-owner-absence-proof",
         "creationAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "reconcileAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "repairAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "deleteAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "ownership": {
           "owner": {
-            "kind": "realm-broker",
-            "realmId": "yl2hpmks5td5dkeso6qq"
+            "kind": "workload-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq",
+            "workloadId": "q5h7jtqteem7kua4tfva"
           },
           "group": "realm-control",
           "mode": "0640"
@@ -456,12 +486,14 @@
         },
         "kind": "ofd",
         "owner": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "releaseAuthority": {
-          "kind": "realm-broker",
-          "realmId": "yl2hpmks5td5dkeso6qq"
+          "kind": "workload-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
         },
         "globalOrder": 200,
         "acquireAfter": ["realm-state-lock"],
