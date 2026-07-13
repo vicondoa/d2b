@@ -23,4 +23,5 @@ ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true
 rustix.workspace = true
+nix = { version = "0.29", default-features = false, features = ["fs"] }
 signal-hook = "0.4"

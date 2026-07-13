@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, File},
@@ -10,16 +9,18 @@ use std::{
     },
     path::{Component, Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
 
+use nix::{
+    errno::Errno as NixErrno,
+    fcntl::{FcntlArg, fcntl},
+    libc,
+};
 use rustix::{
-    fs::{
-        FlockOperation, Mode, OFlags, RenameFlags, fchmod, fcntl_lock, mkdirat, open, openat,
-        renameat_with, unlinkat,
-    },
+    fs::{Mode, OFlags, RenameFlags, fchmod, mkdirat, open, openat, renameat_with, unlinkat},
     io::Errno,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -38,7 +39,6 @@ const MAX_IMMUTABLE_BYTES: usize = MAX_PAYLOAD_BYTES;
 const MAX_SIDECAR_BYTES: usize = 65;
 static NEXT_PRIVATE_FILE: AtomicU64 = AtomicU64::new(1);
 static NEXT_STAGING_DIRECTORY: AtomicU64 = AtomicU64::new(1);
-static HELD_LOCKS: OnceLock<Mutex<BTreeSet<(u64, u64)>>> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct StagedInput {
@@ -353,14 +353,13 @@ impl StateLayout {
 
 #[derive(Debug)]
 pub struct CandidateLock {
-    file: File,
-    identity: (u64, u64),
+    _file: File,
 }
 
 #[derive(Debug)]
 enum CandidateLockFailure {
     Contended,
-    Kernel(Errno),
+    Kernel(NixErrno),
 }
 
 impl CandidateLockFailure {
@@ -374,13 +373,23 @@ impl CandidateLockFailure {
     }
 }
 
-impl Drop for CandidateLock {
-    fn drop(&mut self) {
-        let _ = fcntl_lock(&self.file, FlockOperation::NonBlockingUnlock);
-        if let Ok(mut held) = HELD_LOCKS.get_or_init(Default::default).lock() {
-            held.remove(&self.identity);
-        }
-    }
+fn try_lock_candidate(file: &File) -> std::result::Result<(), CandidateLockFailure> {
+    let lock = libc::flock {
+        l_type: libc::F_WRLCK as _,
+        l_whence: libc::SEEK_SET as _,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    fcntl(file.as_raw_fd(), FcntlArg::F_OFD_SETLK(&lock))
+        .map(|_| ())
+        .map_err(|error| {
+            if matches!(error, NixErrno::EAGAIN | NixErrno::EACCES) {
+                CandidateLockFailure::Contended
+            } else {
+                CandidateLockFailure::Kernel(error)
+            }
+        })
 }
 
 pub fn acquire_candidate_lock(
@@ -411,33 +420,10 @@ pub fn acquire_candidate_lock(
             )));
         }
     };
-    fchmod(&fd, Mode::from_raw_mode(0o600))
-        .map_err(|error| DeliveryError::new(format!("cannot secure candidate lock: {error}")))?;
+    secure_private_file_fd(&fd, "candidate lock")?;
     let file = File::from(fd);
-    let metadata = file.metadata()?;
-    verify_private_file_metadata(&metadata, "candidate lock")?;
-    let identity = (metadata.dev(), metadata.ino());
-    {
-        let mut held = HELD_LOCKS
-            .get_or_init(Default::default)
-            .lock()
-            .map_err(|_| DeliveryError::new("candidate lock registry is poisoned"))?;
-        if !held.insert(identity) {
-            return Err(CandidateLockFailure::Contended.into_delivery_error());
-        }
-    }
-    fcntl_lock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-        if let Ok(mut held) = HELD_LOCKS.get_or_init(Default::default).lock() {
-            held.remove(&identity);
-        }
-        if matches!(error, Errno::AGAIN | Errno::ACCESS) {
-            CandidateLockFailure::Contended
-        } else {
-            CandidateLockFailure::Kernel(error)
-        }
-        .into_delivery_error()
-    })?;
-    Ok((root, CandidateLock { file, identity }))
+    try_lock_candidate(&file).map_err(CandidateLockFailure::into_delivery_error)?;
+    Ok((root, CandidateLock { _file: file }))
 }
 
 pub fn prepare_state_root(
@@ -714,6 +700,7 @@ fn write_immutable_in(
             display_path.display()
         ))
     })?;
+    secure_private_file_fd(&fd, "private immutable artifact")?;
     let mut file = File::from(fd);
     let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
@@ -797,14 +784,9 @@ fn read_existing_at(
             )));
         }
     };
+    secure_private_file_fd(&fd, "existing immutable artifact")?;
     let mut file = File::from(fd);
     let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(DeliveryError::new(
-            "existing immutable artifact is not a regular file",
-        ));
-    }
-    verify_private_file_metadata(&metadata, "existing immutable artifact")?;
     if metadata.len() > MAX_IMMUTABLE_BYTES as u64 || metadata.len() != expected_len as u64 {
         return Ok(Some(Vec::new()));
     }
@@ -977,7 +959,7 @@ fn create_private_dir(path: &Path) -> Result<()> {
                     absolute.display()
                 ))
             })?;
-            openat(
+            let fd = openat(
                 parent.as_fd(),
                 name,
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -988,7 +970,9 @@ fn create_private_dir(path: &Path) -> Result<()> {
                     "cannot anchor private directory {}: {error}",
                     absolute.display()
                 ))
-            })?
+            })?;
+            secure_opened_directory(&fd, "delivery state directory")?;
+            fd
         }
         Err(error) => {
             return Err(DeliveryError::new(format!(
@@ -997,10 +981,8 @@ fn create_private_dir(path: &Path) -> Result<()> {
             )));
         }
     };
+    secure_opened_directory(&fd, "delivery state directory")?;
     let file = File::from(fd);
-    let metadata = file.metadata()?;
-    verify_owner(&metadata, "delivery state directory")?;
-    file.set_permissions(fs::Permissions::from_mode(0o700))?;
     file.sync_all()?;
     Ok(())
 }
@@ -1069,7 +1051,7 @@ fn open_relative_directory_chain(
                 mkdirat(current.as_fd(), name, Mode::from_raw_mode(0o700)).map_err(|error| {
                     DeliveryError::new(format!("cannot create anchored state directory: {error}"))
                 })?;
-                openat(
+                let next = openat(
                     current.as_fd(),
                     name,
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -1077,7 +1059,9 @@ fn open_relative_directory_chain(
                 )
                 .map_err(|error| {
                     DeliveryError::new(format!("cannot open new anchored state directory: {error}"))
-                })?
+                })?;
+                secure_opened_directory(&next, "delivery state directory")?;
+                next
             }
             Err(error) => {
                 return Err(DeliveryError::new(format!(
@@ -1153,7 +1137,7 @@ fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
                         "cannot create anchored directory component: {error}"
                     ))
                 })?;
-                openat(
+                let next = openat(
                     current.as_fd(),
                     *name,
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -1163,7 +1147,9 @@ fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
                     DeliveryError::new(format!(
                         "cannot open newly-created directory component: {error}"
                     ))
-                })?
+                })?;
+                secure_opened_directory(&next, "delivery state directory")?;
+                next
             }
             Err(error) => {
                 return Err(DeliveryError::new(format!(
@@ -1306,8 +1292,26 @@ pub fn verify_private_directory(path: &Path) -> Result<()> {
 
 fn secure_opened_directory(fd: &OwnedFd, label: &str) -> Result<()> {
     let metadata = File::from(fd.try_clone()?).metadata()?;
+    if !metadata.is_dir() {
+        return Err(DeliveryError::new(format!("{label} is not a directory")));
+    }
     verify_owner(&metadata, label)?;
     fchmod(fd, Mode::from_raw_mode(0o700))
+        .map_err(|error| DeliveryError::new(format!("cannot secure {label}: {error}")))
+}
+
+fn secure_private_file_fd(fd: &OwnedFd, label: &str) -> Result<()> {
+    let metadata = File::from(fd.try_clone()?).metadata()?;
+    if !metadata.is_file() {
+        return Err(DeliveryError::new(format!("{label} is not a regular file")));
+    }
+    verify_owner(&metadata, label)?;
+    if metadata.nlink() != 1 {
+        return Err(DeliveryError::new(format!(
+            "{label} must not have hardlink aliases"
+        )));
+    }
+    fchmod(fd, Mode::from_raw_mode(0o600))
         .map_err(|error| DeliveryError::new(format!("cannot secure {label}: {error}")))
 }
 
@@ -1343,8 +1347,12 @@ fn file_name(path: &Path) -> Result<&OsStr> {
 mod tests {
     use super::*;
     use std::{
-        os::unix::fs::symlink,
+        fs::OpenOptions,
+        os::unix::fs::{PermissionsExt, symlink},
+        process::Command,
         sync::atomic::{AtomicU64, Ordering},
+        thread,
+        time::{Duration, Instant},
     };
 
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1362,6 +1370,28 @@ mod tests {
         ));
         fs::create_dir(&path).expect("scratch");
         path
+    }
+
+    fn assert_mode(path: &Path, expected: u32) {
+        assert_eq!(
+            fs::symlink_metadata(path)
+                .unwrap_or_else(|error| panic!("metadata for {}: {error}", path.display()))
+                .permissions()
+                .mode()
+                & 0o777,
+            expected,
+            "unexpected mode for {}",
+            path.display()
+        );
+    }
+
+    fn storage_test_child(name: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("current test executable"));
+        command
+            .arg(name)
+            .arg("--nocapture")
+            .env("D2B_STORAGE_TEST_CHILD", "1");
+        command
     }
 
     #[test]
@@ -1393,18 +1423,241 @@ mod tests {
     }
 
     #[test]
-    fn candidate_lock_contends_between_separate_open_descriptions_and_releases() {
+    fn candidate_lock_process_helper() {
+        if std::env::var_os("D2B_STORAGE_TEST_CHILD").is_none() {
+            return;
+        }
+        let requested =
+            PathBuf::from(std::env::var_os("D2B_STORAGE_LOCK_ROOT").expect("lock root for child"));
+        let key = std::env::var("D2B_STORAGE_LOCK_KEY").expect("lock key for child");
+        match std::env::var("D2B_STORAGE_LOCK_ACTION")
+            .expect("lock action")
+            .as_str()
+        {
+            "contend" => {
+                let error = acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+                    .expect_err("parent OFD lock must contend in another process");
+                assert!(error.to_string().contains("contention"));
+            }
+            "wait-acquire" => {
+                let marker = PathBuf::from(
+                    std::env::var_os("D2B_STORAGE_LOCK_MARKER").expect("lock marker"),
+                );
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !marker.exists() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for parent to close lock fd"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+                    .expect("CLOEXEC child acquires after parent closes lock fd");
+            }
+            action => panic!("unknown lock child action {action}"),
+        }
+    }
+
+    #[test]
+    fn candidate_lock_has_linux_ofd_lifetime_and_cloexec() {
         let root = scratch("ofd-lock");
         let key = "a".repeat(64);
         let requested = root.join("state");
         let (_, first) =
             acquire_candidate_lock(&[], Some(&requested), "w1", &key).expect("first lock");
+
+        assert!(
+            rustix::fs::fcntl_getfd(&first._file)
+                .expect("candidate lock descriptor flags")
+                .contains(rustix::io::FdFlags::CLOEXEC),
+            "candidate lock descriptor must be close-on-exec"
+        );
+        let lock_path = requested.join("locks").join(format!("w1-{key}.lock"));
+        let contending = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("separate open description");
+        assert!(matches!(
+            try_lock_candidate(&contending),
+            Err(CandidateLockFailure::Contended)
+        ));
+        drop(contending);
         let error = acquire_candidate_lock(&[], Some(&requested), "w1", &key)
             .expect_err("separate open description must contend");
         assert!(error.to_string().contains("contention"));
+
+        let unrelated = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("unrelated open description");
+        drop(unrelated);
+        let error = acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+            .expect_err("closing unrelated fd must not release OFD lock");
+        assert!(error.to_string().contains("contention"));
+
+        let status = storage_test_child("candidate_lock_process_helper")
+            .env("D2B_STORAGE_LOCK_ROOT", &requested)
+            .env("D2B_STORAGE_LOCK_KEY", &key)
+            .env("D2B_STORAGE_LOCK_ACTION", "contend")
+            .status()
+            .expect("run lock contender process");
+        assert!(status.success(), "lock contender child failed");
+
+        let marker = root.join("parent-closed");
+        let mut inherited = storage_test_child("candidate_lock_process_helper")
+            .env("D2B_STORAGE_LOCK_ROOT", &requested)
+            .env("D2B_STORAGE_LOCK_KEY", &key)
+            .env("D2B_STORAGE_LOCK_ACTION", "wait-acquire")
+            .env("D2B_STORAGE_LOCK_MARKER", &marker)
+            .spawn()
+            .expect("spawn exec-inheritance child");
         drop(first);
-        acquire_candidate_lock(&[], Some(&requested), "w1", &key)
-            .expect("lock released with owning description");
+        fs::write(&marker, b"closed\n").expect("signal parent lock closure");
+        assert!(
+            inherited
+                .wait()
+                .expect("wait for inheritance child")
+                .success(),
+            "exec-inheritance child failed"
+        );
+        let (_, final_lock) = acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+            .expect("closing lock fd releases OFD lock");
+        drop(final_lock);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn private_modes_umask_child() {
+        if std::env::var_os("D2B_STORAGE_TEST_CHILD").is_none() {
+            return;
+        }
+        let root =
+            PathBuf::from(std::env::var_os("D2B_STORAGE_MODE_ROOT").expect("mode test root"));
+        let state = root.join("intermediate/state");
+        let source = root.join("source");
+        let candidate_id = "d".repeat(64);
+        let layout =
+            StateLayout::create(&[], Some(&state), "w1", &candidate_id).expect("state layout");
+        layout
+            .write_candidate_json(
+                "artifact/nested/value.json",
+                &serde_json::json!({"ok": true}),
+            )
+            .expect("artifact and sidecar");
+        let staged = layout
+            .stage_external_file(&source, "receipt", MAX_JSON_BYTES)
+            .expect("staged input");
+        let (_, lock) = acquire_candidate_lock(&[], Some(&state), "w1", &"e".repeat(64))
+            .expect("candidate lock");
+        create_private_directory(&state.join("manual/deep")).expect("private directory");
+
+        for directory in [
+            root.join("intermediate"),
+            state.clone(),
+            state.join("w1"),
+            layout.candidate.clone(),
+            layout.candidate.join("artifact"),
+            layout.candidate.join("artifact/nested"),
+            layout.candidate.join("input-staging"),
+            state.join("locks"),
+            state.join("manual"),
+            state.join("manual/deep"),
+        ] {
+            assert_mode(&directory, 0o700);
+        }
+        for file in [
+            layout.candidate.join("artifact/nested/value.json"),
+            layout.candidate.join("artifact/nested/value.sha256"),
+            staged.path().to_path_buf(),
+            state
+                .join("locks")
+                .join(format!("w1-{}.lock", "e".repeat(64))),
+        ] {
+            assert_mode(&file, 0o600);
+        }
+        drop(lock);
+    }
+
+    #[test]
+    fn private_modes_ignore_restrictive_and_permissive_umasks() {
+        for umask in ["000", "077", "0200"] {
+            let root = scratch(&format!("umask-{umask}"));
+            fs::write(root.join("source"), b"staged").expect("staging source");
+            let executable = std::env::current_exe().expect("current test executable");
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg("umask \"$1\"; shift; exec \"$@\"")
+                .arg("sh")
+                .arg(umask)
+                .arg(executable)
+                .arg("private_modes_umask_child")
+                .arg("--nocapture")
+                .env("D2B_STORAGE_TEST_CHILD", "1")
+                .env("D2B_STORAGE_MODE_ROOT", &root)
+                .status()
+                .expect("run isolated umask child");
+            assert!(status.success(), "umask {umask} child failed");
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn existing_private_paths_are_reconciled_but_unsafe_files_are_rejected() {
+        let root = scratch("mode-reconcile");
+        let state = root.join("state");
+        let candidate_id = "f".repeat(64);
+        let candidate = state.join("w1").join(&candidate_id);
+        fs::create_dir_all(candidate.join("nested")).expect("precreate state");
+        for directory in [
+            &state,
+            &state.join("w1"),
+            &candidate,
+            &candidate.join("nested"),
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755))
+                .expect("permissive directory");
+        }
+        fs::write(candidate.join("nested/value"), b"same").expect("existing artifact");
+        fs::set_permissions(
+            candidate.join("nested/value"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .expect("permissive artifact");
+
+        let layout = StateLayout::create(&[], Some(&state), "w1", &candidate_id).expect("layout");
+        layout
+            .write_candidate_file("nested/value", b"same")
+            .expect("reconcile existing artifact");
+        for directory in [
+            &state,
+            &state.join("w1"),
+            &candidate,
+            &candidate.join("nested"),
+        ] {
+            assert_mode(directory, 0o700);
+        }
+        assert_mode(&candidate.join("nested/value"), 0o600);
+        assert_mode(&candidate.join("nested/value.sha256"), 0o600);
+
+        fs::write(candidate.join("hardlinked"), b"same").expect("hardlinked artifact");
+        fs::hard_link(
+            candidate.join("hardlinked"),
+            candidate.join("hardlinked-alias"),
+        )
+        .expect("hardlink alias");
+        let error = layout
+            .write_candidate_file("hardlinked", b"same")
+            .expect_err("hardlinked existing artifact must be rejected");
+        assert!(error.to_string().contains("hardlink aliases"));
+
+        symlink("value", candidate.join("nested/unsafe")).expect("unsafe symlink");
+        assert!(
+            layout
+                .write_candidate_file("nested/unsafe", b"same")
+                .is_err()
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 

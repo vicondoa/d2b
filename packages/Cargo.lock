@@ -4855,6 +4855,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-core",
  "d2b-realm-core",
+ "nix 0.29.0",
  "protobuf-codegen",
  "rustix 0.38.44",
  "schemars",
