@@ -104,14 +104,74 @@
       "path": "delivery/manifest.json"
     },
     {
-      "name": "delivery-implementation",
+      "name": "delivery-command",
       "repository": "github.com/vicondoa/d2b",
-      "path": "packages/xtask/src/delivery"
+      "path": "packages/xtask/src/delivery/command.rs"
     },
     {
-      "name": "layer1-implementation",
+      "name": "delivery-eligibility",
       "repository": "github.com/vicondoa/d2b",
-      "path": "packages/xtask/src/layer1"
+      "path": "packages/xtask/src/delivery/eligibility.rs"
+    },
+    {
+      "name": "delivery-evidence",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/evidence.rs"
+    },
+    {
+      "name": "delivery-model",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/model.rs"
+    },
+    {
+      "name": "delivery-module",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/mod.rs"
+    },
+    {
+      "name": "delivery-panel",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/panel.rs"
+    },
+    {
+      "name": "delivery-seal",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/seal.rs"
+    },
+    {
+      "name": "delivery-snapshot",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/snapshot.rs"
+    },
+    {
+      "name": "delivery-storage",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/storage.rs"
+    },
+    {
+      "name": "layer1-checks",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/checks.rs"
+    },
+    {
+      "name": "layer1-model",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/model.rs"
+    },
+    {
+      "name": "layer1-module",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/mod.rs"
+    },
+    {
+      "name": "layer1-runner",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/runner.rs"
+    },
+    {
+      "name": "layer1-workflow",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/workflow.rs"
     },
     {
       "name": "layer1-manifest",

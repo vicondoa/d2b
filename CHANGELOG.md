@@ -56,6 +56,8 @@ deprecations ship one minor release before removal.
   and authoritative manifest order after Git Town removes merged lineage,
   while requiring exact retargeted local lineage for every remaining active
   branch.
+- Expanded W1 delivery fingerprints into explicit tracked source blobs so the
+  immutable snapshot covers the complete delivery and Layer-1 implementations.
 - Hardened delivery subprocess supervision against PID reuse, orphaned process
   groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
   lost bounded diagnostics.
