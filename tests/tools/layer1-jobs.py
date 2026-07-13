@@ -161,7 +161,6 @@ def rust_job(job: dict[str, Any]) -> str:
             packages -> target
             packages/d2b-priv-broker -> target
           cache-directories: |
-            packages/.d2b-gate-targets
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"

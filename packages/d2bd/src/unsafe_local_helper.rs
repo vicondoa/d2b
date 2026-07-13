@@ -1372,6 +1372,25 @@ mod tests {
     use nix::sys::socket::{AddressFamily, SockFlag, socketpair};
     use std::os::fd::OwnedFd;
 
+    type TestFdIdentity = (u64, u64, u64, u64);
+
+    fn fd_identity(raw: std::os::fd::RawFd) -> TestFdIdentity {
+        let stat = nix::sys::stat::fstat(raw).expect("fstat test fd");
+        (stat.st_dev, stat.st_ino, stat.st_mode as u64, stat.st_rdev)
+    }
+
+    fn assert_original_fd_closed(raw: std::os::fd::RawFd, original: TestFdIdentity) {
+        match nix::sys::stat::fstat(raw) {
+            Err(nix::errno::Errno::EBADF) => {}
+            Ok(stat) => assert_ne!(
+                (stat.st_dev, stat.st_ino, stat.st_mode as u64, stat.st_rdev,),
+                original,
+                "original fd object remained open"
+            ),
+            Err(error) => panic!("unexpected fstat error for test fd {raw}: {error}"),
+        }
+    }
+
     fn launch(request_id: u64, operation_id: &str, arg: &str) -> HelperLaunchRequest {
         HelperLaunchRequest {
             request_id,
@@ -1950,6 +1969,7 @@ mod tests {
         .unwrap();
         let raw = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
         fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
+        let raw_identity = fd_identity(raw);
         let ready = HelperTerminalReady {
             request_id: request.request_id(),
             operation_id: request.operation_id().clone(),
@@ -1974,7 +1994,7 @@ mod tests {
                 vec![ReceivedFd(raw)],
             )
             .unwrap();
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert_original_fd_closed(raw, raw_identity);
         assert!(!registry.operations.lock().by_uid.contains_key(&uid));
         drop(peer);
     }
@@ -2046,6 +2066,7 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let raw_identity = fd_identity(raw);
         assert_eq!(
             HelperRegistry::new(42, [1000]).handle_incoming(
                 1000,
@@ -2055,7 +2076,7 @@ mod tests {
             ),
             Err(HelperRegistryError::InvalidTerminalFd)
         );
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert_original_fd_closed(raw, raw_identity);
     }
 
     #[test]
@@ -2241,6 +2262,7 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let raw_identity = fd_identity(raw);
         let ready = HelperTerminalReady {
             request_id: 1,
             operation_id: OperationId::parse("op-terminal-flags").unwrap(),
@@ -2262,22 +2284,18 @@ mod tests {
             validate_terminal_fd(&ready, vec![ReceivedFd(raw)]),
             Err(HelperRegistryError::InvalidTerminalFd)
         ));
-        assert_eq!(fcntl(raw, FcntlArg::F_GETFD), Err(nix::errno::Errno::EBADF));
+        assert_original_fd_closed(raw, raw_identity);
 
         let first = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
         let second = fcntl(stream.as_raw_fd(), FcntlArg::F_DUPFD(512)).unwrap();
+        let first_identity = fd_identity(first);
+        let second_identity = fd_identity(second);
         assert!(matches!(
             validate_terminal_fd(&ready, vec![ReceivedFd(first), ReceivedFd(second)]),
             Err(HelperRegistryError::InvalidTerminalFd)
         ));
-        assert_eq!(
-            fcntl(first, FcntlArg::F_GETFD),
-            Err(nix::errno::Errno::EBADF)
-        );
-        assert_eq!(
-            fcntl(second, FcntlArg::F_GETFD),
-            Err(nix::errno::Errno::EBADF)
-        );
+        assert_original_fd_closed(first, first_identity);
+        assert_original_fd_closed(second, second_identity);
     }
 
     fn register_helper(registry: Arc<HelperRegistry>, generation: u64) -> Socket {
