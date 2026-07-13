@@ -647,6 +647,7 @@ realm-workloads/launcher-json-shape
 realm-workloads/launcher-json-workload-id-field
 realm-workloads/launcher-v2-public-metadata-hides-argv
 realm-workloads/local-vm-private-items-filter-unsupported-kinds
+realm-workloads/local-vm-shell-requires-guest-shell
 realm-workloads/persistent-shell-compatibility-item
 realm-workloads/private-configured-workload-bounds
 realm-workloads/realm-row-workload-names
