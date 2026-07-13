@@ -2411,7 +2411,7 @@ where
     }
 
     if raw_args.len() == 1 {
-        print_stdout("d2b 0.0.0-bootstrap (bootstrap stub)\n");
+        print_stdout(concat!("d2b ", env!("CARGO_PKG_VERSION"), "\n"));
         print_stdout("Rust-native CLI shim active; run `d2b --help` for subcommands.\n");
         return 0;
     }

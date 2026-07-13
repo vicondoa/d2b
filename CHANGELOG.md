@@ -60,6 +60,7 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+<<<<<<< HEAD
 - Hardened final delivery authority with secret-free validation environments,
   authenticated merged-prefix topology, tolerant external GraphQL decoding,
   shared signal forwarding, and kernel-backed child-output polling.
@@ -141,6 +142,8 @@ deprecations ship one minor release before removal.
   branch.
 - Expanded W1 delivery fingerprints into explicit tracked source blobs so the
   immutable snapshot covers the complete delivery and Layer-1 implementations.
+- Removed the redundant guest-only deny check after guest crates joined the
+  canonical workspace, and made binary banners report the 2.0.0 package version.
 - Hardened delivery subprocess supervision against PID reuse, orphaned process
   groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
   lost bounded diagnostics.

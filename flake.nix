@@ -1131,24 +1131,6 @@
           echo ok > $out
         '';
 
-        guest-rust-deny = pkgs.runCommand "d2b-guest-rust-deny" {
-          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
-        } ''
-          export HOME="$TMPDIR"
-          ws="$TMPDIR/guest"
-          cp -r "${rustPackagesSrc}/packages" "$ws"
-          chmod -R u+w "$ws"
-          mkdir -p "$ws/.cargo"
-          printf '%s\n' '${workspaceVendorConfig}' > "$ws/.cargo/config.toml"
-          (
-            cd "$ws"
-            cargo-deny --manifest-path "d2b-guest-shell-runner/Cargo.toml" \
-              check --config "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml" \
-              bans licenses sources
-          )
-          echo ok > "$out"
-        '';
-
         # Real cargo-audit gate: vulnerability scan of the canonical lockfile
         # against the pinned advisory DB snapshot.  Runs offline via
         # --no-fetch with the bundled git-repo copy of the RustSec DB.
