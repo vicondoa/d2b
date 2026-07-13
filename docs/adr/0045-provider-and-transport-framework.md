@@ -1,6 +1,6 @@
 # ADR 0045: d2b 2.0 provider and transport framework
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-10
 - Target release: 2.0.0
 - Refines: [ADR 0035](0035-efficiency-and-simplification-roadmap.md)

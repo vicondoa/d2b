@@ -1,6 +1,6 @@
 # ADR 0044: Unsafe-local runtime provider
 
-- Status: Accepted
+- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
 - Date: 2026-07-09
 - Related: [ADR 0025](0025-wayland-proxy-host-jailed-role.md)
   (host-jailed Wayland filter proxy role), [ADR 0037](0037-local-hypervisor-runtime-seam.md)

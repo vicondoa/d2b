@@ -1,6 +1,6 @@
 # 0032. d2b v2 constellation control plane
 
-- Status: Superseded by [ADR 0043](0043-realm-native-control-plane.md)
+- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
 - Date: 2026-06-14
 - Related: ADR 0002 (non-root daemon and privileged broker), ADR 0010
   (wire protocol and typed errors), ADR 0015 (daemon-only clean break),
