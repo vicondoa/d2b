@@ -2224,7 +2224,6 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(stream.as_raw_fd()).unwrap();
-        let raw_identity = fd_identity(raw);
         fcntl(raw, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).unwrap();
         let ready = HelperTerminalReady {
             request_id: 1,
@@ -2273,6 +2272,7 @@ mod tests {
         )
         .unwrap();
         let raw = unistd::dup(stream.as_raw_fd()).unwrap();
+        let raw_identity = fd_identity(raw);
         let ready = HelperTerminalReady {
             request_id: 1,
             operation_id: OperationId::parse("op-terminal-flags").unwrap(),
