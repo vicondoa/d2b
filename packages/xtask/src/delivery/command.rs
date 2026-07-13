@@ -27,8 +27,8 @@ use signal_hook::{
 use super::{
     DeliveryError, Result,
     model::{
-        CheckPublisher, CheckPublisherKind, GhStackGraph, GitObjectFormat, PullRequestState,
-        validate_git_ref, validate_hash, validate_repository_id,
+        CheckPublisher, CheckPublisherKind, GitObjectFormat, PullRequestState, StackBranch,
+        StackGraph, StackPr, validate_git_ref, validate_hash, validate_repository_id,
     },
 };
 
@@ -44,9 +44,8 @@ const EXIT_STDERR_OVERFLOW: i32 = -3;
 const EXIT_OUTPUT_OVERFLOW: i32 = -4;
 const EXIT_INTERRUPTED: i32 = -5;
 const EXIT_TERMINATED: i32 = -6;
-pub const GH_STACK_VERSION: &str = "0.0.7";
-const GH_STACK_CANNOT_OPERATE: &str = "cannot operate: official gh-stack private preview is \
-    unavailable or unverifiable; no fallback stack mutation is permitted";
+pub const GIT_TOWN_LOCKED_VERSION: &str = "23.0.1";
+pub const GIT_TOWN_SUPPORTED_MAJOR: u64 = 23;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandLimits {
@@ -63,13 +62,6 @@ impl Default for CommandLimits {
             timeout: DEFAULT_COMMAND_TIMEOUT,
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GhStackPreviewRecord {
-    id: u64,
-    pull_requests: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -572,53 +564,190 @@ fn receive_reader(
     }
 }
 
-pub fn check_gh_stack_private_preview<A: CommandOutputAdapter>(
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StackCapability {
+    pub tool: String,
+    pub version: String,
+    pub supported_major: u64,
+    pub non_interactive_propose: bool,
+    pub github_authenticated: bool,
+    pub repository_readable: bool,
+    pub ordinary_pull_request_api: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityGraphQlEnvelope {
+    data: CapabilityGraphQlData,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityGraphQlData {
+    repository: Option<CapabilityRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityRepository {
+    #[serde(rename = "nameWithOwner")]
+    name_with_owner: String,
+    #[serde(rename = "pullRequests")]
+    pull_requests: CapabilityPullRequests,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityPullRequests {
+    nodes: Vec<CapabilityPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityPullRequest {
+    number: u64,
+    state: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+}
+
+const CAPABILITY_QUERY: &str = r#"query($owner:String!,$name:String!){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    pullRequests(first:1,orderBy:{field:UPDATED_AT,direction:DESC}){
+      nodes{number state baseRefName headRefName headRefOid}
+    }
+  }
+}"#;
+
+pub fn check_git_town_capability<A: CommandOutputAdapter>(
     command: &A,
     repository: &str,
-) -> Result<()> {
+) -> Result<StackCapability> {
     validate_repository_slug(repository)?;
-
     let version = command
-        .output("gh-stack", &["--version".to_owned()], None)
-        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+        .output("git-town", &["--version".to_owned()], None)
+        .map_err(|_| DeliveryError::new("Git Town is unavailable"))?;
     if !version.success {
-        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+        return Err(DeliveryError::new("Git Town is unavailable"));
     }
     let version = String::from_utf8(version.stdout)
-        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
-    let expected = format!("gh stack version {GH_STACK_VERSION}");
-    if version.trim() != expected {
+        .map_err(|_| DeliveryError::new("Git Town version output is not UTF-8"))?;
+    let version = version
+        .trim()
+        .strip_prefix("Git Town ")
+        .ok_or_else(|| DeliveryError::new("Git Town version output is not recognized"))?;
+    let parts = version.split('.').collect::<Vec<_>>();
+    let major = parts
+        .first()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| DeliveryError::new("Git Town version output is not recognized"))?;
+    if major != GIT_TOWN_SUPPORTED_MAJOR
+        || parts.len() != 3
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
         return Err(DeliveryError::new(format!(
-            "cannot operate: expected official gh-stack {GH_STACK_VERSION}; \
-             no fallback stack mutation is permitted"
+            "unsupported Git Town version; required major is {GIT_TOWN_SUPPORTED_MAJOR}"
         )));
     }
 
-    let path = format!("repos/{repository}/cli_internal/pulls/stacks");
-    let response = command
+    let propose_help = command
+        .output(
+            "git-town",
+            &["propose".to_owned(), "--help".to_owned()],
+            None,
+        )
+        .map_err(|_| DeliveryError::new("Git Town propose capability is unavailable"))?;
+    if !propose_help.success {
+        return Err(DeliveryError::new(
+            "Git Town propose capability is unavailable",
+        ));
+    }
+    let propose_help = String::from_utf8(propose_help.stdout)
+        .map_err(|_| DeliveryError::new("Git Town propose help is not UTF-8"))?;
+    for flag in ["--stack", "--non-interactive", "--no-browser"] {
+        if !propose_help.contains(flag) {
+            return Err(DeliveryError::new(format!(
+                "Git Town propose does not expose required {flag} behavior"
+            )));
+        }
+    }
+
+    let auth = command
         .output(
             "gh",
             &[
-                "api".to_owned(),
-                "--method".to_owned(),
-                "GET".to_owned(),
-                path,
+                "auth".to_owned(),
+                "status".to_owned(),
+                "--hostname".to_owned(),
+                "github.com".to_owned(),
             ],
             None,
         )
-        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+        .map_err(|_| DeliveryError::new("GitHub authentication is unavailable"))?;
+    if !auth.success {
+        return Err(DeliveryError::new("GitHub authentication is unavailable"));
+    }
+
+    let (owner, name) = repository
+        .split_once('/')
+        .ok_or_else(|| DeliveryError::new("invalid GitHub repository identity"))?;
+    let response = command.output(
+        "gh",
+        &[
+            "api".to_owned(),
+            "graphql".to_owned(),
+            "-f".to_owned(),
+            format!("query={CAPABILITY_QUERY}"),
+            "-f".to_owned(),
+            format!("owner={owner}"),
+            "-f".to_owned(),
+            format!("name={name}"),
+        ],
+        None,
+    )?;
     if !response.success {
-        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+        return Err(command_failed(
+            "GitHub ordinary pull-request API capability query failed",
+            &response,
+        ));
     }
-    let stacks: Vec<GhStackPreviewRecord> = serde_json::from_slice(&response.stdout)
-        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
-    if stacks
-        .iter()
-        .any(|stack| stack.id == 0 || stack.pull_requests.contains(&0))
-    {
-        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+    let response: CapabilityGraphQlEnvelope = serde_json::from_slice(&response.stdout)
+        .map_err(|_| DeliveryError::new("GitHub capability response is invalid"))?;
+    let observed = response
+        .data
+        .repository
+        .ok_or_else(|| DeliveryError::new("GitHub repository is unavailable"))?;
+    if !observed.name_with_owner.eq_ignore_ascii_case(repository) {
+        return Err(DeliveryError::new(
+            "GitHub repository capability identity does not match",
+        ));
     }
-    Ok(())
+    for pr in &observed.pull_requests.nodes {
+        if pr.number == 0 || !matches!(pr.state.as_str(), "OPEN" | "CLOSED" | "MERGED") {
+            return Err(DeliveryError::new(
+                "GitHub ordinary pull-request capability data is invalid",
+            ));
+        }
+        validate_git_ref(&pr.base_ref_name, "GitHub capability base ref")?;
+        validate_git_ref(&pr.head_ref_name, "GitHub capability head ref")?;
+        validate_hash(&pr.head_ref_oid, "GitHub capability head OID")?;
+    }
+    Ok(StackCapability {
+        tool: "git-town".to_owned(),
+        version: version.to_owned(),
+        supported_major: GIT_TOWN_SUPPORTED_MAJOR,
+        non_interactive_propose: true,
+        github_authenticated: true,
+        repository_readable: true,
+        ordinary_pull_request_api: true,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -990,38 +1119,326 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
 }
 
 pub trait StackGraphSource {
-    fn graph(&self, repository: &str, checkout_root: &Path) -> Result<GhStackGraph>;
+    fn graph(&self, repository: &str, checkout_root: &Path) -> Result<StackGraph>;
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitTownPullRequest {
+    number: u64,
+    url: String,
+    state: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    #[serde(rename = "isInMergeQueue")]
+    is_in_merge_queue: bool,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state_status: String,
 }
 
 #[derive(Debug)]
-pub struct GhStackSource<'a, A> {
+pub struct GitTownStackSource<'a, A> {
     command: &'a A,
 }
 
-impl<'a, A> GhStackSource<'a, A> {
+impl<'a, A> GitTownStackSource<'a, A> {
     pub fn new(command: &'a A) -> Self {
         Self { command }
     }
 }
 
-impl<A: CommandOutputAdapter> StackGraphSource for GhStackSource<'_, A> {
-    fn graph(&self, repository: &str, checkout_root: &Path) -> Result<GhStackGraph> {
+impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
+    fn graph(&self, repository: &str, checkout_root: &Path) -> Result<StackGraph> {
         validate_repository_id(repository)?;
+        let slug = repository
+            .strip_prefix("github.com/")
+            .ok_or_else(|| DeliveryError::new("stack repository is not hosted by GitHub"))?;
+        validate_repository_slug(slug)?;
+        self.reject_ambiguous_worktree(checkout_root)?;
+
+        let current_branch = self.command_text(
+            "git",
+            &[
+                "symbolic-ref".to_owned(),
+                "--quiet".to_owned(),
+                "--short".to_owned(),
+                "HEAD".to_owned(),
+            ],
+            checkout_root,
+            "cannot resolve the current stack branch",
+        )?;
+        validate_git_ref(&current_branch, "Git Town current branch")?;
+        let trunk = self.command_text(
+            "git",
+            &[
+                "config".to_owned(),
+                "--get".to_owned(),
+                "git-town.main-branch".to_owned(),
+            ],
+            checkout_root,
+            "Git Town main branch is not configured",
+        )?;
+        validate_git_ref(&trunk, "Git Town main branch")?;
+        if current_branch == trunk {
+            return Err(DeliveryError::new(
+                "Git Town current branch is the main branch, not a stack top",
+            ));
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut branches = Vec::new();
+        let mut branch = current_branch.clone();
+        while branch != trunk {
+            if branches.len() >= super::model::MAX_STACK_NODES {
+                return Err(DeliveryError::new(
+                    "Git Town parent chain exceeds the supported stack size",
+                ));
+            }
+            if !seen.insert(branch.clone()) {
+                return Err(DeliveryError::new(
+                    "Git Town parent configuration contains a cycle",
+                ));
+            }
+            let parent = self.command_text(
+                "git-town",
+                &["config".to_owned(), "get-parent".to_owned(), branch.clone()],
+                checkout_root,
+                "Git Town parent configuration is missing or unreadable",
+            )?;
+            validate_git_ref(&parent, "Git Town parent branch")?;
+            if parent == branch {
+                return Err(DeliveryError::new(
+                    "Git Town parent configuration contains a self-cycle",
+                ));
+            }
+            let head = self.resolve_local_oid(checkout_root, &branch)?;
+            let base = self.resolve_local_oid(checkout_root, &parent)?;
+            self.verify_ancestor(checkout_root, &parent, &branch)?;
+            let pull_request = self.pull_request(slug, &branch, checkout_root)?;
+            if pull_request.head_ref_name != branch
+                || pull_request.base_ref_name != parent
+                || pull_request.head_ref_oid != head
+            {
+                return Err(DeliveryError::new(format!(
+                    "ordinary GitHub PR identity does not match Git Town branch {branch}"
+                )));
+            }
+            if pull_request.is_in_merge_queue {
+                return Err(DeliveryError::new(format!(
+                    "Git Town branch {branch} is queued"
+                )));
+            }
+            if matches!(
+                pull_request.merge_state_status.as_str(),
+                "BEHIND" | "DIRTY" | "UNKNOWN"
+            ) {
+                return Err(DeliveryError::new(format!(
+                    "Git Town branch {branch} has ambiguous or stale merge state"
+                )));
+            }
+            if !matches!(
+                pull_request.merge_state_status.as_str(),
+                "BLOCKED" | "CLEAN" | "DRAFT" | "HAS_HOOKS" | "UNSTABLE"
+            ) {
+                return Err(DeliveryError::new(
+                    "GitHub returned an unsupported merge state",
+                ));
+            }
+            let is_merged = match pull_request.state.as_str() {
+                "OPEN" => false,
+                "MERGED" => true,
+                "CLOSED" => {
+                    return Err(DeliveryError::new(format!(
+                        "Git Town branch {branch} has a closed unmerged PR"
+                    )));
+                }
+                _ => {
+                    return Err(DeliveryError::new(
+                        "GitHub returned an unsupported PR state",
+                    ));
+                }
+            };
+            branches.push(StackBranch {
+                name: branch.clone(),
+                head,
+                base,
+                is_current: branch == current_branch,
+                is_merged,
+                is_queued: false,
+                needs_rebase: false,
+                pr: Some(StackPr {
+                    number: pull_request.number,
+                    url: pull_request.url,
+                    state: pull_request.state,
+                }),
+            });
+            branch = parent;
+        }
+        branches.reverse();
+        let graph = StackGraph {
+            trunk,
+            current_branch,
+            branches,
+        };
+        graph.validate()?;
+        Ok(graph)
+    }
+}
+
+impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
+    fn command_text(
+        &self,
+        program: &str,
+        arguments: &[String],
+        checkout_root: &Path,
+        failure: &str,
+    ) -> Result<String> {
+        let output = self
+            .command
+            .output(program, arguments, Some(checkout_root))?;
+        if !output.success {
+            return Err(command_failed(failure, &output));
+        }
+        let value = String::from_utf8(output.stdout)
+            .map_err(|_| DeliveryError::new(format!("{failure}: output is not UTF-8")))?
+            .trim()
+            .to_owned();
+        if value.is_empty() || value.contains('\n') || value.contains('\0') {
+            return Err(DeliveryError::new(format!(
+                "{failure}: output is missing or ambiguous"
+            )));
+        }
+        Ok(value)
+    }
+
+    fn resolve_local_oid(&self, checkout_root: &Path, branch: &str) -> Result<String> {
+        validate_git_ref(branch, "Git Town local branch")?;
+        let oid = self.command_text(
+            "git",
+            &[
+                "rev-parse".to_owned(),
+                "--verify".to_owned(),
+                "--end-of-options".to_owned(),
+                format!("{branch}^{{commit}}"),
+            ],
+            checkout_root,
+            "Git Town branch is missing locally",
+        )?;
+        validate_hash(&oid, "Git Town local branch OID")?;
+        Ok(oid)
+    }
+
+    fn verify_ancestor(&self, checkout_root: &Path, parent: &str, branch: &str) -> Result<()> {
+        let output = self.command.output(
+            "git",
+            &[
+                "merge-base".to_owned(),
+                "--is-ancestor".to_owned(),
+                parent.to_owned(),
+                branch.to_owned(),
+            ],
+            Some(checkout_root),
+        )?;
+        if !output.success {
+            return Err(DeliveryError::new(format!(
+                "Git Town parent {parent} is not an ancestor of {branch}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn pull_request(
+        &self,
+        repository: &str,
+        branch: &str,
+        checkout_root: &Path,
+    ) -> Result<GitTownPullRequest> {
         let output = self.command.output(
             "gh",
-            &["stack".to_owned(), "view".to_owned(), "--json".to_owned()],
+            &[
+                "pr".to_owned(),
+                "view".to_owned(),
+                branch.to_owned(),
+                "--repo".to_owned(),
+                repository.to_owned(),
+                "--json".to_owned(),
+                "number,url,state,baseRefName,headRefName,headRefOid,isInMergeQueue,mergeStateStatus"
+                    .to_owned(),
+            ],
             Some(checkout_root),
         )?;
         if !output.success {
             return Err(command_failed(
-                format!("gh stack view --json failed for {repository}"),
+                "ordinary GitHub PR lookup failed for Git Town branch",
                 &output,
             ));
         }
-        let graph: GhStackGraph = serde_json::from_slice(&output.stdout)
-            .map_err(|error| DeliveryError::new(format!("invalid gh-stack JSON: {error}")))?;
-        graph.validate()?;
-        Ok(graph)
+        let pull_request: GitTownPullRequest = serde_json::from_slice(&output.stdout)
+            .map_err(|_| DeliveryError::new("ordinary GitHub PR response is invalid"))?;
+        if pull_request.number == 0 {
+            return Err(DeliveryError::new(
+                "ordinary GitHub PR number must not be zero",
+            ));
+        }
+        validate_git_ref(&pull_request.base_ref_name, "GitHub PR base branch")?;
+        validate_git_ref(&pull_request.head_ref_name, "GitHub PR head branch")?;
+        validate_hash(&pull_request.head_ref_oid, "GitHub PR head OID")?;
+        Ok(pull_request)
+    }
+
+    fn reject_ambiguous_worktree(&self, checkout_root: &Path) -> Result<()> {
+        let status = self.command.output(
+            "git",
+            &[
+                "status".to_owned(),
+                "--porcelain=v1".to_owned(),
+                "-z".to_owned(),
+                "--untracked-files=normal".to_owned(),
+            ],
+            Some(checkout_root),
+        )?;
+        if !status.success {
+            return Err(command_failed("cannot inspect stack worktree", &status));
+        }
+        if !status.stdout.is_empty() {
+            return Err(DeliveryError::new(
+                "Git Town stack worktree is dirty or ambiguous",
+            ));
+        }
+        for state in [
+            "rebase-merge",
+            "rebase-apply",
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+        ] {
+            let path = self.command_text(
+                "git",
+                &[
+                    "rev-parse".to_owned(),
+                    "--git-path".to_owned(),
+                    state.to_owned(),
+                ],
+                checkout_root,
+                "cannot inspect Git operation state",
+            )?;
+            let path = Path::new(&path);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                checkout_root.join(path)
+            };
+            if path.exists() {
+                return Err(DeliveryError::new(
+                    "Git Town stack worktree has an in-progress Git operation",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2426,33 +2843,213 @@ mod tests {
         );
     }
 
+    fn stack_source_prefix(current: &str) -> Vec<CommandOutput> {
+        let mut outputs = vec![successful_output(Vec::new())];
+        for path in [
+            ".git/rebase-merge",
+            ".git/rebase-apply",
+            ".git/MERGE_HEAD",
+            ".git/CHERRY_PICK_HEAD",
+            ".git/REVERT_HEAD",
+        ] {
+            outputs.push(successful_output(format!("{path}\n").into_bytes()));
+        }
+        outputs.push(successful_output(format!("{current}\n").into_bytes()));
+        outputs.push(successful_output(b"main\n".to_vec()));
+        outputs
+    }
+
+    fn stack_pr(number: u64, branch: &str, parent: &str, head: &str, state: &str) -> CommandOutput {
+        successful_output(
+            serde_json::to_vec(&serde_json::json!({
+                "number": number,
+                "url": format!("https://github.com/example/d2b/pull/{number}"),
+                "state": state,
+                "baseRefName": parent,
+                "headRefName": branch,
+                "headRefOid": head,
+                "isInMergeQueue": false,
+                "mergeStateStatus": "CLEAN"
+            }))
+            .expect("PR JSON"),
+        )
+    }
+
+    fn stack_branch_outputs(
+        parent: &str,
+        head: &str,
+        base: &str,
+        pr: CommandOutput,
+    ) -> Vec<CommandOutput> {
+        vec![
+            successful_output(format!("{parent}\n").into_bytes()),
+            successful_output(format!("{head}\n").into_bytes()),
+            successful_output(format!("{base}\n").into_bytes()),
+            successful_output(Vec::new()),
+            pr,
+        ]
+    }
+
     #[test]
-    fn gh_stack_adapter_uses_official_machine_readable_surface() {
-        let graph = serde_json::json!({
-            "trunk": "main",
-            "prefix": "",
-            "currentBranch": "feature",
-            "branches": [{
-                "name": "feature",
-                "head": "b".repeat(40),
-                "base": "a".repeat(40),
-                "isCurrent": true,
-                "isMerged": false,
-                "isQueued": false,
-                "needsRebase": false,
-                "pr": {"number": 42, "url": "", "state": "OPEN"}
-            }]
-        });
-        let command = FakeCommand::new(vec![successful_output(
-            serde_json::to_vec(&graph).expect("graph JSON"),
-        )]);
-        GhStackSource::new(&command)
+    fn git_town_adapter_uses_parent_config_local_oids_and_ordinary_prs() {
+        let feature = "b".repeat(40);
+        let main = "a".repeat(40);
+        let mut outputs = stack_source_prefix("feature");
+        outputs.extend(stack_branch_outputs(
+            "main",
+            &feature,
+            &main,
+            stack_pr(42, "feature", "main", &feature, "OPEN"),
+        ));
+        let command = FakeCommand::new(outputs);
+        let graph = GitTownStackSource::new(&command)
             .graph("github.com/example/d2b", Path::new("/checkout"))
             .expect("graph");
+        assert_eq!(graph.current_branch, "feature");
+        assert_eq!(graph.branches[0].base, main);
         let calls = command.calls.borrow();
-        assert_eq!(calls[0].0, "gh");
-        assert_eq!(calls[0].1, ["stack", "view", "--json"]);
-        assert_eq!(calls[0].2.as_deref(), Some(Path::new("/checkout")));
+        assert!(
+            calls.iter().any(|call| {
+                call.0 == "git-town" && call.1 == ["config", "get-parent", "feature"]
+            })
+        );
+        assert!(calls.iter().any(|call| {
+            call.0 == "gh"
+                && call
+                    .1
+                    .starts_with(&["pr".to_owned(), "view".to_owned(), "feature".to_owned()])
+        }));
+    }
+
+    #[test]
+    fn git_town_adapter_orders_recursive_parent_chain_and_merged_prefix() {
+        let main = "a".repeat(40);
+        let first = "b".repeat(40);
+        let second = "c".repeat(40);
+        let mut outputs = stack_source_prefix("second");
+        outputs.extend(stack_branch_outputs(
+            "first",
+            &second,
+            &first,
+            stack_pr(42, "second", "first", &second, "OPEN"),
+        ));
+        outputs.extend(stack_branch_outputs(
+            "main",
+            &first,
+            &main,
+            stack_pr(41, "first", "main", &first, "MERGED"),
+        ));
+        let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect("ordered graph");
+        assert_eq!(
+            graph
+                .branches
+                .iter()
+                .map(|branch| branch.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        assert!(graph.branches[0].is_merged);
+        assert!(graph.branches[1].is_current);
+    }
+
+    #[test]
+    fn git_town_adapter_rejects_cycle_missing_parent_and_non_ancestor() {
+        let mut cycle = stack_source_prefix("feature");
+        cycle.push(successful_output(b"feature\n".to_vec()));
+        let error = GitTownStackSource::new(&FakeCommand::new(cycle))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("self-cycle");
+        assert!(error.to_string().contains("self-cycle"));
+
+        let mut missing = stack_source_prefix("feature");
+        missing.push(CommandOutput {
+            success: false,
+            exit_code: Some(1),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        });
+        let error = GitTownStackSource::new(&FakeCommand::new(missing))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("missing parent");
+        assert!(error.to_string().contains("parent configuration"));
+
+        let mut non_ancestor = stack_source_prefix("feature");
+        non_ancestor.extend([
+            successful_output(b"main\n".to_vec()),
+            successful_output(format!("{}\n", "b".repeat(40)).into_bytes()),
+            successful_output(format!("{}\n", "a".repeat(40)).into_bytes()),
+            CommandOutput {
+                success: false,
+                exit_code: Some(1),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]);
+        let error = GitTownStackSource::new(&FakeCommand::new(non_ancestor))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("non-ancestor");
+        assert!(error.to_string().contains("not an ancestor"));
+    }
+
+    #[test]
+    fn git_town_adapter_rejects_pr_identity_and_queue_ambiguity() {
+        let feature = "b".repeat(40);
+        let main = "a".repeat(40);
+        let mut mismatch = stack_source_prefix("feature");
+        mismatch.extend(stack_branch_outputs(
+            "main",
+            &feature,
+            &main,
+            stack_pr(42, "feature", "other", &feature, "OPEN"),
+        ));
+        let error = GitTownStackSource::new(&FakeCommand::new(mismatch))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("PR mismatch");
+        assert!(error.to_string().contains("does not match"));
+
+        let mut queued_pr: serde_json::Value =
+            serde_json::from_slice(&stack_pr(42, "feature", "main", &feature, "OPEN").stdout)
+                .expect("queued fixture");
+        queued_pr["isInMergeQueue"] = serde_json::json!(true);
+        let mut queued = stack_source_prefix("feature");
+        queued.extend(stack_branch_outputs(
+            "main",
+            &feature,
+            &main,
+            successful_output(serde_json::to_vec(&queued_pr).expect("queued JSON")),
+        ));
+        let error = GitTownStackSource::new(&FakeCommand::new(queued))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("queued");
+        assert!(error.to_string().contains("queued"));
+
+        let mut behind_pr: serde_json::Value =
+            serde_json::from_slice(&stack_pr(42, "feature", "main", &feature, "OPEN").stdout)
+                .expect("behind fixture");
+        behind_pr["mergeStateStatus"] = serde_json::json!("BEHIND");
+        let mut behind = stack_source_prefix("feature");
+        behind.extend(stack_branch_outputs(
+            "main",
+            &feature,
+            &main,
+            successful_output(serde_json::to_vec(&behind_pr).expect("behind JSON")),
+        ));
+        let error = GitTownStackSource::new(&FakeCommand::new(behind))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("behind");
+        assert!(error.to_string().contains("stale merge state"));
+    }
+
+    #[test]
+    fn git_town_adapter_rejects_dirty_worktree_before_topology_queries() {
+        let command = FakeCommand::new([successful_output(b" M tracked-file\0".to_vec())]);
+        let error = GitTownStackSource::new(&command)
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("dirty");
+        assert!(error.to_string().contains("dirty or ambiguous"));
+        assert_eq!(command.calls.borrow().len(), 1);
     }
 
     #[test]
@@ -2593,37 +3190,60 @@ mod tests {
         assert!(command.calls.borrow().is_empty());
     }
 
-    #[test]
-    fn gh_stack_private_preview_probe_is_read_only_and_version_pinned() {
-        let command = FakeCommand::new([
-            successful_output(b"gh stack version 0.0.7\n".to_vec()),
-            successful_output(b"[]\n".to_vec()),
-        ]);
-
-        check_gh_stack_private_preview(&command, "example/d2b").expect("available");
-
-        assert_eq!(
-            *command.calls.borrow(),
-            vec![
-                ("gh-stack".to_owned(), vec!["--version".to_owned()], None),
-                (
-                    "gh".to_owned(),
-                    vec![
-                        "api".to_owned(),
-                        "--method".to_owned(),
-                        "GET".to_owned(),
-                        "repos/example/d2b/cli_internal/pulls/stacks".to_owned(),
-                    ],
-                    None,
-                ),
-            ]
-        );
+    fn capability_response(owner: &str, name: &str) -> CommandOutput {
+        successful_output(
+            serde_json::to_vec(&serde_json::json!({
+                "data": {
+                    "repository": {
+                        "nameWithOwner": format!("{owner}/{name}"),
+                        "pullRequests": {
+                            "nodes": [{
+                                "number": 42,
+                                "state": "OPEN",
+                                "baseRefName": "main",
+                                "headRefName": "feature",
+                                "headRefOid": "b".repeat(40)
+                            }]
+                        }
+                    }
+                }
+            }))
+            .expect("capability JSON"),
+        )
     }
 
     #[test]
-    fn gh_stack_private_preview_failure_has_no_mutating_fallback() {
+    fn git_town_capability_checks_supported_major_auth_and_ordinary_pr_api() {
         let command = FakeCommand::new([
-            successful_output(b"gh stack version 0.0.7\n".to_vec()),
+            successful_output(b"Git Town 23.0.1\n".to_vec()),
+            successful_output(b"--stack\n--non-interactive\n--no-browser\n".to_vec()),
+            successful_output(Vec::new()),
+            capability_response("123", "456"),
+        ]);
+        let capability = check_git_town_capability(&command, "123/456").expect("available");
+        assert_eq!(capability.version, GIT_TOWN_LOCKED_VERSION);
+        assert_eq!(capability.supported_major, GIT_TOWN_SUPPORTED_MAJOR);
+        assert!(capability.non_interactive_propose);
+        let calls = command.calls.borrow();
+        assert_eq!(calls[0].0, "git-town");
+        assert_eq!(calls[1].1, ["propose", "--help"]);
+        assert_eq!(calls[2].1, ["auth", "status", "--hostname", "github.com"]);
+        let query = calls[3].1.join(" ");
+        assert!(query.contains("pullRequests(first:1"));
+        assert!(query.contains("owner=123"));
+        assert!(query.contains("name=456"));
+    }
+
+    #[test]
+    fn git_town_capability_fails_closed_on_version_auth_and_repository() {
+        let wrong_version = FakeCommand::new([successful_output(b"Git Town 24.0.0\n".to_vec())]);
+        let error = check_git_town_capability(&wrong_version, "example/d2b")
+            .expect_err("unsupported major");
+        assert!(error.to_string().contains("required major is 23"));
+
+        let auth_failure = FakeCommand::new([
+            successful_output(b"Git Town 23.9.0\n".to_vec()),
+            successful_output(b"--stack --non-interactive --no-browser\n".to_vec()),
             CommandOutput {
                 success: false,
                 exit_code: Some(1),
@@ -2631,52 +3251,18 @@ mod tests {
                 stderr: Vec::new(),
             },
         ]);
-
         let error =
-            check_gh_stack_private_preview(&command, "example/d2b").expect_err("unavailable");
-        assert!(error.to_string().contains("cannot operate"));
-        assert!(error.to_string().contains("no fallback stack mutation"));
-        assert_eq!(command.calls.borrow().len(), 2);
-    }
+            check_git_town_capability(&auth_failure, "example/d2b").expect_err("missing auth");
+        assert!(error.to_string().contains("authentication"));
 
-    #[test]
-    fn gh_stack_version_or_malformed_preview_response_fails_closed() {
-        let wrong_version =
-            FakeCommand::new([successful_output(b"gh stack version 0.0.6\n".to_vec())]);
-        let error = check_gh_stack_private_preview(&wrong_version, "example/d2b")
-            .expect_err("wrong version");
-        assert!(
-            error
-                .to_string()
-                .contains("expected official gh-stack 0.0.7")
-        );
-
-        let malformed = FakeCommand::new([
-            successful_output(b"gh stack version 0.0.7\n".to_vec()),
-            successful_output(br#"{"unexpected":true}"#.to_vec()),
+        let missing_repository = FakeCommand::new([
+            successful_output(b"Git Town 23.0.1\n".to_vec()),
+            successful_output(b"--stack --non-interactive --no-browser\n".to_vec()),
+            successful_output(Vec::new()),
+            successful_output(br#"{"data":{"repository":null}}"#.to_vec()),
         ]);
-        let error =
-            check_gh_stack_private_preview(&malformed, "example/d2b").expect_err("malformed");
-        assert!(error.to_string().contains("cannot operate"));
-
-        for payload in [
-            br#"[null]"#.as_slice(),
-            br#"[{"unexpected":true}]"#.as_slice(),
-            br#"[{"id":0,"pull_requests":[1]}]"#.as_slice(),
-            br#"[{"id":1,"pull_requests":[0]}]"#.as_slice(),
-        ] {
-            let malformed_array = FakeCommand::new([
-                successful_output(b"gh stack version 0.0.7\n".to_vec()),
-                successful_output(payload.to_vec()),
-            ]);
-            check_gh_stack_private_preview(&malformed_array, "example/d2b")
-                .expect_err("malformed stack record");
-        }
-
-        let valid = FakeCommand::new([
-            successful_output(b"gh stack version 0.0.7\n".to_vec()),
-            successful_output(br#"[{"id":7,"pull_requests":[101,102]}]"#.to_vec()),
-        ]);
-        check_gh_stack_private_preview(&valid, "example/d2b").expect("typed stack record");
+        let error = check_git_town_capability(&missing_repository, "example/d2b")
+            .expect_err("missing repository");
+        assert!(error.to_string().contains("repository is unavailable"));
     }
 }

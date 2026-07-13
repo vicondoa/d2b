@@ -10,10 +10,10 @@ use super::{
     },
     model::{
         AUTHORITATIVE_MANIFEST_PATH, AuthorityBinding, DeliveryManifest, Fingerprint,
-        FingerprintSpec, GhStackGraph, PullRequestState, RepositoryPolicy, RepositoryRecord,
-        SNAPSHOT_ARTIFACT_KIND, SnapshotRequest, StackNode, WaveSnapshot, canonical_digest,
-        prospective_content_id, validate_hash_for_format, validate_repo_relative_path,
-        validate_repository_id,
+        FingerprintSpec, PullRequestState, RepositoryPolicy, RepositoryRecord,
+        SNAPSHOT_ARTIFACT_KIND, SnapshotRequest, StackGraph, StackNode, WaveSnapshot,
+        canonical_digest, prospective_content_id, validate_hash_for_format,
+        validate_repo_relative_path, validate_repository_id,
     },
     storage::{
         MAX_JSON_BYTES, StateLayout, acquire_candidate_lock, ensure_external_path,
@@ -323,7 +323,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
         for branch in &graph.branches {
             let node_policy = policies.get(branch.name.as_str()).copied().ok_or_else(|| {
                 DeliveryError::new(format!(
-                    "gh-stack branch {} is absent from authoritative stack_nodes",
+                    "Git Town stack branch {} is absent from authoritative stack_nodes",
                     branch.name
                 ))
             })?;
@@ -348,7 +348,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
             };
             if branch.head != head_oid || branch.base != base_oid {
                 return Err(DeliveryError::new(format!(
-                    "gh-stack OIDs for {} do not match exact local refs",
+                    "Git Town stack OIDs for {} do not match exact local refs",
                     branch.name
                 )));
             }
@@ -531,7 +531,7 @@ fn verify_collection_unchanged<
         let graph = graph_source.graph(&repository.id, root)?;
         if sha256_bytes(&serde_json::to_vec(&graph)?) != repository.stack_graph_sha256 {
             return Err(DeliveryError::new(format!(
-                "gh-stack graph changed while collecting {}",
+                "Git Town stack graph changed while collecting {}",
                 repository.id
             )));
         }
@@ -896,12 +896,12 @@ fn verify_exact_refs<P: RepositoryProbe>(
 fn verify_graph_policy(
     manifest: &DeliveryManifest,
     repository: &RepositoryPolicy,
-    graph: &GhStackGraph,
+    graph: &StackGraph,
 ) -> Result<()> {
     graph.validate()?;
     if graph.trunk != repository.trunk_ref {
         return Err(DeliveryError::new(format!(
-            "gh-stack trunk for {} differs from authoritative manifest",
+            "Git Town stack trunk for {} differs from authoritative manifest",
             repository.id
         )));
     }
@@ -912,7 +912,7 @@ fn verify_graph_policy(
         .is_none_or(|branch| branch.name != repository.integration_ref)
     {
         return Err(DeliveryError::new(format!(
-            "gh-stack active terminal node for {} is not integration_ref {}",
+            "Git Town stack active terminal node for {} is not integration_ref {}",
             repository.id, repository.integration_ref
         )));
     }
@@ -934,7 +934,7 @@ fn verify_graph_policy(
         .collect::<BTreeSet<_>>();
     if configured != observed {
         return Err(DeliveryError::new(format!(
-            "gh-stack graph for {} does not match configured branches/PRs",
+            "Git Town stack graph for {} does not match configured branches/PRs",
             repository.id
         )));
     }
@@ -946,7 +946,7 @@ fn resolve_candidate_refs<P: RepositoryProbe>(
     manifest: &DeliveryManifest,
     authority: &AuthorityBinding,
     roots: &BTreeMap<String, PathBuf>,
-    graphs: &BTreeMap<String, GhStackGraph>,
+    graphs: &BTreeMap<String, StackGraph>,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
     let mut all = BTreeMap::new();
     for repository in &manifest.repositories {
@@ -1330,12 +1330,11 @@ mod tests {
     }
 
     #[test]
-    fn gh_stack_graph_must_match_configured_branches_and_prs() {
-        let graph = GhStackGraph {
+    fn git_town_graph_must_match_configured_branches_and_prs() {
+        let graph = StackGraph {
             trunk: "main".to_owned(),
-            prefix: String::new(),
             current_branch: "other".to_owned(),
-            branches: vec![super::super::model::GhStackBranch {
+            branches: vec![super::super::model::StackBranch {
                 name: "other".to_owned(),
                 head: "a".repeat(40),
                 base: "b".repeat(40),
@@ -1343,7 +1342,7 @@ mod tests {
                 is_merged: false,
                 is_queued: false,
                 needs_rebase: false,
-                pr: Some(super::super::model::GhStackPr {
+                pr: Some(super::super::model::StackPr {
                     number: 99,
                     url: String::new(),
                     state: "OPEN".to_owned(),
@@ -1352,6 +1351,6 @@ mod tests {
         };
         let error = verify_graph_policy(&manifest(), &manifest().repositories[0], &graph)
             .expect_err("graph mismatch");
-        assert!(error.to_string().contains("gh-stack"));
+        assert!(error.to_string().contains("Git Town stack"));
     }
 }
