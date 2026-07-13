@@ -22,6 +22,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Removed a scheduler-sensitive wall-clock assertion from zombie process
+  detection coverage while retaining the behavioral timeout check.
 - Made the mkfs diagnostic bound test exercise the formatter directly instead
   of depending on unrelated existing-image repair stages.
 - Made output-ring wake coverage observe data and EOF as separate valid
