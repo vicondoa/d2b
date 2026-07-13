@@ -275,6 +275,37 @@ log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
 ok "cargo fmt --check"
 
+contract_feature_sets=(
+  ""
+  common
+  guest-auth
+  usbip
+  security-key
+  guest
+  broker
+  public
+  unsafe-local
+  schema
+  v2-identity
+  v2-component-session
+  v2-services
+  v2-provider
+  v2-state
+)
+for feature_set in "${contract_feature_sets[@]}"; do
+  feature_args=()
+  label="default-empty"
+  if [ -n "$feature_set" ]; then
+    feature_args=(--features "$feature_set")
+    label="$feature_set"
+  fi
+  log "--> d2b-contracts feature check ($label)"
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo check --locked --manifest-path "$manifest" -p d2b-contracts \
+      --no-default-features "${feature_args[@]}"
+done
+ok "d2b-contracts feature matrix"
+
 log "--> cargo clippy --workspace --all-targets -- -D warnings"
 CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
 ok "cargo clippy"
