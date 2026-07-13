@@ -26,6 +26,10 @@ deprecations ship one minor release before removal.
   of depending on unrelated existing-image repair stages.
 - Made output-ring wake coverage observe data and EOF as separate valid
   notifications instead of racing both producer events into one read.
+- Made disk-init test directories use exclusive process-local IDs so parallel
+  tests cannot silently share and remove each other's scratch state.
+- Made failed-fd-send coverage track the original pipe identity so concurrent
+  numeric fd reuse cannot produce a false leak report.
 
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
