@@ -396,9 +396,13 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && \
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && \
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
@@ -492,12 +496,15 @@ cargo_audit_check "broker workspace" "$broker_lock_file"
 cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
 
 log "--> tests/tools/stub-no-socket.sh"
-bash "$ROOT/tests/tools/stub-no-socket.sh"
+D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
+  bash "$ROOT/tests/tools/stub-no-socket.sh"
 ok "stub-no-socket"
 
 # Fail-closed Rust test inventory: every pinned workspace + broker test must
 # still exist (catches a silently-deleted test that would otherwise vanish from
 # coverage). The pinned set is committed under tests/golden/pinned/.
 log "--> tests/tools/assert-pinned-tests.sh"
-bash "$ROOT/tests/tools/assert-pinned-tests.sh"
+D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
+D2B_BROKER_GATE_TARGET_DIR="$broker_target_dir" \
+  bash "$ROOT/tests/tools/assert-pinned-tests.sh"
 ok "assert-pinned-tests"
