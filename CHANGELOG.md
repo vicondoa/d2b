@@ -10,15 +10,25 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
-## [1.4.1] - 2026-07-12
-
-### Added
+### Changed
 
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
   coordinated toolkit cutover, and immutable-tree delivery seals.
+
+## [1.4.1] - 2026-07-12
+
+### Added
+
+- Added ADR 0045, defining parent-owned workload-hosted realm
+  controllers; explicit runtime, infrastructure, transport, substrate,
+  credential, and display provider responsibilities; type-first sortable
+  provider crates; generic Unix/vsock/direct/Azure-Relay byte transports;
+  Noise-authenticated component sessions with ttrpc/protobuf control services;
+  Entra and YubiKey credential placement; and policy-authorized peer shortcuts
+  over inherited shared transport fabrics.
 
 ### Fixed
 
