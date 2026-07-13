@@ -221,16 +221,16 @@ fn v2_rails_are_independently_owned_without_current_aliases() {
         let source = read_repo_file(&format!("packages/d2b-contracts/src/{module}.rs"));
         for forbidden in [
             "pub use",
-            "broker_wire",
-            "cli_output",
-            "guest_auth",
-            "guest_proto",
-            "guest_wire",
-            "public_wire",
-            "security_key",
-            "terminal_wire",
-            "unsafe_local_wire",
-            "usbip",
+            "crate::broker_wire",
+            "crate::cli_output",
+            "crate::guest_auth",
+            "crate::guest_proto",
+            "crate::guest_wire",
+            "crate::public_wire",
+            "crate::security_key",
+            "crate::terminal_wire",
+            "crate::unsafe_local_wire",
+            "crate::usbip",
         ] {
             assert!(
                 !source.lines().any(|line| {
