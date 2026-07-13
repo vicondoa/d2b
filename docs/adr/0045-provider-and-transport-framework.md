@@ -66,7 +66,8 @@ D2b 2.0 has the following fixed decisions:
    `ComponentSession` contract, including local Unix seqpacket boundaries and
    `SCM_RIGHTS` attachment transfer. Local NN identity evidence is directional;
    absolute expiry is distinct from relative ttrpc timeout; request-ID
-   cancellation and FD credits are mandatory.
+   cancellation, readiness-correct nonblocking I/O, and aggregate FD credits
+   with close-once truncation cleanup are mandatory.
 4. `snow` supplies fixed Noise profiles. `ttrpc-rust` with `rust-protobuf`
    supplies typed control RPC inside the session. The d2b named-stream mux
    supplies bounded data channels.
@@ -283,20 +284,28 @@ The apply command:
    namespace remains; no process has an fd, cwd, root, executable, map, or
    mount-namespace reference into a deletion root; and no mount exists at or
    below a deletion root;
-5. reopens every parent/root with `openat2`, records and compares inode, device,
-   and `statx` mount ID, canonicalizes the complete ordered plan, recomputes its
-   digest while the reset lock and inhibitor are held, and requires exact
-   equality with `--confirm`;
+5. reopens and holds every generated parent/root from its immutable anchor with
+   `openat2`, `O_DIRECTORY | O_CLOEXEC`, `RESOLVE_BENEATH`,
+   `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`;
+   records and compares inode, device, and `statx` mount ID, canonicalizes the
+   complete ordered plan, recomputes its digest while the reset lock and
+   inhibitor are held, and requires exact equality with `--confirm`;
 6. accepts the authenticated receipts as the proof that Secret Service items
    were deleted, directly proves root-owned scoped-export material absent, then
    deletes all remaining declared d2b runtime, persistent, cache, generated
    configuration, user-helper, key, token, disk, TPM, store-view, audit,
    ledger, socket, and lock state as opaque trees;
-7. walks and removes only by anchored dirfd using `openat2`, `getdents64`, and
-   `unlinkat`, with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`,
-   `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`; it revalidates inode, device,
-   and mount ID after each open and immediately before each unlink, and refuses
-   a symlink, bind-mount substitution, mount crossing, or changed object;
+7. recursively walks only through those held dirfds: it opens directory entries
+   with the same `openat2` resolve flags, enumerates only through the opened
+   directory FD with `getdents64`, removes non-directory leaves (including
+   symlinks themselves) with `unlinkat(parent_fd, name, 0)`, and removes an
+   emptied directory with `unlinkat(parent_fd, name, AT_REMOVEDIR)` after closing
+   its child dirfd. `unlinkat` never follows a final symlink. Inode, device, and
+   mount-ID observations are revalidated as alarms, not treated as atomic unlink
+   identity authority. A mount point or mount crossing, including `EXDEV` from
+   `RESOLVE_NO_XDEV`, is reported as a fatal `EBUSY` and is never traversed.
+   `ENOTEMPTY` permits at most two complete re-enumerations of that directory; a
+   third `ENOTEMPTY` fails the reset;
 8. never decodes a v1 record and never touches `/etc/nixos`, unrelated Secret
    Service items, unrelated user files, unrelated systemd credentials, or a
    non-d2b mount;
@@ -308,6 +317,15 @@ The apply command:
 11. only after all prior steps succeed, atomically selects the already-built
     final v2 generation as the persistent boot default and reboots into it. It
     does not live-switch services from reset mode.
+
+The exclusive reset lock, the quiescence proof, non-writable anchors, and held
+directory FDs are the deletion synchronization contract and remain in force for
+the complete traversal. No `fstatat`-then-`unlinkat` sequence is treated as an
+atomic identity check. A `/proc/self/mountinfo` snapshot and
+`STATX_MNT_ID_UNIQUE`, when the running kernel supplies it, are additional
+pre/post traversal alarms for an unexpected topology change only; neither
+authorizes deletion nor proves the identity of the object removed by a later
+`unlinkat`.
 
 The shutdown inhibitor is released only after the final boot selection is
 durable or after a failure has left reset mode selected. If clean shutdown
@@ -1310,14 +1328,19 @@ parent spawn. Another dynamic owner receives an already-bound listener FD only
 from the broker named in the generated row. No receiver unlinks and recreates
 the path.
 
-For an inherited or socketpair endpoint, each receiver enables `SO_PASSCRED`
-before traffic and requires the peer's first preface packet to carry exactly one
-`SCM_CREDENTIALS`. The creating parent also mints a single-use launch binding
-over purpose, endpoint roles, executable/configuration digest, expected cgroup,
-pidfd identity, and expiry. The receiver verifies that the kernel credential
-PID is the live process referenced by the pidfd and that its executable and
-cgroup still match the launch binding before accepting Noise bytes. Missing,
-extra, stale, or inconsistent evidence closes the endpoint.
+For an inherited or socketpair endpoint, the creating parent enables
+`SO_PASSCRED` on both socket ends immediately after creation and verifies both
+ends with `getsockopt` before any fork, clone, exec, endpoint handoff, or packet
+send. This is a launch precondition, not receiver initialization. Each receiver
+verifies that the inherited option is still enabled before its first read and
+must not attempt to repair a disabled option after handoff. The peer's first
+preface packet must carry exactly one `SCM_CREDENTIALS`, even when it sends at
+its first schedulable instruction. The creating parent also mints a single-use
+launch binding over purpose, endpoint roles, executable/configuration digest,
+expected cgroup, pidfd identity, and expiry. The receiver verifies that the
+kernel credential PID is the live process referenced by the pidfd and that its
+executable and cgroup still match the launch binding before accepting Noise
+bytes. Missing, extra, stale, or inconsistent evidence closes the endpoint.
 
 The normalized directional evidence and its verifier role enter the Noise
 prologue with purpose, endpoint identity, service, schema, limits, and
@@ -1421,6 +1444,19 @@ sequence, count, total plaintext length, channel, and reconnect generation are
 authenticated. Truncation, duplication, reordering, overlap, nonce exhaustion,
 or over-limit reassembly closes the session.
 
+Unix transports are nonblocking, and their Tokio readiness contract is
+explicit. After obtaining an `AsyncFd` read-ready guard, the sole read driver
+repeats `recvmsg` through that guard until `EAGAIN` or `EWOULDBLOCK`; successful
+packets do not clear readiness. The sole write driver likewise repeats
+`sendmsg` while queued output remains until the queue is empty or the syscall
+returns `EAGAIN` or `EWOULDBLOCK`. `try_io` clears readiness only for the
+would-block result. If a bounded fairness budget stops either loop before
+would-block while work remains, the driver retains the guard for immediate
+continuation or leaves cached readiness uncleared and explicitly reschedules
+itself. It never consumes one packet, drops readiness, and waits for a kernel
+wakeup that may not recur. A seqpacket send succeeds only as one complete
+packet; a stream short write retains the unsent suffix.
+
 Exactly one driver reads and one driver writes the protected transport. Write
 priority is:
 
@@ -1464,7 +1500,14 @@ and cleanup are deterministic under every race.
 ### Unix seqpacket attachments
 
 A Unix packet transport carries one encrypted ComponentSession record and its
-ancillary data in one `sendmsg`. The authenticated record declares:
+ancillary data in one `sendmsg`. Before `recvmsg`, the receiver sizes its
+payload buffer to the negotiated protected-packet ceiling. It computes
+ancillary capacity from the negotiated per-packet attachment maximum, which
+cannot exceed the hard maximum of 32: the worst case reserves one checked
+`CMSG_SPACE(sizeof(RawFd))` slot per attachment plus a checked
+`CMSG_SPACE(sizeof(ucred))` slot when credentials are allowed. Overflow or an
+unrepresentable capacity fails before the syscall. The authenticated record
+declares:
 
 - attachment count;
 - ordered index and closed attachment kind;
@@ -1472,19 +1515,38 @@ ancillary data in one `sendmsg`. The authenticated record declares:
 - required kernel object type and access policy;
 - whether duplicate kernel objects are permitted.
 
-The receiver uses `MSG_CMSG_CLOEXEC` and rejects `MSG_TRUNC`, `MSG_CTRUNC`,
-missing or extra control messages, missing or extra FDs, unknown kinds,
-duplicate objects unless explicitly allowed, non-`CLOEXEC` descriptors, wrong
-access mode, wrong socket family/type, wrong filesystem/object class, and any
-operation-policy mismatch. It validates pidfds, sockets, pipes, memfds, device
-FDs, TAP/KVM/vhost/fuse/hidraw handles, and other kinds through exact
-method-specific policy.
+The receiver uses `MSG_CMSG_CLOEXEC`. Immediately after every successful
+`recvmsg`, its raw ancillary collector walks the returned control area before
+examining payload validity or fatal message flags. It takes exactly-once RAII
+ownership of every complete descriptor value exposed by every
+`SOL_SOCKET`/`SCM_RIGHTS` header, including a partial list, extra rights header,
+or rights attached to an unknown record or attachment kind. Every descriptor
+actually installed and left open in the receiving process is represented by
+one of those complete returned values. On Linux, descriptors omitted because
+the supplied control area was exhausted are closed by the kernel; every
+descriptor exposed in the returned control area is owned and closed by this
+collector and is never left to that kernel rule.
 
-On any failure the receiver closes every received descriptor before semantic
-dispatch and closes the session with a bounded reason. The sender retains its
-authority until a transcript-bound attachment acknowledgement or explicit
-transfer rule says otherwise. There is no split "JSON packet then later FD"
-path and no post-receive `fcntl` race for `CLOEXEC`.
+Only after collection does the receiver reject `MSG_TRUNC`, `MSG_CTRUNC`,
+malformed or partial control data, missing or extra control messages, missing
+or extra FDs, unknown kinds, duplicate objects unless explicitly allowed,
+non-`CLOEXEC` descriptors, wrong access mode, wrong socket family/type, wrong
+filesystem/object class, and any operation-policy mismatch. It validates
+pidfds, sockets, pipes, memfds, device FDs, TAP/KVM/vhost/fuse/hidraw handles,
+and other kinds through exact method-specific policy. The collector immediately
+charges the actual count to packet, session, process-global, and host-global
+receive credit. Once the authenticated envelope identifies a request and
+operation, their aggregate credits must also be acquired before semantic
+dispatch. Failure at either stage drops the one ownership vector and releases
+its credit exactly once; success moves each accepted descriptor once into its
+typed attachment owner. No error path also closes a moved or already-dropped
+numeric FD.
+
+On any failure cleanup completes before the receiver returns the bounded fatal
+error and closes the session. The sender retains its authority until a
+transcript-bound attachment acknowledgement or explicit transfer rule says
+otherwise. There is no split "JSON packet then later FD" path and no
+post-receive `fcntl` race for `CLOEXEC`.
 
 ### Session observability
 
@@ -2238,9 +2300,10 @@ No old type is re-exported.
 
 #### W3 - Session, provider, state, and client foundations
 
-- `d2b-unix-session`: stream/seqpacket, AsyncFd readiness, directional local
-  identity evidence, ancillary send/receive, packet atomicity, and exact bounded
-  FD validation.
+- `d2b-unix-session`: stream/seqpacket, drain-correct `AsyncFd` readiness,
+  directional local identity with parent-prearmed `SO_PASSCRED`, ancillary
+  capacity derived from negotiated hard maxima, packet atomicity, truncation
+  scavenging, and exact bounded FD validation and credit cleanup.
 - `d2b-session`: `snow`, vectors, record protection, fragmentation, replay,
   keepalive, close, authenticated absolute expiry, per-hop relative ttrpc
   timeout, request-ID cancellation, named streams, scheduler, and metrics.
@@ -2368,8 +2431,10 @@ Across private sibling branches:
   protocols, and branches do not remain.
 - Validate persistent reset boot selection, crash-to-reset behavior, unit/socket
   absence, lock/inhibitor handling, cgroup/process/session/fd/mount quiescence,
-  under-lock digest recomputation, mount-ID revalidation, fd-relative deletion,
-  fsync, and final-v2 boot selection without parsing old state.
+  under-lock digest recomputation, held-dirfd recursive deletion, symlink and
+  mount-crossing refusal, fatal mount-point `EBUSY`, bounded `ENOTEMPTY`
+  re-enumeration, optional topology-change alarms, fsync, and final-v2 boot
+  selection without parsing old state.
 
 #### W11 - Private physical-host cutover and hardening
 
@@ -2392,7 +2457,8 @@ Before implementation PRs merge:
    or masked (with only the inert reset target active), acquire the reset
    lock/inhibitor, verify every receipt without accessing or unlocking Secret
    Service, prove cgroup/process/session/fd/mount quiescence, dry-run, and apply
-   the recomputed digest-confirmed reset with no backup;
+   the recomputed digest-confirmed reset through the bounded fd-relative
+   traversal with no backup;
 7. allow the reset binary to select final v2 and reboot only after deletion,
    receipt revalidation, fsync, and absence proofs succeed; any interruption
    reboots to reset mode;
@@ -2534,7 +2600,8 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - transcript downgrade, cross-purpose, role, schema, limit, and channel-binding
   rejection;
 - pathname acceptor `SO_PEERCRED`, responder socket/unit/inode provenance,
-  inherited first-packet `SCM_CREDENTIALS`, launch-binding/pidfd/cgroup/executable
+  parent-prearmed two-ended `SO_PASSCRED` before fork/handoff, immediate-child
+  first-packet `SCM_CREDENTIALS`, launch-binding/pidfd/cgroup/executable
   mismatch, and established-session transfer rejection;
 - replay, truncation, duplicate/reordered fragment, nonce exhaustion, malformed
   preface, and over-limit rejection;
@@ -2543,8 +2610,15 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   request-ID cancellation before and during dispatch;
 - deterministic scheduler coverage for priority, fairness, backpressure,
   cancellation, and no lock across await;
-- Unix packet tests for `MSG_TRUNC`, `MSG_CTRUNC`, missing/extra FD, duplicate
-  object, wrong type/access/purpose, absent `CLOEXEC`, and disconnect;
+- Unix readiness burst tests prove read and write drivers drain through
+  `EAGAIN`/`EWOULDBLOCK` or preserve the guard/cached readiness and explicitly
+  continue, with no one-packet-per-wakeup stall;
+- Unix packet tests derive ancillary capacity at every negotiated boundary and
+  cover `MSG_TRUNC`, `MSG_CTRUNC`, partial descriptor delivery, malformed or
+  unknown control/attachment data, missing/extra FD, duplicate object, wrong
+  type/access/purpose, absent `CLOEXEC`, and disconnect. Stable before/after
+  process-FD counts prove zero leaks and close-once ownership on every fatal
+  path;
 - exact packet/request/operation/session/process/host FD-credit boundaries,
   `RLIMIT_NOFILE` reduction, 64-FD emergency reserve, rejection, and close-once
   cleanup under cancel/disconnect races;
@@ -2662,8 +2736,15 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - reset lock and shutdown inhibitor fail closed;
 - cgroup, process, ComponentSession, open-fd, cwd/root/executable/map, lease, and
   mount quiescence checks cover every declared root;
-- plan digest is recomputed under lock after dirfd/inode/device/mount-ID reopen;
-- deletion is fd-relative and mount IDs are revalidated before unlink;
+- plan digest is recomputed under lock after anchored root dirfds are opened and
+  held;
+- deletion is recursive and fd-relative; directory descent uses the required
+  `openat2` resolve flags, `unlinkat` never follows a final symlink, a mount
+  point fails `EBUSY`, and a third `ENOTEMPTY` after two complete
+  re-enumerations fails closed;
+- `/proc/self/mountinfo` and `STATX_MNT_ID_UNIQUE`, when available, are tested
+  only as defense-in-depth topology alarms and never as an atomic
+  `fstatat`-then-unlink identity proof;
 - final v2 is selected and booted only after fsync and absence proofs;
 - W0 has a 10/10 Proposed-tree panel and a separate 10/10 Accepted/index-tree
   panel using the bootstrap evidence procedure;
@@ -2719,14 +2800,16 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 | Risk | Required control |
 | --- | --- |
 | A byte-only session abstraction loses seqpacket and FD security. | Packet/attachment capability is first-class; broker migration waits for kernel-level truncation, type, flag, policy, and disconnect coverage. |
-| A Unix initiator mistakes socket-activation peer credentials for responder identity. | Keep NN, but use directional evidence: acceptor-observed `SO_PEERCRED`, initiator-verified path/inode/unit provenance, and first-packet credentials plus parent launch binding for inherited endpoints. Never transfer an established session FD. |
+| An `AsyncFd` driver consumes one packet per readiness wake and strands queued control or cancellation work. | Drain `recvmsg`/`sendmsg` under the readiness guard through would-block, or preserve cached readiness and explicitly reschedule when a fairness budget yields. |
+| A Unix initiator mistakes socket-activation peer credentials for responder identity. | Keep NN, but use directional evidence: acceptor-observed `SO_PEERCRED`, initiator-verified path/inode/unit provenance, and parent-prearmed two-ended `SO_PASSCRED` plus first-packet credentials and a launch binding for inherited endpoints. Never transfer an established session FD. |
 | An absolute epoch is encoded as a relative ttrpc timeout or expires while queued. | Authenticate issue/expiry separately, enforce 30-second skew and 15-minute lifetime, intersect wall/monotonic remaining time at every queue boundary, set only capped relative `timeout_nano`, and cancel by request ID. |
-| Ancillary FD floods exhaust `RLIMIT_NOFILE` and prevent cancellation/cleanup. | Enforce packet/request/operation/session/process/host credits, keep 64 emergency control slots, reserve before transfer, and close/release deterministically on every rejection and race. |
+| Ancillary truncation or an FD flood exhausts `RLIMIT_NOFILE`, leaks a partially delivered descriptor, or prevents cancellation/cleanup. | Size control space from the negotiated hard maximum, collect every installed descriptor before honoring truncation or parse errors, enforce packet/request/operation/session/process/host credits, keep 64 emergency control slots, and close/release each ownership slot exactly once. |
 | Multiple realm brokers race over global host resources or a child escapes its lease. | Local-root alone retains initial-namespace/global authority; each child has a dedicated uid and user/mount/network namespaces, zero initial-namespace capabilities, and only allocator-issued dirfds/FDs/leases. |
 | Reset mode cannot delete a locked user's Secret Service items and cutover deadlocks. | Delete fixed-attribute items and revoke scoped exports in a mandatory confirmed pre-reset phase while every configured owning session is unlocked; authenticate digest-bound receipts, close the write barrier, and refuse to select reset mode without the exact set. Reset mode never accesses or unlocks Secret Service. |
 | PID1 and the allocator can independently start the same child broker with incompatible namespace/listener ownership. | Socket-activate only the local-root broker. The allocator pre-binds child listeners and parent-spawns separate child controllers/brokers through typed operations; local-root `d2bd` supervises their pidfds, and no child realm PID1 unit exists. |
 | A child controller cannot move a runner from a sibling systemd cgroup or gains write to all of `d2b.slice`. | Create a process-free per-realm root with controller, broker, and workload children; place controller/broker directly with `CLONE_INTO_CGROUP`; delegate the common realm ancestor/workload subtree only; and birth runners in role leaves or move them only within that realm root. |
-| The no-backup reset crashes after deletion and boots v1. | Build both closures first, persistently select a no-d2b-service reset generation, hold a reset lock and shutdown inhibitor, revalidate quiescence/digest/mount IDs, and select final v2 only after fsync/absence proof. Every interruption reboots reset mode. |
+| Recursive reset deletion treats a pre-unlink stat or mount ID as an atomic object-identity guarantee. | Hold the exclusive reset lock and quiescence proof, walk held dirfds with `openat2` beneath/no-symlink/no-xdev resolution, unlink only relative to the parent dirfd, fail mount points with `EBUSY`, and bound `ENOTEMPTY` re-enumeration. Mount observations are alarms only. |
+| The no-backup reset crashes after deletion and boots v1. | Build both closures first, persistently select a no-d2b-service reset generation, hold a reset lock and shutdown inhibitor through bounded fd-relative deletion, and select final v2 only after fsync/absence proof. Every interruption reboots reset mode. |
 | Legacy outlier names become a permanent compatibility inventory. | Permit one audited data-only manifest only in the private W11 reset closure, never parse records, and remove the manifest, closure roots, and literals before the final seal/release. |
 | File-backed swtpm is treated as non-cloneable identity. | State that host root/whole-state copy can clone it, bind guest admission to the parent runtime/transport/generations/fresh boot nonce, and deny controller-host capability absent accepted non-copyable attestation. |
 | An unlocked Secret Service is ambient to same-uid processes. | Document the same-uid limit, separate `d2b-userd` from the runtime agent, use a direct stdin-only keyring unlock backend, export only scoped systemd credentials, and never forward Secret Service into guests. |
@@ -2744,16 +2827,21 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
    acceptance, or semantic dispatch.
 2. Local NN identity evidence is directional: acceptors use kernel
    `SO_PEERCRED`; initiators use trusted endpoint provenance; inherited
-   endpoints also use first-packet credentials and parent launch binding. An
-   established session endpoint is not transferable.
+   endpoints have `SO_PASSCRED` enabled on both ends by the parent before
+   fork/handoff and also use first-packet credentials and parent launch
+   binding. An established session endpoint is not transferable.
 3. Transport evidence establishes reachability only. It never grants local
    daemon role, broker authority, or realm identity.
 4. Authenticated absolute expiry is independent of ttrpc relative timeout.
    Remaining time is rechecked at every queue/dispatch boundary, and
-   request-ID cancellation aborts outstanding dispatch and cleanup.
+   request-ID cancellation aborts outstanding dispatch and cleanup. Unix
+   readiness handling drains to would-block or preserves readiness for explicit
+   continuation, so control and cancellation never depend on a second edge.
 5. Attachment count, kind, object type, flags, operation binding, and
    packet/request/operation/session/process/host credits are exact. Emergency
-   control FD headroom cannot be consumed by attachments.
+   control FD headroom cannot be consumed by attachments. Every descriptor
+   installed by a receive is collected before truncation/parser failure returns
+   and is closed or transferred exactly once.
 6. A provider cannot widen an already-authorized operation or invoke the broker
    directly. `ProviderId` is globally unique; factory uniqueness is only by
    (`ProviderType`, `ImplementationId`), allowing distinct configured
@@ -2797,7 +2885,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
     Factory reset runs only in the persistently selected no-d2b-service reset
     generation, never accesses or unlocks Secret Service, refuses without the
     exact receipt set, and selects final v2 only after locked, inhibited,
-    digest-confirmed, fd-relative deletion and absence proof.
+    digest-confirmed, quiescent fd-relative deletion that refuses symlink
+    traversal and mount crossing, and absence proof. Mount observations are
+    defense in depth, not unlink identity authority.
 17. Final v2 production code/configuration/schema/test and release artifacts
     contain no legacy reset inventory. One private W11 data-only outlier
     manifest is permitted only until the manifest-free final seal; historical
@@ -2813,7 +2903,9 @@ The d2b 2.0 program is complete only when:
   evidence;
 - every d2b-owned live IPC boundary uses ComponentSession v2 with directional
   local identity, authenticated absolute expiry, per-hop relative ttrpc
-  timeout, request-ID cancellation, and bounded FD credits;
+  timeout, request-ID cancellation, parent-prearmed inherited credentials,
+  readiness-correct I/O, bounded aggregate FD credits, and close-once
+  truncation cleanup;
 - every production lifecycle/component path enters the appropriate typed
   provider registry;
 - all eleven provider axes wrap current functionality, every initial
@@ -2849,8 +2941,8 @@ The d2b 2.0 program is complete only when:
   proof plus rerun CI;
 - the physical host has completed the confirmed live-user deletion/revocation
   phase and exact receipt gate, booted the persistent reset generation,
-  completed the locked/inhibited/quiescent/mount-revalidated reset with no
-  Secret Service access and no backup, booted final v2 only after receipt,
+  locked/inhibited/quiescent, mount-refusing, recursively fd-relative reset with
+  no Secret Service access and no backup, booted final v2 only after receipt,
   fsync, and absence proof, and been validated on the private integrated
   branch;
 - the final sealed production source/configuration/schema/test set and release
