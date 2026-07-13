@@ -175,21 +175,21 @@
         },
         "ServicePackage": {
           "enum": [
-            "daemon-v2",
-            "realm-v2",
-            "guest-v2",
-            "provider-v2",
-            "broker-v2",
-            "user-v2",
-            "runtime-systemd-user-v2",
-            "shell-v2",
-            "clipboard-v2",
-            "clipboard-picker-v2",
-            "notify-v2",
-            "security-key-v2",
-            "wayland-v2",
-            "activation-v2",
-            "tty-v2"
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
           ],
           "type": "string"
         }
@@ -209,6 +209,49 @@
         "descriptors"
       ],
       "title": "AttachmentPacket",
+      "type": "object"
+    },
+    "bootstrapPskBinding": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        }
+      },
+      "properties": {
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "operationId": {
+          "$ref": "#/definitions/BoundedVec_16_16_uint8"
+        },
+        "replayNonce": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "expiresAtUnixMs",
+        "operationId",
+        "replayNonce"
+      ],
+      "title": "BootstrapPskBinding",
       "type": "object"
     },
     "cancelAck": {
@@ -673,9 +716,9 @@
         },
         "NoiseProfile": {
           "enum": [
-            "nn25519-cha-cha-poly-sha256",
-            "kk25519-cha-cha-poly-sha256",
-            "ikpsk2-25519-cha-cha-poly-sha256"
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
           ],
           "type": "string"
         },
@@ -689,21 +732,21 @@
         },
         "ServicePackage": {
           "enum": [
-            "daemon-v2",
-            "realm-v2",
-            "guest-v2",
-            "provider-v2",
-            "broker-v2",
-            "user-v2",
-            "runtime-systemd-user-v2",
-            "shell-v2",
-            "clipboard-v2",
-            "clipboard-picker-v2",
-            "notify-v2",
-            "security-key-v2",
-            "wayland-v2",
-            "activation-v2",
-            "tty-v2"
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
           ],
           "type": "string"
         },
@@ -989,9 +1032,9 @@
         },
         "NoiseProfile": {
           "enum": [
-            "nn25519-cha-cha-poly-sha256",
-            "kk25519-cha-cha-poly-sha256",
-            "ikpsk2-25519-cha-cha-poly-sha256"
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
           ],
           "type": "string"
         },
@@ -1005,21 +1048,21 @@
         },
         "ServicePackage": {
           "enum": [
-            "daemon-v2",
-            "realm-v2",
-            "guest-v2",
-            "provider-v2",
-            "broker-v2",
-            "user-v2",
-            "runtime-systemd-user-v2",
-            "shell-v2",
-            "clipboard-v2",
-            "clipboard-picker-v2",
-            "notify-v2",
-            "security-key-v2",
-            "wayland-v2",
-            "activation-v2",
-            "tty-v2"
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
           ],
           "type": "string"
         },
@@ -1302,9 +1345,9 @@
         },
         "NoiseProfile": {
           "enum": [
-            "nn25519-cha-cha-poly-sha256",
-            "kk25519-cha-cha-poly-sha256",
-            "ikpsk2-25519-cha-cha-poly-sha256"
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
           ],
           "type": "string"
         },
@@ -1390,6 +1433,30 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "definitions": {
+        "ChannelId": {
+          "anyOf": [
+            {
+              "maximum": 0.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 1.0,
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 2.0,
+              "minimum": 2.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 65535.0,
+              "minimum": 256.0,
+              "type": "integer"
+            }
+          ]
+        },
         "RecordKind": {
           "enum": [
             "session-control",
@@ -1407,9 +1474,7 @@
       },
       "properties": {
         "channel": {
-          "format": "uint16",
-          "minimum": 0.0,
-          "type": "integer"
+          "$ref": "#/definitions/ChannelId"
         },
         "flags": {
           "format": "uint8",

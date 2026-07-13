@@ -1,9 +1,16 @@
 use std::collections::BTreeSet;
 
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::v2_component_session::{EndpointPurpose, NoiseProfile};
+use d2b_contracts::v2_component_session::{
+    BootstrapPskBinding, BootstrapPskState, EndpointPurpose, HandshakeRejectReason, NoiseProfile,
+    OperationId,
+};
 use serde_json::Value;
-use snow::{Builder, HandshakeState, params::NoiseParams};
+use snow::{
+    Builder, HandshakeState,
+    params::{DHChoice, NoiseParams},
+    resolvers::{CryptoResolver, DefaultResolver},
+};
 
 fn hex(value: &str) -> Vec<u8> {
     assert_eq!(value.len() % 2, 0, "hex must have complete bytes");
@@ -27,11 +34,25 @@ fn optional_hex(value: &Value, name: &str) -> Option<Vec<u8>> {
     value[name].as_str().map(hex)
 }
 
+fn derive_public(private: &[u8]) -> Vec<u8> {
+    let mut dh = DefaultResolver
+        .resolve_dh(&DHChoice::Curve25519)
+        .expect("snow default resolver must provide 25519");
+    dh.set(private);
+    dh.pubkey().to_vec()
+}
+
+fn declared_public_matches(private: &[u8], declared_public: &[u8]) -> bool {
+    derive_public(private) == declared_public
+}
+
 #[derive(Clone)]
 struct VectorMaterial {
     prologue: Vec<u8>,
     initiator_ephemeral: Vec<u8>,
+    initiator_ephemeral_public: Vec<u8>,
     responder_ephemeral: Vec<u8>,
+    responder_ephemeral_public: Vec<u8>,
     initiator_static: Option<Vec<u8>>,
     initiator_public: Option<Vec<u8>>,
     responder_static: Option<Vec<u8>>,
@@ -44,7 +65,9 @@ impl VectorMaterial {
         Self {
             prologue: hex(field(vector, "prologueHex")),
             initiator_ephemeral: hex(field(vector, "initiatorEphemeralPrivateHex")),
+            initiator_ephemeral_public: hex(field(vector, "initiatorEphemeralPublicHex")),
             responder_ephemeral: hex(field(vector, "responderEphemeralPrivateHex")),
+            responder_ephemeral_public: hex(field(vector, "responderEphemeralPublicHex")),
             initiator_static: optional_hex(vector, "initiatorStaticPrivateHex"),
             initiator_public: optional_hex(vector, "initiatorStaticPublicHex"),
             responder_static: optional_hex(vector, "responderStaticPrivateHex"),
@@ -133,6 +156,46 @@ fn committed_noise_vectors_verify_with_pinned_snow() {
         purpose_classes.insert(field(vector, "purposeClass"));
 
         let material = VectorMaterial::from_fixture(vector);
+        assert!(
+            declared_public_matches(
+                &material.initiator_ephemeral,
+                &material.initiator_ephemeral_public
+            ),
+            "{} initiator ephemeral public key",
+            field(vector, "purpose")
+        );
+        assert!(
+            declared_public_matches(
+                &material.responder_ephemeral,
+                &material.responder_ephemeral_public
+            ),
+            "{} responder ephemeral public key",
+            field(vector, "purpose")
+        );
+        match (&material.initiator_static, &material.initiator_public) {
+            (Some(private), Some(public)) => assert!(
+                declared_public_matches(private, public),
+                "{} initiator static public key",
+                field(vector, "purpose")
+            ),
+            (None, None) => {}
+            _ => panic!(
+                "{} has incomplete initiator static key material",
+                field(vector, "purpose")
+            ),
+        }
+        match (&material.responder_static, &material.responder_public) {
+            (Some(private), Some(public)) => assert!(
+                declared_public_matches(private, public),
+                "{} responder static public key",
+                field(vector, "purpose")
+            ),
+            (None, None) => {}
+            _ => panic!(
+                "{} has incomplete responder static key material",
+                field(vector, "purpose")
+            ),
+        }
         let mut initiator = builder(vector, true, &material);
         let mut responder = builder(vector, false, &material);
         let payloads = vector["handshakePayloadsHex"].as_array().unwrap();
@@ -266,6 +329,93 @@ fn committed_noise_vectors_verify_with_pinned_snow() {
         purpose_classes,
         BTreeSet::from(["bootstrap", "enrolled", "local"])
     );
+}
+
+#[test]
+fn declared_noise_public_key_corruption_is_rejected() {
+    let fixture: Value = serde_json::from_str(&read_repo_file(
+        "docs/reference/component-session-v2-vectors.json",
+    ))
+    .unwrap();
+    for vector in fixture["vectors"].as_array().unwrap() {
+        for (private_field, public_field) in [
+            (
+                "initiatorEphemeralPrivateHex",
+                "initiatorEphemeralPublicHex",
+            ),
+            (
+                "responderEphemeralPrivateHex",
+                "responderEphemeralPublicHex",
+            ),
+            ("initiatorStaticPrivateHex", "initiatorStaticPublicHex"),
+            ("responderStaticPrivateHex", "responderStaticPublicHex"),
+        ] {
+            let Some(private) = optional_hex(vector, private_field) else {
+                assert!(vector[public_field].is_null());
+                continue;
+            };
+            let mut corrupted = hex(field(vector, public_field));
+            corrupted[0] ^= 1;
+            assert!(
+                !declared_public_matches(&private, &corrupted),
+                "{} accepted corrupted {public_field}",
+                field(vector, "purpose")
+            );
+        }
+    }
+}
+
+#[test]
+fn bootstrap_fixture_mutations_execute_typed_admission_state() {
+    let fixture: Value = serde_json::from_str(&read_repo_file(
+        "docs/reference/component-session-v2-vectors.json",
+    ))
+    .unwrap();
+    for vector in fixture["vectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|vector| {
+            field(vector, "protocolName") == NoiseProfile::Ikpsk2_25519ChaChaPolySha256.as_str()
+        })
+    {
+        let fixture_binding = &vector["bootstrapBinding"];
+        let binding = BootstrapPskBinding {
+            operation_id: OperationId::new(hex(field(fixture_binding, "operationIdHex"))).unwrap(),
+            replay_nonce: hex(field(fixture_binding, "replayNonceHex"))
+                .try_into()
+                .unwrap(),
+            expires_at_unix_ms: fixture_binding["expiresAtUnixMs"].as_u64().unwrap(),
+        };
+        let wrong_operation =
+            OperationId::new(hex(field(fixture_binding, "wrongOperationIdHex"))).unwrap();
+        let valid_at = fixture_binding["validAtUnixMs"].as_u64().unwrap();
+        let expired_at = fixture_binding["expiredAtUnixMs"].as_u64().unwrap();
+
+        let mut wrong = BootstrapPskState::new(binding.clone()).unwrap();
+        assert_eq!(
+            wrong.admit(&wrong_operation, &binding.replay_nonce, valid_at),
+            Err(HandshakeRejectReason::BootstrapOperationMismatch)
+        );
+        assert!(!wrong.is_consumed());
+
+        let mut expired = BootstrapPskState::new(binding.clone()).unwrap();
+        assert_eq!(
+            expired.admit(&binding.operation_id, &binding.replay_nonce, expired_at),
+            Err(HandshakeRejectReason::BootstrapExpired)
+        );
+        assert!(!expired.is_consumed());
+
+        let mut replay = BootstrapPskState::new(binding.clone()).unwrap();
+        assert_eq!(
+            replay.admit(&binding.operation_id, &binding.replay_nonce, valid_at),
+            Ok(())
+        );
+        assert_eq!(
+            replay.admit(&binding.operation_id, &binding.replay_nonce, valid_at),
+            Err(HandshakeRejectReason::BootstrapReplayed)
+        );
+    }
 }
 
 #[test]

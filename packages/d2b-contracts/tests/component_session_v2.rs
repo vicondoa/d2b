@@ -1,9 +1,10 @@
 #![cfg(feature = "v2-component-session")]
 
 use d2b_contracts::v2_component_session::*;
-use schemars::schema_for;
+use schemars::{JsonSchema, schema_for};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
-use std::{fs, path::PathBuf};
+use std::{fmt::Debug, fs, path::PathBuf};
 
 fn packet_policy() -> AttachmentPolicy {
     AttachmentPolicy {
@@ -59,6 +60,23 @@ fn request_id() -> RequestId {
 
 fn operation_id() -> OperationId {
     OperationId::new(vec![0x42; 16]).unwrap()
+}
+
+fn assert_wire_enum<T>(values: &[T], spelling: impl Fn(T) -> &'static str)
+where
+    T: Copy + Debug + Eq + JsonSchema + Serialize + DeserializeOwned,
+{
+    let expected: Vec<_> = values
+        .iter()
+        .copied()
+        .map(|value| json!(spelling(value)))
+        .collect();
+    for (value, wire) in values.iter().copied().zip(&expected) {
+        assert_eq!(serde_json::to_value(value).unwrap(), *wire);
+        assert_eq!(serde_json::from_value::<T>(wire.clone()).unwrap(), value);
+    }
+    let schema = schema_for!(T);
+    assert_eq!(schema.schema.enum_values.as_ref(), Some(&expected));
 }
 
 #[test]
@@ -119,7 +137,28 @@ fn preface_is_exact_network_order_and_strict() {
 fn offer_accept_and_reject_have_canonical_binary_round_trips() {
     let offer = offer();
     let bytes = offer.encode_canonical().unwrap();
+    assert_eq!(bytes.len(), HANDSHAKE_OFFER_CANONICAL_LEN);
     assert_eq!(HandshakeOffer::decode_canonical(&bytes).unwrap(), offer);
+
+    let mut undersized = offer.clone();
+    undersized.limits.handshake_offer_bytes = HANDSHAKE_OFFER_CANONICAL_LEN as u32 - 1;
+    assert_eq!(
+        undersized.encode_canonical(),
+        Err(BinaryError::InvalidContract(ContractError::LimitExceeded))
+    );
+    let mut self_declared_undersized = bytes.clone();
+    self_declared_undersized[39..43]
+        .copy_from_slice(&(HANDSHAKE_OFFER_CANONICAL_LEN as u32 - 1).to_be_bytes());
+    assert_eq!(
+        HandshakeOffer::decode_canonical(&self_declared_undersized),
+        Err(BinaryError::LengthExceeded)
+    );
+    let mut noncanonical = bytes.clone();
+    *noncanonical.last_mut().unwrap() = 2;
+    assert_eq!(
+        HandshakeOffer::decode_canonical(&noncanonical),
+        Err(BinaryError::NonCanonical)
+    );
 
     let mut trailing = bytes.clone();
     trailing.push(0);
@@ -258,6 +297,41 @@ fn closed_inventory_and_noise_identity_requirements_are_complete() {
 }
 
 #[test]
+fn every_closed_wire_enum_uses_its_canonical_spelling_in_serde_and_schema() {
+    macro_rules! check {
+        ($type:ty) => {
+            assert_wire_enum(<$type>::ALL, <$type>::as_str);
+        };
+    }
+
+    check!(EndpointPurpose);
+    check!(PurposeClass);
+    check!(EndpointRole);
+    check!(ServicePackage);
+    check!(NoiseProfile);
+    check!(IdentityEvidenceRequirement);
+    check!(Locality);
+    check!(TransportClass);
+    check!(AttachmentPolicyKind);
+    check!(HandshakeRejectReason);
+    check!(Remediation);
+    check!(SessionErrorCode);
+    check!(RecordKind);
+    check!(ChannelClass);
+    check!(CloseReason);
+    check!(CancelResult);
+    check!(AttachmentKind);
+    check!(KernelObjectType);
+    check!(AttachmentAccess);
+    check!(AttachmentPurpose);
+    check!(AttachmentCreditClass);
+    check!(MetricResult);
+    check!(MetricReason);
+    check!(HealthState);
+    check!(ProviderTypeLabel);
+}
+
+#[test]
 fn every_limit_is_exactly_bounded_and_overhead_is_checked() {
     let exact = LimitProfile::local_default();
     assert_eq!(exact.validate(), Ok(()));
@@ -320,6 +394,15 @@ fn every_limit_is_exactly_bounded_and_overhead_is_checked() {
         }};
     }
     boundary!(handshake_offer_bytes, MAX_HANDSHAKE_OFFER_BYTES as u32);
+    let mut undersized_offer = exact;
+    undersized_offer.handshake_offer_bytes = HANDSHAKE_OFFER_CANONICAL_LEN as u32 - 1;
+    assert_eq!(
+        undersized_offer.validate(),
+        Err(ContractError::LimitExceeded)
+    );
+    let mut exact_offer = exact;
+    exact_offer.handshake_offer_bytes = HANDSHAKE_OFFER_CANONICAL_LEN as u32;
+    assert_eq!(exact_offer.validate(), Ok(()));
     boundary!(protected_ciphertext_bytes, MAX_PROTECTED_CIPHERTEXT_BYTES);
     boundary!(logical_ttrpc_bytes, MAX_LOGICAL_MESSAGE_BYTES);
     boundary!(logical_named_stream_bytes, MAX_LOGICAL_MESSAGE_BYTES);
@@ -364,6 +447,34 @@ fn record_fragment_and_sequence_contracts_fail_closed() {
         ChannelId::named(0x100).unwrap().class(),
         ChannelClass::NamedStream
     );
+    for invalid in [3, 4, 0xff] {
+        assert!(serde_json::from_value::<ChannelId>(json!(invalid)).is_err());
+    }
+    for valid in [0, 1, 2, 0x100, u16::MAX] {
+        assert_eq!(
+            serde_json::from_value::<ChannelId>(json!(valid))
+                .unwrap()
+                .value(),
+            valid
+        );
+    }
+    let channel_schema = schema_for!(ChannelId);
+    let ranges: Vec<_> = channel_schema
+        .schema
+        .subschemas
+        .as_ref()
+        .and_then(|subschemas| subschemas.any_of.as_ref())
+        .unwrap()
+        .iter()
+        .map(|schema| {
+            let number = schema.clone().into_object().number.unwrap();
+            (
+                number.minimum.unwrap() as u16,
+                number.maximum.unwrap() as u16,
+            )
+        })
+        .collect();
+    assert_eq!(ranges, [(0, 0), (1, 1), (2, 2), (0x100, u16::MAX)]);
 
     let fragment = FragmentHeader {
         message_id: 1,
@@ -410,12 +521,22 @@ fn record_fragment_and_sequence_contracts_fail_closed() {
         final_sequence.accept(value).unwrap();
     }
     assert_eq!(final_sequence.accept(2), Err(SequenceError::Replay));
-    let mut exhausted = ReceiveSequence::from_expected(u64::MAX);
-    assert_eq!(exhausted.accept(u64::MAX), Ok(()));
+    let mut exhausted = ReceiveSequence::from_expected(u64::MAX - 1);
+    assert_eq!(exhausted.accept(u64::MAX - 1), Ok(()));
     assert_eq!(
         exhausted.accept(u64::MAX),
         Err(SequenceError::NonceExhausted)
     );
+    let mut reserved = ReceiveSequence::from_expected(u64::MAX);
+    assert_eq!(
+        reserved.accept(u64::MAX),
+        Err(SequenceError::NonceExhausted)
+    );
+    let mut sender = SendSequence::from_next(u64::MAX - 1);
+    assert_eq!(sender.take(), Ok(u64::MAX - 1));
+    assert_eq!(sender.take(), Err(SequenceError::NonceExhausted));
+    let mut reserved_sender = SendSequence::from_next(u64::MAX);
+    assert_eq!(reserved_sender.take(), Err(SequenceError::NonceExhausted));
 
     let first = FragmentHeader {
         message_id: 9,
@@ -508,6 +629,41 @@ fn cancellation_is_generation_and_request_bound() {
     assert_eq!(accepted.result, CancelResult::CancelledBeforeDispatch);
 }
 
+#[test]
+fn bootstrap_psk_state_enforces_operation_expiry_and_single_use() {
+    let binding = BootstrapPskBinding {
+        operation_id: operation_id(),
+        replay_nonce: [0x51; 32],
+        expires_at_unix_ms: 10_000,
+    };
+    let wrong_operation = OperationId::new(vec![0x43; 16]).unwrap();
+
+    let mut wrong = BootstrapPskState::new(binding.clone()).unwrap();
+    assert_eq!(
+        wrong.admit(&wrong_operation, &binding.replay_nonce, 9_999),
+        Err(HandshakeRejectReason::BootstrapOperationMismatch)
+    );
+    assert!(!wrong.is_consumed());
+
+    let mut expired = BootstrapPskState::new(binding.clone()).unwrap();
+    assert_eq!(
+        expired.admit(&binding.operation_id, &binding.replay_nonce, 10_000),
+        Err(HandshakeRejectReason::BootstrapExpired)
+    );
+    assert!(!expired.is_consumed());
+
+    let mut single_use = BootstrapPskState::new(binding.clone()).unwrap();
+    assert_eq!(
+        single_use.admit(&binding.operation_id, &binding.replay_nonce, 9_999),
+        Ok(())
+    );
+    assert!(single_use.is_consumed());
+    assert_eq!(
+        single_use.admit(&binding.operation_id, &binding.replay_nonce, 9_999),
+        Err(HandshakeRejectReason::BootstrapReplayed)
+    );
+}
+
 fn descriptor(index: u16) -> AttachmentDescriptor {
     AttachmentDescriptor {
         index,
@@ -566,6 +722,37 @@ fn attachments_are_packet_atomic_and_exactly_accounted() {
     assert_eq!(
         bad.validate(packet_policy(), 2, false, false, false),
         Err(AttachmentReceiveError::DescriptorMismatch)
+    );
+
+    let mut credentials_descriptor = descriptor(0);
+    credentials_descriptor.kind = AttachmentKind::Credentials;
+    credentials_descriptor.object_type = KernelObjectType::UnixSeqpacketSocket;
+    let credentials = AttachmentPacket {
+        declared_count: 1,
+        descriptors: BoundedVec::new(vec![credentials_descriptor.clone()]).unwrap(),
+    };
+    let mut credentials_disabled = packet_policy();
+    credentials_disabled.credentials_allowed = false;
+    assert_eq!(
+        credentials.validate(credentials_disabled, 1, false, false, false),
+        Err(AttachmentReceiveError::PolicyDenied)
+    );
+    assert_eq!(
+        credentials.validate(packet_policy(), 1, false, false, false),
+        Ok(())
+    );
+    assert_eq!(
+        credentials.validate(credentials_disabled, 0, false, false, false),
+        Err(AttachmentReceiveError::CountMismatch)
+    );
+    let credentials_over_credit = AttachmentPacket {
+        declared_count: 2,
+        descriptors: BoundedVec::new(vec![credentials_descriptor, descriptor(1)]).unwrap(),
+    };
+    credentials_disabled.max_per_packet = 1;
+    assert_eq!(
+        credentials_over_credit.validate(credentials_disabled, 2, false, false, false),
+        Err(AttachmentReceiveError::CreditExceeded)
     );
 
     let credits = AttachmentCredits {
@@ -639,6 +826,7 @@ fn schema_fixture() -> serde_json::Value {
             "formatVersion": 1,
             "schemas": {
                 "attachmentPacket": schema_for!(AttachmentPacket),
+                "bootstrapPskBinding": schema_for!(BootstrapPskBinding),
                 "cancelAck": schema_for!(CancelAck),
                 "cancelRequest": schema_for!(CancelRequest),
                 "closeRecord": schema_for!(CloseRecord),
@@ -658,7 +846,8 @@ fn schema_fixture() -> serde_json::Value {
 fn committed_schema_fixture_matches_contract_types() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/reference/component-session-v2-schema.json");
+    let generated = schema_fixture();
     let committed: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(committed, schema_fixture());
+    assert_eq!(committed, generated);
 }

@@ -6,7 +6,10 @@
 
 use schemars::{
     JsonSchema,
-    schema::{ArrayValidation, Schema},
+    schema::{
+        ArrayValidation, InstanceType, NumberValidation, Schema, SchemaObject, SingleOrVec,
+        SubschemaValidation,
+    },
 };
 use serde::{
     Deserialize, Deserializer, Serialize,
@@ -23,6 +26,7 @@ pub const PREFACE_MAGIC: [u8; 8] = *b"D2BCS2\r\n";
 pub const COMPONENT_SESSION_MAJOR: u16 = 2;
 pub const COMPONENT_SESSION_MINOR: u16 = 0;
 pub const MAX_HANDSHAKE_OFFER_BYTES: usize = 16 * 1024;
+pub const HANDSHAKE_OFFER_CANONICAL_LEN: usize = 148;
 pub const MAX_PROTECTED_CIPHERTEXT_BYTES: u32 = u16::MAX as u32;
 pub const NOISE_TAG_BYTES: u32 = 16;
 pub const RECORD_LENGTH_BYTES: u32 = 2;
@@ -245,9 +249,12 @@ macro_rules! closed_enum {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
             Serialize, Deserialize, JsonSchema,
         )]
-        #[serde(rename_all = "kebab-case")]
         pub enum $name {
-            $($variant),+
+            $(
+                #[serde(rename = $wire)]
+                #[schemars(rename = $wire)]
+                $variant
+            ),+
         }
 
         impl $name {
@@ -269,6 +276,20 @@ macro_rules! closed_enum {
                 match tag {
                     $($tag => Ok(Self::$variant),)+
                     _ => Err(BinaryError::UnknownEnumTag),
+                }
+            }
+        }
+    };
+}
+
+macro_rules! wire_enum_values {
+    ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        impl $name {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire),+
                 }
             }
         }
@@ -499,7 +520,7 @@ impl LimitProfile {
     }
 
     pub fn validate(self) -> Result<(), ContractError> {
-        let nonzero = self.handshake_offer_bytes != 0
+        let nonzero = self.handshake_offer_bytes >= HANDSHAKE_OFFER_CANONICAL_LEN as u32
             && self.protected_ciphertext_bytes > NOISE_TAG_BYTES
             && self.logical_ttrpc_bytes != 0
             && self.logical_named_stream_bytes != 0
@@ -720,7 +741,12 @@ impl HandshakeOffer {
         writer.u8(self.transport_binding.identity_evidence.tag());
         writer.u64(self.reconnect_generation);
         encode_attachment_policy(&mut writer, self.attachment_policy);
-        if writer.len() > MAX_HANDSHAKE_OFFER_BYTES {
+        if writer.len() != HANDSHAKE_OFFER_CANONICAL_LEN {
+            return Err(BinaryError::NonCanonical);
+        }
+        if writer.len() > MAX_HANDSHAKE_OFFER_BYTES
+            || writer.len() > self.limits.handshake_offer_bytes as usize
+        {
             return Err(BinaryError::LengthExceeded);
         }
         Ok(writer.finish())
@@ -753,6 +779,9 @@ impl HandshakeOffer {
             attachment_policy: decode_attachment_policy(&mut reader)?,
         };
         reader.finish()?;
+        if bytes.len() > offer.limits.handshake_offer_bytes as usize {
+            return Err(BinaryError::LengthExceeded);
+        }
         offer.validate().map_err(BinaryError::InvalidContract)?;
         if offer.encode_canonical()?.as_slice() != bytes {
             return Err(BinaryError::NonCanonical);
@@ -1010,7 +1039,7 @@ closed_enum!(ChannelClass {
     NamedStream = 4 => "named-stream"
 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ChannelId(u16);
 
@@ -1058,6 +1087,39 @@ impl<'de> Deserialize<'de> for ChannelId {
         let channel = Self(value);
         channel.validate().map_err(serde::de::Error::custom)?;
         Ok(channel)
+    }
+}
+
+impl JsonSchema for ChannelId {
+    fn schema_name() -> String {
+        "ChannelId".to_owned()
+    }
+
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> Schema {
+        fn integer_range(minimum: u16, maximum: u16) -> Schema {
+            Schema::Object(SchemaObject {
+                instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
+                number: Some(Box::new(NumberValidation {
+                    minimum: Some(f64::from(minimum)),
+                    maximum: Some(f64::from(maximum)),
+                    ..NumberValidation::default()
+                })),
+                ..SchemaObject::default()
+            })
+        }
+
+        Schema::Object(SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation {
+                any_of: Some(vec![
+                    integer_range(0, 0),
+                    integer_range(1, 1),
+                    integer_range(2, 2),
+                    integer_range(NAMED_STREAM_CHANNEL_MIN, u16::MAX),
+                ]),
+                ..SubschemaValidation::default()
+            })),
+            ..SchemaObject::default()
+        })
     }
 }
 
@@ -1301,12 +1363,12 @@ impl ReceiveSequence {
     pub const fn from_expected(expected: u64) -> Self {
         Self {
             expected,
-            exhausted: false,
+            exhausted: expected == u64::MAX,
         }
     }
 
     pub fn accept(&mut self, sequence: u64) -> Result<(), SequenceError> {
-        if self.exhausted {
+        if self.exhausted || sequence == u64::MAX {
             return Err(SequenceError::NonceExhausted);
         }
         if sequence < self.expected {
@@ -1315,7 +1377,7 @@ impl ReceiveSequence {
         if sequence > self.expected {
             return Err(SequenceError::OutOfOrder);
         }
-        if sequence == u64::MAX {
+        if sequence == u64::MAX - 1 {
             self.exhausted = true;
         } else {
             self.expected += 1;
@@ -1330,33 +1392,147 @@ impl Default for ReceiveSequence {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendSequence {
+    next: u64,
+    exhausted: bool,
+}
+
+impl SendSequence {
+    pub const fn new() -> Self {
+        Self {
+            next: 0,
+            exhausted: false,
+        }
+    }
+
+    pub const fn from_next(next: u64) -> Self {
+        Self {
+            next,
+            exhausted: next == u64::MAX,
+        }
+    }
+
+    pub fn take(&mut self) -> Result<u64, SequenceError> {
+        if self.exhausted || self.next == u64::MAX {
+            return Err(SequenceError::NonceExhausted);
+        }
+        let sequence = self.next;
+        if sequence == u64::MAX - 1 {
+            self.exhausted = true;
+        } else {
+            self.next += 1;
+        }
+        Ok(sequence)
+    }
+}
+
+impl Default for SendSequence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum CloseReason {
+    #[serde(rename = "normal")]
+    #[schemars(rename = "normal")]
     Normal,
+    #[serde(rename = "peer-requested")]
+    #[schemars(rename = "peer-requested")]
     PeerRequested,
+    #[serde(rename = "authentication-failed")]
+    #[schemars(rename = "authentication-failed")]
     AuthenticationFailed,
+    #[serde(rename = "purpose-mismatch")]
+    #[schemars(rename = "purpose-mismatch")]
     PurposeMismatch,
+    #[serde(rename = "role-mismatch")]
+    #[schemars(rename = "role-mismatch")]
     RoleMismatch,
+    #[serde(rename = "schema-mismatch")]
+    #[schemars(rename = "schema-mismatch")]
     SchemaMismatch,
+    #[serde(rename = "limit-mismatch")]
+    #[schemars(rename = "limit-mismatch")]
     LimitMismatch,
+    #[serde(rename = "channel-binding-mismatch")]
+    #[schemars(rename = "channel-binding-mismatch")]
     ChannelBindingMismatch,
+    #[serde(rename = "replay")]
+    #[schemars(rename = "replay")]
     Replay,
+    #[serde(rename = "record-truncated")]
+    #[schemars(rename = "record-truncated")]
     RecordTruncated,
+    #[serde(rename = "fragment-invalid")]
+    #[schemars(rename = "fragment-invalid")]
     FragmentInvalid,
+    #[serde(rename = "nonce-exhausted")]
+    #[schemars(rename = "nonce-exhausted")]
     NonceExhausted,
+    #[serde(rename = "deadline-expired")]
+    #[schemars(rename = "deadline-expired")]
     DeadlineExpired,
+    #[serde(rename = "cancelled")]
+    #[schemars(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "attachment-invalid")]
+    #[schemars(rename = "attachment-invalid")]
     AttachmentInvalid,
+    #[serde(rename = "attachment-truncated")]
+    #[schemars(rename = "attachment-truncated")]
     AttachmentTruncated,
+    #[serde(rename = "unknown-control")]
+    #[schemars(rename = "unknown-control")]
     UnknownControl,
+    #[serde(rename = "credit-exhausted")]
+    #[schemars(rename = "credit-exhausted")]
     CreditExhausted,
+    #[serde(rename = "control-resource-exhausted")]
+    #[schemars(rename = "control-resource-exhausted")]
     ControlResourceExhausted,
+    #[serde(rename = "scheduler-stalled")]
+    #[schemars(rename = "scheduler-stalled")]
     SchedulerStalled,
+    #[serde(rename = "keepalive-timeout")]
+    #[schemars(rename = "keepalive-timeout")]
     KeepaliveTimeout,
+    #[serde(rename = "session-lost")]
+    #[schemars(rename = "session-lost")]
     SessionLost,
+    #[serde(rename = "internal-invariant")]
+    #[schemars(rename = "internal-invariant")]
     InternalInvariant,
 }
+
+wire_enum_values!(CloseReason {
+    Normal => "normal",
+    PeerRequested => "peer-requested",
+    AuthenticationFailed => "authentication-failed",
+    PurposeMismatch => "purpose-mismatch",
+    RoleMismatch => "role-mismatch",
+    SchemaMismatch => "schema-mismatch",
+    LimitMismatch => "limit-mismatch",
+    ChannelBindingMismatch => "channel-binding-mismatch",
+    Replay => "replay",
+    RecordTruncated => "record-truncated",
+    FragmentInvalid => "fragment-invalid",
+    NonceExhausted => "nonce-exhausted",
+    DeadlineExpired => "deadline-expired",
+    Cancelled => "cancelled",
+    AttachmentInvalid => "attachment-invalid",
+    AttachmentTruncated => "attachment-truncated",
+    UnknownControl => "unknown-control",
+    CreditExhausted => "credit-exhausted",
+    ControlResourceExhausted => "control-resource-exhausted",
+    SchedulerStalled => "scheduler-stalled",
+    KeepaliveTimeout => "keepalive-timeout",
+    SessionLost => "session-lost",
+    InternalInvariant => "internal-invariant"
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1408,6 +1584,66 @@ bounded_bytes!(CorrelationId, 1, 64);
 bounded_bytes!(TraceId, 16, 16);
 bounded_bytes!(IdempotencyKey, 1, 64);
 bounded_bytes!(OperationId, 16, 16);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct BootstrapPskBinding {
+    pub operation_id: OperationId,
+    pub replay_nonce: [u8; 32],
+    pub expires_at_unix_ms: u64,
+}
+
+impl BootstrapPskBinding {
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.replay_nonce == [0; 32] {
+            return Err(ContractError::InvalidBinding);
+        }
+        if self.expires_at_unix_ms == 0 {
+            return Err(ContractError::InvalidDeadline);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapPskState {
+    binding: BootstrapPskBinding,
+    consumed: bool,
+}
+
+impl BootstrapPskState {
+    pub fn new(binding: BootstrapPskBinding) -> Result<Self, ContractError> {
+        binding.validate()?;
+        Ok(Self {
+            binding,
+            consumed: false,
+        })
+    }
+
+    pub fn admit(
+        &mut self,
+        operation_id: &OperationId,
+        replay_nonce: &[u8; 32],
+        now_unix_ms: u64,
+    ) -> Result<(), HandshakeRejectReason> {
+        if operation_id != &self.binding.operation_id || replay_nonce != &self.binding.replay_nonce
+        {
+            return Err(HandshakeRejectReason::BootstrapOperationMismatch);
+        }
+        if now_unix_ms >= self.binding.expires_at_unix_ms {
+            return Err(HandshakeRejectReason::BootstrapExpired);
+        }
+        if self.consumed {
+            return Err(HandshakeRejectReason::BootstrapReplayed);
+        }
+        self.consumed = true;
+        Ok(())
+    }
+
+    pub const fn is_consumed(&self) -> bool {
+        self.consumed
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1482,15 +1718,34 @@ pub struct CancelRequest {
     pub request_id: RequestId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum CancelResult {
+    #[serde(rename = "cancelled-before-dispatch")]
+    #[schemars(rename = "cancelled-before-dispatch")]
     CancelledBeforeDispatch,
+    #[serde(rename = "cancellation-signalled")]
+    #[schemars(rename = "cancellation-signalled")]
     CancellationSignalled,
+    #[serde(rename = "already-terminal")]
+    #[schemars(rename = "already-terminal")]
     AlreadyTerminal,
+    #[serde(rename = "unknown-request")]
+    #[schemars(rename = "unknown-request")]
     UnknownRequest,
+    #[serde(rename = "generation-mismatch")]
+    #[schemars(rename = "generation-mismatch")]
     GenerationMismatch,
 }
+
+wire_enum_values!(CancelResult {
+    CancelledBeforeDispatch => "cancelled-before-dispatch",
+    CancellationSignalled => "cancellation-signalled",
+    AlreadyTerminal => "already-terminal",
+    UnknownRequest => "unknown-request",
+    GenerationMismatch => "generation-mismatch"
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1645,6 +1900,14 @@ impl AttachmentPacket {
         if self.declared_count > policy.max_per_packet {
             return Err(AttachmentReceiveError::CreditExceeded);
         }
+        if !policy.credentials_allowed
+            && self
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.kind == AttachmentKind::Credentials)
+        {
+            return Err(AttachmentReceiveError::PolicyDenied);
+        }
         for (index, descriptor) in self.descriptors.iter().enumerate() {
             descriptor
                 .validate(index as u16)
@@ -1730,67 +1993,209 @@ impl AttachmentCredits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum MetricResult {
+    #[serde(rename = "accepted")]
+    #[schemars(rename = "accepted")]
     Accepted,
+    #[serde(rename = "rejected")]
+    #[schemars(rename = "rejected")]
     Rejected,
+    #[serde(rename = "cancelled")]
+    #[schemars(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "expired")]
+    #[schemars(rename = "expired")]
     Expired,
+    #[serde(rename = "closed")]
+    #[schemars(rename = "closed")]
     Closed,
+    #[serde(rename = "retrying")]
+    #[schemars(rename = "retrying")]
     Retrying,
+    #[serde(rename = "exhausted")]
+    #[schemars(rename = "exhausted")]
     Exhausted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+wire_enum_values!(MetricResult {
+    Accepted => "accepted",
+    Rejected => "rejected",
+    Cancelled => "cancelled",
+    Expired => "expired",
+    Closed => "closed",
+    Retrying => "retrying",
+    Exhausted => "exhausted"
+});
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum MetricReason {
+    #[serde(rename = "none")]
+    #[schemars(rename = "none")]
     None,
+    #[serde(rename = "policy-denied")]
+    #[schemars(rename = "policy-denied")]
     PolicyDenied,
+    #[serde(rename = "authentication")]
+    #[schemars(rename = "authentication")]
     Authentication,
+    #[serde(rename = "transcript-mismatch")]
+    #[schemars(rename = "transcript-mismatch")]
     TranscriptMismatch,
+    #[serde(rename = "purpose-mismatch")]
+    #[schemars(rename = "purpose-mismatch")]
     PurposeMismatch,
+    #[serde(rename = "role-mismatch")]
+    #[schemars(rename = "role-mismatch")]
     RoleMismatch,
+    #[serde(rename = "schema-mismatch")]
+    #[schemars(rename = "schema-mismatch")]
     SchemaMismatch,
+    #[serde(rename = "limit-mismatch")]
+    #[schemars(rename = "limit-mismatch")]
     LimitMismatch,
+    #[serde(rename = "channel-binding-mismatch")]
+    #[schemars(rename = "channel-binding-mismatch")]
     ChannelBindingMismatch,
+    #[serde(rename = "replay")]
+    #[schemars(rename = "replay")]
     Replay,
+    #[serde(rename = "truncation")]
+    #[schemars(rename = "truncation")]
     Truncation,
+    #[serde(rename = "malformed")]
+    #[schemars(rename = "malformed")]
     Malformed,
+    #[serde(rename = "deadline")]
+    #[schemars(rename = "deadline")]
     Deadline,
+    #[serde(rename = "cancellation")]
+    #[schemars(rename = "cancellation")]
     Cancellation,
+    #[serde(rename = "backpressure")]
+    #[schemars(rename = "backpressure")]
     Backpressure,
+    #[serde(rename = "credit-exhausted")]
+    #[schemars(rename = "credit-exhausted")]
     CreditExhausted,
+    #[serde(rename = "keepalive-timeout")]
+    #[schemars(rename = "keepalive-timeout")]
     KeepaliveTimeout,
+    #[serde(rename = "transport")]
+    #[schemars(rename = "transport")]
     Transport,
+    #[serde(rename = "internal-invariant")]
+    #[schemars(rename = "internal-invariant")]
     InternalInvariant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+wire_enum_values!(MetricReason {
+    None => "none",
+    PolicyDenied => "policy-denied",
+    Authentication => "authentication",
+    TranscriptMismatch => "transcript-mismatch",
+    PurposeMismatch => "purpose-mismatch",
+    RoleMismatch => "role-mismatch",
+    SchemaMismatch => "schema-mismatch",
+    LimitMismatch => "limit-mismatch",
+    ChannelBindingMismatch => "channel-binding-mismatch",
+    Replay => "replay",
+    Truncation => "truncation",
+    Malformed => "malformed",
+    Deadline => "deadline",
+    Cancellation => "cancellation",
+    Backpressure => "backpressure",
+    CreditExhausted => "credit-exhausted",
+    KeepaliveTimeout => "keepalive-timeout",
+    Transport => "transport",
+    InternalInvariant => "internal-invariant"
+});
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum HealthState {
+    #[serde(rename = "starting")]
+    #[schemars(rename = "starting")]
     Starting,
+    #[serde(rename = "healthy")]
+    #[schemars(rename = "healthy")]
     Healthy,
+    #[serde(rename = "degraded")]
+    #[schemars(rename = "degraded")]
     Degraded,
+    #[serde(rename = "unavailable")]
+    #[schemars(rename = "unavailable")]
     Unavailable,
+    #[serde(rename = "failed")]
+    #[schemars(rename = "failed")]
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+wire_enum_values!(HealthState {
+    Starting => "starting",
+    Healthy => "healthy",
+    Degraded => "degraded",
+    Unavailable => "unavailable",
+    Failed => "failed"
+});
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum ProviderTypeLabel {
+    #[serde(rename = "runtime")]
+    #[schemars(rename = "runtime")]
     Runtime,
+    #[serde(rename = "infrastructure")]
+    #[schemars(rename = "infrastructure")]
     Infrastructure,
+    #[serde(rename = "transport")]
+    #[schemars(rename = "transport")]
     Transport,
+    #[serde(rename = "substrate")]
+    #[schemars(rename = "substrate")]
     Substrate,
+    #[serde(rename = "credential")]
+    #[schemars(rename = "credential")]
     Credential,
+    #[serde(rename = "display")]
+    #[schemars(rename = "display")]
     Display,
+    #[serde(rename = "network")]
+    #[schemars(rename = "network")]
     Network,
+    #[serde(rename = "storage")]
+    #[schemars(rename = "storage")]
     Storage,
+    #[serde(rename = "device")]
+    #[schemars(rename = "device")]
     Device,
+    #[serde(rename = "audio")]
+    #[schemars(rename = "audio")]
     Audio,
+    #[serde(rename = "observability")]
+    #[schemars(rename = "observability")]
     Observability,
 }
+
+wire_enum_values!(ProviderTypeLabel {
+    Runtime => "runtime",
+    Infrastructure => "infrastructure",
+    Transport => "transport",
+    Substrate => "substrate",
+    Credential => "credential",
+    Display => "display",
+    Network => "network",
+    Storage => "storage",
+    Device => "device",
+    Audio => "audio",
+    Observability => "observability"
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

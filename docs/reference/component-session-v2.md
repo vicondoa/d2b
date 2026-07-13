@@ -44,8 +44,11 @@ encodes fixed-width integers in network order in this sequence:
 The accept carries the exact canonical offer and a nonzero 32-byte transcript
 binding. The reject carries one closed reason and remediation. Decoders reject
 unknown tags, truncation, trailing bytes, noncanonical booleans, invalid
-contracts, and over-limit input. An endpoint compares every offer field for
-equality with its policy; it never selects a weaker value.
+contracts, and over-limit input. The canonical offer is 148 bytes and must fit
+both the global 16 KiB ceiling and its own selected
+`limits.handshakeOfferBytes`; a self-declared smaller profile is invalid on
+encode and decode. An endpoint compares every offer field for equality with its
+policy; it never selects a weaker value.
 
 ### Service packages
 
@@ -92,6 +95,9 @@ Roles, locality, and transport are closed enums. Locality is `process-local`,
 `host-local`, `guest-local`, or `remote`. Transport is `unix-stream`,
 `unix-seqpacket`, `inherited-socketpair`, `native-vsock`,
 `cloud-hypervisor-vsock`, `provider-stream`, or `direct-configured`.
+Every closed enum uses the spelling listed by this contract identically in JSON
+and generated JSON Schema; variant-name case conversion is not part of the
+wire contract.
 
 ## Limits
 
@@ -130,7 +136,8 @@ kind:u8 flags:u8 channel:u16 sequence:u64 generation:u64 payload_len:u32
 Channel `0` is session control, `1` is ttrpc control, and `2` is attachment
 control. Named streams begin at `0x0100`; the intervening range is invalid.
 Record kind must match channel class. Sequence state distinguishes replay,
-out-of-order input, and exhausted `u64` nonces.
+out-of-order input, and exhausted nonces. Sequence `u64::MAX` is reserved;
+`u64::MAX - 1` is the final usable send or receive sequence.
 
 The 24-byte fragment header is:
 
@@ -183,7 +190,10 @@ No numeric or raw file descriptor is serialized. Payload and ancillary data
 arrive in one packet. Message truncation, control truncation, unknown control,
 missing or extra descriptors, order mismatch, absent `CLOEXEC`, policy
 mismatch, and credit exhaustion are fatal before semantic dispatch. Credit
-arithmetic is checked at all six scopes.
+arithmetic is checked at all six scopes. A `credentials` descriptor is accepted
+only when the exact negotiated attachment policy sets
+`credentialsAllowed = true`; count and credit validation still fail first when
+those bounds are violated.
 
 ## Errors and telemetry
 
@@ -207,6 +217,8 @@ provider peers; and realm and guest bootstrap. Every case fixes:
 
 - protocol name, purpose class, exact prologue, roles, and package;
 - static and ephemeral private test keys and static public keys;
+- derived static and ephemeral public keys, checked through the pinned `snow`
+  resolver;
 - PSK where applicable;
 - both handshake payloads and messages;
 - transcript hash and directional transport keys;
@@ -216,5 +228,9 @@ provider peers; and realm and guest bootstrap. Every case fixes:
 - wrong-operation, expired-PSK, and replay mutations for bootstrap.
 
 The vectors are test data, not production keys. Contract tests verify them
-with the pinned `snow = "=0.10.0"` dev dependency. Production contract code
+with the pinned `snow = "=0.10.0"` dev dependency, reject corrupted declared
+public keys, and execute bootstrap admission against the fixture's operation
+ID, replay nonce, validity time, and expiry time. Successful bootstrap admission
+consumes the state; wrong-operation, expiry, and second-use attempts return
+their exact closed handshake rejection reasons. Production contract code
 contains no cryptographic implementation.

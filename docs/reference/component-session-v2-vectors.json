@@ -20,6 +20,7 @@
         "6163636570743a6461656d6f6e2d6c6f63616c"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "command-client",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -38,6 +39,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "local-root-controller",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -65,6 +67,7 @@
         "6163636570743a70726f76696465722d6167656e74"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "realm-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -83,6 +86,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "provider-agent",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -110,6 +114,7 @@
         "6163636570743a70726976696c656765642d62726f6b6572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -128,6 +133,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "local-root-broker",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -155,6 +161,7 @@
         "6163636570743a757365722d6167656e74"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "command-client",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -173,6 +180,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "user-agent",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -200,6 +208,7 @@
         "6163636570743a72756e74696d652d73797374656d642d75736572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -218,6 +227,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "runtime-systemd-user-agent",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -245,6 +255,7 @@
         "6163636570743a7368656c6c2d73757065727669736f72"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "runtime-systemd-user-agent",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -263,6 +274,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "shell-supervisor",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -290,6 +302,7 @@
         "6163636570743a636c6970626f6172642d636f6e74726f6c"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "user-agent",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -308,6 +321,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "clipboard-daemon",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -335,6 +349,7 @@
         "6163636570743a636c6970626f6172642d7069636b6572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "clipboard-daemon",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -353,6 +368,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "clipboard-picker",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -380,6 +396,7 @@
         "6163636570743a636c6970626f6172642d627269646765"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "wayland-proxy",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -398,6 +415,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "clipboard-daemon",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -425,6 +443,7 @@
         "6163636570743a6465736b746f702d6f62736572766572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -443,6 +462,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "desktop-observer",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -470,6 +490,7 @@
         "6163636570743a73656375726974792d6b6579"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "security-key-frontend",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -488,6 +509,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "security-key-controller",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -515,6 +537,7 @@
         "6163636570743a61637469766174696f6e2d68656c706572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -533,6 +556,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "activation-helper",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -560,6 +584,7 @@
         "6163636570743a7474792d68656c706572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "command-client",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -578,6 +603,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "tty-helper",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -605,6 +631,7 @@
         "6163636570743a7761796c616e642d70726f7879"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": null,
       "initiatorStaticPublicHex": null,
@@ -623,6 +650,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "wayland-proxy",
       "responderStaticPrivateHex": null,
       "responderStaticPublicHex": null,
@@ -650,6 +678,7 @@
         "6163636570743a6461656d6f6e2d72656d6f7465"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "remote-peer",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -668,6 +697,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "local-root-controller",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
@@ -695,6 +725,7 @@
         "6163636570743a7265616c6d2d70656572"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "realm-controller",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -713,6 +744,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "realm-controller",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
@@ -740,6 +772,7 @@
         "6163636570743a67756573742d636f6e74726f6c"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "realm-controller",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -758,6 +791,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "guest-agent",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
@@ -785,6 +819,7 @@
         "6163636570743a70726f76696465722d6167656e74"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "realm-controller",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -803,6 +838,7 @@
         "channel-binding-mismatch"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "provider-agent",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
@@ -814,6 +850,14 @@
       }
     },
     {
+      "bootstrapBinding": {
+        "expiredAtUnixMs": 1800000060000,
+        "expiresAtUnixMs": 1800000060000,
+        "operationIdHex": "66666666666666666666666666666666",
+        "replayNonceHex": "8888888888888888888888888888888888888888888888888888888888888888",
+        "validAtUnixMs": 1800000000000,
+        "wrongOperationIdHex": "77777777777777777777777777777777"
+      },
       "firstRecords": {
         "initiatorCiphertextHex": "033d9422c98c4435014b62f49241d0ee5358a30d360c4b2f4a5eeb4d4facfe6836d576155412f5a2c5522d9ba9b22b3f3dee330320ce",
         "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a7265616c6d2d626f6f747374726170",
@@ -830,6 +874,7 @@
         "6163636570743a7265616c6d2d626f6f747374726170"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "local-root-controller",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -851,6 +896,7 @@
         "psk-replay"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "realm-controller",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
@@ -862,6 +908,14 @@
       }
     },
     {
+      "bootstrapBinding": {
+        "expiredAtUnixMs": 1800000060000,
+        "expiresAtUnixMs": 1800000060000,
+        "operationIdHex": "67676767676767676767676767676767",
+        "replayNonceHex": "8888888888888888888888888888888888888888888888888888888888888888",
+        "validAtUnixMs": 1800000000000,
+        "wrongOperationIdHex": "77777777777777777777777777777777"
+      },
       "firstRecords": {
         "initiatorCiphertextHex": "033d9422c98c4435014b62f49241d0ee5358a30d360c4b3a5a5af4544facfe6836d5761554121049e8afa47b13e77b12e4120515175e",
         "initiatorPlaintextHex": "66697273742d7265636f72643a696e69746961746f723a67756573742d626f6f747374726170",
@@ -878,6 +932,7 @@
         "6163636570743a67756573742d626f6f747374726170"
       ],
       "initiatorEphemeralPrivateHex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "initiatorEphemeralPublicHex": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
       "initiatorRole": "realm-controller",
       "initiatorStaticPrivateHex": "fd854264a06be19db34011574b527f91618ffc7acd0c45279f50b8ee2a2769a2",
       "initiatorStaticPublicHex": "2ac502e43ef8715b7acd6dab812674fe81a47a06f35f0be9890ff6127222f750",
@@ -899,6 +954,7 @@
         "psk-replay"
       ],
       "responderEphemeralPrivateHex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "responderEphemeralPublicHex": "ff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
       "responderRole": "guest-agent",
       "responderStaticPrivateHex": "24ecb094e122dc0e518e6ff049d8f2eb583765702b1ebfb5adfe23984f15c8f6",
       "responderStaticPublicHex": "478f4fc78e55f940296b9952d6f71e1d2ddfd5f2dc65cadcc569349500adcf7d",
