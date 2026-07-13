@@ -6,6 +6,7 @@ use super::{
 };
 
 pub const CHECKOUT_ACTION: &str = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5";
+pub const CHECKOUT_REF: &str = "${{ github.event.pull_request.head.sha || github.sha }}";
 pub const INSTALL_NIX_ACTION: &str =
     "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077";
 pub const RUST_CACHE_ACTION: &str = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32";
@@ -155,6 +156,8 @@ fn simple_nix_job(job: &JobSpec) -> String {
     timeout-minutes: {}
     steps:
       - uses: {}
+        with:
+          ref: {}
 {}
       - name: {}
         run: {}"#,
@@ -163,6 +166,7 @@ fn simple_nix_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         job.display_name,
         ci_make_command(make_target(job))
@@ -176,6 +180,8 @@ fn tier0_job(job: &JobSpec) -> String {
     timeout-minutes: {}
     steps:
       - uses: {}
+        with:
+          ref: {}
       - name: {}
         run: {}
       - name: ADR index coverage guard
@@ -189,6 +195,7 @@ fn tier0_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         job.display_name,
         ci_make_command(make_target(job))
     )
@@ -203,6 +210,7 @@ fn changelog_job(job: &JobSpec) -> String {
     steps:
       - uses: {}
         with:
+          ref: {}
           fetch-depth: 0
       - name: {}
         run: bash scripts/changelog-check.sh"#,
@@ -211,6 +219,7 @@ fn changelog_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         job.display_name
     )
 }
@@ -238,6 +247,7 @@ fn rust_job(job: &JobSpec) -> String {
     steps:
       - uses: {}
         with:
+          ref: {}
           fetch-depth: 0
 {}
       - name: Free runner disk for Rust gate
@@ -290,6 +300,7 @@ fn rust_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         RUST_CACHE_ACTION,
         job.display_name,
@@ -306,6 +317,8 @@ fn flake_discover_job(job: &JobSpec) -> String {
       checks: ${{{{ steps.list.outputs.checks }}}}
     steps:
       - uses: {}
+        with:
+          ref: {}
 {}
       - id: list
         name: {}
@@ -319,6 +332,7 @@ fn flake_discover_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         job.display_name,
         ci_silent_make_command("test-flake-list")
@@ -338,6 +352,8 @@ fn flake_x86_shards_job(job: &JobSpec) -> String {
         check: ${{{{ fromJSON(needs.{}.outputs.checks) }}}}
     steps:
       - uses: {}
+        with:
+          ref: {}
       - name: Add swap (insurance for the heaviest single check)
         run: |
           # A single check instantiates in its own process and fits a 16 GB
@@ -368,6 +384,7 @@ fn flake_x86_shards_job(job: &JobSpec) -> String {
         job.max_parallel.expect("validated maxParallel"),
         discover_job,
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         job.display_name,
         ci_make_command("test-flake")
@@ -381,6 +398,8 @@ fn flake_x86_outputs_job(job: &JobSpec) -> String {
     timeout-minutes: {}
     steps:
       - uses: {}
+        with:
+          ref: {}
 {}
       - name: {}
         env:
@@ -391,6 +410,7 @@ fn flake_x86_outputs_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         job.display_name,
         ci_make_command("test-flake")
@@ -441,6 +461,8 @@ fn flake_aarch64_smoke_job(job: &JobSpec) -> String {
     timeout-minutes: {}
     steps:
       - uses: {}
+        with:
+          ref: {}
 {}
       - name: {}
         run: |
@@ -452,6 +474,7 @@ fn flake_aarch64_smoke_job(job: &JobSpec) -> String {
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
+        CHECKOUT_REF,
         nix_setup_step(),
         job.display_name
     )
@@ -532,6 +555,13 @@ mod tests {
             include_str!("../../../../.github/workflows/pr-l1-static-fast.yml")
         );
         assert!(first.contains(CHECKOUT_ACTION));
+        assert_eq!(
+            first.matches(CHECKOUT_ACTION).count(),
+            first
+                .matches(&format!("          ref: {CHECKOUT_REF}"))
+                .count(),
+            "every checkout must select the exact pull-request head"
+        );
         assert!(first.contains(INSTALL_NIX_ACTION));
         assert!(first.contains(RUST_CACHE_ACTION));
         assert!(first.contains("  pull_request:\n  push:\n    branches: [main]"));

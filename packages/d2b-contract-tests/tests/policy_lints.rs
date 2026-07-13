@@ -355,3 +355,21 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
         "delivery reference must fail closed and keep evidence external"
     );
 }
+
+#[test]
+fn generated_layer1_workflow_checks_out_every_exact_candidate_head() {
+    let workflow = read_repo_file(".github/workflows/pr-l1-static-fast.yml");
+    let checkout_count = workflow.matches("uses: actions/checkout@").count();
+    let exact_ref_count = workflow
+        .matches("ref: ${{ github.event.pull_request.head.sha || github.sha }}")
+        .count();
+
+    assert!(
+        checkout_count > 0,
+        "Layer-1 workflow must check out its tree"
+    );
+    assert_eq!(
+        checkout_count, exact_ref_count,
+        "every generated Layer-1 checkout must select the exact candidate head"
+    );
+}

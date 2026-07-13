@@ -139,6 +139,7 @@ fn run_cli_inner(args: &[String]) -> Result<()> {
 
             let process_runner = runner::ProcessJobRunner::new(paths.root);
             let report = runner::execute_local(&manifest, skip_preflight, jobs, &process_runner)?;
+            process_runner.append_step_summary(&report)?;
             if report.failures.is_empty() {
                 println!("Layer-1 manifest runner OK");
                 Ok(())
