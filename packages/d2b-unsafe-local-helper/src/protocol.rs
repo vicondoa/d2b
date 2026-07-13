@@ -721,6 +721,8 @@ mod tests {
         let (payload_read, _payload_write) =
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
         let raw = payload_read.as_raw_fd();
+        let proc_path = std::path::PathBuf::from(format!("/proc/self/fd/{raw}"));
+        let original_identity = std::fs::read_link(&proc_path).unwrap();
         let result = send_queued_response(
             &sender,
             QueuedResponse {
@@ -729,6 +731,13 @@ mod tests {
             },
         );
         assert_eq!(result, Err(ProtocolError::ConnectFailed));
-        assert!(!std::path::Path::new(&format!("/proc/self/fd/{raw}")).exists());
+        match std::fs::read_link(&proc_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(current_identity) => assert_ne!(
+                current_identity, original_identity,
+                "failed send retained ownership of the original fd"
+            ),
+            Err(error) => panic!("failed to inspect released fd: {error}"),
+        }
     }
 }
