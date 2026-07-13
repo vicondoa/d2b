@@ -336,6 +336,12 @@ struct RustItem {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
+        [command, rest @ ..] if command == "delivery" => xtask::delivery::run_cli(rest),
+        [command, ..]
+            if ["stack", "wave", "evidence", "panel", "merge"].contains(&command.as_str()) =>
+        {
+            xtask::delivery::run_cli(&args)
+        }
         [command] if command == "gen-schemas" => run_task("gen-schemas", gen_schemas),
         [command] if command == "gen-cli-schemas" => run_task("gen-cli-schemas", gen_cli_schemas),
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
@@ -358,7 +364,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
+                "usage: cargo xtask <delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
             std::process::ExitCode::FAILURE
         }

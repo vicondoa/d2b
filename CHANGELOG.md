@@ -10,6 +10,13 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added Rust delivery tooling for validated stack graphs, immutable
+  tree-addressed snapshots, hashed validation evidence, exact-role panel
+  records, non-circular wave seals, history-only reuse proofs, and fail-closed
+  merge eligibility.
+
 ### Changed
 
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
