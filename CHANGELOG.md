@@ -20,6 +20,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Rejected local-VM realm workloads that advertise persistent shells while the
+  referenced guest has shell support disabled, preventing desktop clients from
+  exposing a terminal action that can only fail at runtime.
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
   concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process
