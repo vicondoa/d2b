@@ -5,7 +5,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -26,8 +26,32 @@ const STEP_SUMMARY_TRUNCATED: &str = "\n\n_Additional output omitted._\n";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobStatus {
     Succeeded,
-    Failed(i32),
+    Failed(JobResult),
     Blocked(Vec<String>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JobResult {
+    ExitCode(i32),
+    Signal(i32),
+    RunnerError,
+}
+
+impl JobResult {
+    fn status(self) -> JobStatus {
+        match self {
+            Self::ExitCode(0) => JobStatus::Succeeded,
+            failure => JobStatus::Failed(failure),
+        }
+    }
+
+    fn summary(self) -> String {
+        match self {
+            Self::ExitCode(code) => format!("exit {code}"),
+            Self::Signal(signal) => render_signal(signal),
+            Self::RunnerError => "runner error".to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,8 +73,8 @@ impl ExecutionReport {
             .failures
             .iter()
             .map(|outcome| match &outcome.status {
-                JobStatus::Failed(code) => {
-                    format!("{} (exit {code})", outcome.job_id)
+                JobStatus::Failed(result) => {
+                    format!("{} ({})", outcome.job_id, result.summary())
                 }
                 JobStatus::Blocked(dependencies) => format!(
                     "{} (blocked by {})",
@@ -65,7 +89,7 @@ impl ExecutionReport {
 }
 
 pub trait LocalJobRunner: Sync {
-    fn run(&self, job_id: &str, job: &JobSpec) -> i32;
+    fn run(&self, job_id: &str, job: &JobSpec) -> JobResult;
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +159,7 @@ impl ProcessJobRunner {
         }
     }
 
-    fn run_process(&self, job_id: &str, job: &JobSpec) -> Result<i32> {
+    fn run_process(&self, job_id: &str, job: &JobSpec) -> Result<JobResult> {
         let target = job
             .make_target
             .as_deref()
@@ -173,12 +197,13 @@ impl ProcessJobRunner {
                 let _ = fs::remove_file(&log_path);
                 let _ = fs::remove_dir(&log_dir);
             }
-            return Ok(0);
+            return Ok(JobResult::ExitCode(0));
         }
 
-        let code = status.code().unwrap_or(1);
+        let result = job_result(status);
+        let status_summary = result.summary();
         let redacted_log_path = self.redactor.redact(&log_path.display().to_string());
-        eprintln!("FAIL: {target} (exit {code}); tail of {redacted_log_path}:");
+        eprintln!("FAIL: {target} ({status_summary}); tail of {redacted_log_path}:");
         match tail_lines(&log_path, FAILURE_TAIL_LINES) {
             Ok(lines) => {
                 let redacted = lines
@@ -209,7 +234,7 @@ impl ProcessJobRunner {
                 self.record_summary(job_id, vec![message]);
             }
         }
-        Ok(code)
+        Ok(result)
     }
 
     fn record_summary(&self, job_id: &str, lines: Vec<String>) {
@@ -345,6 +370,47 @@ fn replace_path_root(text: &str, root: &str) -> String {
     rendered
 }
 
+fn job_result(status: ExitStatus) -> JobResult {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return JobResult::Signal(signal);
+        }
+    }
+
+    status
+        .code()
+        .map_or(JobResult::RunnerError, JobResult::ExitCode)
+}
+
+fn render_signal(signal: i32) -> String {
+    let name = known_signal_name(signal);
+    name.map_or_else(
+        || format!("signal {signal}"),
+        |name| format!("signal {signal} ({name})"),
+    )
+}
+
+fn known_signal_name(signal: i32) -> Option<&'static str> {
+    #[cfg(unix)]
+    {
+        use signal_hook::consts::{SIGKILL, SIGTERM};
+
+        match signal {
+            SIGKILL => Some("SIGKILL"),
+            SIGTERM => Some("SIGTERM"),
+            _ => None,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal;
+        None
+    }
+}
+
 fn render_step_summary(
     report: &ExecutionReport,
     entries: &[SummaryEntry],
@@ -364,7 +430,7 @@ fn render_step_summary(
         ));
         for outcome in &report.failures {
             let status = match &outcome.status {
-                JobStatus::Failed(code) => format!("exit {code}"),
+                JobStatus::Failed(result) => result.summary(),
                 JobStatus::Blocked(dependencies) => {
                     format!("blocked by {}", dependencies.join(", "))
                 }
@@ -378,15 +444,16 @@ fn render_step_summary(
             .map(|entry| (entry.job_id.as_str(), entry))
             .collect::<BTreeMap<_, _>>();
         for outcome in &report.failures {
-            let JobStatus::Failed(code) = outcome.status else {
+            let JobStatus::Failed(result) = outcome.status else {
                 continue;
             };
             let Some(entry) = entries.get(outcome.job_id.as_str()) else {
                 continue;
             };
             rendered.push_str(&format!(
-                "\n<details><summary>Redacted tail for <code>{}</code> (exit {code})</summary>\n\n",
-                outcome.job_id
+                "\n<details><summary>Redacted tail for <code>{}</code> ({})</summary>\n\n",
+                outcome.job_id,
+                result.summary()
             ));
             if entry.lines.is_empty() {
                 rendered.push_str("    No log tail was captured.\n");
@@ -418,14 +485,14 @@ fn truncate_step_summary(mut summary: String) -> String {
 }
 
 impl LocalJobRunner for ProcessJobRunner {
-    fn run(&self, job_id: &str, job: &JobSpec) -> i32 {
+    fn run(&self, job_id: &str, job: &JobSpec) -> JobResult {
         match self.run_process(job_id, job) {
-            Ok(code) => code,
+            Ok(result) => result,
             Err(error) => {
                 let message = self.redactor.redact(&error.to_string());
                 eprintln!("FAIL: Layer-1 job {job_id}: {message}");
                 self.record_summary(job_id, vec![message]);
-                1
+                JobResult::RunnerError
             }
         }
     }
@@ -681,18 +748,14 @@ where
                         changed.notify_all();
                         drop(scheduler);
 
-                        let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             runner.run(job_id, job)
                         }))
                         .unwrap_or_else(|_| {
                             eprintln!("FAIL: Layer-1 job worker panicked for {job_id}");
-                            1
+                            JobResult::RunnerError
                         });
-                        let status = if code == 0 {
-                            JobStatus::Succeeded
-                        } else {
-                            JobStatus::Failed(code)
-                        };
+                        let status = result.status();
                         let mut scheduler = state.lock().expect("Layer-1 scheduler lock");
                         scheduler.running -= 1;
                         scheduler.results.insert(job_id.clone(), status.clone());
@@ -730,15 +793,11 @@ fn run_one<R: LocalJobRunner>(manifest: &Layer1Manifest, job_id: &str, runner: &
         .make_target
         .clone()
         .unwrap_or_else(|| "<missing>".to_owned());
-    let code = runner.run(job_id, job);
+    let result = runner.run(job_id, job);
     JobOutcome {
         job_id: job_id.to_owned(),
         make_target: target,
-        status: if code == 0 {
-            JobStatus::Succeeded
-        } else {
-            JobStatus::Failed(code)
-        },
+        status: result.status(),
     }
 }
 
@@ -834,16 +893,20 @@ mod tests {
     #[derive(Default)]
     struct RecordingRunner {
         events: Mutex<Vec<String>>,
-        statuses: BTreeMap<String, i32>,
+        statuses: BTreeMap<String, JobResult>,
     }
 
     impl LocalJobRunner for RecordingRunner {
-        fn run(&self, job_id: &str, _job: &JobSpec) -> i32 {
+        fn run(&self, job_id: &str, _job: &JobSpec) -> JobResult {
             self.events
                 .lock()
                 .expect("events")
                 .push(format!("start:{job_id}"));
-            let status = self.statuses.get(job_id).copied().unwrap_or(0);
+            let status = self
+                .statuses
+                .get(job_id)
+                .copied()
+                .unwrap_or(JobResult::ExitCode(0));
             self.events
                 .lock()
                 .expect("events")
@@ -894,7 +957,7 @@ mod tests {
     }
 
     impl LocalJobRunner for BlockingRunner {
-        fn run(&self, _job_id: &str, _job: &JobSpec) -> i32 {
+        fn run(&self, _job_id: &str, _job: &JobSpec) -> JobResult {
             let mut state = self.state.lock().expect("blocking runner state");
             state.active += 1;
             state.max_active = state.max_active.max(state.active);
@@ -903,7 +966,7 @@ mod tests {
                 state = self.changed.wait(state).expect("blocking runner wait");
             }
             state.active -= 1;
-            0
+            JobResult::ExitCode(0)
         }
     }
 
@@ -1049,7 +1112,10 @@ mod tests {
         manifest.ci.rollup_needs = vec!["after".to_owned()];
         let runner = RecordingRunner {
             events: Mutex::new(Vec::new()),
-            statuses: BTreeMap::from([("one".to_owned(), 3), ("two".to_owned(), 7)]),
+            statuses: BTreeMap::from([
+                ("one".to_owned(), JobResult::ExitCode(3)),
+                ("two".to_owned(), JobResult::ExitCode(7)),
+            ]),
         };
         let report = execute_local(&manifest, false, 2, &runner).expect("execute");
         assert_eq!(
@@ -1066,6 +1132,54 @@ mod tests {
         assert!(!events.contains(&"start:after".to_owned()));
         assert!(report.failure_summary().contains("one (exit 3)"));
         assert!(report.failure_summary().contains("two (exit 7)"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_results_preserve_exit_codes_and_termination_signals() {
+        use signal_hook::consts::{SIGKILL, SIGTERM};
+
+        let exit = Command::new("sh")
+            .args(["-c", "exit 23"])
+            .status()
+            .expect("normal exit");
+        let sigkill = Command::new("sh")
+            .args(["-c", "kill -KILL $$"])
+            .status()
+            .expect("SIGKILL exit");
+        let sigterm = Command::new("sh")
+            .args(["-c", "kill -TERM $$"])
+            .status()
+            .expect("SIGTERM exit");
+
+        assert_eq!(job_result(exit), JobResult::ExitCode(23));
+        assert_eq!(job_result(sigkill), JobResult::Signal(SIGKILL));
+        assert_eq!(job_result(sigterm), JobResult::Signal(SIGTERM));
+
+        let report = report(vec![
+            JobOutcome {
+                job_id: "killed".to_owned(),
+                make_target: "killed".to_owned(),
+                status: JobStatus::Failed(JobResult::Signal(SIGKILL)),
+            },
+            JobOutcome {
+                job_id: "terminated".to_owned(),
+                make_target: "terminated".to_owned(),
+                status: JobStatus::Failed(JobResult::Signal(SIGTERM)),
+            },
+        ]);
+        let human = report.failure_summary();
+        assert!(human.contains(&format!("killed (signal {SIGKILL} (SIGKILL))")));
+        assert!(human.contains(&format!("terminated (signal {SIGTERM} (SIGTERM))")));
+
+        let summary = render_step_summary(
+            &report,
+            &[],
+            &WorkspaceRedactor::new(Path::new("/checkout/d2b"), []),
+        );
+        assert!(summary.contains(&format!("`killed` (signal {SIGKILL} (SIGKILL))")));
+        assert!(summary.contains(&format!("`terminated` (signal {SIGTERM} (SIGTERM))")));
+        assert!(!summary.contains("core"));
     }
 
     #[test]
@@ -1145,7 +1259,7 @@ mod tests {
                 JobOutcome {
                     job_id: "test-rust".to_owned(),
                     make_target: "test-rust".to_owned(),
-                    status: JobStatus::Failed(17),
+                    status: JobStatus::Failed(JobResult::ExitCode(17)),
                 },
                 JobOutcome {
                     job_id: "test-policy".to_owned(),
@@ -1157,7 +1271,7 @@ mod tests {
                 JobOutcome {
                     job_id: "test-rust".to_owned(),
                     make_target: "test-rust".to_owned(),
-                    status: JobStatus::Failed(17),
+                    status: JobStatus::Failed(JobResult::ExitCode(17)),
                 },
                 JobOutcome {
                     job_id: "test-policy".to_owned(),
@@ -1194,12 +1308,12 @@ mod tests {
             outcomes: vec![JobOutcome {
                 job_id: "test-rust".to_owned(),
                 make_target: "test-rust".to_owned(),
-                status: JobStatus::Failed(1),
+                status: JobStatus::Failed(JobResult::ExitCode(1)),
             }],
             failures: vec![JobOutcome {
                 job_id: "test-rust".to_owned(),
                 make_target: "test-rust".to_owned(),
-                status: JobStatus::Failed(1),
+                status: JobStatus::Failed(JobResult::ExitCode(1)),
             }],
         };
         let redactor = WorkspaceRedactor::new(Path::new("/secret/checkout"), []);
