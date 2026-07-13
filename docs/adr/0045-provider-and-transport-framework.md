@@ -2599,6 +2599,13 @@ Layer-1 manifests/workflows, stacked-PR base triggering, PR dependency/evidence
 fields without AI attribution, and Nix dev tooling for `gh-stack`, pinned
 nightly `cargo-udeps`, and `cargo-semver-checks`.
 
+AGENTS must require the integrator to open or update the wave PR immediately
+after the immutable candidate is committed and focused preflight passes, before
+starting the final long local/host validation and full panel. GitHub CI, final
+local validation, and panel inspection then run concurrently against the same
+tree hash. A PR may show those lanes as pending; it cannot merge until every
+required CI/local/host result and the 10/10 panel are present in the seal.
+
 #### W2 - Workspace and canonical contracts
 
 W2 first runs the blocking dependency/API-fit spike for exact
@@ -2932,10 +2939,14 @@ The W1 tool writes those records and the later validation/panel/seal payloads to
 the same class of external tree-hash-addressed storage or to GitHub artifacts and
 checks; its output is not a commit candidate.
 
-Two lanes run concurrently against that exact immutable tree:
+After focused preflight passes, the integrator opens or updates the PR for the
+exact snapshot before starting the final lanes. Three activities then proceed
+concurrently against that exact immutable tree:
 
-1. validators run the required tests and import hash-bound command/results;
-2. the full panel inspects the tree, plan, and live evidence status but runs no
+1. GitHub runs the PR's required CI shards;
+2. validators run the required local/host tests and import hash-bound
+   command/results;
+3. the full panel inspects the tree, plan, and live evidence status but runs no
    tests.
 
 Every wave uses all ten roles:
