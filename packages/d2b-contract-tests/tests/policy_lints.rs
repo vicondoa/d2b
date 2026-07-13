@@ -60,7 +60,11 @@ fn adr_0015_present_with_header_and_cross_references() {
     }
     let adr = read_repo_file("docs/adr/0015-daemon-only-clean-break.md");
     assert_line_matches(&adr, r"(?m)^# 0015\. ", "ADR 0015 title");
-    assert_line_matches(&adr, r"(?m)^- Status: Accepted$", "ADR 0015 Status header");
+    assert_line_matches(
+        &adr,
+        r"(?m)^- Status: Superseded by \[ADR 0045\]\(0045-provider-and-transport-framework\.md\)$",
+        "ADR 0015 Status header",
+    );
     assert_line_matches(&adr, r"(?m)^- Wave: P6$", "ADR 0015 Wave header");
     assert_line_matches(
         &adr,
