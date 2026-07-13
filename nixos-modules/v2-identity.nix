@@ -68,12 +68,7 @@ let
     go 0;
 
   isPrintableAscii = value:
-    value != ""
-    && builtins.all
-      (index:
-        let c = builtins.substring index 1 value;
-        in (builtins.tryEval (findChar printable c)).success)
-      (builtins.genList (index: index) (builtins.stringLength value));
+    builtins.match "[ -~]+" value != null;
 
   validateCanonicalName = kind: value:
     if builtins.stringLength value <= 63
@@ -196,8 +191,17 @@ let
       parts = parsed.acc;
     };
 
+  hexNibbles = {
+    "0" = 0; "1" = 1; "2" = 2; "3" = 3;
+    "4" = 4; "5" = 5; "6" = 6; "7" = 7;
+    "8" = 8; "9" = 9; "a" = 10; "b" = 11;
+    "c" = 12; "d" = 13; "e" = 14; "f" = 15;
+  };
+
   hexNibble = char:
-    findChar hexAlphabet char;
+    if builtins.hasAttr char hexNibbles
+    then builtins.getAttr char hexNibbles
+    else throw "v2 identity: digest is not lowercase hexadecimal";
 
   byteAt = hex: index:
     16 * hexNibble (builtins.substring (2 * index) 1 hex)
