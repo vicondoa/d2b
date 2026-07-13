@@ -897,19 +897,25 @@ fn ts_at_least(line: &str, since: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        base.join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ))
+        fs::create_dir_all(&base).expect("create audit test scratch root");
+        for _ in 0..1024 {
+            let id = NEXT_SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
+            let path = base.join(format!("{prefix}-{}-{id}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return path,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create audit test directory {}: {error}", path.display()),
+            }
+        }
+        panic!("failed to reserve a unique audit test directory")
     }
 
     #[test]

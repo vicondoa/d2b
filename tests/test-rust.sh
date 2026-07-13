@@ -41,27 +41,43 @@ if [ -z "$pinned_channel" ]; then
 fi
 export pinned_channel
 
-workspace_target_dir=$(d2b_cargo_target_dir workspace)
-# Separate target dirs for the broker's three concurrent feature passes so they
-# don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
-# (not mktemp): sccache hashes the inherited CARGO_* environment, including
-# CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
-# and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
-# hits) while still avoiding lock contention. They are gitignored and reused
-# across runs like the default broker/workspace target dirs.
-broker_target_dir=$(d2b_cargo_target_dir broker)
-broker_layer1_target_dir="${broker_target_dir%/}-layer1"
-broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
-guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
+# Keep the pinned gate isolated from packages/target, where developers may have
+# built with a different rustc. Rust metadata is not cross-version compatible;
+# a shared target can make rustdoc load an rlib produced by the wrong compiler.
+# Stable per-toolchain dirs preserve incremental reuse and sccache hits without
+# allowing an unpinned Cargo invocation to poison the gate.
+workspace_target_dir=$(d2b_cargo_gate_target_dir workspace "$pinned_channel")
+broker_target_dir=$(d2b_cargo_gate_target_dir broker "$pinned_channel")
+broker_layer1_target_dir=$(d2b_cargo_gate_target_dir broker-layer1 "$pinned_channel")
+broker_fakebackends_target_dir=$(d2b_cargo_gate_target_dir broker-fakebackends "$pinned_channel")
+guest_shell_runner_target_dir=$(d2b_cargo_gate_target_dir guest-shell-runner "$pinned_channel")
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full D2B_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
 workspace_test_excludes=(--exclude d2b-contract-tests)
 
-d2b_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path "$pinned_channel" || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
+pinned_toolchain_active=0
+if command -v cargo >/dev/null 2>&1 \
+  && command -v rustc >/dev/null 2>&1 \
+  && command -v rustfmt >/dev/null 2>&1 \
+  && command -v cargo-fmt >/dev/null 2>&1 \
+  && command -v cargo-clippy >/dev/null 2>&1 \
+  && command -v clippy-driver >/dev/null 2>&1 \
+  && cargo --version | grep -Fq "$pinned_channel" \
+  && rustc --version | grep -Fq "$pinned_channel" \
+  && rustfmt --version >/dev/null 2>&1 \
+  && cargo fmt --version >/dev/null 2>&1 \
+  && clippy-driver --version >/dev/null 2>&1 \
+  && cargo clippy --version >/dev/null 2>&1; then
+  pinned_toolchain_active=1
+fi
+
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && ! command -v rustup >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "rustup not on PATH and nix is unavailable; rust gate cannot run pinned Rust $pinned_channel"
     exit 1
@@ -79,7 +95,9 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>
   exit $?
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && command -v rustup >/dev/null 2>&1; then
   export D2B_RUST_GATE_IN_NIX_SHELL=1
   export D2B_RUST_GATE_BOOTSTRAP_RUSTUP=1
   export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
@@ -87,7 +105,9 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1
   rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "neither cargo nor nix is on PATH; rust gate cannot run"
     exit 1
@@ -398,9 +418,13 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && \
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && \
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
@@ -494,12 +518,15 @@ cargo_audit_check "broker workspace" "$broker_lock_file"
 cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
 
 log "--> tests/tools/stub-no-socket.sh"
-bash "$ROOT/tests/tools/stub-no-socket.sh"
+D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
+  bash "$ROOT/tests/tools/stub-no-socket.sh"
 ok "stub-no-socket"
 
 # Fail-closed Rust test inventory: every pinned workspace + broker test must
 # still exist (catches a silently-deleted test that would otherwise vanish from
 # coverage). The pinned set is committed under tests/golden/pinned/.
 log "--> tests/tools/assert-pinned-tests.sh"
-bash "$ROOT/tests/tools/assert-pinned-tests.sh"
+D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
+D2B_BROKER_GATE_TARGET_DIR="$broker_target_dir" \
+  bash "$ROOT/tests/tools/assert-pinned-tests.sh"
 ok "assert-pinned-tests"

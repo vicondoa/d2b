@@ -22,20 +22,14 @@ test_script="$ROOT/tests/test-rust.sh"
 
 rc=0
 
-# --- Build the set of target dirs that test-rust.sh actually uses ---
-# These are the paths that MUST be cached for warm CI builds.
-declared_dirs=(
-  "packages -> target"
-  "packages/d2b-priv-broker -> target"
-)
-# Broker parallel feature-pass target dirs: the script uses
-# ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
-# packages/d2b-priv-broker/target.
-while IFS= read -r suffix; do
-  declared_dirs+=("packages/d2b-priv-broker/target-${suffix}")
-done < <(
-  grep -oP '(?<=broker_target_dir%/\}-)[a-z0-9]+' "$test_script" | sort -u
-)
+# The pinned gate places every workspace and standalone feature pass below one
+# toolchain-scoped root. Cache that root rather than enumerating a channel or
+# each scope, so a toolchain bump does not require a workflow path rewrite.
+declared_dirs=("packages/.d2b-gate-targets")
+if ! grep -q 'd2b_cargo_gate_target_dir' "$test_script"; then
+  log "FAIL: test-rust.sh does not use the toolchain-scoped target helper"
+  rc=1
+fi
 
 # --- Extract cached dirs from CI workflow (simple grep) ---
 # The workflow's Swatinem/rust-cache step declares paths in `workspaces:`
