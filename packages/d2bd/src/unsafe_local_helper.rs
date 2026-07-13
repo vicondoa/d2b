@@ -1376,24 +1376,14 @@ mod tests {
 
     fn fd_identity(raw: std::os::fd::RawFd) -> TestFdIdentity {
         let stat = nix::sys::stat::fstat(raw).expect("fstat test fd");
-        (
-            stat.st_dev,
-            stat.st_ino,
-            stat.st_mode as u64,
-            stat.st_rdev,
-        )
+        (stat.st_dev, stat.st_ino, stat.st_mode as u64, stat.st_rdev)
     }
 
     fn assert_original_fd_closed(raw: std::os::fd::RawFd, original: TestFdIdentity) {
         match nix::sys::stat::fstat(raw) {
             Err(nix::errno::Errno::EBADF) => {}
             Ok(stat) => assert_ne!(
-                (
-                    stat.st_dev,
-                    stat.st_ino,
-                    stat.st_mode as u64,
-                    stat.st_rdev,
-                ),
+                (stat.st_dev, stat.st_ino, stat.st_mode as u64, stat.st_rdev,),
                 original,
                 "original fd object remained open"
             ),
