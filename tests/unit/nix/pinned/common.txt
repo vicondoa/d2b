@@ -756,6 +756,17 @@ usb-security-key/valid-config-no-assertion-failures
 usb-security-key/valid-config-vm-option-set
 usb-security-key/vm-default-disabled
 usb-security-key/vm-enabled-host-disabled-fails
+v2-identity/canonical-cross-language-vectors
+v2-identity/duplicate-provider-ids-fail-closed
+v2-identity/global-short-id-collisions-fail-closed
+v2-identity/malformed-encodings-fail-recomputation
+v2-identity/malformed-short-ids-are-rejected
+v2-identity/partition-boundaries-are-distinct
+v2-identity/provider-types-are-closed-and-fully-vectored
+v2-identity/realm-path-is-leaf-to-root
+v2-identity/renames-produce-new-ids
+v2-identity/role-kinds-are-closed-and-fully-vectored
+v2-identity/short-id-path-proof
 vm-eval-overlays/guest-inherits-host-overlays
 volume-mounts/disk-init-absolute
 volume-mounts/disk-init-non-ext4
