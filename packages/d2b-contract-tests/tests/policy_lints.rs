@@ -50,7 +50,7 @@ fn v1_1_kernel_floor_declared_in_adr_and_migration_guide() {
 
 // Migrated from tests/adr-0015-presence-eval.sh.
 #[test]
-fn adr_0015_present_with_header_and_cross_references() {
+fn adr_0015_superseded_with_historical_invariants() {
     for f in [
         "docs/adr/0015-daemon-only-clean-break.md",
         "docs/adr/0045-provider-and-transport-framework.md",
@@ -99,8 +99,103 @@ fn adr_0015_present_with_header_and_cross_references() {
     );
     let adr_index = read_repo_file("docs/adr/README.md");
     assert!(
-        adr_index.contains("0015-daemon-only-clean-break.md"),
-        "docs/adr/README.md index must list 0015-daemon-only-clean-break.md"
+        adr_index.lines().any(|line| {
+            line.contains("0015-daemon-only-clean-break.md")
+                && line.contains("| Superseded |")
+                && line.contains("ADR 0045")
+        }),
+        "ADR index must mark ADR 0015 as superseded by ADR 0045"
+    );
+}
+
+#[test]
+fn adr_0045_accepted_with_realm_and_delivery_contracts() {
+    for file in [
+        "docs/adr/0045-provider-and-transport-framework.md",
+        "AGENTS.md",
+        "tests/AGENTS.md",
+        "tests/README.md",
+        "docs/how-to/adding-a-test.md",
+        "docs/adr/README.md",
+    ] {
+        assert!(repo_path_exists(file), "missing {file}");
+    }
+
+    let adr = read_repo_file("docs/adr/0045-provider-and-transport-framework.md");
+    assert_line_matches(&adr, r"(?m)^# ADR 0045: ", "ADR 0045 title");
+    assert_line_matches(&adr, r"(?m)^- Status: Accepted$", "ADR 0045 Status header");
+    assert_line_matches(
+        &adr,
+        r"(?m)^- Date: [0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "ADR 0045 ISO Date header",
+    );
+    for section in [
+        r"(?m)^## Context$",
+        r"(?m)^## Decision summary$",
+        r"(?m)^## Realm process and authority model$",
+        r"(?m)^## Normative precedence$",
+    ] {
+        assert_line_matches(&adr, section, "ADR 0045 required section");
+    }
+    for required in [
+        "parent-spawns each child controller",
+        "and broker as separate pidfd-supervised processes",
+        "Child processes are not PID1 units.",
+        "Delivery uses `gh-stack`, Rust `xtask`, immutable tree snapshots",
+        "validation and panel lanes",
+    ] {
+        assert!(
+            adr.contains(required),
+            "ADR 0045 is missing required contract text: {required}"
+        );
+    }
+
+    let agents = read_repo_file("AGENTS.md");
+    for required in [
+        "## Realm-local control-plane end state",
+        "parent-spawned",
+        "pidfd-supervised",
+        "run concurrently against that",
+        "they never run tests, builds, evals",
+    ] {
+        assert!(
+            agents.contains(required),
+            "AGENTS.md is missing accepted ADR 0045 policy: {required}"
+        );
+    }
+
+    let test_agents = read_repo_file("tests/AGENTS.md");
+    assert!(
+        test_agents.contains("and the ten-role panel proceed concurrently"),
+        "tests/AGENTS.md must require concurrent final lanes"
+    );
+    assert!(
+        test_agents.contains("Reviewers") && test_agents.contains("never execute tests"),
+        "tests/AGENTS.md must keep reviewers out of validator execution"
+    );
+
+    let test_readme = read_repo_file("tests/README.md");
+    assert!(
+        test_readme.contains("Open or update the PR and `gh-stack` graph")
+            && test_readme.contains("panel concurrently against that snapshot")
+            && test_readme.contains("Do not paste raw"),
+        "tests/README.md must keep PR-before-final-lanes and external-summary-only evidence"
+    );
+    let adding_test = read_repo_file("docs/how-to/adding-a-test.md");
+    assert!(
+        adding_test.contains("## Open the PR before final gates")
+            && adding_test.contains("final validator lane after the PR opens")
+            && adding_test.contains("Never paste raw"),
+        "adding-a-test guide must keep PR-before-final-lanes and external-summary-only evidence"
+    );
+
+    let adr_index = read_repo_file("docs/adr/README.md");
+    assert!(
+        adr_index.lines().any(|line| {
+            line.contains("0045-provider-and-transport-framework.md")
+                && line.contains("| Accepted |")
+        }),
+        "ADR index must list ADR 0045 as Accepted"
     );
 }
 

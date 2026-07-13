@@ -36,7 +36,11 @@ deprecations ship one minor release before removal.
 - Moved Layer-1 manifest validation, bounded local orchestration, flake-check
   discovery, and generated workflow ownership from Python and Bash into Rust
   `xtask`, and enabled the generated PR workflow for stacked non-main bases.
-- Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
+- Replaced serial phase gating and the three-unit process assumption with
+  speculative `gh-stack` waves, exact-tree concurrent CI/validator/panel lanes,
+  external `xtask` evidence and seals, full ten-role end-of-wave review, and the
+  accepted local-root plus parent-spawned per-realm controller/broker model.
+- Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
@@ -47,6 +51,9 @@ deprecations ship one minor release before removal.
 - Hardened Layer-1 scheduling and generated CI rollups against slot underfill,
   skippable-only dependency coverage, invalid workflow job IDs, option-like Make
   targets, and clean environments without `sccache`.
+- Aligned delivery documentation and fail-closed policy checks with the
+  hardened candidate/content identifiers, external panel attestations,
+  manifest-driven Layer-1 commands, and PR-before-final-gates order.
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
   concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process
