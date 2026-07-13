@@ -413,28 +413,65 @@ fn gen_ttrpc_api_fit_spike() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let proto_dir = crate_dir.join("proto");
     let proto = proto_dir.join("ttrpc_api_fit_spike.proto");
     let out_dir = crate_dir.join("src/generated");
-    fs::create_dir_all(&out_dir)?;
+    let staging_dir = create_exclusive_temp_dir("d2b-ttrpc-api-fit")?;
 
-    ttrpc_codegen::Codegen::new()
-        .out_dir(&out_dir)
-        .input(&proto)
-        .include(&proto_dir)
-        .rust_protobuf()
-        .rust_protobuf_customize(ttrpc_codegen::ProtobufCustomize::default().gen_mod_rs(false))
-        .customize(ttrpc_codegen::Customize {
-            async_all: true,
-            ..Default::default()
-        })
-        .run()?;
+    let generation = (|| {
+        ttrpc_codegen::Codegen::new()
+            .out_dir(&staging_dir)
+            .input(&proto)
+            .include(&proto_dir)
+            .rust_protobuf()
+            .rust_protobuf_customize(ttrpc_codegen::ProtobufCustomize::default().gen_mod_rs(false))
+            .customize(ttrpc_codegen::Customize {
+                async_all: true,
+                ..Default::default()
+            })
+            .run()?;
 
-    let outputs = [
-        out_dir.join("ttrpc_api_fit_spike.rs"),
-        out_dir.join("ttrpc_api_fit_spike_ttrpc.rs"),
-    ];
-    for output in &outputs {
-        sanitize_generated_rust(output)?;
+        let expected_names = ["ttrpc_api_fit_spike.rs", "ttrpc_api_fit_spike_ttrpc.rs"];
+        let mut actual_names = fs::read_dir(&staging_dir)?
+            .map(|entry| {
+                entry?
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| "generated output name is not UTF-8".into())
+            })
+            .collect::<Result<Vec<String>, Box<dyn std::error::Error>>>()?;
+        actual_names.sort();
+        if actual_names != expected_names {
+            return Err(format!(
+                "ttrpc API-fit generator emitted unexpected files: {actual_names:?}"
+            )
+            .into());
+        }
+
+        for name in expected_names {
+            sanitize_generated_rust(&staging_dir.join(name))?;
+        }
+
+        fs::create_dir_all(&out_dir)?;
+        for entry in fs::read_dir(&out_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?;
+            } else {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        let outputs = expected_names.map(|name| out_dir.join(name));
+        for (name, output) in expected_names.into_iter().zip(&outputs) {
+            fs::copy(staging_dir.join(name), output)?;
+        }
+        Ok(outputs.into())
+    })();
+
+    let cleanup = fs::remove_dir_all(&staging_dir);
+    if let Err(error) = cleanup
+        && generation.is_ok()
+    {
+        return Err(error.into());
     }
-    Ok(outputs.into())
+    generation
 }
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
