@@ -27,17 +27,17 @@ These are separate responsibilities:
   iterating. Authoring a test does not certify the final candidate.
 - **Validators** execute the manifest-required local, integration, host, live,
   or hardware commands against the exact immutable wave tree and import
-  command/result evidence with the canonical W1 `xtask` tooling. Validators do
-  not review.
+  command/result evidence with the canonical delivery `xtask` tooling.
+  Validators do not review.
 - **Reviewers** inspect the exact tree, test design, dependency/contract changes,
   and external evidence status as members of the end-of-wave panel. Reviewers
   never execute tests, builds, evals, or other gates.
 
-After focused preflight, the integrator snapshots the candidate and opens or
-updates its PR. GitHub CI, the final validator lane, and the ten-role panel then
-proceed concurrently on that tree. Any content change invalidates both
-validator evidence and panel signoff. Pending lanes are valid on an open PR but
-never make it merge-eligible.
+After focused preflight, the integrator opens or updates the PR and then
+snapshots that exact open PR/stack state. GitHub CI, the final validator lane,
+and the ten-role panel proceed concurrently on that tree. Any content change
+invalidates both validator evidence and panel signoff. Pending lanes are valid
+on an open PR but never make it merge-eligible.
 
 ## Taxonomy — name, definition, home, how it runs
 
@@ -84,7 +84,7 @@ files: **drift gates** (`tests/unit/gates/` — `xtask gen-* + git diff`) and
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
-   `cargo run -p xtask -- gen-*` and commit — do **not** add a new gate.
+   `cargo xtask gen-*` from `packages/` and commit — do **not** add a new gate.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
    device?** → the matching Layer-2 tier (9–12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
@@ -132,11 +132,21 @@ Types 2–5 (unit/integration/contract/policy-lint) are Rust and live under
 
 ## Layer-1 orchestration manifest
 
-After W1 integration, `tests/layer1-jobs.json` is the declarative source of
-truth for the Layer-1 PR/local graph and Rust `xtask` is the sole orchestration
-implementation for manifest validation, parallel local execution, and workflow
+`tests/layer1-jobs.json` is the declarative source of truth for the Layer-1
+PR/local graph and Rust `xtask` is the sole orchestration implementation for
+manifest validation, parallel local execution, check discovery, and workflow
 rendering. The existing `make` targets remain contributor-facing entry points;
-they delegate to the canonical manifest/`xtask` path.
+they delegate to this canonical path.
+
+The direct commands, run from `packages/`, are:
+
+```bash
+cargo xtask layer1 validate
+cargo xtask layer1 run-local
+cargo xtask layer1 workflow write
+cargo xtask layer1 workflow check
+cargo xtask layer1 checks list
+```
 
 Test authors edit the manifest when changing which `make test-*` targets belong
 to the PR-equivalent graph and regenerate
@@ -150,10 +160,12 @@ branch protection. Keep intermediate job/matrix names as generated
 implementation details unless a required-context migration explicitly needs
 them preserved.
 
-The same W1 delivery tooling owns immutable snapshots, evidence import, panel
+The same delivery tooling owns immutable snapshots, evidence import, panel
 record validation, identical-content proof, wave sealing, and merge
-eligibility. Those payloads live outside the repository; never add evidence or
-panel output to this manifest or another tracked test artifact.
+eligibility. Run `cargo xtask delivery wave help` from `packages/` for its
+machine-readable command/option index. Those payloads live outside the
+repository; never add evidence or panel output to this manifest or another
+tracked test artifact.
 
 ### Standalone Rust workspaces
 

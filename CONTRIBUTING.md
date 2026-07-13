@@ -26,10 +26,12 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 ## Running quality gates
 
 - `make check` is the PR-equivalent Layer-1 entry point.
-- After the delivery tooling is integrated, the checked Layer-1 manifest and
-  Rust `xtask` own validation, parallel local execution, and generated workflow
-  rendering; use the existing `make` entry points rather than invoking an
-  ad-hoc orchestrator.
+- The checked Layer-1 manifest and Rust `xtask` own validation, parallel local
+  execution, check discovery, and generated workflow rendering. Use the
+  existing `make` entry points. The direct equivalents, run from `packages/`,
+  are `cargo xtask layer1 validate`, `cargo xtask layer1 run-local`, and
+  `cargo xtask layer1 workflow <write|check>`; do not create an ad-hoc
+  orchestrator.
 - Run the smallest relevant focused preflight before opening or updating a PR.
   Final CI, local/host validation, and review run concurrently on the immutable
   PR tree.
@@ -39,8 +41,9 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ### Rust workspace checks
 
-The `packages/` Cargo workspace is gated by `tests/static.sh` and by
-`nix flake check --no-build --all-systems`. To run the gate locally:
+The `packages/` Cargo workspace is gated by the manifest-owned
+`make test-rust` job and by `nix flake check --no-build --all-systems`.
+For a focused local run:
 
 ```bash
 cargo --manifest-path packages/Cargo.toml fmt --check
@@ -87,16 +90,9 @@ cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --co
 cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
 ```
 
-`bash tests/static.sh` also has a fast path for Rust-heavy gates:
-
-- it resolves one shared Rust toolchain shell at the top of the run and
-  reuses that PATH in child scripts instead of spawning a fresh `nix shell`
-  per gate;
-- independent Rust, schema, and example gates run behind a small semaphore
-  controlled by `D2B_STATIC_JOBS` (default `4`);
-- `bash tests/tools/static-timing.sh` writes a per-gate wall-clock report to
-  `$ROOT/.static-timing.log`;
-- to profile one gate in isolation, run `time bash tests/<gate>.sh`.
+Use the owning crate test or `make test-rust` while iterating. The legacy
+monolithic `make check-static` entry point remains available, but it is not
+where new coverage or orchestration is added.
 
 #### Schema and shell-artifact drift gates
 
@@ -111,14 +107,6 @@ before committing whenever you touch the corresponding Rust types,
 - `cargo xtask gen-cli-shell-artifacts`
 - `cargo xtask gen-daemon-api`
 
-**Drift gates**
-
-- `bash tests/cli-json-drift.sh`
-- `bash tests/error-codes-drift.sh`
-- `bash tests/manpage-completion-drift.sh`
-- `bash tests/daemon-api-drift.sh`
-- `bash tests/cli-contract-coverage.sh`
-
 A typical regeneration loop is:
 
 ```bash
@@ -128,11 +116,7 @@ cargo xtask gen-error-codes
 cargo xtask gen-cli-shell-artifacts
 cargo xtask gen-daemon-api
 cd ..
-bash tests/cli-json-drift.sh
-bash tests/error-codes-drift.sh
-bash tests/manpage-completion-drift.sh
-bash tests/daemon-api-drift.sh
-bash tests/cli-contract-coverage.sh
+make test-drift
 ```
 
 ## Submitting a pull request
@@ -141,17 +125,20 @@ bash tests/cli-contract-coverage.sh
 - Keep one logical change per commit.
 - For dependent work, use official `gh-stack` to create, restack, and retarget
   the PR graph.
-- Commit the candidate, run focused preflight, create the canonical `xtask`
-  snapshot, then open or update the PR before final long validation or panel
-  review.
+- Commit the candidate, run focused preflight, open or update the PR/stack, and
+  then create the canonical `xtask` snapshot of that exact open state before
+  final long validation or panel review.
 - GitHub CI, final local/host validators, and the full end-of-wave panel may be
   pending when the PR opens and run concurrently. Every required lane and the
   tree-bound seal must pass before merge.
 - Any content change invalidates validator and panel results. History-only
   reuse requires canonical `xtask` proof of byte-identical content and rerun CI.
 - Keep evidence and panel output external. The PR body contains dependency,
-  base/head/tree, and check-status summaries only, with no AI, assistant, tool,
-  or model metadata.
+  base/head/tree, `candidate_id`/`content_id`, and check-status summaries only,
+  with no raw output, AI, assistant, tool, model, run, or provider metadata.
+- Run `cd packages && cargo xtask delivery wave help` for the canonical,
+  machine-readable delivery command and option index. The `delivery` namespace
+  is mandatory.
 - ADR-scale branches merge through GitHub only. After merge, restore the primary
   clone to `main` and fast-forward it; never locally merge the branch into
   `main` beforehand.
@@ -165,37 +152,29 @@ When docs disagree with committed, passing code, the code wins. Update the docs 
 ## Host-prepare gates
 
 Contributors touching anything in `packages/d2b-host/`,
-`packages/d2b-priv-broker/src/ops/`, or the host-prepare
-docs (`docs/how-to/host-prepare.md`,
-`docs/how-to/host-prepare.d/*.md`,
+`packages/d2b-priv-broker/src/ops/`, or the host-prepare docs
+(`docs/how-to/host-prepare.md`, `docs/how-to/host-prepare.d/*.md`,
 `docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`,
-ADRs 0011–0014) MUST run the host-prepare Layer-1 gate set before
-submitting:
+ADRs 0011–0014) must cover the change through the closed taxonomy in
+[`tests/AGENTS.md`](./tests/AGENTS.md). Use focused owning-crate or nix-unit
+tests while iterating, then include the applicable manifest jobs:
 
 ```bash
-# From the repo root:
-bash tests/cgroup-delegation-oracle.sh
-bash tests/pidfd-handoff.sh
-bash tests/host-prepare-network.sh
-bash tests/ipv6-off-readback.sh
-bash tests/ifname-collision.sh
-bash tests/path-safety-violation-fs.sh
-bash tests/nft-coexistence.sh
-bash tests/nft-foreign-rule-preservation.sh
-bash tests/usbip-firewall-skeleton.sh
-bash tests/kernel-module-matrix.sh
-bash tests/device-node-matrix.sh
-bash tests/ioctl-negative.sh
-bash tests/runner-shape-preflight.sh
-bash tests/minijail-version-check.sh
-bash tests/multi-env-daemon-backed.sh
+make test-rust
+make test-flake
+make test-policy
 ```
 
-Each of these is also wired into `tests/static.sh` per the
-integrator-owned wiring rule (scope agents add the standalone test
-under `tests/`, the integrator registers it). Running them
-standalone is recommended while iterating because the parallel-gate
-pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
+Do not add a standalone `tests/*.sh` gate or wire new work into
+`tests/static.sh`. If the Layer-1 graph itself changes, edit
+`tests/layer1-jobs.json`, then run:
+
+```bash
+cd packages
+cargo xtask layer1 validate
+cargo xtask layer1 workflow write
+cargo xtask layer1 workflow check
+```
 
 ### When to run the L2 KVM tests
 

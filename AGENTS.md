@@ -64,8 +64,7 @@ full picture and threat model.
 │   ├── d2bd/                  <- unprivileged public daemon / supervisor
 │   ├── d2b-priv-broker/       <- privileged broker for audited host mutations
 │   ├── d2b-guest-shell-runner/ <- standalone static guest helper for persistent shell feasibility
-│   └── xtask/                     <- schema / docs codegen helpers; see
-│                                      `docs/adr/0000` + `docs/adr/0009`
+│   └── xtask/                     <- schema/docs codegen + Layer-1/delivery workflows
 ├── tests/                          <- see "Test layout" below
 ├── examples/                       <- minimal / graphics-workstation / multi-env / with-entra-id
 ├── templates/default/              <- `nix flake init -t github:vicondoa/d2b`
@@ -112,9 +111,10 @@ make test
 
 Before opening or updating a wave PR, commit the candidate and run the
 smallest focused preflight that can catch an obviously broken tree.
-After that preflight passes, snapshot the exact tree and open or update
-the PR. Run the final local/host validation matrix only after the PR is
-open, concurrently with GitHub CI and the end-of-wave panel:
+After that preflight passes, open or update the PR, then snapshot the
+exact open PR/stack state. Run the final local/host validation matrix
+only after the PR is open, concurrently with GitHub CI and the
+end-of-wave panel:
 
 ```bash
 make test-integration       # Layer 2 container tests; needs podman
@@ -211,20 +211,26 @@ Use this shape:
    retargeting. Do not replace it with ad-hoc `gh`/Git stack scripts.
 2. Stack only real dependencies. Independent branches target `main`; dependent
    branches target the exact contract PR they consume.
-3. Once W1 delivery tooling is integrated, use its canonical Rust `xtask`
-   commands for wave snapshots, evidence import, panel validation, wave seals,
-   rebase/retarget preflight, merge-train status, and merge eligibility. The
-   stable entry points include `cargo xtask wave snapshot` and
-   `cargo xtask wave seal`; consult `cargo xtask --help` for their required
-   manifest and evidence arguments rather than recreating orchestration.
-4. After focused preflight, open or update the PR for the exact snapshot before
-   final long validation or panel review. GitHub CI, validators, and reviewers
-   then work concurrently on that immutable tree. Pending lanes permit an open
-   PR, never a merge.
+3. Use the hardened Rust `xtask` commands for snapshots, validation run/import,
+   panel request/attestation, sealing/verification, history proof, retarget
+   preflight, eligibility, and merge. The machine-readable command index is:
+
+   ```bash
+   cd packages
+   cargo xtask delivery wave help
+   ```
+
+   Do not omit the `delivery` namespace or infer options from a generic
+   `--help`; the command index above is authoritative.
+4. After focused preflight, open or update the PR and then create the immutable
+   snapshot of that exact open PR/stack state. GitHub CI, validators, and
+   reviewers work concurrently on the snapshotted tree. Pending lanes permit
+   an open PR, never a merge.
 5. Keep validation, panel, and seal payloads external to Git. PR bodies contain
-   only dependency, base/head/tree, and check-status summaries and may link to
-   external evidence. Never commit or embed raw evidence or panel output, and
-   never include AI, assistant, tool, or model metadata.
+   only dependency, base/head/tree, `candidate_id`/`content_id`, and check-status
+   summaries and may link to external evidence. Never commit or embed raw
+   evidence or panel output, and never include AI, assistant, tool, or model
+   metadata.
 6. If any content changes—including generated output, dependency metadata,
    contracts, or repository membership—both validation and panel results are
    invalid. A history-only rebase or retarget may reuse panel results only after
@@ -437,14 +443,14 @@ panels are the completed bootstrap exception.
 
 The integrator follows this order:
 
-1. integrate and commit the candidate, run focused preflight, and create the
-   immutable `xtask` wave snapshot;
-2. open or update the PR for that exact base, heads, dependency graph, repository
-   set, and tree hash;
-3. start three concurrent lanes on the snapshot: required GitHub CI, final
+1. integrate and commit the candidate and run focused preflight;
+2. open or update the PR, then create the immutable `xtask` snapshot for that
+   exact base, heads, dependency graph, repository set, and prospective merge
+   trees;
+3. run three concurrent lanes on the snapshot: required GitHub CI, final
    local/host validators, and the full panel;
-4. import validator command/result evidence and panel records into external
-   tree-hash-addressed storage;
+4. import validator command/result evidence and panel records into the external
+   candidate-ID-addressed state directory;
 5. run the canonical `xtask` wave seal and merge-eligibility checks; and
 6. merge through GitHub only after every lane is complete.
 
@@ -457,8 +463,9 @@ results; they do not review or substitute for panel signoff.
 Validation, panel, and seal records are external artifacts bound to the exact
 tree. Never commit them, copy them into generated artifacts, paste raw output
 into the PR body, or include them in a release archive. The PR body contains
-dependency, base/head/tree, and check-status summaries only, with optional links
-to external evidence and no AI, assistant, tool, or model metadata.
+dependency, base/head/tree, `candidate_id`/`content_id`, and check-status
+summaries only, with optional links to external evidence and no AI, assistant,
+tool, or model metadata.
 
 Every content change invalidates both the validator and panel lanes, including
 documentation, generated output, dependency metadata, contract/index content,
@@ -468,16 +475,44 @@ W1 `xtask` proof verifies byte-identical integrated content, generated
 artifacts, dependency diff, contract fingerprints, and repository set.
 Required CI still reruns on the new history.
 
-Each engineer returns a JSON sign-off record shaped like:
+Use the integrated delivery binary's generated command index for every delivery
+operation. Do not infer options from a generic `--help`:
+
+```bash
+cd packages
+cargo xtask delivery wave help
+```
+
+`cargo xtask delivery wave panel-request` writes the candidate-bound request.
+`cargo xtask delivery wave panel-attest` validates a directory containing
+exactly one record for every required role. Supply one
+`--repo LOGICAL_ID=CHECKOUT_ROOT` mapping for every repository in the wave.
+The request binds the candidate/content identities, snapshot digest, exact
+ten-role roster, and required model.
+
+Each role then supplies one strict 12-field attestation shaped like:
 
 ```json
 {
-  "engineer": "software",
+  "artifact_kind": "d2b-delivery/panel-attestation",
+  "schema_version": 1,
+  "role": "software",
+  "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "model_version": "gemini-3.1-pro-preview",
+  "provider": "google",
+  "run_id": "run-001",
+  "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "signoff": true,
-  "summary": "What was reviewed and the overall posture.",
   "recommendations": []
 }
 ```
+
+The delivery tool rejects unknown or missing fields, the wrong model or
+candidate binding, duplicate provider/run provenance, and inconsistent
+`signoff`/`recommendations`. Attestations and raw review output never enter Git,
+generated source, a PR body, or a release archive.
 
 By policy, `signoff` is `true` iff `recommendations` is `[]`; otherwise the
 recommendations are actionable findings. Any finding requires a content change,
@@ -489,7 +524,7 @@ small waves, requires unanimous 10/10 signoff before merge.
 
 Every role uses Gemini 3.1 Pro:
 
-| Engineer          | Focus |
+| Role              | Focus |
 |-------------------|-------|
 | `software`        | Shell + Nix shape of every new module, daemon instrumentation, idempotency of sidecars, error handling in metric exporters. |
 | `test`            | Coverage of new option schema, vsock CID collision cases, restart-policy gates, manifest schema drift, and what could regress invisibly. |
@@ -503,7 +538,8 @@ Every role uses Gemini 3.1 Pro:
 | `kernel`          | pidfd, cgroup, namespace, mount, signal, ioctl, and filesystem semantics; kernel-version assumptions and Linux API edge cases. |
 
 The wave seal requires all ten records to report `signoff: true` with empty
-recommendations and to bind the same immutable tree and candidate digest.
+recommendations and to bind the same `candidate_id`, `content_id`, and
+`snapshot_sha256`.
 Historical smaller rosters do not apply to ADR 0045 waves.
 
 ### Commit-tag mapping
@@ -533,10 +569,13 @@ form (e.g. `... ( W2fu4 H10 )`).
 
 ### Tooling note
 
-After W1 integration, Rust `xtask` owns candidate snapshots, evidence import,
-panel JSON validation, identical-content proof, sealing, and merge eligibility.
-Use those canonical commands and external artifacts rather than host-local
-panel scripts or repository-resident evidence.
+Rust `xtask` owns candidate snapshots, validation run/import, panel-request
+generation, strict panel-attestation validation, identical-content proof,
+sealing, and merge eligibility.
+Run `cd packages && cargo xtask delivery wave help` for the generated,
+machine-readable command/option index. Use those canonical commands and
+external artifacts rather than host-local panel scripts or repository-resident
+evidence.
 
 ## Test layout
 
@@ -550,7 +589,7 @@ At a glance:
 
 | Location | Role |
 | --- | --- |
-| `tests/test-*.sh`, `tests/static.sh`, `tests/runner.sh` | Make-target entry points/wrappers; after W1 the manifest and Rust `xtask` own orchestration. Do not add a new top-level shell gate unless `tests/AGENTS.md` explicitly permits it. |
+| `tests/test-*.sh`, `tests/static.sh`, `tests/runner.sh` | Make-target entry points/wrappers; the manifest and Rust `xtask` own orchestration. Do not add a new top-level shell gate unless `tests/AGENTS.md` explicitly permits it. |
 | `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
 | `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
@@ -656,20 +695,20 @@ the public option/schema surface and are not bookkeeping; leave them.
 
 `main` is protected: changes land through GitHub pull requests, never a direct
 push or a pre-merge local integration. Use `gh-stack` for dependent PRs. After
-the committed candidate passes focused preflight, create its immutable snapshot
-and immediately open or update the PR; do not wait for final long local/host
-validation or the panel.
+the committed candidate passes focused preflight, immediately open or update
+the PR and create its immutable snapshot from that open PR/stack state; do not
+wait for final long local/host validation or the panel.
 
 GitHub CI, validators, and the ten-role panel run concurrently against that
 exact tree. The PR may report final lanes as pending while open, but it may not
 merge until canonical `xtask` seal and merge-eligibility checks confirm all
 required results. Any content change resets both validator and panel status.
 
-PR bodies contain dependency, base/head/tree, and check-status summaries only.
-Panel records, command output, validation payloads, and seals remain external
-and may be linked, not embedded. Do **not** tag or list the AI agent, assistant,
-tool, or model used to author or review a change, and do not add PR-template
-fields requesting that metadata.
+PR bodies contain dependency, base/head/tree, `candidate_id`/`content_id`, and
+check-status summaries only. Panel records, command output, validation payloads,
+and seals remain external and may be linked, not embedded. Do **not** tag or list
+the AI agent, assistant, tool, or model used to author or review a change, and
+do not add PR-template fields requesting that metadata.
 
 The detailed wave-tag commit convention in
 [Commit conventions](#commit-conventions) applies to in-development commits on
@@ -1012,8 +1051,9 @@ contract:
   unit or receives `SD_LISTEN_FDS`.
 - The local-root controller supervises and adopts child controller/broker
   pidfds. Each realm controller supervises only its workload DAGs.
-- There are no per-realm child `.socket`/`.service` units and no per-workload
-  systemd units. Unit count does not scale with realm or workload count.
+- There are no per-realm child `.socket`/`.service` units.
+- There are no per-workload systemd templates or units. Unit count does not
+  scale with realm or workload count.
 - Realm-confined privileged effects go through that realm's broker; global host
   effects stay in closed local-root allocator operations. One broker with realm
   tags does not satisfy the boundary.

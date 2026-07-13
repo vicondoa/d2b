@@ -24,6 +24,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Aligned delivery documentation and fail-closed policy checks with the
+  hardened candidate/content identifiers, external panel attestations,
+  manifest-driven Layer-1 commands, and PR-before-final-gates order.
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
   concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process

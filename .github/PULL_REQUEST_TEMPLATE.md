@@ -18,9 +18,11 @@
 - **Dependencies (PRs/branches):** <!-- `none`, or ordered root-to-leaf list -->
 - **Base ref and commit:**
 - **Head ref and commit:**
-- **Integrated tree hash:** <!-- `git rev-parse HEAD^{tree}` -->
+- **Stack `prospective_merge_tree_oid` value(s):**
+- **Delivery `candidate_id`:**
+- **Delivery `content_id`:**
 - **`gh-stack` graph status:** <!-- current / needs restack, with check link -->
-- **Snapshot/evidence index status:** <!-- pending / current, external link only -->
+- **External snapshot/evidence status:** <!-- pending / current, status link only -->
 
 ## Required check status
 
@@ -41,11 +43,11 @@
 - [ ] **`make check` passes for the final tree** in the required CI or validator
       lane. This may be pending when the PR opens.
 - [ ] **`make test-integration` passes in the final validator lane**, **or**
-      state `N/A: pure policy/docs/checklist change with no daemon, broker,
-      NixOS module, runtime, network, or generated-artifact behavior change`.
+      state `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
+      module, runtime, network, or generated-artifact behavior change`.
 - [ ] **`make test-host-integration` passes in the final validator lane**, **or**
-      state `N/A: pure policy/docs/checklist change with no daemon, broker,
-      NixOS module, runtime, network, or generated-artifact behavior change`.
+      state `N/A: pure policy/docs/checklist change with no daemon, broker, NixOS
+      module, runtime, network, or generated-artifact behavior change`.
 - [ ] **Manual `make test-hardware` run** on a NixOS host **with the real
       devices**, if this change touches graphics/GPU, video decode,
       USBIP/YubiKey, hardware-TPM, or a full d2b-microVM boot; otherwise state
