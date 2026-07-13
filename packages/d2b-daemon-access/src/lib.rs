@@ -20,12 +20,13 @@ use std::{
 use async_trait::async_trait;
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, KnownFeatureFlag, MAX_FRAME_SIZE,
-    PUBLIC_SOCKET_PATH, SemverRange,
+    PUBLIC_SOCKET_PATH,
     public_wire::{
         ListEntry, ListRequest, ListResponse, PublicVmServices, RuntimeSummary, VmLifecycle,
         VmLifecycleState,
     },
 };
+use d2b_core::error::SemverRange;
 use d2b_realm_core::{
     Capability, CapabilitySet, ErrorKind, NodeId, PrincipalId, ProviderId,
     RealmAccessClientBindingKind, RealmAccessClientContract, RealmPath, WorkloadId, WorkloadState,
@@ -1210,10 +1211,8 @@ struct ListResponseFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::{
-        Version,
-        public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle},
-    };
+    use d2b_contracts::public_wire::{PublicVmServices, RuntimeSummary, VmLifecycle};
+    use d2b_core::error::Version;
     use nix::{
         sys::socket::{Backlog, MsgFlags, accept4, bind, listen, send},
         unistd::close,

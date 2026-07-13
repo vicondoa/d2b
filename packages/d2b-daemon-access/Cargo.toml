@@ -20,7 +20,8 @@ workspace = true
 [dependencies]
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["public"] }
+d2b-core = { workspace = true }
 async-trait.workspace = true
 nix = { version = "0.29", default-features = false, features = ["socket"] }
 serde.workspace = true

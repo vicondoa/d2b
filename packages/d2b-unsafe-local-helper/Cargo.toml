@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["unsafe-local"] }
 d2b-core = { workspace = true }
 d2b-realm-core = { workspace = true }
 d2b-wayland-proxy = { workspace = true }

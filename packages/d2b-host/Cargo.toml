@@ -30,7 +30,7 @@ fake-backends = []
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
 d2b-core = { workspace = true }
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["broker"] }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

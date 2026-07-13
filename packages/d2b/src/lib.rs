@@ -15,7 +15,6 @@ use std::{
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
-    SemverRange,
     broker_wire::{
         ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
         StoreVerifyStatus as IpcStoreVerifyStatus,
@@ -35,6 +34,7 @@ use d2b_contracts::{
     },
     types::{MediaRef, validate_usb_bus_id},
 };
+use d2b_core::error::SemverRange;
 use d2b_core::{
     bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
@@ -11734,7 +11734,7 @@ mod host_install_dispatch_tests {
         output_service_capabilities, parse_host_shutdown_hook_args, parse_vm_exec_action,
         public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
     };
-    use d2b_contracts::Version;
+    use d2b_core::error::Version;
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
     static TEST_SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -18841,7 +18841,8 @@ mod console_fsm_tests {
         SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
         scan_chunk_for_detach, send, socket,
     };
-    use d2b_contracts::{Version, public_wire};
+    use d2b_contracts::public_wire;
+    use d2b_core::error::Version;
     use nix::{
         sys::socket::{Backlog, accept4, bind, listen},
         unistd::close,

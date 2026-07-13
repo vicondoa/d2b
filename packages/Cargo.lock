@@ -990,6 +990,7 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-core",
  "d2b-realm-core",
  "d2b-realm-provider",
  "nix 0.29.0",

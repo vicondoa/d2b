@@ -16,6 +16,6 @@ serde = { workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["schema"] }
 d2b-host = { workspace = true }
 regex = "1"

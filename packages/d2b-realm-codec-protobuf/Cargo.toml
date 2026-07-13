@@ -24,7 +24,7 @@ workspace = true
 [dependencies]
 d2b-realm-core = { workspace = true }
 d2b-realm-provider = { workspace = true }
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["common"] }
 prost = "0.13"
 
 [dev-dependencies]

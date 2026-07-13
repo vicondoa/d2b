@@ -17,7 +17,7 @@ clap_mangen = "0.2"
 d2b = { workspace = true }
 d2b-realm-core = { workspace = true }
 d2b-core = { workspace = true }
-d2b-contracts = { workspace = true }
+d2b-contracts = { workspace = true, features = ["schema"] }
 protobuf-codegen.workspace = true
 serde.workspace = true
 sha2.workspace = true
