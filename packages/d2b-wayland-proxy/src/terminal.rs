@@ -159,10 +159,7 @@ impl TerminalChild {
             let _ = child.wait();
             io::Error::other(format!("pidfd_open failed: {err}"))
         })?;
-        Ok(Self {
-            child,
-            pidfd,
-        })
+        Ok(Self { child, pidfd })
     }
 
     pub fn poll_fd(&self) -> &OwnedFd {

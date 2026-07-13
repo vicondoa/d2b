@@ -1310,12 +1310,7 @@ mod tests {
             PollFlags::IN | PollFlags::ERR | PollFlags::HUP
         );
         assert_eq!(
-            accept_poll_timeout_ms(
-                Duration::from_secs(60),
-                Some(backoff_until),
-                None,
-                now,
-            ),
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), None, now,),
             50
         );
         assert_eq!(
