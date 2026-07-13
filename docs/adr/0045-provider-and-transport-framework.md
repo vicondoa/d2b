@@ -87,9 +87,10 @@ D2b 2.0 has the following fixed decisions:
    and broker as separate pidfd-supervised processes through typed operations,
    passing only their listener, namespace, cgroup, resource, and lease FDs.
    Child processes are not PID1 units.
-8. Dynamic paths use deterministic 96-bit, domain-separated SHA-256 IDs,
-   compatible with Nix `builtins.hashString "sha256"`, rendered as 20 lowercase
-   unpadded base32 characters. Human names never become runtime path components.
+8. Dynamic paths use deterministic 96-bit, domain-separated SHA-256 IDs over a
+   canonical printable-ASCII length-prefixed grammar that Nix passes directly
+   to `builtins.hashString "sha256"`. IDs are rendered as 20 lowercase unpadded
+   RFC 4648 base32 characters. Human names never become runtime path components.
 9. Brokers are the only creators and repair owners of dynamic paths below fixed
    filesystem anchors. PID1 creates only the closed local-root endpoint set;
    the owning user manager creates the closed per-user set, and the local-root
@@ -159,6 +160,35 @@ destructive; the executable does not carry a legacy diagnosis engine.
 There are no compatibility symlinks, tombstones, state markers, parsers, aliases,
 or protocol feature flags. There is no mixed authenticated d2b 1.x/d2b 2.0
 topology and no side-by-side drain mode inside d2b.
+
+`lib.mkRemovedOptionModule` is explicitly forbidden. It registers an old option
+path and a tailored compatibility diagnostic, so it is an option tombstone even
+when it returns only an error. Old option paths remain undeclared and therefore
+produce Nix's generic unknown-option error. The release notes and migration guide,
+not an executable parser or module tombstone, explain the replacement surface.
+
+### Mandatory destructive-cutover acknowledgement
+
+Every d2b 2.0 host configuration must set:
+
+```nix
+d2b.acceptDestructiveV2Cutover = true;
+```
+
+This is a new v2-only Boolean option with a default of `false`. Importing or
+enabling the v2 framework while it is omitted or false fails module evaluation
+before a bundle, operational unit, or reset closure is emitted. Reset-generation
+construction also requires the evaluated true value and records it in the
+generated v2 reset policy consumed by the reset binary. The acknowledgement
+means that the operator accepts destruction of all d2b 1.x state, workload disks,
+TPM state, keys, credentials, audits, and sessions with no rollback.
+
+The acknowledgement is necessary but cannot cause deletion. The persistent reset
+boot, dry-run, digest confirmation, lock, inhibitor, quiescence, and final-boot
+rules below remain mandatory. It does not declare an old option, parse old
+configuration, select a compatibility mode, or recognize old state. A
+configuration that also contains an old option still fails through the generic
+unknown-option path.
 
 ### Factory reset trigger
 
@@ -724,6 +754,20 @@ pub trait Provider: Send + Sync {
 The traits remain object-safe for `Arc<dyn ...>`. They have no generic methods,
 `Self` return values, or implementation-specific associated types at the
 registry boundary.
+
+`ProviderHealth` is a typed, bounded observation rather than a free-form status
+string. Its state is exactly `healthy`, `degraded`, `unavailable`, or `failed`;
+it carries the observed registry generation, observation time, one closed reason,
+and one closed remediation. Initial reasons are `none`, `provider-degraded`,
+`health-timeout`, `health-stale`, `session-disconnected`, `queue-pressure`,
+`handshake-timeout`, `authentication-failed`, `identity-mismatch`,
+`configuration-mismatch`, `generation-mismatch`, and `capability-mismatch`.
+Initial remediations are `none`, `retry-bounded`, `inspect-provider`,
+`restart-agent`, `re-enroll-peer`, `repair-configuration`,
+`replace-generation`, and `operator-interaction`. The DTO carries no provider
+response, endpoint, path, credential subject, user label, or unbounded
+diagnostic. The exact transition thresholds are defined in
+[Operational health objectives](#operational-health-objectives).
 
 ### Exact specialized method families
 
@@ -1623,6 +1667,44 @@ and authorized audit may carry bounded operation, correlation, provider, and
 generation IDs. No telemetry surface carries raw endpoint, resource ID, user
 identity, key fingerprint, proof, credential, command, path, or payload.
 
+### Operational health objectives
+
+The following are initial v2 operational defaults and hard failure
+classifications. They are implementation health objectives, not latency or
+availability promises to an external customer. A generated service profile may
+tighten them but may not loosen a hard deadline or failure threshold without a
+versioned contract change. Percentiles use one-minute buckets over a rolling
+five-minute window and exclude policy denials, caller cancellation, and requests
+that arrived already expired.
+
+| Dimension | Default objective | Typed degraded threshold | Hard failure classification |
+| --- | --- | --- | --- |
+| Scheduling | p99 enqueue-to-dispatch is at most 10 ms for session/ttrpc control and 50 ms for attachment/named-stream work. | The objective is exceeded for three consecutive one-minute buckets, or one otherwise-runnable item waits 1 second while it still has deadline budget: `degraded/scheduling-delay`, remediation `inspect-provider`. | Runnable work makes no dequeue progress for 10 seconds, or session control waits 5 seconds: close with `scheduler-stalled`, mark the endpoint `unavailable`, and use `restart-agent` for an agent or `replace-generation` for an in-process owner. |
+| Queues | Each queue remains below 75% of its hard ceiling and backpressure rejects less than 1% of attempts over five minutes. | A queue remains at or above 75% for 30 seconds, or rejects reach 1% with at least 100 attempts (or 10 rejects with fewer attempts): `degraded/queue-pressure`, remediation `retry-bounded`. | Reserved session/ttrpc control credit is exhausted, or a full queue makes no dequeue progress for 5 seconds: close with `control-resource-exhausted` and mark the endpoint `unavailable`. An isolated named-stream ceiling rejects only that stream unless the no-progress rule also fires. |
+| Handshake | Local handshakes have p99 at most 1 second; provider/remote handshakes have p99 at most 5 seconds. | The matching objective is exceeded for three consecutive buckets, or three consecutive transient transport/timeout failures occur: `degraded/handshake-timeout`, remediation `retry-bounded`. | Local and provider/remote handshake deadlines are 5 and 15 seconds respectively. Deadline expiry rejects that connection; three consecutive deadline expiries mark the endpoint `unavailable`. Authentication, transcript, purpose, role, schema, identity, or configuration mismatch rejects immediately and marks the configured endpoint `failed`, with no automatic retry. |
+| Reconnect | A recoverable local endpoint re-establishes within 5 seconds and a provider/remote endpoint within 30 seconds, normally within three attempts. | The objective elapses or three consecutive attempts fail: `degraded/session-disconnected`, remediation `retry-bounded`. | Ten failed attempts or 5 minutes disconnected, whichever occurs first, marks the endpoint `unavailable`. An authentication/identity/configuration mismatch instead marks it `failed` immediately and requires `re-enroll-peer` or `repair-configuration`. |
+| Provider health | Poll every 10 seconds; a local health call completes within 2 seconds, an agent/remote call within 10 seconds, and a successful observation is never more than 30 seconds old. | A provider reports degraded, three consecutive health calls fail, or the last success is older than 30 seconds: the matching `ProviderHealth` degraded reason and `inspect-provider`. | Agent disconnect is immediately `unavailable`. Ten consecutive health failures or a last success at least 5 minutes old is `unavailable`. Identity, configuration, generation, or capability mismatch is immediately `failed`; no operation is admitted and `repair-configuration` or `replace-generation` is required. |
+
+An endpoint starts as `starting` and becomes `healthy` only after its first
+successful handshake and, where applicable, provider-health observation.
+`degraded` preserves safe admission with typed backpressure and visible
+remediation. `unavailable` stops new calls, removes queued work, preserves or
+quarantines ambiguous durable operations under their original operation IDs, and
+continues only the bounded reconnect/health probe. `failed` performs no automatic
+retry. Recovery from `unavailable` requires a fresh authenticated session and
+health success. Recovery from `degraded` requires three consecutive successful
+evaluation intervals, at least 30 seconds below 50% queue utilization, and no
+remaining breached objective. Recovery from `failed` requires explicit
+re-enrollment, configuration repair, or publication of a validated replacement
+generation.
+
+Status exposes state, closed reason, transition time, affected closed component
+class, and closed remediation; it does not expose raw peer/provider output.
+Metrics add only `locality`, `provider_type`, `health_state`, and closed
+`result`/`reason` to the already allowed low-cardinality dimensions. Realm,
+workload, provider ID, session, request, stream, operation, endpoint, and user
+never become metric labels.
+
 ### Complete internal IPC migration matrix
 
 | Current boundary | v2 purpose and service | Transport/attachment contract | Migration |
@@ -1664,21 +1746,29 @@ lowercase unpadded RFC 4648 base32 alphabet:
 abcdefghijklmnopqrstuvwxyz234567
 ```
 
-For each ID, construct this exact byte string:
+For each ID, construct one canonical printable-ASCII string with this grammar:
 
 ```text
-ASCII domain
-0x00
-u32be(part-count)
-for each part:
-  u32be(byte-length)
-  exact UTF-8 bytes
+encoded = "d2b-id-v2;" decimal ":" domain ";" decimal ";"
+          *(decimal ":" part ";")
+decimal = "0" / (nonzero-digit *digit)
 ```
 
-Nix passes that byte string directly to
-`builtins.hashString "sha256"` and decodes its lowercase hexadecimal result.
-Rust hashes the same bytes with SHA-256. Both take digest bytes 0 through 11 and
-encode them as exactly 20 lowercase unpadded base32 characters:
+The first decimal is the ASCII byte length of `domain`; the second is the exact
+part count; each following decimal is the ASCII byte length of the immediately
+following part. There are exactly that many part fields and no trailing bytes
+after the final `;`. Zero is spelled only `0`; every positive value has no
+leading zero. Domains and parts are non-empty in the four ID contracts below.
+The prefix, delimiters, decimal lengths, domains, and canonical parts use only
+printable ASCII bytes. There is no NUL, control-byte construction, binary
+integer, locale conversion, escaping, or implicit concatenation. For example,
+the part lists `["ab", "c"]` and `["a", "bc"]` serialize respectively with
+suffixes `2;2:ab;1:c;` and `2;1:a;2:bc;`.
+
+Nix constructs the string with interpolation and `builtins.stringLength`, then
+passes it directly to `builtins.hashString "sha256"`. Rust emits the same ASCII
+grammar into a byte vector and hashes it with SHA-256. Both take digest bytes 0
+through 11 and encode them as exactly 20 lowercase unpadded base32 characters:
 
 ```text
 realm-id:
@@ -1700,17 +1790,24 @@ role-id:
 
 The canonical inputs are frozen:
 
-- `canonical-realm-path` is the realm's lowercase ASCII labels from leaf to root
-  joined by literal `.`, for example `personal-dev.dev.local-root`. It never
-  includes the public target suffix `.d2b`.
+- `canonical-realm-path` is exactly `local-root` for the root. A child appends
+  its schema-validated lowercase ASCII kebab-case label before its parent's
+  path, separated by one literal `.`, so the order is leaf to root:
+  `personal-dev.dev.local-root`. Empty labels, repeated separators, a trailing
+  separator, and the public target suffix `.d2b` are forbidden.
 - `canonical-workload-name` and `configured-provider-id` are their exact
   schema-validated lowercase ASCII kebab-case spellings.
 - `provider-type` is exactly one closed wire spelling: `runtime`,
   `infrastructure`, `transport`, `substrate`, `credential`, `display`,
   `network`, `storage`, `device`, `audio`, or `observability`.
-- `canonical-role` is the exact closed contract wire spelling for the role. It
-  is not a display label and is not case-folded or rewritten;
-  `cloud-hypervisor` in the vector below is one such closed spelling.
+- `canonical-role` is exactly one initial `RoleKind` wire spelling:
+  `store-virtiofs-preflight`, `swtpm-pre-start-flush`, `swtpm`, `virtiofsd`,
+  `video`, `gpu`, `gpu-render-node`, `audio`, `cloud-hypervisor`,
+  `qemu-media`, `vsock-relay`, `guest-control-health`, `usbip`,
+  `security-key-frontend`, or `wayland-proxy`. It is not a display label,
+  provider implementation ID, or Rust variant spelling. A new role requires a
+  versioned schema change, a new canonical vector, and regenerated endpoint
+  proof before it may acquire a role ID.
 
 No Unicode normalization, locale case folding, alternate root-to-leaf order,
 `.d2b` suffix, separator substitution, or enum display spelling is accepted.
@@ -1725,33 +1822,101 @@ resource. Nix and Rust implement the derivation independently and compare
 committed vectors; neither consumes IDs generated by the other. Collision
 detection, not probability, is the correctness boundary.
 
+The pure-Nix hexadecimal-to-base32 helper is specified by this implementation.
+It intentionally uses arithmetic over individual bytes rather than constructing
+binary strings or relying on a Nix-specific base32 alphabet:
+
+```nix
+let
+  alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  field = value:
+    "${builtins.toString (builtins.stringLength value)}:${value};";
+  encode = domain: parts:
+    "d2b-id-v2;${field domain}${builtins.toString (builtins.length parts)};"
+    + builtins.concatStringsSep "" (builtins.map field parts);
+  hexNibble = {
+    "0" = 0; "1" = 1; "2" = 2; "3" = 3;
+    "4" = 4; "5" = 5; "6" = 6; "7" = 7;
+    "8" = 8; "9" = 9; "a" = 10; "b" = 11;
+    "c" = 12; "d" = 13; "e" = 14; "f" = 15;
+  };
+  powersOfTwo = [ 1 2 4 8 16 32 64 128 ];
+  nibbleAt = hex: offset:
+    let c = builtins.substring offset 1 hex;
+    in if builtins.hasAttr c hexNibble
+       then builtins.getAttr c hexNibble
+       else throw "short-id digest is not lowercase hexadecimal";
+  byteAt = hex: index:
+    16 * nibbleAt hex (2 * index) + nibbleAt hex (2 * index + 1);
+  bitAt = hex: bit:
+    let
+      byte = byteAt hex (builtins.div bit 8);
+      divisor = builtins.elemAt powersOfTwo
+        (7 - builtins.mod bit 8);
+    in builtins.mod (builtins.div byte divisor) 2;
+  symbolAt = hex: index:
+    let
+      firstBit = index * 5;
+      value = builtins.foldl'
+        (acc: offset:
+          acc * 2
+          + (if firstBit + offset < 96
+             then bitAt hex (firstBit + offset)
+             else 0))
+        0
+        (builtins.genList (offset: offset) 5);
+    in builtins.substring value 1 alphabet;
+  base32First96 = hex:
+    assert builtins.stringLength hex == 64;
+    builtins.concatStringsSep ""
+      (builtins.genList (index: symbolAt hex index) 20);
+  shortId = domain: parts:
+    base32First96
+      (builtins.hashString "sha256" (encode domain parts));
+in
+  { inherit encode base32First96 shortId; }
+```
+
+`base32First96` accepts only the 64-character lowercase hexadecimal result from
+`builtins.hashString "sha256"`. Bits are consumed most-significant first in RFC
+4648 order; the last symbol contains the final digest bit followed by four zero
+padding bits. It never converts the 96-bit prefix into one Nix integer. The Rust
+implementation independently serializes the grammar, hashes it with the `sha2`
+crate, and applies RFC 4648 base32 without padding; it does not call generated
+Nix or consume Nix-produced IDs.
+
 The following vectors are canonical. Each implementation verifies the encoded
-bytes, full SHA-256 digest, and 20-character ID:
+ASCII string, its byte-for-byte hexadecimal form, full SHA-256 digest, and
+20-character ID:
 
 ```text
 realm
   parts   = ["dev.local-root"]
-  bytes   = 6432622d76323a7265616c6d00000000010000000e6465762e6c6f63616c2d726f6f74
-  sha256  = ffc2e01e8aabff5c6e2ab64189fa363cf5d171bd4f7a10eab765efdf01774fb4
-  id      = 77boahukvp7vy3rkwzaq
+  encoded = "d2b-id-v2;12:d2b-v2:realm;1;14:dev.local-root;"
+  bytes   = 6432622d69642d76323b31323a6432622d76323a7265616c6d3b313b31343a6465762e6c6f63616c2d726f6f743b
+  sha256  = c2f477b152ecc7d1a89277a11d7465a8704f8ecfcb9282d3644e2b25ee46e04e
+  id      = yl2hpmks5td5dkeso6qq
 
 workload
-  parts   = ["77boahukvp7vy3rkwzaq", "personal-dev"]
-  bytes   = 6432622d76323a776f726b6c6f61640000000002000000143737626f6168756b767037767933726b777a61710000000c706572736f6e616c2d646576
-  sha256  = 31948ae33a1e1b92a357cce28d1934d23d04bfbcf256f7b55e989037377e2672
-  id      = ggkivyz2dynzfi2xztra
+  parts   = ["yl2hpmks5td5dkeso6qq", "personal-dev"]
+  encoded = "d2b-id-v2;15:d2b-v2:workload;2;20:yl2hpmks5td5dkeso6qq;12:personal-dev;"
+  bytes   = 6432622d69642d76323b31353a6432622d76323a776f726b6c6f61643b323b32303a796c3268706d6b7335746435646b65736f3671713b31323a706572736f6e616c2d6465763b
+  sha256  = 874ff4ce132119f5501c996a6bf57b23f504bcb892928fe2c20198f4ce0cba90
+  id      = q5h7jtqteem7kua4tfva
 
 provider
-  parts   = ["77boahukvp7vy3rkwzaq", "runtime", "primary"]
-  bytes   = 6432622d76323a70726f76696465720000000003000000143737626f6168756b767037767933726b777a61710000000772756e74696d65000000077072696d617279
-  sha256  = c5841a2e2e12dbbb8ff533e4b722028f6c6ef1f95443dcfaf121bd6e1ab1d823
-  id      = ywcbulrocln3xd7vgpsa
+  parts   = ["yl2hpmks5td5dkeso6qq", "runtime", "primary"]
+  encoded = "d2b-id-v2;15:d2b-v2:provider;3;20:yl2hpmks5td5dkeso6qq;7:runtime;7:primary;"
+  bytes   = 6432622d69642d76323b31353a6432622d76323a70726f76696465723b333b32303a796c3268706d6b7335746435646b65736f3671713b373a72756e74696d653b373a7072696d6172793b
+  sha256  = 2ff3b5749b058cde6c0b4cf41c4dc286919a7cd46d5737d2692021c268182a41
+  id      = f7z3k5e3awgn43aljt2a
 
 role
-  parts   = ["77boahukvp7vy3rkwzaq", "ggkivyz2dynzfi2xztra", "cloud-hypervisor"]
-  bytes   = 6432622d76323a726f6c650000000003000000143737626f6168756b767037767933726b777a61710000001467676b6976797a3264796e7a666932787a74726100000010636c6f75642d68797065727669736f72
-  sha256  = 3871b5acca368928be7f948631f567deee848c93c561a4facdbae273f36ffb02
-  id      = hby3llgkg2esrpt7ssda
+  parts   = ["yl2hpmks5td5dkeso6qq", "q5h7jtqteem7kua4tfva", "cloud-hypervisor"]
+  encoded = "d2b-id-v2;11:d2b-v2:role;3;20:yl2hpmks5td5dkeso6qq;20:q5h7jtqteem7kua4tfva;16:cloud-hypervisor;"
+  bytes   = 6432622d69642d76323b31313a6432622d76323a726f6c653b333b32303a796c3268706d6b7335746435646b65736f3671713b32303a713568376a74717465656d376b756134746676613b31363a636c6f75642d68797065727669736f723b
+  sha256  = fde214b9b2247677a3e78393063b638b5d3fe8d47e6f7333d1f1edc269553caa
+  id      = 7xrbjonser3hpi7hqojq
 ```
 
 For one million IDs in one domain, the 96-bit birthday bound is less than
@@ -1764,38 +1929,72 @@ p <= n * (n - 1) / 2^97
 Domain separation prevents a realm/workload/provider/role cross-type collision
 from becoming the same typed identity even if rendered text matches.
 
+W2 adds the ID evaluation measurement to the existing
+`tests/unit/gates/performance-budgets.sh` gate; it does not add a new top-level
+gate. With `D2B_PERF_STABLE=1` on the pinned x86_64-linux self-hosted runner, the
+fixture derives 4,096 IDs (1,024 complete realm/workload/provider/role chains),
+checks collisions, and expands every applicable socket-template row. After one
+unmeasured warm-up, the median of three single `nix eval` runs has a 5,000 ms
+budget (6,000 ms including the gate's declared 20% enforcement margin), and each
+run has a 512 MiB peak-RSS ceiling. Correctness vectors, grammar rejection, and
+the complete socket proof remain ordinary Layer-1 coverage on every PR even when
+the stable-runner performance lane is unavailable.
+
 ### Unix socket-length proof
 
 Linux pathname Unix sockets provide 108 bytes in `sockaddr_un.sun_path`,
 including the terminating NUL, so pathname bytes must be at most 107.
 
 The generated `socket-endpoints-v2` contract is a closed table. Every row names
-its literal path template and leaf, endpoint purpose, protocol owner, creator,
-accepting owner, mode/group, maximum substituted byte count, and repair owner.
-There is no unconstrained `<socket-leaf>` field. The initial complete template
-set is:
+one template ID, literal path template and leaf, endpoint purpose, protocol
+owner, creator, accepting owner, mode/group, substitution types, maximum
+substituted byte count, and repair owner. There is no unconstrained
+`<socket-leaf>` field. The initial complete expanded template set is:
 
-| Endpoint class | Exact template or leaf set | Maximum pathname bytes |
+| Template ID | Exact template | Maximum pathname bytes |
 | --- | --- | ---: |
-| Local-root public | `/run/d2b/root.sock` | 18 |
-| Local-root broker | `/run/d2b/broker.sock` | 20 |
-| Child-realm public | `/run/d2b/r/<realm-id>/public.sock` | 43 |
-| Child-realm broker | `/run/d2b/r/<realm-id>/broker.sock` | 43 |
-| Provider agent | `/run/d2b/r/<realm-id>/p/<provider-id>/agent.sock` | 65 |
-| Workload role ComponentSession | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/control.sock` | 94 |
-| Workload role external sockets | the same role prefix with exactly `api.sock`, `qmp.sock`, `virtiofs.sock`, `tpm.sock`, `audio.sock`, `video.sock`, or `wayland.sock` | 90, 90, 95, 90, 92, 92, or 94 |
-| Workload guest control | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/guest.sock` | 73 |
-| Workload display | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/display.sock` | 75 |
-| Workload security key | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/security-key.sock` | 80 |
-| User agent | `/run/d2b/u/<uid-decimal>/userd.sock` | 32 |
-| User runtime agent | `/run/d2b/u/<uid-decimal>/runtime-agent.sock` | 40 |
-| Clipd control | `/run/d2b/u/<uid-decimal>/clipd/control.sock` | 40 |
-| Clipd picker | `/run/d2b/u/<uid-decimal>/clipd/picker.sock` | 39 |
-| Clipd bridge | `/run/d2b/u/<uid-decimal>/clipd/bridge.sock` | 39 |
-| One-shot inherited helper | no pathname; one fresh socketpair from the declared parent | not applicable |
+| `local-root-public` | `/run/d2b/root.sock` | 18 |
+| `local-root-broker` | `/run/d2b/broker.sock` | 20 |
+| `child-realm-public` | `/run/d2b/r/<realm-id>/public.sock` | 43 |
+| `child-realm-broker` | `/run/d2b/r/<realm-id>/broker.sock` | 43 |
+| `provider-agent` | `/run/d2b/r/<realm-id>/p/<provider-id>/agent.sock` | 65 |
+| `role-control` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/control.sock` | 94 |
+| `role-api` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/api.sock` | 90 |
+| `role-qmp` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/qmp.sock` | 90 |
+| `role-virtiofs` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/virtiofs.sock` | 95 |
+| `role-tpm` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/tpm.sock` | 90 |
+| `role-audio` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/audio.sock` | 92 |
+| `role-video` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/video.sock` | 92 |
+| `role-wayland` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/wayland.sock` | 94 |
+| `workload-guest` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/guest.sock` | 73 |
+| `workload-display` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/display.sock` | 75 |
+| `workload-security-key` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/security-key.sock` | 80 |
+| `user-agent` | `/run/d2b/u/<uid-decimal>/userd.sock` | 32 |
+| `user-runtime-agent` | `/run/d2b/u/<uid-decimal>/runtime-agent.sock` | 40 |
+| `clipd-control` | `/run/d2b/u/<uid-decimal>/clipd/control.sock` | 40 |
+| `clipd-picker` | `/run/d2b/u/<uid-decimal>/clipd/picker.sock` | 39 |
+| `clipd-bridge` | `/run/d2b/u/<uid-decimal>/clipd/bridge.sock` | 39 |
+| `one-shot-inherited` | no pathname; one fresh socketpair from the declared parent | not applicable |
+
+W2 owns one versioned machine-readable endpoint descriptor and generates from it
+the Rust `SocketTemplateId`/descriptor table, the Nix table, the reference
+schema, and a complete proof artifact. The proof expands every leaf separately
+and records literal segments, substitution maxima, the longest rendered path,
+its exact ASCII byte count, and remaining bytes before the terminating NUL. It
+also proves both directions: every rendered system/user socket unit, bundle
+endpoint, broker-created listener, and d2b-owned pathname bind references
+exactly one template ID, and every generated template row is referenced or is
+the explicit inherited-socketpair row.
+
+Production pathname-listener APIs accept a `SocketTemplateId` plus typed
+substitutions, never a free-form path or leaf. A Layer-1 source policy rejects a
+d2b-owned pathname `bind` or socket-unit declaration outside that generated
+surface. A contract test compares the complete rendered endpoint multiset with
+the generated proof, so a new socket cannot be omitted by updating only one
+consumer.
 
 The proof substitutes 20 bytes for each derived ID and at most 10 ASCII digits
-for a Linux `uid_t`. The longest row is `virtiofs.sock` at 95 bytes, leaving 12
+for a Linux `uid_t`. The longest row is `role-virtiofs` at 95 bytes, leaving 12
 pathname bytes before the required NUL. Any new socket or leaf first extends the
 generated closed table and its checked proof. Nix evaluates every instantiated
 row and Rust independently recomputes every exact byte length before binding;
@@ -2359,16 +2558,22 @@ tree loses its prior seal.
 #### W0 - ADR decision closure
 
 - Expand ADR 0045 to this implementation-ready decision.
-- Keep status `Proposed` and leave the ADR index unchanged for the first
-  candidate.
-- Create the bootstrap evidence manifest below and run the full ten-role panel
-  against that exact Proposed content tree.
+- Keep ADR 0045 status `Proposed`; leave the eight historical ADR status headers
+  and `docs/adr/README.md` unchanged for every Proposed candidate.
+- Create evidence with the exact
+  [external W0 bootstrap template](#external-evidence-storage-and-w0-bootstrap-template)
+  and run the full ten-role panel against that exact Proposed content tree.
 - Address safety and completeness findings without reopening the no-v1 decision.
 - After the Proposed tree has 10/10 signoff, prepare a second immutable
-  candidate that changes the status to `Accepted`, updates `docs/adr/README.md`,
-  and includes the final generated/index artifacts and dependency diff.
+  candidate that changes ADR 0045 to `Accepted`; changes the `Status` headers of
+  ADRs 0010, 0015, 0028, 0032, 0034, 0042, 0043, and 0044 to
+  `Superseded by ADR 0045`; updates all eight rows plus ADR 0045 in
+  `docs/adr/README.md`; and includes the final generated/index artifacts. These
+  prospective supersession edits do not land on a Proposed tree.
 - Run a second full ten-role panel against that exact Accepted/index candidate.
-  W0 closes only when this second panel is also 10/10.
+  Its panel records and seal stay external to the candidate. The unmerged status
+  headers become authoritative only after this second panel is also 10/10 and
+  the candidate lands.
 - If either panel finds a content defect, make the correction on a Proposed
   candidate and repeat both panel lanes. Dispatch no v2 code before the final
   Accepted/index candidate has both required signoffs.
@@ -2416,7 +2621,11 @@ Parallel contract slices:
 7. define complete storage, sync, state, and audit contracts;
 8. bump all contract generations and regenerate schema/reference artifacts.
 
-No old type is re-exported.
+W2 owns the v2 reference and schema documentation for IDs, roles, endpoints,
+ComponentSession, services, providers, storage, synchronization, state, and
+audit. It commits generated JSON/Markdown and drift coverage together with each
+contract change, including the cross-language ID vectors, socket proof, and
+evaluation budget. No old type is re-exported.
 
 #### W3 - Session, provider, state, and client foundations
 
@@ -2469,7 +2678,9 @@ Parallel slices:
   controller/broker cgroup-leaf placement, typed parent spawn, pidfd handoff,
   zero initial-namespace capabilities, and FD-only delegation.
 
-No slice keeps an old handshake or fallback.
+W5 owns reference documentation for the daemon, realm, guest, provider-agent,
+broker, allocator, and client service APIs plus operator how-to changes needed
+by those service migrations. No slice keeps an old handshake or fallback.
 
 #### W6 - User, desktop, device, and helper migration
 
@@ -2485,6 +2696,11 @@ Parallel slices:
 - security-key report streams, trusted intent, cancellation, and command policy;
 - activation, TTY, and retained one-shot helper channels;
 - any additional d2b-owned IPC found by the W0 inventory rule.
+
+W6 owns the user-secret, unattended-credential, systemd-user, shell, clipboard,
+desktop, Wayland, FIDO/security-key, activation, and TTY reference and how-to
+documentation. Each migrated boundary updates or removes its old instructions
+in the same slice.
 
 #### W7 - Realm-native host configuration and resources
 
@@ -2506,6 +2722,11 @@ Implement:
 - realm-scoped network, storage, device, and audio resources;
 - canonical-target-only desktop metadata;
 - deletion of `d2b.vms`, `d2b.envs`, gateway, relay, and placeholder wiring.
+
+W7 owns the v2 Nix option reference, generated option/schema artifacts,
+filesystem and endpoint layout, realm/process/allocator/storage/network
+reference, and realm configuration how-tos. Option examples must include the
+mandatory destructive-cutover acknowledgement and no old option path.
 
 #### W8 - Integrated behavior and current-feature parity
 
@@ -2534,6 +2755,11 @@ Across private sibling branches:
   generated artifacts, and release automation;
 - run `cargo-semver-checks` against the intentional 2.0 major-break baseline.
 
+W9 owns in-tree client/provider toolkit reference material and the corresponding
+README, API, release, and migration documentation in every sibling repository.
+Toolkit docs consume the generated v2 contracts and contain no copied wire
+definition.
+
 #### W10 - V1 purge and reset tooling
 
 - Complete every checked deletion item.
@@ -2549,6 +2775,10 @@ Across private sibling branches:
   current d2b anchor classes and may not contain a literal legacy outlier name.
 - Add source policy proving old identifiers, paths, crates, services, options,
   protocols, and branches do not remain.
+- Complete a Diataxis-wide rewrite/removal audit of `README.md`, examples, and
+  every current `docs/reference`, `docs/how-to`, and `docs/explanation` page.
+  Rewrite live v2 guidance, delete stale pages rather than preserving migration
+  stubs, and retain v1 text only in historical ADRs and released changelogs.
 - Validate persistent reset boot selection, crash-to-reset behavior, unit/socket
   absence, lock/inhibitor handling, cgroup/process/session/fd/mount quiescence,
   under-lock digest recomputation, held-dirfd recursive deletion, symlink and
@@ -2608,6 +2838,11 @@ Before implementation PRs merge:
 - Release d2b 2.0.0.
 - Release both toolkit distributions and sibling migrations in dependency
   order.
+- Before any release is published, own and complete the 2.0 release notes and
+  destructive migration guide. They name
+  `d2b.acceptDestructiveV2Cutover = true`, the no-backup reset procedure, generic
+  unknown-option behavior, absence of `mkRemovedOptionModule` tombstones, and
+  repair-forward posture.
 - Move `/etc/nixos` from the private branch to final merged tags/releases.
 - Switch once more without resetting state and rerun focused host smoke.
 - Commit the host lock/config update separately.
@@ -2619,10 +2854,39 @@ Official `gh-stack` owns stack creation, restacking, and retargeting. Changes
 merge through GitHub only, root to leaf; no implementation branch pushes or
 merges directly to `main`.
 
+Seal, panel, and test/validation evidence is never part of the Git content tree
+being reviewed. It lives only in external session state, GitHub artifacts, and
+GitHub checks, keyed by the exact integrated Git tree hash and carrying SHA-256
+digests for each evidence payload. It is never copied into a branch, generated
+repository artifact, release source archive, or commit merely to make the seal
+self-describing. A PR may link to external evidence; it may not embed that
+evidence as reviewed-tree content.
+
+#### External evidence storage and W0 bootstrap template
+
 W0 precedes `xtask wave snapshot`, so it uses a checked bootstrap evidence
-procedure rather than pretending the tool already exists. For each of the
-Proposed and Accepted/index candidates, the integrator records in one immutable
-panel input:
+procedure rather than pretending the tool already exists. The exact local
+storage template is:
+
+```text
+$HOME/.copilot/session-state/<session-id>/evidence/w0/<git-tree-hash>/
+  candidate.json
+  candidate.sha256
+  validation/<validation-id>.json
+  validation/<validation-id>.sha256
+  panel/<role>.json
+  panel/<role>.sha256
+  seal.json
+  seal.sha256
+```
+
+The directory name is the full output of `git rev-parse <head>^{tree}`. An
+optional GitHub mirror uses artifact name
+`d2b-w0-<proposed|accepted-index>-<git-tree-hash>` and checks that report the
+same tree hash and payload SHA-256. Neither location is inside a repository
+worktree.
+
+For each Proposed and Accepted/index candidate, `candidate.json` records:
 
 - repository identity, base commit, head commit, and `git rev-parse
   <head>^{tree}` content-tree hash;
@@ -2630,17 +2894,28 @@ panel input:
 - the name and digest of every changed/generated artifact;
 - the exact dependency-file diff and contract/index diff, including an explicit
   empty result;
-- validation command, exit status, and output-artifact digest already produced
-  for that tree;
-- all ten schema-validated panel records bound to the tree hash.
+- each validation ID, exact command digest, exit status, output-artifact digest,
+  and external locator already produced for that tree.
+
+`candidate.sha256` contains the digest of `candidate.json`; the candidate does
+not contain its own digest and does not list panel records that do not yet exist.
+Each panel record binds the tree hash and `candidate.sha256`. Once all ten panel
+records exist, `seal.json` lists the candidate digest and the sorted validation
+and panel record digests; `seal.sha256` hashes the seal. The seal does not contain
+its own digest. This one-way construction has no self-inclusion cycle.
 
 The integrator independently checks that the worktree is clean at the recorded
 head, re-derives the tree and artifact digests, and supplies those values to
 every reviewer. Reviewers inspect but do not run validation. The Proposed
-manifest and panel records are retained when constructing the Accepted/index
-candidate; they are evidence for the first required panel, not a seal for the
-second tree. The second full panel is bound to the Accepted/index tree and is
-the W0 closing evidence.
+candidate, panel records, and seal are retained externally when constructing the
+Accepted/index candidate; they are evidence for the first required panel, not a
+seal for the second tree. The Accepted/index candidate has a different tree-hash
+directory and a fresh candidate, panel set, and seal. Its status/index/header
+edits are already in that immutable candidate, while the resulting panel and
+seal remain external. Thus the second panel can approve the exact prospective
+Accepted tree without requiring evidence to be committed into the tree it
+approves. Any correction creates a new tree-hash directory and invalidates the
+old candidate rather than mutating or reusing it.
 
 For each wave, `xtask wave snapshot` records:
 
@@ -2650,6 +2925,10 @@ For each wave, `xtask wave snapshot` records:
 - integrated tree hash;
 - required validation matrix;
 - repository set for cross-repository waves.
+
+The W1 tool writes those records and the later validation/panel/seal payloads to
+the same class of external tree-hash-addressed storage or to GitHub artifacts and
+checks; its output is not a commit candidate.
 
 Two lanes run concurrently against that exact immutable tree:
 
@@ -2699,6 +2978,31 @@ All coverage follows `tests/AGENTS.md`: Rust unit/integration/contract/policy
 tests and nix-unit cases first, then container, host, hardware, and live tests
 where the behavior requires them. No ad hoc top-level shell gate is added.
 
+### Required test-tier mapping
+
+Layer-1 proofs remain mandatory even when a higher tier covers the integrated
+behavior: type 1 nix-unit cases own option values/eval rejection (including the
+destructive acknowledgement), types 2-3 own pure state machines, framing,
+scheduling, reset planning, and hermetic binary/session behavior, type 4 owns
+rendered Nix/Rust contract parity, type 5 owns complete-inventory and no-v1
+source policy, and type 6 owns realized example/flake evaluation. Generated
+artifacts use the existing drift gate; performance uses the existing
+`performance-budgets.sh` gate. No higher tier substitutes for these proofs.
+
+The behavior that genuinely needs a booted or physical system maps exactly as
+follows:
+
+| `tests/AGENTS.md` tier | Mandatory d2b 2.0 coverage |
+| --- | --- |
+| Type 10, runNixOSTest (`tests/host-integration/*.nix`, `make test-host-integration`) | Disposable reset-generation boot and reboot/crash-to-reset simulations; final-v2 selection only after success; systemd unit/socket absence and persistent boot selection; systemd credential materialization and keyring/unlock process lifecycle; local-root plus per-realm controller/broker boot; child-broker user/mount/network namespaces, UID/GID maps, capability sets, FD delegation, and cgroup placement. Reset tests delete only disposable VM disks and synthetic d2b anchors. |
+| Type 11, live host (`tests/integration/live/*.sh`, `D2B_LIVE=1`, manual only) | The actual destructive physical-host cutover, real reset reboot/lock/inhibitor/quiescence/deletion/final-boot flow, real desktop login/keyring continuity, and credentialed ACA/Azure Relay or other cloud flow. These checks never run in CI and require the private-host procedure and explicit operator control. |
+| Type 12, hardware (`tests/host-integration/hardware/*.sh`, manual only) | Physical TPM sealing/unsealing and reset behavior, YubiKey/USBIP/FIDO mediation, and real GPU/video/device passthrough. Software swtpm and synthetic device-policy cases stay in lower tiers; only actual hardware claims close here. |
+
+Type 9 containers are used only for a provider/helper that must prove foreign
+non-Nix userland behavior; they are not a shortcut around type 10 boot/systemd
+coverage. Every Layer-2 test records why Layer 1 cannot prove the same kernel,
+boot, cloud, or device property.
+
 ### Contracts and workspace
 
 - reproducible protobuf/schema generation;
@@ -2712,10 +3016,12 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   host Nix/socket and cloud SDK families from framework guest artifacts;
 - one workspace, one lockfile, and version 2.0.0 inheritance, with no nested
   guest or broker workspace;
-- independent Nix/Rust SHA-256 short-ID vectors and global `ProviderId`
-  uniqueness;
-- generated socket contract completeness and byte-length proof for every row
-  and literal leaf;
+- independent Nix/Rust printable-ASCII grammar, pure-Nix lowercase RFC 4648
+  base32 helper, exact encoded/digest/ID vectors, malformed/non-canonical grammar
+  rejection, global `ProviderId` uniqueness, and the pinned 4,096-ID evaluation
+  time/RSS budget;
+- generated socket contract bidirectional completeness and byte-length/NUL
+  headroom proof for every separately expanded row and literal leaf;
 - `cargo-udeps` clean;
 - source policy rejects old crates, types, versions, and service IDs.
 
@@ -2741,6 +3047,12 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   captures an owned `Arc` provider/context or explicit owned operation object;
 - deterministic scheduler coverage for priority, fairness, backpressure,
   cancellation, and no lock across await;
+- paused-time boundary tests at one unit below, exactly at, and one unit above
+  every scheduling, queue, handshake, reconnect, stale-health, and recovery
+  threshold; status transition/hysteresis and closed remediation tests;
+- low-cardinality metric-schema tests proving that only transport, purpose,
+  channel class, Noise class, locality, provider type, health state, and closed
+  result/reason labels exist and that IDs never become labels;
 - Unix readiness burst tests prove read and write drivers drain through
   `EAGAIN`/`EWOULDBLOCK` or preserve the guard/cached readiness and explicitly
   continue, with no one-packet-per-wakeup stall;
@@ -2759,6 +3071,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 ### Providers
 
 - base descriptor and health;
+- exact `healthy`/`degraded`/`unavailable`/`failed` provider-health transitions,
+  poll/deadline/staleness thresholds, agent-disconnect behavior, recovery
+  requirements, and no automatic retry from an invariant failure;
 - object-safe trait construction for every primary and optional interface;
 - global provider-ID collision, duplicate
   (`ProviderType`, `ImplementationId`) factory rejection, and multiple
@@ -2801,8 +3116,11 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   that delegated root;
 - per-realm user, socket, broker, key, state, audit, cgroup, and network
   separation;
-- independent Nix/Rust SHA-256 vectors, collision rejection, and a generated
-  per-endpoint Unix socket-length proof;
+- omission/false rejection and true acceptance for
+  `d2b.acceptDestructiveV2Cutover`, with no reset artifact generated on
+  rejection and no old-option tombstone;
+- independent Nix/Rust SHA-256 vectors, collision rejection, and the generated
+  complete per-endpoint Unix socket-length proof;
 - no path built from a raw human/provider/device value;
 - complete storage/sync/endpoint inventory, fixed local-root/user
   socket-activation exception, allocator-owned child listeners, broker-only
@@ -2858,6 +3176,8 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 ### Reset and seal safety
 
 - reset and final v2 closures are built before cutover;
+- module and reset-generation evaluation require the explicit v2 destructive
+  acknowledgement, while setting it alone performs no mutation;
 - before reset selection, the canonical intent and confirmed per-user
   preparation delete d2b-owned Secret Service items, revoke scoped exports,
   authenticate exactly one digest/nonce/inventory-bound receipt per configured
@@ -2886,7 +3206,7 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   `fstatat`-then-unlink identity proof;
 - final v2 is selected and booted only after fsync and absence proofs;
 - W0 has a 10/10 Proposed-tree panel and a separate 10/10 Accepted/index-tree
-  panel using the bootstrap evidence procedure;
+  panel using the external tree-hash-addressed bootstrap evidence template;
 - history-only reuse requires `xtask` proof of identical integrated tree,
   generated artifacts, dependency diff/contracts, and repository set, followed
   by rerun CI; any content change invalidates both lanes.
@@ -3031,20 +3351,27 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
     contain no legacy reset inventory. One private W11 data-only outlier
     manifest is permitted only until the manifest-free final seal; historical
     ADR prose is not executable inventory.
-18. No v1 compatibility recommendation can weaken these invariants.
+18. Module and reset-generation evaluation require the explicit v2 destructive
+    acknowledgement. It cannot trigger deletion by itself and does not register
+    or recognize an old option.
+19. No v1 compatibility recommendation can weaken these invariants.
 
 ## Definition of done
 
 The d2b 2.0 program is complete only when:
 
 - ADR 0045 is Accepted only after a 10/10 panel on the Proposed tree and a
-  second 10/10 panel on the final Accepted/index tree using W0 bootstrap
-  evidence;
+  second 10/10 panel on the final Accepted/index tree using external
+  tree-hash-addressed W0 bootstrap evidence that is never committed into either
+  reviewed tree;
 - every d2b-owned live IPC boundary uses ComponentSession v2 with directional
   local identity, authenticated absolute expiry, per-hop relative ttrpc
   timeout, request-ID cancellation, parent-prearmed inherited credentials,
   readiness-correct I/O, bounded aggregate FD credits, and close-once
   truncation cleanup;
+- ComponentSession scheduling, queues, handshakes, reconnect, and provider
+  health enforce the typed operational objectives, hard failure thresholds,
+  transitions, remediation, and low-cardinality telemetry defined here;
 - every production lifecycle/component path enters the appropriate typed
   provider registry;
 - all eleven provider axes wrap current functionality, every initial
@@ -3059,8 +3386,10 @@ The d2b 2.0 program is complete only when:
   dedicated uid/user/mount/network namespaces, no initial-namespace
   capabilities, and FD/lease-only delegated access;
 - every dynamic path uses independently derived SHA-256 short
-  realm/workload/provider/role IDs, every socket row has a generated length and
-  ownership proof, and only the declared manager/broker creates it;
+  realm/workload/provider/role IDs over the printable-ASCII grammar with
+  pure-Nix/Rust vector parity and the evaluation budget; every expanded socket
+  row has a bidirectionally complete generated length/ownership proof; and only
+  the declared manager/broker creates it;
 - d2b-userd, GNOME Keyring, TPM2 scoped exports, and host-local realm key
   lifecycle work from Niri, direct TTY backend, graphical prompt, and
   unattended `$CREDENTIALS_DIRECTORY` delivery with the documented
@@ -3070,14 +3399,22 @@ The d2b 2.0 program is complete only when:
 - guest identity rejects copied/stale runtime state through exact
   runtime/transport/generation/boot-nonce binding, and file-backed swtpm never
   advertises controller-host capability;
+- every v2 host configuration explicitly sets
+  `d2b.acceptDestructiveV2Cutover = true`, omission/false fails before reset
+  generation, and no `mkRemovedOptionModule` or other old-option tombstone
+  exists;
 - all d2b 1.x code, options, protocols, crates, state, paths, tests, aliases,
   tombstones, wrappers, and current shipped docs are gone, except historical
   ADR and released-changelog records that cannot act as input;
 - `d2b-client-toolkit`, `d2b-provider-toolkit`, `d2b-wlterm`,
   `d2b-wlcontrol`, and the WeezTerm seam are v2-only;
+- W2/W5/W6/W7/W9 documentation ownership is complete, W10 has closed the full
+  current Diataxis rewrite/removal audit, and W12 has published the destructive
+  release and migration guidance before release;
 - every wave has all required tests and a 10/10 immutable-tree panel seal, and
   history-only evidence reuse occurs only after identical-content `xtask`
-  proof plus rerun CI;
+  proof plus rerun CI; seal, panel, and validation artifacts remain external to
+  the sealed Git tree;
 - the physical host has completed the confirmed live-user deletion/revocation
   phase and exact receipt gate, booted the persistent reset generation,
   locked/inhibited/quiescent, mount-refusing, recursively fd-relative reset with
@@ -3128,6 +3465,14 @@ The d2b 2.0 program is complete only when:
 Rejected. A parser, tombstone, alias, state reader, wrapper, or mixed protocol
 would preserve the old authority boundary in production and make deletion
 unverifiable.
+
+### Use `mkRemovedOptionModule` for friendlier old-option errors
+
+Rejected. `lib.mkRemovedOptionModule` is a tombstone: it keeps the old option
+path executable specifically so it can recognize and diagnose that path. D2b
+2.0 deliberately leaves old paths undeclared, accepts the generic Nix
+unknown-option error, and puts all cutover guidance in release and migration
+documentation.
 
 ### Preserve disks, TPM state, or keys offline
 
