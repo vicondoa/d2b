@@ -10,9 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-12
+
 ### Added
 
-- Added proposed ADR 0045, defining parent-owned workload-hosted realm
+- Added ADR 0045, defining parent-owned workload-hosted realm
   controllers; explicit runtime, infrastructure, transport, substrate,
   credential, and display provider responsibilities; type-first sortable
   provider crates; generic Unix/vsock/direct/Azure-Relay byte transports;
@@ -29,7 +31,6 @@ deprecations ship one minor release before removal.
   of depending on unrelated existing-image repair stages.
 - Made output-ring wake coverage observe data and EOF as separate valid
   notifications instead of racing both producer events into one read.
-
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
   waking the supervisor accept loop so its owned listener unlinks before forced
