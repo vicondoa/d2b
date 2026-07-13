@@ -1,3 +1,5 @@
+#![cfg(feature = "v2-component-session")]
+
 use d2b_contracts::v2_component_session::*;
 use schemars::schema_for;
 use serde_json::json;
