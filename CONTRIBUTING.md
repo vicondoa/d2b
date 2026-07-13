@@ -25,8 +25,14 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ## Running quality gates
 
-- `bash tests/static.sh` is the top-level Layer-1 gate.
-- It runs parse checks, smoke evals, assertion tests, manifest schema validation, and per-example flake checks.
+- `make check` is the PR-equivalent Layer-1 entry point.
+- After the delivery tooling is integrated, the checked Layer-1 manifest and
+  Rust `xtask` own validation, parallel local execution, and generated workflow
+  rendering; use the existing `make` entry points rather than invoking an
+  ad-hoc orchestrator.
+- Run the smallest relevant focused preflight before opening or updating a PR.
+  Final CI, local/host validation, and review run concurrently on the immutable
+  PR tree.
 - See [tests/README.md](./tests/README.md) for the full test layering and optional Layer-2 integration tests.
 
 <a id="rust-workspace-checks"></a>
@@ -133,7 +139,23 @@ bash tests/cli-contract-coverage.sh
 
 - Use short imperative commit subjects with an area prefix, for example `net: fix ...` or `cli: add ...`.
 - Keep one logical change per commit.
-- Draft PRs are welcome.
+- For dependent work, use official `gh-stack` to create, restack, and retarget
+  the PR graph.
+- Commit the candidate, run focused preflight, create the canonical `xtask`
+  snapshot, then open or update the PR before final long validation or panel
+  review.
+- GitHub CI, final local/host validators, and the full end-of-wave panel may be
+  pending when the PR opens and run concurrently. Every required lane and the
+  tree-bound seal must pass before merge.
+- Any content change invalidates validator and panel results. History-only
+  reuse requires canonical `xtask` proof of byte-identical content and rerun CI.
+- Keep evidence and panel output external. The PR body contains dependency,
+  base/head/tree, and check-status summaries only, with no AI, assistant, tool,
+  or model metadata.
+- ADR-scale branches merge through GitHub only. After merge, restore the primary
+  clone to `main` and fast-forward it; never locally merge the branch into
+  `main` beforehand.
+- Draft PRs are welcome once focused preflight has passed.
 - Reference resolved issues with `Closes #N`.
 
 ## Code is canon
@@ -177,9 +199,10 @@ pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
 
 ### When to run the L2 KVM tests
 
-The Layer-2 (`tests/integration/live/d2b-store.sh`, `tests/integration/live/audio.sh`) tests
-require a live host with d2b activated and are NOT part of the
-PR gate. Run them locally when:
+The Layer-2 (`tests/integration/live/d2b-store.sh`,
+`tests/integration/live/audio.sh`) tests require a live host with d2b activated
+and do not run in GitHub CI. Run applicable tests in the final validator lane
+after the PR opens when:
 
 - You change a privileged broker handler whose effect is only
   observable on a real host (cgroup delegation, pidfd handoff,

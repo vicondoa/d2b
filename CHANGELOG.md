@@ -12,7 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
+- Replaced serial phase gating and the three-unit process assumption with
+  speculative `gh-stack` waves, exact-tree concurrent CI/validator/panel lanes,
+  external `xtask` evidence and seals, full ten-role end-of-wave review, and the
+  accepted local-root plus parent-spawned per-realm controller/broker model.
+- Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
