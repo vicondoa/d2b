@@ -882,6 +882,18 @@ constructs eleven typed registries as one transaction:
   receives a call;
 - there is no "last registration wins" behavior.
 
+Every generated factory-registration, capability-registration,
+configured-instance construction, and generation-finalization API is fallible
+and returns `Result<_, RegistryBuildError>`. Duplicate keys, malformed
+configuration, descriptor mismatch, missing capabilities, and factory
+construction failures return typed, redacted errors and abort the transaction;
+they never use `panic!`, `assert!`, `unwrap`, or `expect` for configuration
+handling. The factory key is exactly
+(`ProviderType`, `ImplementationId`). Registration creates one factory for that
+key; constructing multiple configured instances from it is a separate fallible
+operation and is required to work for distinct globally unique `ProviderId`
+values.
+
 A registry generation is immutable. Reconfiguration builds and validates a new
 generation, stops admission to the old generation, drains bounded in-flight
 operations, and atomically publishes the new generation. Calls retain the
@@ -1150,13 +1162,27 @@ TransportProvider or direct local endpoint
 Dependencies are:
 
 - Noise: `snow`;
-- control RPC: `ttrpc-rust` plus `rust-protobuf`;
+- control RPC: the exact runtime pins `ttrpc = "=0.9.0"` from
+  `ttrpc-rust` and `protobuf = "=3.7.2"` from `rust-protobuf`, with
+  `ttrpc-codegen = "=0.6.0"` and `protobuf-codegen = "=3.7.2"` for the
+  generated bindings;
 - data: the d2b named-stream mux with independent bounded credit;
 - Unix packet and FD substrate: established `rustix` or `nix` calls, wrapped by
   Tokio `AsyncFd` in one small audited `d2b-unix-session` abstraction.
 
 There is no hand-authored protobuf codec, alternate realm record layer, local
 plaintext mechanism, or second mux.
+
+W2 begins with a dependency/API-fit spike against those exact versions. The
+spike generates a minimal asynchronous server and client, carries unary calls
+through the ComponentSession transport adapter, and proves on both Tokio
+current-thread and multi-thread runtimes that client, accept, read, write, and
+handler waits yield to an independent progress task. It also compile-proves the
+generated service traits, cancellation path, and owned/borrowed handler
+lifetimes used below. This gate runs before any `.v2` service schema is frozen.
+An incompatible API, blocking generated path, or required sync adapter fails W2
+and requires a reviewed dependency decision; it is not worked around after
+schemas are generated.
 
 ### Fixed preface and service selection
 
@@ -1260,6 +1286,27 @@ method's bounded cleanup. An ambiguous durable mutation is observed or
 quarantined under its original operation ID, never replayed as cancellation
 cleanup. The endpoint returns one bounded terminal cancellation acknowledgement
 when the control channel remains available.
+
+### Generated dispatch ownership
+
+Generated ttrpc handlers dispatch in the session-owned request task. That task
+may borrow the registered trait object and `ProviderCallContext`, call an
+`async_trait` method through `&self`, and await the returned borrowed future to
+completion because the request task owns the borrow lifetime.
+
+No code may pass or spawn a future borrowing `&self`, a registry entry, request
+stack data, or a session-local context into `tokio::spawn` or any other
+`'static` executor. Work that intentionally outlives the request task is
+converted before detachment into either:
+
+- an owned `Arc<dyn Provider...>` plus an owned or `Arc`-backed call context; or
+- an explicit owned operation object containing only the bounded authority,
+  cancellation, deadline, generation, and resource handles it needs.
+
+The detached task owns every captured value. It does not retain a reference to
+the generated handler, registry generation stack frame, ttrpc request, or
+session task. Compile tests cover both the borrowed in-task path and every
+allowed owned detached path.
 
 ### Authentication profiles
 
@@ -1413,10 +1460,21 @@ key repair.
 
 ### Record and queue rules
 
-Noise handshake and protected records use a 16-bit big-endian wire length.
-Ciphertext is at most 65,535 bytes and plaintext is at most 65,519 bytes after
-the 16-byte authentication tag. Larger logical frames are fragmented only by
-ComponentSession.
+Noise handshake messages and protected records use a 16-bit big-endian wire
+length. Protected ciphertext is at most 65,535 bytes and plaintext is at most
+65,519 bytes after the 16-byte authentication tag. Larger logical frames are
+fragmented only by ComponentSession.
+
+Every admission, fragmentation, queue-credit, and pre-allocation calculation
+uses checked arithmetic and includes all applicable wire overhead: the fixed
+preface and canonical offer, the selected Noise pattern's handshake fields and
+handshake AEAD tags as reported by `snow`, the two-byte record length, the
+16-byte transport AEAD tag, ComponentSession record/fragment headers, and the
+ttrpc/protobuf envelope. A buffer is reserved from the checked ciphertext bound,
+never from a peer length plus unchecked overhead. Underflow, overflow, an
+impossible `snow` output bound, or a value above the selected profile limit is a
+typed pre-allocation rejection; it never reaches indexing, allocation, or a
+panic.
 
 Initial hard ceilings are:
 
@@ -1864,6 +1922,12 @@ authoritative JSON persistence and enforces:
 - typed quarantine for corrupt or ambiguous state;
 - no success-shaped default on missing or invalid authority.
 
+This is an ordered durability protocol, not a list of optional best practices.
+The writer must fsync the complete temporary file before rename, atomically
+rename it, open and fsync the parent directory after the rename, and return
+success only after that directory fsync succeeds. A file fsync without the
+post-rename parent-directory fsync is not a successful authoritative write.
+
 Each authority writes only its declared records. State adoption verifies the
 live kernel/provider identity and generation. Pidfds, sockets, locks, session
 keys, and Noise cipher state are never serialized.
@@ -2053,11 +2117,15 @@ not recursively scan realm/provider configuration.
 ### One workspace
 
 All host and guest crates use the repository root Cargo workspace and one
-`Cargo.lock`. The broker and guest helpers are not separate workspaces.
+`Cargo.lock`. The broker and guest helpers are not separate workspaces, and no
+nested workspace or second lockfile is permitted.
 
 The root sets:
 
 ```toml
+[workspace]
+resolver = "2"
+
 [workspace.package]
 version = "2.0.0"
 ```
@@ -2065,6 +2133,16 @@ version = "2.0.0"
 Every publishable and internal crate uses `version.workspace = true`. Common
 edition, license, rust-version, lints, and dependency versions are inherited
 where Cargo supports it.
+
+The portable shared crates `d2b-core`, `d2b-realm-core`, `d2b-contracts`,
+`d2b-provider`, `d2b-provider-toolkit`, `d2b-session`, `d2b-state`, and
+`d2b-client` each declare `[features] default = []`. Every consumer sets
+`default-features = false` and names the exact features it needs. Host-only Nix
+integration, host Unix/socket/SCM_RIGHTS integration, and cloud SDK integration
+are optional dependency families classified respectively as `host-nix`,
+`host-socket`, and `cloud-sdk`; none is enabled by a portable crate default.
+Here `host-socket` does not include the guest's explicitly selected native
+vsock transport.
 
 `d2b-contracts` remains one canonical crate with no default features:
 
@@ -2080,6 +2158,32 @@ bundle
 
 Consumers use `default-features = false` and select only required families.
 Feature combinations are compile-tested. No feature re-exports a d2b 1.x type.
+
+The framework guest-artifact inventory initially contains `d2b-guestd` and
+`d2b-exec-runner`. `d2b-guestd` exposes exactly one package feature,
+`guest-control`, which selects only `d2b-contracts/session` and
+`d2b-contracts/guest`; `d2b-exec-runner` has an empty feature set. Root tooling
+runs these isolated commands, never `--workspace` or `--all-features`:
+
+```text
+cargo check --locked -p d2b-guestd --no-default-features --features guest-control
+cargo build --locked -p d2b-guestd --no-default-features --features guest-control
+cargo check --locked -p d2b-exec-runner --no-default-features
+cargo build --locked -p d2b-exec-runner --no-default-features
+```
+
+An `xtask` feature-graph test resolves those exact roots and feature sets with
+Cargo metadata and fails if `host-nix`, `host-socket`, `cloud-sdk`, or any
+dependency reachable only through one of those families enters either guest
+artifact. A new framework guest artifact cannot land until its exact isolated
+check/build rows and forbidden-feature proof are added.
+
+This guest inventory does not reclassify a configured cloud provider agent as
+guest framework code. The `azure-container-apps` and `azure-relay` agents remain
+separate, explicitly selected package closures in their configured
+credential-owning workload, co-located with their private credential module as
+required by the placement table. Their explicit cloud SDK features never enter
+`d2b-guestd` or `d2b-exec-runner`.
 
 Focused canonical crates include:
 
@@ -2126,6 +2230,15 @@ A new sibling distribution repository,
 Neither toolkit family publishes crates to crates.io. They ship through GitHub
 release source artifacts and flake/path dependencies with exact source
 fingerprints.
+
+This GitHub/flake-only distribution is fixed. The canonical SDK closure,
+including `d2b-client`, `d2b-provider-toolkit`, `d2b-contracts`,
+`d2b-provider`, and `d2b-session`, sets `publish = false`; crates.io publishing
+is not a supported fallback. Path dependencies into the fingerprinted release
+source are expected and version-only registry dependencies are rejected.
+`xtask` validates every canonical SDK manifest, rejects a release plan or
+automation command containing `cargo publish`, and fails if any SDK crate
+becomes publishable.
 
 The v2 cutover atomically migrates:
 
@@ -2280,6 +2393,13 @@ fields without AI attribution, and Nix dev tooling for `gh-stack`, pinned
 nightly `cargo-udeps`, and `cargo-semver-checks`.
 
 #### W2 - Workspace and canonical contracts
+
+W2 first runs the blocking dependency/API-fit spike for exact
+`ttrpc = "=0.9.0"`, `protobuf = "=3.7.2"`,
+`ttrpc-codegen = "=0.6.0"`, and `protobuf-codegen = "=3.7.2"`. It must prove
+generated asynchronous server/client compatibility and nonblocking Tokio
+behavior before service schemas freeze. W2 fails closed if the spike does not
+pass; no contract slice starts around an incompatible or blocking binding.
 
 Parallel contract slices:
 
@@ -2585,8 +2705,13 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - exact `.v2` service IDs and schema fingerprints;
 - exact authenticated-expiry/cancellation metadata and no epoch-valued
   `timeout_nano`;
-- feature-family dependency direction and no-default portable builds;
-- one workspace, one lockfile, and version 2.0.0 inheritance;
+- exact ttrpc/rust-protobuf runtime and codegen pins, plus the pre-schema
+  async-generated API-fit/nonblocking Tokio spike;
+- resolver 2 feature-family dependency direction, no-default portable builds,
+  exact isolated guest check/build feature sets, and feature-graph exclusion of
+  host Nix/socket and cloud SDK families from framework guest artifacts;
+- one workspace, one lockfile, and version 2.0.0 inheritance, with no nested
+  guest or broker workspace;
 - independent Nix/Rust SHA-256 short-ID vectors and global `ProviderId`
   uniqueness;
 - generated socket contract completeness and byte-length proof for every row
@@ -2605,9 +2730,15 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   mismatch, and established-session transfer rejection;
 - replay, truncation, duplicate/reordered fragment, nonce exhaustion, malformed
   preface, and over-limit rejection;
+- checked Noise handshake, handshake-tag, record-tag, fragment, and envelope
+  overhead at every allocation boundary, including adversarial boundary
+  property tests that prove rejection without panic;
 - 30-second skew and 15-minute lifetime boundaries, wall-clock jumps,
   ingress/queue/dispatch expiry, per-hop capped relative ttrpc timeout, and
   request-ID cancellation before and during dispatch;
+- generated handlers awaiting borrowed `async_trait` futures only in the
+  session-owned request task, with compile coverage that every detached path
+  captures an owned `Arc` provider/context or explicit owned operation object;
 - deterministic scheduler coverage for priority, fairness, backpressure,
   cancellation, and no lock across await;
 - Unix readiness burst tests prove read and write drivers drain through
@@ -2632,6 +2763,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - global provider-ID collision, duplicate
   (`ProviderType`, `ImplementationId`) factory rejection, and multiple
   configured-instance acceptance;
+- fallible `Result`-returning factory/capability/instance registration,
+  typed duplicate and configuration errors, transaction abort, and no
+  configuration-triggered panic;
 - descriptor/registry claim parity and per-instance duplicate rejection;
 - generated placement coverage for every initial implementation ID;
 - operation-scope widening rejection;
@@ -2674,7 +2808,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
   socket-activation exception, allocator-owned child listeners, broker-only
   other dynamic creation, and no daemon unlink/rebind path;
 - restart adoption before cleanup and typed quarantine;
-- atomic JSON crash consistency;
+- atomic JSON crash and simulated power-loss consistency at every write phase,
+  proving that success is impossible before the post-rename parent-directory
+  fsync and that recovery observes exactly the prior or complete new document;
 - segment chain, checkpoint, retention, and gap behavior;
 - no old options, aliases, tombstones, or three-unit invariant.
 
@@ -2710,6 +2846,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 
 - `cargo-semver-checks` records the intentional 2.0 API break;
 - toolkit and sibling flakes build from exact released source artifacts;
+- every canonical SDK crate remains `publish = false`, `xtask` rejects
+  `cargo publish`, and fingerprinted GitHub/flake path dependencies work
+  without a crates.io publication path;
 - no old repository, crate, package, share, or protocol path remains;
 - final production source/configuration/schema/test set and release closure
   contain no private W11 reset manifest or literal legacy outlier root, and
