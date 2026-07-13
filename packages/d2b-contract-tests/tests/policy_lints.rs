@@ -141,7 +141,7 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
         "parent-spawns each child controller",
         "and broker as separate pidfd-supervised processes",
         "Child processes are not PID1 units.",
-        "Delivery uses `gh-stack`, Rust `xtask`, immutable tree snapshots",
+        "Delivery uses Git Town ordinary PR stacks, Rust `xtask`, immutable tree snapshots",
         "validation and panel lanes",
     ] {
         assert!(
@@ -166,7 +166,7 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
 
     let test_agents = read_repo_file("tests/AGENTS.md");
     assert!(
-        test_agents.contains("and the ten-role panel proceed concurrently"),
+        test_agents.contains("the ten-role panel") && test_agents.contains("proceed\nconcurrently"),
         "tests/AGENTS.md must require concurrent final lanes"
     );
     assert!(
@@ -176,7 +176,7 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
 
     let test_readme = read_repo_file("tests/README.md");
     assert!(
-        test_readme.contains("Open or update the PR and `gh-stack` graph")
+        test_readme.contains("Open or update the ordinary PR and Git Town parent graph")
             && test_readme.contains("panel concurrently against that snapshot")
             && test_readme.contains("Do not paste raw"),
         "tests/README.md must keep PR-before-final-lanes and external-summary-only evidence"
@@ -203,13 +203,11 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
 fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     let tools = read_repo_file("pkgs/delivery-tools.nix");
     for pin in [
-        r#"ghStackVersion = "0.0.7";"#,
+        "gitTown = pkgs.git-town;",
         r#"cargoUdepsVersion = "0.1.61";"#,
         r#"cargoUdepsNightlyDate = "2025-12-01";"#,
         r#"cargoSemverChecksVersion = "0.47.0";"#,
         r#"rustStableVersion = "1.94.1";"#,
-        r#"hash = "sha256-mD76Ef2b1loiyd807s9zuV0OD9tmRTJLLKT3WCyssug=";"#,
-        r#"vendorHash = "sha256-Qs46cUUQjdF/pU5TgSAkQ583JpVrFt22kg6g6TDCpG4=";"#,
         r#"hash = "sha256-yT/EJWGGhQapbU1o1Gus1Vk5cAhso5ALTBecB3BH46g=";"#,
         r#"cargoHash = "sha256-DGfAsBucFRFJkjmJkpTpNfQO79jaNa5NezXKf7hYYeM=";"#,
         r#"hash = "sha256-1D6WFsiMOl/bJr0J+mmvLlgnRSKN6rPhDSnDsdLTC9E=";"#,
@@ -229,9 +227,17 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         "delivery tools must not download toolchains or binaries at runtime"
     );
     assert!(
-        tools.contains("ghUpstream = pkgs.gh;")
-            && tools.contains("inherit (ghUpstream) version;")
-            && !tools.contains("assert pkgs.gh.version"),
+        !tools.contains("buildGoModule"),
+        "delivery tooling must use locked nixpkgs Git Town without a source-build wrapper"
+    );
+    let flake = read_repo_file("flake.nix");
+    assert!(
+        flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
+            && flake.contains("git-town = deliveryTools.gitTown;"),
+        "delivery flake checks must pin the locked Git Town package version"
+    );
+    assert!(
+        tools.contains("gh = pkgs.gh;") && !tools.contains("assert pkgs.gh.version"),
         "GitHub CLI must come from the caller's nixpkgs without an exact-version eval assertion"
     );
 
@@ -300,9 +306,14 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
 
     let delivery_command = read_repo_file("packages/xtask/src/delivery/command.rs");
     assert!(
-        delivery_command.contains(r#""GET".to_owned()"#)
-            && delivery_command.contains("no fallback stack mutation is permitted"),
-        "xtask must encode read-only private-preview inspection and fail-closed fallback"
+        delivery_command.contains(r#""git-town""#)
+            && delivery_command.contains(r#""config".to_owned()"#)
+            && delivery_command.contains(r#""get-parent".to_owned()"#)
+            && delivery_command.contains(r#""pr".to_owned()"#)
+            && delivery_command.contains(r#""view".to_owned()"#)
+            && !delivery_command.contains("cli_internal")
+            && !delivery_command.contains("pulls/stacks"),
+        "xtask must derive topology from Git Town and ordinary GitHub PR authority"
     );
     for mutation in [
         r#""POST".to_owned()"#,
@@ -352,9 +363,10 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
 
     let reference = read_repo_file("docs/reference/delivery-tooling.md");
     assert!(
-        reference.contains("Official `gh-stack` is the only stack mutator")
-            && reference.contains("There is no fallback stack mutation")
-            && reference.contains("Private-preview\navailability is mandatory and fail-closed")
+        reference
+            .contains("Git Town is the only stack topology, propose, and synchronization mutator")
+            && reference.contains("git town propose --stack --non-interactive --no-browser")
+            && reference.contains("ordinary pull-request API")
             && reference.contains("Use `$XDG_STATE_HOME/d2b/delivery`")
             && reference.contains("Git metadata is never delivery state")
             && reference.contains("must never be added\nto the reviewed tree")

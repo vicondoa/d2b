@@ -175,8 +175,8 @@ git worktree add -b phase-<name> ../d2b-<name> main
 
 Each scope owner commits in that worktree and hands the branch to the
 integrator. For ADR-scale work, completion means the branch is represented in
-the `gh-stack` graph and its PR state is current; it does **not** mean merging
-the branch into the primary clone.
+the Git Town parent graph and its ordinary GitHub PR state is current; it does
+**not** mean merging the branch into the primary clone.
 
 #### Finish-of-work invariant: GitHub merge, then fast-forward
 
@@ -207,8 +207,10 @@ panel seal, and pass merge-eligibility checks before it merges.
 Use this shape:
 
 1. Open one private branch/worktree per independently reviewable slice and use
-   official `gh-stack` for stack creation, graph inspection, restacking, and
-   retargeting. Do not replace it with ad-hoc `gh`/Git stack scripts.
+   Git Town for stack topology, graph inspection, proposing, synchronization,
+   restacking, and retargeting. Do not replace it with ad-hoc `gh`/Git stack
+   scripts. Propose noninteractively with
+   `git town propose --stack --non-interactive --no-browser`.
 2. Stack only real dependencies. Independent branches target `main`; dependent
    branches target the exact contract PR they consume.
 3. Use the hardened Rust `xtask` commands for snapshots, validation run/import,
@@ -284,7 +286,7 @@ host, prefer `d2b down <vm> --apply` followed by
 #### Stable-contract preparation
 
 When parallel scopes share DTOs, schemas, or other contracts, put those shared
-contracts in the root PR of the `gh-stack` graph. Dependent scopes may start
+contracts in the root PR of the Git Town graph. Dependent scopes may start
 once that committed contract is stable enough to consume, but they remain
 speculative until it lands. Contract changes require dependent branches to
 restack and lose any prior validation or panel seal; never land a prep commit
@@ -694,7 +696,10 @@ the public option/schema surface and are not bookkeeping; leave them.
 ### Landing changes (PR workflow)
 
 `main` is protected: changes land through GitHub pull requests, never a direct
-push or a pre-merge local integration. Use `gh-stack` for dependent PRs. After
+push or a pre-merge local integration. Use Git Town and ordinary GitHub PRs for
+dependent work. Direct `git push` may publish commits only after Git Town owns
+and verifies that branch's immediate parent; it must never create or change
+stack topology or retarget a PR. After
 the committed candidate passes focused preflight, immediately open or update
 the PR and create its immutable snapshot from that open PR/stack state; do not
 wait for final long local/host validation or the panel.

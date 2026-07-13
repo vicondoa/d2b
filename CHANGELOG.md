@@ -19,15 +19,17 @@ deprecations ship one minor release before removal.
   exact-role panel attestations, non-circular wave seals, history-only reuse
   proofs, and fail-closed merge eligibility.
 - Added reproducible delivery packages and a default development shell with
-  official `gh-stack`, GitHub CLI, pinned-nightly `cargo-udeps`, and
+  Git Town, GitHub CLI, pinned-nightly `cargo-udeps`, and
   `cargo-semver-checks`; stacked-base PR workflows now emit tree-bound check
-  summaries, and private-preview unavailability fails closed without a custom
-  stack-mutation fallback.
+  summaries.
 
 ### Changed
 
-- Bound delivery snapshots and seals to checked-in manifests, official
-  `gh-stack` graphs, exact GitHub PR/check publishers and OIDs, verified
+- Replaced the unavailable GitHub stack preview dependency with locked Git
+  Town 23.0.1, ordinary GitHub PR authority, recursive parent-graph
+  verification, and a typed fail-closed capability check.
+- Bound delivery snapshots and seals to checked-in manifests, Git Town parent
+  graphs, exact GitHub PR/check publishers and OIDs, verified
   validation and panel provenance, portable multi-repository content IDs,
   private XDG state, history-only proofs, and fail-closed merge authority.
 - Hardened delivery sealing with real nested GitHub check-suite metadata,
@@ -39,7 +41,7 @@ deprecations ship one minor release before removal.
   discovery, and generated workflow ownership from Python and Bash into Rust
   `xtask`, and enabled the generated PR workflow for stacked non-main bases.
 - Replaced serial phase gating and the three-unit process assumption with
-  speculative `gh-stack` waves, exact-tree concurrent CI/validator/panel lanes,
+  speculative Git Town PR stacks, exact-tree concurrent CI/validator/panel lanes,
   external `xtask` evidence and seals, full ten-role end-of-wave review, and the
   accepted local-root plus parent-spawned per-realm controller/broker model.
 - Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive

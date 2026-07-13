@@ -119,7 +119,7 @@ Useful knobs:
 
 1. Commit the candidate and run the smallest relevant focused preflight, such
    as one crate test, one nix-unit shard, or one `make test-*` target.
-2. Open or update the PR and `gh-stack` graph, then create the immutable
+2. Open or update the ordinary PR and Git Town parent graph, then create the immutable
    delivery snapshot for that exact open PR state.
 3. Run GitHub CI, the manifest-required final validator lane, and the ten-role
    panel concurrently against that snapshot. Reviewers inspect; they do not run

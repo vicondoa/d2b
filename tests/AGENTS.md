@@ -33,9 +33,10 @@ These are separate responsibilities:
   and external evidence status as members of the end-of-wave panel. Reviewers
   never execute tests, builds, evals, or other gates.
 
-After focused preflight, the integrator opens or updates the PR and then
-snapshots that exact open PR/stack state. GitHub CI, the final validator lane,
-and the ten-role panel proceed concurrently on that tree. Any content change
+After focused preflight, the integrator uses Git Town to open or update the
+ordinary GitHub PR stack and then snapshots that exact open PR/parent-graph
+state. GitHub CI, the final validator lane, and the ten-role panel proceed
+concurrently on that tree. Any content change
 invalidates both validator evidence and panel signoff. Pending lanes are valid
 on an open PR but never make it merge-eligible.
 
