@@ -22,10 +22,10 @@ use xtask::delivery::{
     evidence::{CiAttestationClaims, CiAttestationVerifier, EvidenceRecord, VerifiedCiAttestation},
     import_ci_evidence,
     model::{
-        CheckPublisher, CheckPublisherKind, DeliveryManifest, FingerprintSpec, GhStackBranch,
-        GhStackGraph, GhStackPr, GitObjectFormat, LogicalPath, PANEL_ATTESTATION_ARTIFACT_KIND,
-        PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY, PANEL_ROLES, PullRequestState, RepositoryPolicy,
-        RequiredCheck, RequiredValidation, SnapshotRequest, StackNodePolicy, ValidationAuthority,
+        CheckPublisher, CheckPublisherKind, DeliveryManifest, FingerprintSpec, GitObjectFormat,
+        LogicalPath, PANEL_ATTESTATION_ARTIFACT_KIND, PANEL_MODEL_POLICY, PANEL_PROVIDER_POLICY,
+        PANEL_ROLES, PullRequestState, RepositoryPolicy, RequiredCheck, RequiredValidation,
+        SnapshotRequest, StackBranch, StackGraph, StackNodePolicy, StackPr, ValidationAuthority,
     },
     panel::{PanelAttestation, PanelReceiptVerifier, VerifiedPanelReceipt},
     read_snapshot, run_validation,
@@ -70,11 +70,16 @@ impl Drop for Scratch {
 
 #[derive(Clone)]
 struct StaticGraph {
-    graph: GhStackGraph,
+    graph: StackGraph,
 }
 
 impl StackGraphSource for StaticGraph {
-    fn graph(&self, repository: &str, _checkout_root: &Path) -> Result<GhStackGraph> {
+    fn graph(
+        &self,
+        repository: &str,
+        _checkout_root: &Path,
+        _expected_nodes: &[StackNodePolicy],
+    ) -> Result<StackGraph> {
         if repository != REPOSITORY_ID {
             return Err(DeliveryError::new("unexpected graph repository"));
         }
@@ -372,24 +377,28 @@ fn manifest(authority: ValidationAuthority) -> DeliveryManifest {
     }
 }
 
-fn graph(base: &str, head: &str) -> GhStackGraph {
-    GhStackGraph {
+fn graph(base: &str, head: &str) -> StackGraph {
+    StackGraph {
         trunk: "main".to_owned(),
-        prefix: String::new(),
         current_branch: "feature".to_owned(),
-        branches: vec![GhStackBranch {
+        branches: vec![StackBranch {
             name: "feature".to_owned(),
+            parent: "main".to_owned(),
+            base_ref: "main".to_owned(),
+            observed_base: base.to_owned(),
             head: head.to_owned(),
             base: base.to_owned(),
             is_current: true,
             is_merged: false,
             is_queued: false,
             needs_rebase: false,
-            pr: Some(GhStackPr {
+            pr: Some(StackPr {
                 number: 42,
                 url: "https://github.com/example/d2b/pull/42".to_owned(),
                 state: "OPEN".to_owned(),
             }),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
         }],
     }
 }
@@ -434,6 +443,7 @@ fn status_for(
         head_oid: head.to_owned(),
         merge_commit_oid: None,
         merge_commit_tree_oid: None,
+        merge_base_oid: (state == PullRequestState::Merged).then(|| base.to_owned()),
         is_in_merge_queue: false,
         is_merge_queue_enabled: false,
         merge_queue_entry: None,
@@ -1235,14 +1245,19 @@ fn state_inside_git_common_directory_is_rejected() {
 }
 
 struct MutatingGraph {
-    graph: GhStackGraph,
+    graph: StackGraph,
     repository: PathBuf,
     replacement_oid: String,
     calls: Cell<usize>,
 }
 
 impl StackGraphSource for MutatingGraph {
-    fn graph(&self, _repository: &str, _checkout_root: &Path) -> Result<GhStackGraph> {
+    fn graph(
+        &self,
+        _repository: &str,
+        _checkout_root: &Path,
+        _expected_nodes: &[StackNodePolicy],
+    ) -> Result<StackGraph> {
         let calls = self.calls.get();
         self.calls.set(calls + 1);
         if calls == 1 {
@@ -1371,7 +1386,7 @@ fn snapshot_detects_ref_and_worktree_toctou_mutation() {
 }
 
 #[test]
-fn gh_stack_merged_prefix_progresses_without_changing_content() {
+fn git_town_merged_prefix_progresses_without_changing_content() {
     let scratch = Scratch::new("merged-prefix");
     let repository = scratch.path.join("repository");
     fs::create_dir(&repository).expect("repository");
@@ -1459,38 +1474,47 @@ fn gh_stack_merged_prefix_progresses_without_changing_content() {
         state_root: Some(scratch.path.join("state")),
     };
     let old_graph = StaticGraph {
-        graph: GhStackGraph {
+        graph: StackGraph {
             trunk: "main".to_owned(),
-            prefix: String::new(),
             current_branch: "second".to_owned(),
             branches: vec![
-                GhStackBranch {
+                StackBranch {
                     name: "first".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: base.clone(),
                     head: first.clone(),
                     base: base.clone(),
                     is_current: false,
                     is_merged: false,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 41,
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
-                GhStackBranch {
+                StackBranch {
                     name: "second".to_owned(),
+                    parent: "first".to_owned(),
+                    base_ref: "first".to_owned(),
+                    observed_base: first.clone(),
                     head: second.clone(),
                     base: first.clone(),
                     is_current: true,
                     is_merged: false,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 42,
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         },
@@ -1552,38 +1576,51 @@ fn gh_stack_merged_prefix_progresses_without_changing_content() {
         .resolve_commit(&repository, "second")
         .expect("rebased second");
     let new_graph = StaticGraph {
-        graph: GhStackGraph {
+        graph: StackGraph {
             trunk: "main".to_owned(),
-            prefix: String::new(),
             current_branch: "second".to_owned(),
             branches: vec![
-                GhStackBranch {
+                StackBranch {
                     name: "first".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: base.clone(),
                     head: first.clone(),
                     base: base.clone(),
                     is_current: false,
                     is_merged: true,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 41,
                         url: String::new(),
                         state: "MERGED".to_owned(),
                     }),
+                    merge_commit_oid: Some(advanced_base.clone()),
+                    merge_commit_tree_oid: Some(
+                        probe
+                            .tree_for_commit(&repository, &advanced_base)
+                            .expect("merge tree"),
+                    ),
                 },
-                GhStackBranch {
+                StackBranch {
                     name: "second".to_owned(),
+                    parent: "first".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: advanced_base.clone(),
                     head: rebased_second.clone(),
                     base: advanced_base.clone(),
                     is_current: true,
                     is_merged: false,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 42,
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         },
@@ -1618,7 +1655,10 @@ fn gh_stack_merged_prefix_progresses_without_changing_content() {
     assert_eq!(old.content_id, new.content_id);
     assert_ne!(old.candidate_id, new.candidate_id);
     assert_eq!(new.stack[0].snapshot_state, PullRequestState::Merged);
+    assert_eq!(new.stack[0].expected_base_oid, base);
     assert_eq!(new.stack[1].expected_base_ref, "main");
+    assert_eq!(new.stack[1].expected_base_oid, advanced_base);
+    assert_eq!(new.stack[1].depends_on, ["first"]);
     xtask::delivery::verify_history_only_equivalence(&old, &new)
         .expect("merged prefix progression");
     let proof = construct_history_proof(

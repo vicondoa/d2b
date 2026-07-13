@@ -16,8 +16,8 @@ pub mod snapshot;
 pub mod storage;
 
 pub use command::{
-    GH_STACK_VERSION, GhMergeSource, GhStackSource, GhStatusSource, GitProbe, ProcessCommandOutput,
-    check_gh_stack_private_preview,
+    GIT_TOWN_LOCKED_VERSION, GIT_TOWN_SUPPORTED_MAJOR, GhMergeSource, GhStatusSource, GitProbe,
+    GitTownStackSource, ProcessCommandOutput, StackCapability, check_git_town_capability,
 };
 pub use eligibility::{
     MergeEligibility, atomic_history_merge, atomic_merge, check_history_merge_eligibility,
@@ -91,6 +91,8 @@ struct WorkflowOutput {
     integration_points: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     commands: Vec<WorkflowCommandHelp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stack_capability: Option<StackCapability>,
 }
 
 #[derive(Serialize)]
@@ -123,7 +125,7 @@ pub fn run_cli(args: &[String]) -> std::process::ExitCode {
 fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
     let command = ProcessCommandOutput;
     let probe = GitProbe::new(command);
-    let graph = GhStackSource::new(&command);
+    let graph = GitTownStackSource::new(&command);
     let github = GhStatusSource::new(&command);
     let ci_verifier = GithubAttestationVerifier::new(&command);
     let panel_verifier = OpenSslPanelReceiptVerifier::new(&command);
@@ -149,7 +151,8 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             ],
             integration_points: vec![
                 "checked-in-authoritative-manifest".to_owned(),
-                "gh-stack-view-json".to_owned(),
+                "git-town-parent-configuration".to_owned(),
+                "ordinary-github-pull-requests".to_owned(),
                 "github-check-suite-run-authority".to_owned(),
                 "offline-github-attestation-bundle".to_owned(),
                 "signed-external-panel-receipts".to_owned(),
@@ -157,6 +160,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
                 "external-layer1-renderer".to_owned(),
             ],
             commands: workflow_command_help(),
+            stack_capability: None,
         }),
         [area, action, rest @ ..] if area == "stack" && action == "capability" => {
             let mut options = CliOptions::parse(rest)?;
@@ -166,7 +170,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             let repository = repository_id.strip_prefix("github.com/").ok_or_else(|| {
                 DeliveryError::new("authority repository is not hosted by GitHub")
             })?;
-            check_gh_stack_private_preview(&ProcessCommandOutput, repository)?;
+            let capability = check_git_town_capability(&ProcessCommandOutput, repository)?;
             Ok(WorkflowOutput {
                 schema_version: DELIVERY_SCHEMA_VERSION,
                 operation: "stack-capability".to_owned(),
@@ -174,10 +178,12 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
                 candidate_id: None,
                 artifact: None,
                 stages: vec![],
-                integration_points: vec![format!(
-                    "official-gh-stack-{GH_STACK_VERSION}-private-preview"
-                )],
+                integration_points: vec![
+                    format!("git-town-{}-supported-major", capability.supported_major),
+                    "ordinary-github-pull-request-api".to_owned(),
+                ],
                 commands: vec![],
+                stack_capability: Some(capability),
             })
         }
         [area, action, rest @ ..] if area == "wave" && action == "snapshot" => {
@@ -288,6 +294,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
                 stages: vec![],
                 integration_points: vec![],
                 commands: vec![],
+                stack_capability: None,
             })
         }
         [area, action, rest @ ..]
@@ -403,6 +410,7 @@ fn output_for_artifact(operation: &str, path: &Path) -> Result<WorkflowOutput> {
         stages: vec![],
         integration_points: vec![],
         commands: vec![],
+        stack_capability: None,
     })
 }
 
@@ -421,6 +429,7 @@ fn output_for_candidate(
         stages: vec![],
         integration_points: vec![],
         commands: vec![],
+        stack_capability: None,
     })
 }
 
@@ -441,6 +450,7 @@ fn output_for_eligibility(
         stages: vec![],
         integration_points: vec![],
         commands: vec![],
+        stack_capability: None,
     })
 }
 
@@ -448,7 +458,7 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
     [
         (
             "snapshot",
-            "Import checked-in authority plus gh stack view --json and write an immutable candidate.",
+            "Import checked-in authority, Git Town parent topology, and ordinary GitHub PR state into an immutable candidate.",
             &[
                 "--authority-repository",
                 "--authority-ref",

@@ -123,8 +123,9 @@ make test-drift
 
 - Use short imperative commit subjects with an area prefix, for example `net: fix ...` or `cli: add ...`.
 - Keep one logical change per commit.
-- For dependent work, use official `gh-stack` to create, restack, and retarget
-  the PR graph.
+- For dependent work, use Git Town to own parent topology, propose ordinary
+  GitHub PRs, synchronize, restack, and retarget the graph. Use
+  `git town propose --stack --non-interactive --no-browser`.
 - Commit the candidate, run focused preflight, open or update the PR/stack, and
   then create the canonical `xtask` snapshot of that exact open state before
   final long validation or panel review.

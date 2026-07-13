@@ -1,7 +1,6 @@
 { pkgs }:
 
 let
-  ghStackVersion = "0.0.7";
   cargoUdepsVersion = "0.1.61";
   cargoUdepsNightlyDate = "2025-12-01";
   cargoSemverChecksVersion = "0.47.0";
@@ -14,55 +13,8 @@ let
     rustc = stableRust;
   };
 
-  ghStack = pkgs.buildGoModule {
-    pname = "gh-stack";
-    version = ghStackVersion;
-
-    src = pkgs.fetchFromGitHub {
-      owner = "github";
-      repo = "gh-stack";
-      tag = "v${ghStackVersion}";
-      hash = "sha256-mD76Ef2b1loiyd807s9zuV0OD9tmRTJLLKT3WCyssug=";
-    };
-
-    vendorHash = "sha256-Qs46cUUQjdF/pU5TgSAkQ583JpVrFt22kg6g6TDCpG4=";
-
-    ldflags = [
-      "-s"
-      "-w"
-      "-X=github.com/github/gh-stack/cmd.Version=${ghStackVersion}"
-    ];
-
-    nativeCheckInputs = [ pkgs.git ];
-    nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
-    doInstallCheck = true;
-
-    meta = {
-      description = "Official GitHub CLI extension for stacked pull requests";
-      homepage = "https://github.com/github/gh-stack";
-      license = pkgs.lib.licenses.mit;
-      mainProgram = "gh-stack";
-      platforms = pkgs.lib.platforms.linux;
-    };
-  };
-
-  ghUpstream = pkgs.gh;
-  gh = pkgs.writeShellApplication {
-    name = "gh";
-    text = ''
-      if [[ "''${1-}" == "stack" ]]; then
-        shift
-        exec ${ghStack}/bin/gh-stack "$@"
-      fi
-      exec ${ghUpstream}/bin/gh "$@"
-    '';
-    passthru = {
-      inherit (ghUpstream) version;
-      upstream = ghUpstream;
-      inherit ghStack;
-    };
-    meta = ghUpstream.meta;
-  };
+  gh = pkgs.gh;
+  gitTown = pkgs.git-town;
 
   cargoUdepsRaw = stableRustPlatform.buildRustPackage {
     pname = "cargo-udeps";
@@ -154,7 +106,7 @@ in
     cargoSemverChecks
     cargoUdepsNightly
     gh
-    ghStack
+    gitTown
     nightlyRust
     stableRust
     stableRustPlatform

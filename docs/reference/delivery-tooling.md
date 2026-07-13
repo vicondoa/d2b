@@ -13,17 +13,18 @@ The shell contains these exact tools:
 | Tool | Pin |
 | --- | --- |
 | GitHub CLI | `2.92.0` from the locked nixpkgs input |
-| official `github/gh-stack` | `0.0.7` |
+| Git Town | `23.0.1` from the locked nixpkgs input |
 | `cargo-udeps` | `0.1.61`, run with nightly `2025-12-01` |
 | `cargo-semver-checks` | `0.47.0` |
 | project Rust toolchain | `1.94.1` |
 
-The source and dependency hashes are fixed in `pkgs/delivery-tools.nix`.
-Nothing downloads a tool when the shell or a command starts. The focused
-packages can also be built directly:
+The Cargo tool source and dependency hashes are fixed in
+`pkgs/delivery-tools.nix`; Git Town and GitHub CLI come from the repository's
+locked nixpkgs input. Nothing downloads a tool when the shell or a command
+starts. The focused packages can also be built directly:
 
 ```console
-nix build .#gh-stack .#cargo-udeps-nightly .#cargo-semver-checks
+nix build .#git-town .#cargo-udeps-nightly .#cargo-semver-checks
 ```
 
 Use `cargo udeps` in the shell. Its wrapper selects the pinned nightly compiler
@@ -32,16 +33,21 @@ remains the project's pinned stable toolchain. The shell also provides a C
 toolchain, CMake, `pkg-config`, OpenSSL, Protobuf, and `sccache` for workspace
 crates with native build dependencies.
 
-## Stack authority and private preview
+## Stack authority
 
-Official `gh-stack` is the only stack mutator. It owns stack creation,
-restacking, submission, and retargeting. The delivery `xtask` imports the
-checked-in manifest and declared graph while creating an immutable snapshot;
-it never accepts a caller-authored manifest, substitutes `gh pr edit`, performs
-custom API mutations, or rewrites local branches for a failed `gh stack`
-operation.
+Git Town is the only stack topology, propose, and synchronization mutator. It
+owns parent relationships, restacking, PR creation/update, and retargeting.
+The delivery `xtask` independently reconstructs the parent chain with
+`git-town config get-parent` and reads ordinary GitHub PR authority. Active
+branches must match exact local refs. Merged prefixes instead retain their
+historical PR head, merge base, merge commit, and merge tree, so a deleted or
+advanced local branch ref does not erase merge authority. The checked-in
+manifest remains the expected ordered graph. `xtask` never accepts a
+caller-authored graph, edits PR topology, or rewrites branches.
 
-Before creating a stack, verify that the repository has the private preview:
+Before creating or updating a stack, verify the supported Git Town major,
+noninteractive propose flags, GitHub authentication, repository read access,
+and ordinary pull-request API:
 
 ```console
 nix run .#delivery -- stack capability \
@@ -55,19 +61,29 @@ cargo xtask delivery stack capability \
   --repository github.com/example/d2b
 ```
 
-The capability check accepts only official `gh-stack` `0.0.7` and performs a
-read-only query against GitHub's private-preview endpoint. Private-preview
-availability is mandatory and fail-closed: if the preview is disabled, the
-token cannot access it, the response is malformed, or the tool version differs,
-the result is **cannot operate**. There is no fallback stack mutation. Enable
-the preview or stop the stacked delivery.
+The capability result is typed JSON. It accepts supported Git Town `23.x`
+binaries and fails closed when Git Town, required noninteractive flags, GitHub
+authentication, repository read access, or the ordinary PR API is absent or
+unverifiable. It does not require special GitHub enrollment.
 
-After the check succeeds, mutate the stack only with `gh stack`, for example:
+Configure and mutate a stack only with Git Town:
 
 ```console
-gh stack init --base main feature-contracts feature-runtime
-gh stack submit
+git config --local git-town.main-branch main
+git town set-parent main --non-interactive
+git town sync --stack --non-interactive
+git town propose --stack --non-interactive --no-browser
 ```
+
+The configured Git Town main branch is the perennial root; feature branches
+form one immediate-parent chain above it.
+Run `set-parent` on each branch whose immediate parent changes. A direct
+`git push` is permitted only to publish commits on a branch whose parent is
+already configured and verified by Git Town; it must not create, change,
+restack, or retarget topology. Use `git town propose` for every ordinary PR
+create/update and Git Town for every topology or synchronization change.
+Merging remains the delivery `xtask` exact-base-and-head compare-and-swap path
+or the GitHub merge queue.
 
 ## External evidence and check summaries
 
@@ -111,7 +127,7 @@ pass `--state-dir` an explicitly selected, operator-owned external directory
 with mode `0700`. Snapshots, evidence, panel records, and seals stay outside
 every reviewed checkout and outside every Git directory or common directory.
 Git metadata is never delivery state, and these artifacts must never be added
-to the reviewed tree. The app bundles pinned `git`, `gh`, and `gh-stack`
+to the reviewed tree. The app bundles pinned `git`, `gh`, and `git-town`
 executables so status inspection does not depend on an ambient command version.
 
 The non-generated pull-request workflows emit a small GitHub step summary bound
@@ -124,7 +140,7 @@ failed, or malformed required check.
 ## Validation ownership
 
 When realized, the `delivery-tooling` flake check verifies the locked GitHub
-CLI, `gh-stack`, Rust toolchains, Cargo tools, offline workspace metadata, and
+CLI, Git Town, Rust toolchains, Cargo tools, offline workspace metadata, and
 native OpenSSL build inputs. On x86_64 Linux it is discovered and instantiated
 as its own hosted CI flake-check shard. `make check` performs the same no-build
 instantiation through the bounded local flake shards;

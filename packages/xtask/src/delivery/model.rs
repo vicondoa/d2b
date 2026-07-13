@@ -446,60 +446,71 @@ pub struct FingerprintSpec {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct GhStackGraph {
+pub struct StackGraph {
     pub trunk: String,
-    #[serde(default)]
-    pub prefix: String,
-    #[serde(rename = "currentBranch")]
     pub current_branch: String,
-    pub branches: Vec<GhStackBranch>,
+    pub branches: Vec<StackBranch>,
 }
 
-impl GhStackGraph {
+impl StackGraph {
     pub fn validate(&self) -> Result<()> {
-        validate_git_ref(&self.trunk, "gh-stack trunk")?;
-        validate_optional_bounded_string(&self.prefix, "gh-stack prefix")?;
-        validate_bounded_string(&self.current_branch, "gh-stack current branch")?;
-        ensure_count(self.branches.len(), 1, MAX_STACK_NODES, "gh-stack branches")?;
+        validate_git_ref(&self.trunk, "Git Town trunk")?;
+        validate_bounded_string(&self.current_branch, "Git Town current branch")?;
+        ensure_count(
+            self.branches.len(),
+            1,
+            MAX_STACK_NODES,
+            "Git Town stack branches",
+        )?;
         let mut names = BTreeSet::new();
         let mut prs = BTreeSet::new();
         let mut current = 0;
+        let mut saw_active = false;
         for branch in &self.branches {
             branch.validate()?;
             if !names.insert(branch.name.as_str()) {
                 return Err(DeliveryError::new(format!(
-                    "gh-stack repeats branch {}",
+                    "Git Town stack repeats branch {}",
                     branch.name
                 )));
             }
             if branch.is_current {
                 if branch.is_merged {
-                    return Err(DeliveryError::new("gh-stack current branch must be active"));
+                    return Err(DeliveryError::new("Git Town current branch must be active"));
                 }
                 current += 1;
                 if branch.name != self.current_branch {
                     return Err(DeliveryError::new(
-                        "gh-stack currentBranch disagrees with isCurrent",
+                        "Git Town current branch identity is inconsistent",
                     ));
                 }
+            }
+            if branch.is_merged {
+                if saw_active {
+                    return Err(DeliveryError::new(
+                        "Git Town stack has a merged node after an active node",
+                    ));
+                }
+            } else {
+                saw_active = true;
             }
             if let Some(pr) = &branch.pr
                 && !prs.insert(pr.number)
             {
                 return Err(DeliveryError::new(format!(
-                    "gh-stack repeats PR {}",
+                    "Git Town stack repeats PR {}",
                     pr.number
                 )));
             }
         }
         if current != 1 {
             return Err(DeliveryError::new(
-                "gh-stack must identify exactly one current branch",
+                "Git Town stack must identify exactly one current branch",
             ));
         }
         if !self.branches.iter().any(|branch| !branch.is_merged) {
             return Err(DeliveryError::new(
-                "gh-stack must contain at least one active branch",
+                "Git Town stack must contain at least one active branch",
             ));
         }
         Ok(())
@@ -508,8 +519,13 @@ impl GhStackGraph {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct GhStackBranch {
+pub struct StackBranch {
     pub name: String,
+    pub parent: String,
+    #[serde(rename = "baseRef")]
+    pub base_ref: String,
+    #[serde(rename = "observedBase")]
+    pub observed_base: String,
     pub head: String,
     pub base: String,
     #[serde(rename = "isCurrent")]
@@ -520,30 +536,54 @@ pub struct GhStackBranch {
     pub is_queued: bool,
     #[serde(rename = "needsRebase")]
     pub needs_rebase: bool,
-    pub pr: Option<GhStackPr>,
+    pub pr: Option<StackPr>,
+    #[serde(rename = "mergeCommitOid")]
+    pub merge_commit_oid: Option<String>,
+    #[serde(rename = "mergeCommitTreeOid")]
+    pub merge_commit_tree_oid: Option<String>,
 }
 
-impl GhStackBranch {
+impl StackBranch {
     fn validate(&self) -> Result<()> {
-        validate_git_ref(&self.name, "gh-stack branch")?;
-        validate_hash(&self.head, "gh-stack branch head")?;
-        validate_hash(&self.base, "gh-stack branch base")?;
+        validate_git_ref(&self.name, "Git Town branch")?;
+        validate_git_ref(&self.parent, "Git Town parent")?;
+        validate_git_ref(&self.base_ref, "GitHub PR base ref")?;
+        validate_hash(&self.observed_base, "GitHub PR observed base")?;
+        validate_hash(&self.head, "Git Town branch head")?;
+        validate_hash(&self.base, "Git Town branch base")?;
         if self.is_queued || self.needs_rebase {
             return Err(DeliveryError::new(format!(
-                "gh-stack branch {} is queued or needs rebase",
+                "Git Town branch {} is queued or needs rebase",
                 self.name
             )));
         }
         let pr = self.pr.as_ref().ok_or_else(|| {
-            DeliveryError::new(format!("gh-stack branch {} has no PR", self.name))
+            DeliveryError::new(format!("Git Town branch {} has no PR", self.name))
         })?;
         pr.validate()?;
         let expected = if self.is_merged { "MERGED" } else { "OPEN" };
         if pr.state != expected {
             return Err(DeliveryError::new(format!(
-                "gh-stack branch {} state disagrees with PR state",
+                "Git Town branch {} state disagrees with PR state",
                 self.name
             )));
+        }
+        match (
+            self.is_merged,
+            &self.merge_commit_oid,
+            &self.merge_commit_tree_oid,
+        ) {
+            (true, Some(commit), Some(tree)) => {
+                validate_hash(commit, "GitHub merge commit OID")?;
+                validate_hash(tree, "GitHub merge commit tree OID")?;
+            }
+            (false, None, None) => {}
+            _ => {
+                return Err(DeliveryError::new(format!(
+                    "Git Town branch {} has inconsistent merge authority",
+                    self.name
+                )));
+            }
         }
         Ok(())
     }
@@ -551,25 +591,25 @@ impl GhStackBranch {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct GhStackPr {
+pub struct StackPr {
     pub number: u64,
     #[serde(default)]
     pub url: String,
     pub state: String,
 }
 
-impl GhStackPr {
+impl StackPr {
     fn validate(&self) -> Result<()> {
         if self.number == 0 {
-            return Err(DeliveryError::new("gh-stack PR number must not be 0"));
+            return Err(DeliveryError::new("Git Town stack PR number must not be 0"));
         }
         if !matches!(self.state.as_str(), "OPEN" | "MERGED") {
             return Err(DeliveryError::new(format!(
-                "unsupported gh-stack PR state {}",
+                "unsupported Git Town stack PR state {}",
                 self.state
             )));
         }
-        validate_optional_bounded_string(&self.url, "gh-stack PR URL")
+        validate_optional_bounded_string(&self.url, "Git Town stack PR URL")
     }
 }
 
@@ -983,6 +1023,7 @@ pub struct StackNode {
     pub pr_number: u64,
     pub expected_base_ref: String,
     pub expected_base_oid: String,
+    pub observed_base_oid: String,
     pub head_ref: String,
     pub head_oid: String,
     pub head_tree_oid: String,
@@ -1012,6 +1053,7 @@ impl StackNode {
         validate_git_ref(&self.expected_base_ref, "expected base ref")?;
         validate_git_ref(&self.head_ref, "head ref")?;
         validate_hash(&self.expected_base_oid, "expected base OID")?;
+        validate_hash(&self.observed_base_oid, "observed PR base OID")?;
         validate_hash(&self.head_oid, "head OID")?;
         validate_hash(&self.head_tree_oid, "head tree OID")?;
         match (
@@ -1461,43 +1503,82 @@ mod tests {
     }
 
     #[test]
-    fn gh_stack_graph_rejects_duplicate_or_ambiguous_current_branch() {
-        let graph = GhStackGraph {
+    fn git_town_graph_rejects_duplicate_or_ambiguous_current_branch() {
+        let graph = StackGraph {
             trunk: "main".to_owned(),
-            prefix: String::new(),
             current_branch: "one".to_owned(),
             branches: vec![
-                GhStackBranch {
+                StackBranch {
                     name: "one".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: "b".repeat(40),
                     head: "a".repeat(40),
                     base: "b".repeat(40),
                     is_current: true,
                     is_merged: false,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 1,
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
-                GhStackBranch {
+                StackBranch {
                     name: "one".to_owned(),
+                    parent: "one".to_owned(),
+                    base_ref: "one".to_owned(),
+                    observed_base: "a".repeat(40),
                     head: "c".repeat(40),
                     base: "a".repeat(40),
                     is_current: false,
                     is_merged: false,
                     is_queued: false,
                     needs_rebase: false,
-                    pr: Some(GhStackPr {
+                    pr: Some(StackPr {
                         number: 2,
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         };
         assert!(graph.validate().is_err());
+    }
+
+    #[test]
+    fn git_town_graph_rejects_duplicate_pull_requests() {
+        let branch = |name: &str, current: bool| StackBranch {
+            name: name.to_owned(),
+            parent: "main".to_owned(),
+            base_ref: "main".to_owned(),
+            observed_base: "0".repeat(40),
+            head: if current { "b" } else { "a" }.repeat(40),
+            base: "0".repeat(40),
+            is_current: current,
+            is_merged: false,
+            is_queued: false,
+            needs_rebase: false,
+            pr: Some(StackPr {
+                number: 7,
+                url: String::new(),
+                state: "OPEN".to_owned(),
+            }),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
+        };
+        let graph = StackGraph {
+            trunk: "main".to_owned(),
+            current_branch: "two".to_owned(),
+            branches: vec![branch("one", false), branch("two", true)],
+        };
+        let error = graph.validate().expect_err("duplicate PR");
+        assert!(error.to_string().contains("repeats PR"));
     }
 
     #[test]

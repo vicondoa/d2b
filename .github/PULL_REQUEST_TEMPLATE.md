@@ -21,7 +21,7 @@
 - **Stack `prospective_merge_tree_oid` value(s):**
 - **Delivery `candidate_id`:**
 - **Delivery `content_id`:**
-- **`gh-stack` graph status:** <!-- current / needs restack, with check link -->
+- **Git Town parent graph / ordinary PR status:** <!-- current / needs restack, with check link -->
 - **External snapshot/evidence status:** <!-- pending / current, status link only -->
 
 ## Required check status
