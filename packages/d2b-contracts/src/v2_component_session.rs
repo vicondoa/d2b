@@ -156,7 +156,7 @@ where
         if let Schema::Object(object) = &mut schema {
             let array = object
                 .array
-                .get_or_insert_with(|| Box::<ArrayValidation>::default());
+                .get_or_insert_with(Box::<ArrayValidation>::default);
             array.min_items = Some(MIN as u32);
             array.max_items = Some(MAX as u32);
         }

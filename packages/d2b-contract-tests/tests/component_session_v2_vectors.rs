@@ -27,58 +27,74 @@ fn optional_hex(value: &Value, name: &str) -> Option<Vec<u8>> {
     value[name].as_str().map(hex)
 }
 
-fn builder<'a>(
-    vector: &'a Value,
-    initiator: bool,
-    prologue: &'a [u8],
-    initiator_ephemeral: &'a [u8],
-    responder_ephemeral: &'a [u8],
-    initiator_static: Option<&'a [u8]>,
-    initiator_public: Option<&'a [u8]>,
-    responder_static: Option<&'a [u8]>,
-    responder_public: Option<&'a [u8]>,
-    psk: Option<&'a [u8; 32]>,
-) -> HandshakeState {
+#[derive(Clone)]
+struct VectorMaterial {
+    prologue: Vec<u8>,
+    initiator_ephemeral: Vec<u8>,
+    responder_ephemeral: Vec<u8>,
+    initiator_static: Option<Vec<u8>>,
+    initiator_public: Option<Vec<u8>>,
+    responder_static: Option<Vec<u8>>,
+    responder_public: Option<Vec<u8>>,
+    psk: Option<[u8; 32]>,
+}
+
+impl VectorMaterial {
+    fn from_fixture(vector: &Value) -> Self {
+        Self {
+            prologue: hex(field(vector, "prologueHex")),
+            initiator_ephemeral: hex(field(vector, "initiatorEphemeralPrivateHex")),
+            responder_ephemeral: hex(field(vector, "responderEphemeralPrivateHex")),
+            initiator_static: optional_hex(vector, "initiatorStaticPrivateHex"),
+            initiator_public: optional_hex(vector, "initiatorStaticPublicHex"),
+            responder_static: optional_hex(vector, "responderStaticPrivateHex"),
+            responder_public: optional_hex(vector, "responderStaticPublicHex"),
+            psk: optional_hex(vector, "pskHex").map(|value| <[u8; 32]>::try_from(value).unwrap()),
+        }
+    }
+}
+
+fn builder<'a>(vector: &'a Value, initiator: bool, material: &'a VectorMaterial) -> HandshakeState {
     let params: NoiseParams = field(vector, "protocolName").parse().unwrap();
     let mut builder = Builder::new(params)
-        .prologue(prologue)
+        .prologue(&material.prologue)
         .unwrap()
         .fixed_ephemeral_key_for_testing_only(if initiator {
-            initiator_ephemeral
+            &material.initiator_ephemeral
         } else {
-            responder_ephemeral
+            &material.responder_ephemeral
         });
     match field(vector, "protocolName") {
         "Noise_NN_25519_ChaChaPoly_SHA256" => {}
         "Noise_KK_25519_ChaChaPoly_SHA256" => {
             builder = if initiator {
                 builder
-                    .local_private_key(initiator_static.unwrap())
+                    .local_private_key(material.initiator_static.as_deref().unwrap())
                     .unwrap()
-                    .remote_public_key(responder_public.unwrap())
+                    .remote_public_key(material.responder_public.as_deref().unwrap())
                     .unwrap()
             } else {
                 builder
-                    .local_private_key(responder_static.unwrap())
+                    .local_private_key(material.responder_static.as_deref().unwrap())
                     .unwrap()
-                    .remote_public_key(initiator_public.unwrap())
+                    .remote_public_key(material.initiator_public.as_deref().unwrap())
                     .unwrap()
             };
         }
         "Noise_IKpsk2_25519_ChaChaPoly_SHA256" => {
             builder = if initiator {
                 builder
-                    .local_private_key(initiator_static.unwrap())
+                    .local_private_key(material.initiator_static.as_deref().unwrap())
                     .unwrap()
-                    .remote_public_key(responder_public.unwrap())
+                    .remote_public_key(material.responder_public.as_deref().unwrap())
                     .unwrap()
-                    .psk(2, psk.unwrap())
+                    .psk(2, material.psk.as_ref().unwrap())
                     .unwrap()
             } else {
                 builder
-                    .local_private_key(responder_static.unwrap())
+                    .local_private_key(material.responder_static.as_deref().unwrap())
                     .unwrap()
-                    .psk(2, psk.unwrap())
+                    .psk(2, material.psk.as_ref().unwrap())
                     .unwrap()
             };
         }
@@ -116,38 +132,9 @@ fn committed_noise_vectors_verify_with_pinned_snow() {
         profiles.insert(field(vector, "protocolName"));
         purpose_classes.insert(field(vector, "purposeClass"));
 
-        let prologue = hex(field(vector, "prologueHex"));
-        let initiator_ephemeral = hex(field(vector, "initiatorEphemeralPrivateHex"));
-        let responder_ephemeral = hex(field(vector, "responderEphemeralPrivateHex"));
-        let initiator_static = optional_hex(vector, "initiatorStaticPrivateHex");
-        let initiator_public = optional_hex(vector, "initiatorStaticPublicHex");
-        let responder_static = optional_hex(vector, "responderStaticPrivateHex");
-        let responder_public = optional_hex(vector, "responderStaticPublicHex");
-        let psk = optional_hex(vector, "pskHex").map(|value| <[u8; 32]>::try_from(value).unwrap());
-        let mut initiator = builder(
-            vector,
-            true,
-            &prologue,
-            &initiator_ephemeral,
-            &responder_ephemeral,
-            initiator_static.as_deref(),
-            initiator_public.as_deref(),
-            responder_static.as_deref(),
-            responder_public.as_deref(),
-            psk.as_ref(),
-        );
-        let mut responder = builder(
-            vector,
-            false,
-            &prologue,
-            &initiator_ephemeral,
-            &responder_ephemeral,
-            initiator_static.as_deref(),
-            initiator_public.as_deref(),
-            responder_static.as_deref(),
-            responder_public.as_deref(),
-            psk.as_ref(),
-        );
+        let material = VectorMaterial::from_fixture(vector);
+        let mut initiator = builder(vector, true, &material);
+        let mut responder = builder(vector, false, &material);
         let payloads = vector["handshakePayloadsHex"].as_array().unwrap();
         let expected_messages = vector["handshakeMessagesHex"].as_array().unwrap();
         let mut message = vec![0; 65_535];
@@ -288,40 +275,11 @@ fn transcript_and_psk_mutations_are_rejected() {
     ))
     .unwrap();
     for vector in fixture["vectors"].as_array().unwrap() {
-        let prologue = hex(field(vector, "prologueHex"));
-        let mut wrong_prologue = prologue.clone();
-        *wrong_prologue.last_mut().unwrap() ^= 1;
-        let initiator_ephemeral = hex(field(vector, "initiatorEphemeralPrivateHex"));
-        let responder_ephemeral = hex(field(vector, "responderEphemeralPrivateHex"));
-        let initiator_static = optional_hex(vector, "initiatorStaticPrivateHex");
-        let initiator_public = optional_hex(vector, "initiatorStaticPublicHex");
-        let responder_static = optional_hex(vector, "responderStaticPrivateHex");
-        let responder_public = optional_hex(vector, "responderStaticPublicHex");
-        let psk = optional_hex(vector, "pskHex").map(|value| <[u8; 32]>::try_from(value).unwrap());
-        let mut initiator = builder(
-            vector,
-            true,
-            &prologue,
-            &initiator_ephemeral,
-            &responder_ephemeral,
-            initiator_static.as_deref(),
-            initiator_public.as_deref(),
-            responder_static.as_deref(),
-            responder_public.as_deref(),
-            psk.as_ref(),
-        );
-        let mut responder = builder(
-            vector,
-            false,
-            &wrong_prologue,
-            &initiator_ephemeral,
-            &responder_ephemeral,
-            initiator_static.as_deref(),
-            initiator_public.as_deref(),
-            responder_static.as_deref(),
-            responder_public.as_deref(),
-            psk.as_ref(),
-        );
+        let material = VectorMaterial::from_fixture(vector);
+        let mut wrong_material = material.clone();
+        *wrong_material.prologue.last_mut().unwrap() ^= 1;
+        let mut initiator = builder(vector, true, &material);
+        let mut responder = builder(vector, false, &wrong_material);
         let payloads = vector["handshakePayloadsHex"].as_array().unwrap();
         let mut message = vec![0; 65_535];
         let mut plaintext = vec![0; 65_535];
@@ -349,41 +307,11 @@ fn transcript_and_psk_mutations_are_rejected() {
         .iter()
         .find(|vector| field(vector, "protocolName") == "Noise_IKpsk2_25519_ChaChaPoly_SHA256")
         .unwrap();
-    let prologue = hex(field(bootstrap, "prologueHex"));
-    let initiator_ephemeral = hex(field(bootstrap, "initiatorEphemeralPrivateHex"));
-    let responder_ephemeral = hex(field(bootstrap, "responderEphemeralPrivateHex"));
-    let initiator_static = optional_hex(bootstrap, "initiatorStaticPrivateHex");
-    let initiator_public = optional_hex(bootstrap, "initiatorStaticPublicHex");
-    let responder_static = optional_hex(bootstrap, "responderStaticPrivateHex");
-    let responder_public = optional_hex(bootstrap, "responderStaticPublicHex");
-    let psk = optional_hex(bootstrap, "pskHex")
-        .map(|value| <[u8; 32]>::try_from(value).unwrap())
-        .unwrap();
-    let wrong_psk = [0x56; 32];
-    let mut initiator = builder(
-        bootstrap,
-        true,
-        &prologue,
-        &initiator_ephemeral,
-        &responder_ephemeral,
-        initiator_static.as_deref(),
-        initiator_public.as_deref(),
-        responder_static.as_deref(),
-        responder_public.as_deref(),
-        Some(&psk),
-    );
-    let mut responder = builder(
-        bootstrap,
-        false,
-        &prologue,
-        &initiator_ephemeral,
-        &responder_ephemeral,
-        initiator_static.as_deref(),
-        initiator_public.as_deref(),
-        responder_static.as_deref(),
-        responder_public.as_deref(),
-        Some(&wrong_psk),
-    );
+    let material = VectorMaterial::from_fixture(bootstrap);
+    let mut wrong_material = material.clone();
+    wrong_material.psk = Some([0x56; 32]);
+    let mut initiator = builder(bootstrap, true, &material);
+    let mut responder = builder(bootstrap, false, &wrong_material);
     let payload = hex(bootstrap["handshakePayloadsHex"][0].as_str().unwrap());
     let mut message = vec![0; 65_535];
     let mut plaintext = vec![0; 65_535];
