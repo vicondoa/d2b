@@ -1,0 +1,505 @@
+{
+  "schemaVersion": 2,
+  "schemaGeneration": 1,
+  "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "storage": {
+    "schemaGeneration": 1,
+    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "resources": [
+      {
+        "resourceId": "local-root-broker-state",
+        "category": "local-root",
+        "kind": "json-document",
+        "scope": { "kind": "local-root" },
+        "logicalLocation": "host-broker",
+        "creation": "create-if-missing",
+        "reconcile": "reconcile-exact",
+        "repair": "repair-exact",
+        "delete": "factory-reset-only",
+        "creationAuthority": { "kind": "local-root-broker" },
+        "reconcileAuthority": { "kind": "local-root-broker" },
+        "repairAuthority": { "kind": "local-root-broker" },
+        "deleteAuthority": { "kind": "local-root-broker" },
+        "ownership": {
+          "owner": { "kind": "local-root-broker" },
+          "group": "local-root-control",
+          "mode": "0640"
+        },
+        "persistence": "persistent",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "realm-controller-state",
+        "category": "realm",
+        "kind": "json-document",
+        "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "logicalLocation": "realm-controller",
+        "creation": "create-if-missing",
+        "reconcile": "reconcile-exact",
+        "repair": "quarantine",
+        "delete": "factory-reset-only",
+        "creationAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-controller",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "persistent",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "workload-state",
+        "category": "workload",
+        "kind": "directory",
+        "scope": {
+          "kind": "workload",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
+        },
+        "logicalLocation": "workload-state",
+        "creation": "create-if-missing",
+        "reconcile": "reconcile-exact",
+        "repair": "repair-exact",
+        "delete": "factory-reset-only",
+        "creationAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0750"
+        },
+        "persistence": "persistent",
+        "secretClass": "secret-adjacent",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "provider-state",
+        "category": "provider",
+        "kind": "directory",
+        "scope": {
+          "kind": "provider",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "providerId": "f7z3k5e3awgn43aljt2a"
+        },
+        "logicalLocation": "provider-state",
+        "creation": "create-if-missing",
+        "reconcile": "adopt-after-proof",
+        "repair": "quarantine",
+        "delete": "generation-retirement",
+        "creationAuthority": {
+          "kind": "provider",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "providerId": "f7z3k5e3awgn43aljt2a"
+        },
+        "reconcileAuthority": {
+          "kind": "provider",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "providerId": "f7z3k5e3awgn43aljt2a"
+        },
+        "repairAuthority": {
+          "kind": "provider",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "providerId": "f7z3k5e3awgn43aljt2a"
+        },
+        "deleteAuthority": {
+          "kind": "provider",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "providerId": "f7z3k5e3awgn43aljt2a"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "provider",
+            "realmId": "yl2hpmks5td5dkeso6qq",
+            "providerId": "f7z3k5e3awgn43aljt2a"
+          },
+          "group": "realm-control",
+          "mode": "0700"
+        },
+        "persistence": "persistent",
+        "secretClass": "secret-adjacent",
+        "restart": "quarantine-on-ambiguity",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "role-runtime",
+        "category": "runtime",
+        "kind": "directory",
+        "scope": {
+          "kind": "role",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva",
+          "roleId": "7xrbjonser3hpi7hqojq"
+        },
+        "logicalLocation": "runtime-role",
+        "creation": "create-if-missing",
+        "reconcile": "adopt-after-proof",
+        "repair": "quarantine",
+        "delete": "after-owner-absence-proof",
+        "creationAuthority": {
+          "kind": "workload-role",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva",
+          "roleId": "7xrbjonser3hpi7hqojq"
+        },
+        "reconcileAuthority": {
+          "kind": "workload-role",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva",
+          "roleId": "7xrbjonser3hpi7hqojq"
+        },
+        "repairAuthority": {
+          "kind": "workload-role",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva",
+          "roleId": "7xrbjonser3hpi7hqojq"
+        },
+        "deleteAuthority": {
+          "kind": "workload-role",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva",
+          "roleId": "7xrbjonser3hpi7hqojq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "workload-role",
+            "realmId": "yl2hpmks5td5dkeso6qq",
+            "workloadId": "q5h7jtqteem7kua4tfva",
+            "roleId": "7xrbjonser3hpi7hqojq"
+          },
+          "group": "role-private",
+          "mode": "0700"
+        },
+        "persistence": "boot-scoped",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-lease"
+      },
+      {
+        "resourceId": "realm-locks",
+        "category": "lock",
+        "kind": "ofd-lock-file",
+        "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "logicalLocation": "runtime-locks",
+        "creation": "create-if-missing",
+        "reconcile": "adopt-after-proof",
+        "repair": "quarantine",
+        "delete": "after-owner-absence-proof",
+        "creationAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "boot-scoped",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "workload-leases",
+        "category": "lease",
+        "kind": "lease-record",
+        "scope": {
+          "kind": "workload",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "workloadId": "q5h7jtqteem7kua4tfva"
+        },
+        "logicalLocation": "runtime-leases",
+        "creation": "create-if-missing",
+        "reconcile": "adopt-after-proof",
+        "repair": "quarantine",
+        "delete": "after-owner-absence-proof",
+        "creationAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "boot-scoped",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-lease"
+      },
+      {
+        "resourceId": "realm-quarantine",
+        "category": "quarantine",
+        "kind": "json-document",
+        "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "logicalLocation": "quarantine",
+        "creation": "create-if-missing",
+        "reconcile": "verify-only",
+        "repair": "no-repair",
+        "delete": "factory-reset-only",
+        "creationAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-controller",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "persistent",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "realm-audit",
+        "category": "audit",
+        "kind": "json-lines-segment",
+        "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "logicalLocation": "realm-audit",
+        "creation": "create-if-missing",
+        "reconcile": "verify-only",
+        "repair": "no-repair",
+        "delete": "retention-only",
+        "creationAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-broker",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "persistent",
+        "secretClass": "private-metadata",
+        "restart": "preserve-and-verify",
+        "adoption": "verify-identity-and-generation"
+      },
+      {
+        "resourceId": "realm-status-projection",
+        "category": "projection",
+        "kind": "projection-document",
+        "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "logicalLocation": "projection",
+        "creation": "materialize-generation",
+        "reconcile": "regenerate",
+        "repair": "regenerate",
+        "delete": "generation-retirement",
+        "creationAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "reconcileAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "repairAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "deleteAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "ownership": {
+          "owner": {
+            "kind": "realm-controller",
+            "realmId": "yl2hpmks5td5dkeso6qq"
+          },
+          "group": "realm-control",
+          "mode": "0640"
+        },
+        "persistence": "regenerable",
+        "secretClass": "public-metadata",
+        "restart": "regenerate-from-configuration",
+        "adoption": "not-applicable"
+      }
+    ]
+  },
+  "synchronization": {
+    "schemaGeneration": 1,
+    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "locks": [
+      {
+        "lockId": "realm-state-lock",
+        "key": {
+          "class": "realm",
+          "scope": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+          "resourceId": "realm-controller-state"
+        },
+        "kind": "ofd",
+        "owner": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "releaseAuthority": {
+          "kind": "realm-controller",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "globalOrder": 100,
+        "acquireAfter": [],
+        "cloexec": true,
+        "fdTransfer": "never",
+        "contention": "bounded-wait",
+        "deadlineMs": 30000,
+        "cancellation": "complete-atomic-section"
+      },
+      {
+        "lockId": "workload-state-lock",
+        "key": {
+          "class": "workload",
+          "scope": {
+            "kind": "workload",
+            "realmId": "yl2hpmks5td5dkeso6qq",
+            "workloadId": "q5h7jtqteem7kua4tfva"
+          },
+          "resourceId": "workload-state"
+        },
+        "kind": "ofd",
+        "owner": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "releaseAuthority": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "globalOrder": 200,
+        "acquireAfter": ["realm-state-lock"],
+        "cloexec": true,
+        "fdTransfer": "never",
+        "contention": "bounded-wait",
+        "deadlineMs": 30000,
+        "cancellation": "complete-atomic-section"
+      }
+    ]
+  },
+  "audit": {
+    "schemaGeneration": 1,
+    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "streams": [
+      {
+        "stream": { "kind": "local-root" },
+        "owner": { "kind": "local-root-broker" },
+        "retention": {
+          "maxAgeDays": 14,
+          "maxSegmentBytes": 67108864,
+          "maxRecordsPerSegment": 16384,
+          "checkpointRequiredBeforePrune": true
+        }
+      },
+      {
+        "stream": { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
+        "owner": {
+          "kind": "realm-broker",
+          "realmId": "yl2hpmks5td5dkeso6qq"
+        },
+        "retention": {
+          "maxAgeDays": 7,
+          "maxSegmentBytes": 33554432,
+          "maxRecordsPerSegment": 8192,
+          "checkpointRequiredBeforePrune": true
+        }
+      }
+    ]
+  }
+}
