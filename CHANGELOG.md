@@ -20,11 +20,13 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made unsafe-local helper FD cleanup tests track the original kernel object so
+  concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process
   detection coverage while retaining the behavioral timeout check.
 - Isolated the pinned Rust gate's Cargo outputs by toolchain so developer builds
-  from another compiler cannot poison doctest metadata, and included the
-  isolated targets in CI caching.
+  from another compiler cannot poison doctest metadata, and kept those compiler
+  artifacts out of CI cache restoration.
 - Reused an already-installed pinned Rust toolchain before attempting a network
   bootstrap.
 - Made broker audit tests reserve exclusive process-local scratch directories
