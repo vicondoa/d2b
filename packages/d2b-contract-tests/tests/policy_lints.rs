@@ -315,6 +315,13 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
             && !delivery_command.contains("pulls/stacks"),
         "xtask must derive topology from Git Town and ordinary GitHub PR authority"
     );
+    let delivery_cli = read_repo_file("packages/xtask/src/delivery/mod.rs");
+    for stale in ["gh stack", "gh-stack", "private preview", "cli_internal"] {
+        assert!(
+            !delivery_cli.to_ascii_lowercase().contains(stale),
+            "delivery machine-readable help contains stale stack integration {stale}"
+        );
+    }
     for mutation in [
         r#""POST".to_owned()"#,
         r#""PUT".to_owned()"#,

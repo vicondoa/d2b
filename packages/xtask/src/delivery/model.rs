@@ -521,6 +521,11 @@ impl StackGraph {
 #[serde(deny_unknown_fields)]
 pub struct StackBranch {
     pub name: String,
+    pub parent: String,
+    #[serde(rename = "baseRef")]
+    pub base_ref: String,
+    #[serde(rename = "observedBase")]
+    pub observed_base: String,
     pub head: String,
     pub base: String,
     #[serde(rename = "isCurrent")]
@@ -532,11 +537,18 @@ pub struct StackBranch {
     #[serde(rename = "needsRebase")]
     pub needs_rebase: bool,
     pub pr: Option<StackPr>,
+    #[serde(rename = "mergeCommitOid")]
+    pub merge_commit_oid: Option<String>,
+    #[serde(rename = "mergeCommitTreeOid")]
+    pub merge_commit_tree_oid: Option<String>,
 }
 
 impl StackBranch {
     fn validate(&self) -> Result<()> {
         validate_git_ref(&self.name, "Git Town branch")?;
+        validate_git_ref(&self.parent, "Git Town parent")?;
+        validate_git_ref(&self.base_ref, "GitHub PR base ref")?;
+        validate_hash(&self.observed_base, "GitHub PR observed base")?;
         validate_hash(&self.head, "Git Town branch head")?;
         validate_hash(&self.base, "Git Town branch base")?;
         if self.is_queued || self.needs_rebase {
@@ -555,6 +567,23 @@ impl StackBranch {
                 "Git Town branch {} state disagrees with PR state",
                 self.name
             )));
+        }
+        match (
+            self.is_merged,
+            &self.merge_commit_oid,
+            &self.merge_commit_tree_oid,
+        ) {
+            (true, Some(commit), Some(tree)) => {
+                validate_hash(commit, "GitHub merge commit OID")?;
+                validate_hash(tree, "GitHub merge commit tree OID")?;
+            }
+            (false, None, None) => {}
+            _ => {
+                return Err(DeliveryError::new(format!(
+                    "Git Town branch {} has inconsistent merge authority",
+                    self.name
+                )));
+            }
         }
         Ok(())
     }
@@ -994,6 +1023,7 @@ pub struct StackNode {
     pub pr_number: u64,
     pub expected_base_ref: String,
     pub expected_base_oid: String,
+    pub observed_base_oid: String,
     pub head_ref: String,
     pub head_oid: String,
     pub head_tree_oid: String,
@@ -1023,6 +1053,7 @@ impl StackNode {
         validate_git_ref(&self.expected_base_ref, "expected base ref")?;
         validate_git_ref(&self.head_ref, "head ref")?;
         validate_hash(&self.expected_base_oid, "expected base OID")?;
+        validate_hash(&self.observed_base_oid, "observed PR base OID")?;
         validate_hash(&self.head_oid, "head OID")?;
         validate_hash(&self.head_tree_oid, "head tree OID")?;
         match (
@@ -1479,6 +1510,9 @@ mod tests {
             branches: vec![
                 StackBranch {
                     name: "one".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: "b".repeat(40),
                     head: "a".repeat(40),
                     base: "b".repeat(40),
                     is_current: true,
@@ -1490,9 +1524,14 @@ mod tests {
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
                 StackBranch {
                     name: "one".to_owned(),
+                    parent: "one".to_owned(),
+                    base_ref: "one".to_owned(),
+                    observed_base: "a".repeat(40),
                     head: "c".repeat(40),
                     base: "a".repeat(40),
                     is_current: false,
@@ -1504,6 +1543,8 @@ mod tests {
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         };
@@ -1514,6 +1555,9 @@ mod tests {
     fn git_town_graph_rejects_duplicate_pull_requests() {
         let branch = |name: &str, current: bool| StackBranch {
             name: name.to_owned(),
+            parent: "main".to_owned(),
+            base_ref: "main".to_owned(),
+            observed_base: "0".repeat(40),
             head: if current { "b" } else { "a" }.repeat(40),
             base: "0".repeat(40),
             is_current: current,
@@ -1525,6 +1569,8 @@ mod tests {
                 url: String::new(),
                 state: "OPEN".to_owned(),
             }),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
         };
         let graph = StackGraph {
             trunk: "main".to_owned(),

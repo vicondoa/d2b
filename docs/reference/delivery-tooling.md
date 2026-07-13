@@ -38,10 +38,12 @@ crates with native build dependencies.
 Git Town is the only stack topology, propose, and synchronization mutator. It
 owns parent relationships, restacking, PR creation/update, and retargeting.
 The delivery `xtask` independently reconstructs the parent chain with
-`git-town config get-parent`, resolves local branch OIDs, and reads ordinary
-GitHub PR authority. The checked-in manifest remains the expected graph.
-`xtask` never accepts a caller-authored graph, edits PR topology, or rewrites
-branches.
+`git-town config get-parent` and reads ordinary GitHub PR authority. Active
+branches must match exact local refs. Merged prefixes instead retain their
+historical PR head, merge base, merge commit, and merge tree, so a deleted or
+advanced local branch ref does not erase merge authority. The checked-in
+manifest remains the expected ordered graph. `xtask` never accepts a
+caller-authored graph, edits PR topology, or rewrites branches.
 
 Before creating or updating a stack, verify the supported Git Town major,
 noninteractive propose flags, GitHub authentication, repository read access,

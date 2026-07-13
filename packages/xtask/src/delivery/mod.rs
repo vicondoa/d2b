@@ -458,7 +458,7 @@ fn workflow_command_help() -> Vec<WorkflowCommandHelp> {
     [
         (
             "snapshot",
-            "Import checked-in authority plus gh stack view --json and write an immutable candidate.",
+            "Import checked-in authority, Git Town parent topology, and ordinary GitHub PR state into an immutable candidate.",
             &[
                 "--authority-repository",
                 "--authority-ref",

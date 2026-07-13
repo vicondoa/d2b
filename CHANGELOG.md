@@ -52,6 +52,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Reconstructed merged stack prefixes from historical GitHub merge authority,
+  enforced manifest stack order and parent edges, and accepted correctly
+  retargeted active descendants without requiring stale merged branch refs.
 - Hardened delivery subprocess supervision against PID reuse, orphaned process
   groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
   lost bounded diagnostics.

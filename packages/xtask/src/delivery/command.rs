@@ -1127,17 +1127,6 @@ pub trait StackGraphSource {
 struct GitTownPullRequest {
     number: u64,
     url: String,
-    state: String,
-    #[serde(rename = "baseRefName")]
-    base_ref_name: String,
-    #[serde(rename = "headRefName")]
-    head_ref_name: String,
-    #[serde(rename = "headRefOid")]
-    head_ref_oid: String,
-    #[serde(rename = "isInMergeQueue")]
-    is_in_merge_queue: bool,
-    #[serde(rename = "mergeStateStatus")]
-    merge_state_status: String,
 }
 
 #[derive(Debug)]
@@ -1215,56 +1204,55 @@ impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
                     "Git Town parent configuration contains a self-cycle",
                 ));
             }
-            let head = self.resolve_local_oid(checkout_root, &branch)?;
-            let base = self.resolve_local_oid(checkout_root, &parent)?;
-            self.verify_ancestor(checkout_root, &parent, &branch)?;
             let pull_request = self.pull_request(slug, &branch, checkout_root)?;
-            if pull_request.head_ref_name != branch
-                || pull_request.base_ref_name != parent
-                || pull_request.head_ref_oid != head
-            {
+            let status =
+                GhStatusSource::new(self.command).status(repository, pull_request.number)?;
+            if status.head_ref != branch {
                 return Err(DeliveryError::new(format!(
                     "ordinary GitHub PR identity does not match Git Town branch {branch}"
                 )));
             }
-            if pull_request.is_in_merge_queue {
+            if status.is_in_merge_queue {
                 return Err(DeliveryError::new(format!(
                     "Git Town branch {branch} is queued"
                 )));
             }
-            if matches!(
-                pull_request.merge_state_status.as_str(),
-                "BEHIND" | "DIRTY" | "UNKNOWN"
-            ) {
+            if status.state == PullRequestState::Open
+                && matches!(status.merge_state.as_str(), "BEHIND" | "DIRTY" | "UNKNOWN")
+            {
                 return Err(DeliveryError::new(format!(
                     "Git Town branch {branch} has ambiguous or stale merge state"
                 )));
             }
             if !matches!(
-                pull_request.merge_state_status.as_str(),
+                status.merge_state.as_str(),
                 "BLOCKED" | "CLEAN" | "DRAFT" | "HAS_HOOKS" | "UNSTABLE"
-            ) {
+            ) && status.state == PullRequestState::Open
+            {
                 return Err(DeliveryError::new(
                     "GitHub returned an unsupported merge state",
                 ));
             }
-            let is_merged = match pull_request.state.as_str() {
-                "OPEN" => false,
-                "MERGED" => true,
-                "CLOSED" => {
+            let is_merged = match status.state {
+                PullRequestState::Open => false,
+                PullRequestState::Merged => true,
+                PullRequestState::Closed => {
                     return Err(DeliveryError::new(format!(
                         "Git Town branch {branch} has a closed unmerged PR"
                     )));
                 }
-                _ => {
-                    return Err(DeliveryError::new(
-                        "GitHub returned an unsupported PR state",
-                    ));
-                }
             };
+            let base = status
+                .merge_base_oid
+                .as_ref()
+                .unwrap_or(&status.base_oid)
+                .clone();
             branches.push(StackBranch {
                 name: branch.clone(),
-                head,
+                parent: parent.clone(),
+                base_ref: status.base_ref,
+                observed_base: status.base_oid,
+                head: status.head_oid,
                 base,
                 is_current: branch == current_branch,
                 is_merged,
@@ -1273,12 +1261,47 @@ impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
                 pr: Some(StackPr {
                     number: pull_request.number,
                     url: pull_request.url,
-                    state: pull_request.state,
+                    state: if is_merged { "MERGED" } else { "OPEN" }.to_owned(),
                 }),
+                merge_commit_oid: status.merge_commit_oid,
+                merge_commit_tree_oid: status.merge_commit_tree_oid,
             });
             branch = parent;
         }
         branches.reverse();
+        let mut configured_parent = trunk.as_str();
+        let mut active_base_ref = trunk.as_str();
+        for branch in &branches {
+            if branch.parent != configured_parent {
+                return Err(DeliveryError::new(format!(
+                    "Git Town parent topology is inconsistent at {}",
+                    branch.name
+                )));
+            }
+            if branch.base_ref != active_base_ref {
+                return Err(DeliveryError::new(format!(
+                    "ordinary GitHub PR base for {} does not match the active Git Town topology",
+                    branch.name
+                )));
+            }
+            if !branch.is_merged {
+                active_base_ref = &branch.name;
+            }
+            configured_parent = &branch.name;
+        }
+        for branch in &branches {
+            if !branch.is_merged {
+                let local_head = self.resolve_local_oid(checkout_root, &branch.name)?;
+                let local_base = self.resolve_local_oid(checkout_root, &branch.base_ref)?;
+                if branch.head != local_head || branch.observed_base != local_base {
+                    return Err(DeliveryError::new(format!(
+                        "ordinary GitHub PR OIDs for {} do not match exact local refs",
+                        branch.name
+                    )));
+                }
+            }
+            self.verify_ancestor_oids(checkout_root, &branch.base, &branch.head, &branch.name)?;
+        }
         let graph = StackGraph {
             trunk,
             current_branch,
@@ -1332,20 +1355,26 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
         Ok(oid)
     }
 
-    fn verify_ancestor(&self, checkout_root: &Path, parent: &str, branch: &str) -> Result<()> {
+    fn verify_ancestor_oids(
+        &self,
+        checkout_root: &Path,
+        base_oid: &str,
+        head_oid: &str,
+        branch: &str,
+    ) -> Result<()> {
         let output = self.command.output(
             "git",
             &[
                 "merge-base".to_owned(),
                 "--is-ancestor".to_owned(),
-                parent.to_owned(),
-                branch.to_owned(),
+                base_oid.to_owned(),
+                head_oid.to_owned(),
             ],
             Some(checkout_root),
         )?;
         if !output.success {
             return Err(DeliveryError::new(format!(
-                "Git Town parent {parent} is not an ancestor of {branch}"
+                "Git Town content base is not an ancestor of {branch}"
             )));
         }
         Ok(())
@@ -1366,8 +1395,7 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
                 "--repo".to_owned(),
                 repository.to_owned(),
                 "--json".to_owned(),
-                "number,url,state,baseRefName,headRefName,headRefOid,isInMergeQueue,mergeStateStatus"
-                    .to_owned(),
+                "number,url".to_owned(),
             ],
             Some(checkout_root),
         )?;
@@ -1384,9 +1412,6 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
                 "ordinary GitHub PR number must not be zero",
             ));
         }
-        validate_git_ref(&pull_request.base_ref_name, "GitHub PR base branch")?;
-        validate_git_ref(&pull_request.head_ref_name, "GitHub PR head branch")?;
-        validate_hash(&pull_request.head_ref_oid, "GitHub PR head OID")?;
         Ok(pull_request)
     }
 
@@ -1481,6 +1506,7 @@ pub struct PullRequestStatus {
     pub head_oid: String,
     pub merge_commit_oid: Option<String>,
     pub merge_commit_tree_oid: Option<String>,
+    pub merge_base_oid: Option<String>,
     pub is_in_merge_queue: bool,
     pub is_merge_queue_enabled: bool,
     pub merge_queue_entry: Option<ObservedMergeQueueEntry>,
@@ -1519,7 +1545,7 @@ const PR_STATUS_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!
       isInMergeQueue isMergeQueueEnabled
       mergeQueueEntry{id state baseCommit{oid} headCommit{oid}}
       headRepository{nameWithOwner}
-      mergeCommit{oid tree{oid}}
+      mergeCommit{oid tree{oid} parents(first:2){nodes{oid} pageInfo{hasNextPage}}}
       commits(last:1){
         nodes{commit{oid statusCheckRollup{contexts(first:100){
           nodes{
@@ -1624,6 +1650,15 @@ struct GraphQlPullRequest {
 struct GraphQlMergeCommit {
     oid: String,
     tree: GraphQlOid,
+    parents: GraphQlParents,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphQlParents {
+    nodes: Vec<GraphQlOid>,
+    #[serde(rename = "pageInfo")]
+    page_info: GraphQlPageInfo,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1726,18 +1761,30 @@ pub(crate) fn parse_gh_status(
             )));
         }
     };
-    let (merge_commit_oid, merge_commit_tree_oid) = match (state, &pr.merge_commit) {
+    let (merge_commit_oid, merge_commit_tree_oid, merge_base_oid) = match (state, &pr.merge_commit)
+    {
         (PullRequestState::Merged, Some(commit)) => {
             validate_hash(&commit.oid, "GitHub merge commit OID")?;
             validate_hash(&commit.tree.oid, "GitHub merge commit tree OID")?;
-            (Some(commit.oid.clone()), Some(commit.tree.oid.clone()))
+            if commit.parents.page_info.has_next_page || commit.parents.nodes.is_empty() {
+                return Err(DeliveryError::new(
+                    "merged GitHub PR has no unambiguous historical merge base",
+                ));
+            }
+            let merge_base = commit.parents.nodes[0].oid.clone();
+            validate_hash(&merge_base, "GitHub historical merge base OID")?;
+            (
+                Some(commit.oid.clone()),
+                Some(commit.tree.oid.clone()),
+                Some(merge_base),
+            )
         }
         (PullRequestState::Merged, None) => {
             return Err(DeliveryError::new(
                 "merged GitHub PR has no exact merge commit authority",
             ));
         }
-        (_, None) => (None, None),
+        (_, None) => (None, None, None),
         (_, Some(_)) => {
             return Err(DeliveryError::new(
                 "unmerged GitHub PR unexpectedly has merge commit authority",
@@ -1825,6 +1872,7 @@ pub(crate) fn parse_gh_status(
         head_oid: pr.head_ref_oid,
         merge_commit_oid,
         merge_commit_tree_oid,
+        merge_base_oid,
         is_in_merge_queue: pr.is_in_merge_queue,
         is_merge_queue_enabled: pr.is_merge_queue_enabled,
         merge_queue_entry,
@@ -2859,34 +2907,62 @@ mod tests {
         outputs
     }
 
-    fn stack_pr(number: u64, branch: &str, parent: &str, head: &str, state: &str) -> CommandOutput {
+    fn stack_pr(number: u64) -> CommandOutput {
         successful_output(
             serde_json::to_vec(&serde_json::json!({
                 "number": number,
-                "url": format!("https://github.com/example/d2b/pull/{number}"),
-                "state": state,
-                "baseRefName": parent,
-                "headRefName": branch,
-                "headRefOid": head,
-                "isInMergeQueue": false,
-                "mergeStateStatus": "CLEAN"
+                "url": format!("https://github.com/example/d2b/pull/{number}")
             }))
             .expect("PR JSON"),
         )
     }
 
-    fn stack_branch_outputs(
-        parent: &str,
+    #[allow(clippy::too_many_arguments)]
+    fn stack_status(
+        number: u64,
+        branch: &str,
+        base_ref: &str,
+        observed_base: &str,
         head: &str,
-        base: &str,
-        pr: CommandOutput,
+        state: &str,
+        merge_base: Option<&str>,
+        merge_commit: Option<&str>,
+        merge_tree: Option<&str>,
+    ) -> CommandOutput {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&graphql(serde_json::json!([]))).expect("status fixture");
+        let pr = &mut value["data"]["repository"]["pullRequest"];
+        pr["number"] = serde_json::json!(number);
+        pr["state"] = serde_json::json!(state);
+        pr["baseRefName"] = serde_json::json!(base_ref);
+        pr["baseRefOid"] = serde_json::json!(observed_base);
+        pr["headRefName"] = serde_json::json!(branch);
+        pr["headRefOid"] = serde_json::json!(head);
+        pr["commits"]["nodes"][0]["commit"]["oid"] = serde_json::json!(head);
+        pr["mergeCommit"] = match (merge_base, merge_commit, merge_tree) {
+            (Some(base), Some(commit), Some(tree)) => serde_json::json!({
+                "oid": commit,
+                "tree": {"oid": tree},
+                "parents": {
+                    "nodes": [{"oid": base}],
+                    "pageInfo": {"hasNextPage": false}
+                }
+            }),
+            (None, None, None) => serde_json::Value::Null,
+            _ => panic!("merge fixture must be complete"),
+        };
+        successful_output(serde_json::to_vec(&value).expect("status JSON"))
+    }
+
+    fn stack_branch_queries(
+        parent: &str,
+        pr_number: u64,
+        status: CommandOutput,
     ) -> Vec<CommandOutput> {
         vec![
             successful_output(format!("{parent}\n").into_bytes()),
-            successful_output(format!("{head}\n").into_bytes()),
-            successful_output(format!("{base}\n").into_bytes()),
-            successful_output(Vec::new()),
-            pr,
+            stack_pr(pr_number),
+            status,
         ]
     }
 
@@ -2895,12 +2971,18 @@ mod tests {
         let feature = "b".repeat(40);
         let main = "a".repeat(40);
         let mut outputs = stack_source_prefix("feature");
-        outputs.extend(stack_branch_outputs(
+        outputs.extend(stack_branch_queries(
             "main",
-            &feature,
-            &main,
-            stack_pr(42, "feature", "main", &feature, "OPEN"),
+            42,
+            stack_status(
+                42, "feature", "main", &main, &feature, "OPEN", None, None, None,
+            ),
         ));
+        outputs.extend([
+            successful_output(format!("{feature}\n").into_bytes()),
+            successful_output(format!("{main}\n").into_bytes()),
+            successful_output(Vec::new()),
+        ]);
         let command = FakeCommand::new(outputs);
         let graph = GitTownStackSource::new(&command)
             .graph("github.com/example/d2b", Path::new("/checkout"))
@@ -2922,23 +3004,41 @@ mod tests {
     }
 
     #[test]
-    fn git_town_adapter_orders_recursive_parent_chain_and_merged_prefix() {
+    fn git_town_adapter_reconstructs_one_merged_prefix_retargeted_to_trunk() {
         let main = "a".repeat(40);
         let first = "b".repeat(40);
         let second = "c".repeat(40);
+        let merged = "d".repeat(40);
+        let merge_tree = "e".repeat(40);
         let mut outputs = stack_source_prefix("second");
-        outputs.extend(stack_branch_outputs(
+        outputs.extend(stack_branch_queries(
             "first",
-            &second,
-            &first,
-            stack_pr(42, "second", "first", &second, "OPEN"),
+            42,
+            stack_status(
+                42, "second", "main", &merged, &second, "OPEN", None, None, None,
+            ),
         ));
-        outputs.extend(stack_branch_outputs(
+        outputs.extend(stack_branch_queries(
             "main",
-            &first,
-            &main,
-            stack_pr(41, "first", "main", &first, "MERGED"),
+            41,
+            stack_status(
+                41,
+                "first",
+                "main",
+                &merged,
+                &first,
+                "MERGED",
+                Some(&main),
+                Some(&merged),
+                Some(&merge_tree),
+            ),
         ));
+        outputs.extend([
+            successful_output(Vec::new()),
+            successful_output(format!("{second}\n").into_bytes()),
+            successful_output(format!("{merged}\n").into_bytes()),
+            successful_output(Vec::new()),
+        ]);
         let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
             .graph("github.com/example/d2b", Path::new("/checkout"))
             .expect("ordered graph");
@@ -2951,7 +3051,81 @@ mod tests {
             ["first", "second"]
         );
         assert!(graph.branches[0].is_merged);
+        assert_eq!(graph.branches[0].base, main);
+        assert_eq!(graph.branches[0].observed_base, merged);
+        assert_eq!(graph.branches[1].parent, "first");
+        assert_eq!(graph.branches[1].base_ref, "main");
         assert!(graph.branches[1].is_current);
+    }
+
+    #[test]
+    fn git_town_adapter_reconstructs_multiple_merged_prefixes() {
+        let main = "a".repeat(40);
+        let first = "b".repeat(40);
+        let second = "c".repeat(40);
+        let third = "d".repeat(40);
+        let first_merge = "e".repeat(40);
+        let second_merge = "f".repeat(40);
+        let mut outputs = stack_source_prefix("third");
+        outputs.extend(stack_branch_queries(
+            "second",
+            43,
+            stack_status(
+                43,
+                "third",
+                "main",
+                &second_merge,
+                &third,
+                "OPEN",
+                None,
+                None,
+                None,
+            ),
+        ));
+        outputs.extend(stack_branch_queries(
+            "first",
+            42,
+            stack_status(
+                42,
+                "second",
+                "main",
+                &second_merge,
+                &second,
+                "MERGED",
+                Some(&first_merge),
+                Some(&second_merge),
+                Some(&"1".repeat(40)),
+            ),
+        ));
+        outputs.extend(stack_branch_queries(
+            "main",
+            41,
+            stack_status(
+                41,
+                "first",
+                "main",
+                &second_merge,
+                &first,
+                "MERGED",
+                Some(&main),
+                Some(&first_merge),
+                Some(&"2".repeat(40)),
+            ),
+        ));
+        outputs.extend([
+            successful_output(Vec::new()),
+            successful_output(Vec::new()),
+            successful_output(format!("{third}\n").into_bytes()),
+            successful_output(format!("{second_merge}\n").into_bytes()),
+            successful_output(Vec::new()),
+        ]);
+        let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect("multiple merged prefix");
+        assert_eq!(graph.branches[0].base, main);
+        assert_eq!(graph.branches[1].base, first_merge);
+        assert_eq!(graph.branches[2].base, second_merge);
+        assert_eq!(graph.branches[2].base_ref, "main");
     }
 
     #[test]
@@ -2976,8 +3150,22 @@ mod tests {
         assert!(error.to_string().contains("parent configuration"));
 
         let mut non_ancestor = stack_source_prefix("feature");
+        non_ancestor.extend(stack_branch_queries(
+            "main",
+            42,
+            stack_status(
+                42,
+                "feature",
+                "main",
+                &"a".repeat(40),
+                &"b".repeat(40),
+                "OPEN",
+                None,
+                None,
+                None,
+            ),
+        ));
         non_ancestor.extend([
-            successful_output(b"main\n".to_vec()),
             successful_output(format!("{}\n", "b".repeat(40)).into_bytes()),
             successful_output(format!("{}\n", "a".repeat(40)).into_bytes()),
             CommandOutput {
@@ -2998,26 +3186,30 @@ mod tests {
         let feature = "b".repeat(40);
         let main = "a".repeat(40);
         let mut mismatch = stack_source_prefix("feature");
-        mismatch.extend(stack_branch_outputs(
+        mismatch.extend(stack_branch_queries(
             "main",
-            &feature,
-            &main,
-            stack_pr(42, "feature", "other", &feature, "OPEN"),
+            42,
+            stack_status(
+                42, "other", "main", &main, &feature, "OPEN", None, None, None,
+            ),
         ));
         let error = GitTownStackSource::new(&FakeCommand::new(mismatch))
             .graph("github.com/example/d2b", Path::new("/checkout"))
             .expect_err("PR mismatch");
         assert!(error.to_string().contains("does not match"));
 
-        let mut queued_pr: serde_json::Value =
-            serde_json::from_slice(&stack_pr(42, "feature", "main", &feature, "OPEN").stdout)
-                .expect("queued fixture");
-        queued_pr["isInMergeQueue"] = serde_json::json!(true);
+        let mut queued_pr: serde_json::Value = serde_json::from_slice(
+            &stack_status(
+                42, "feature", "main", &main, &feature, "OPEN", None, None, None,
+            )
+            .stdout,
+        )
+        .expect("queued fixture");
+        queued_pr["data"]["repository"]["pullRequest"]["isInMergeQueue"] = serde_json::json!(true);
         let mut queued = stack_source_prefix("feature");
-        queued.extend(stack_branch_outputs(
+        queued.extend(stack_branch_queries(
             "main",
-            &feature,
-            &main,
+            42,
             successful_output(serde_json::to_vec(&queued_pr).expect("queued JSON")),
         ));
         let error = GitTownStackSource::new(&FakeCommand::new(queued))
@@ -3025,21 +3217,85 @@ mod tests {
             .expect_err("queued");
         assert!(error.to_string().contains("queued"));
 
-        let mut behind_pr: serde_json::Value =
-            serde_json::from_slice(&stack_pr(42, "feature", "main", &feature, "OPEN").stdout)
-                .expect("behind fixture");
-        behind_pr["mergeStateStatus"] = serde_json::json!("BEHIND");
+        let mut behind_pr: serde_json::Value = serde_json::from_slice(
+            &stack_status(
+                42, "feature", "main", &main, &feature, "OPEN", None, None, None,
+            )
+            .stdout,
+        )
+        .expect("behind fixture");
+        behind_pr["data"]["repository"]["pullRequest"]["mergeStateStatus"] =
+            serde_json::json!("BEHIND");
         let mut behind = stack_source_prefix("feature");
-        behind.extend(stack_branch_outputs(
+        behind.extend(stack_branch_queries(
             "main",
-            &feature,
-            &main,
+            42,
             successful_output(serde_json::to_vec(&behind_pr).expect("behind JSON")),
         ));
         let error = GitTownStackSource::new(&FakeCommand::new(behind))
             .graph("github.com/example/d2b", Path::new("/checkout"))
             .expect_err("behind");
         assert!(error.to_string().contains("stale merge state"));
+    }
+
+    #[test]
+    fn git_town_adapter_rejects_wrong_retarget_and_base_oid() {
+        let main = "a".repeat(40);
+        let first = "b".repeat(40);
+        let second = "c".repeat(40);
+        let merged = "d".repeat(40);
+        let mut wrong_retarget = stack_source_prefix("second");
+        wrong_retarget.extend(stack_branch_queries(
+            "first",
+            42,
+            stack_status(
+                42, "second", "first", &first, &second, "OPEN", None, None, None,
+            ),
+        ));
+        wrong_retarget.extend(stack_branch_queries(
+            "main",
+            41,
+            stack_status(
+                41,
+                "first",
+                "main",
+                &merged,
+                &first,
+                "MERGED",
+                Some(&main),
+                Some(&merged),
+                Some(&"e".repeat(40)),
+            ),
+        ));
+        let error = GitTownStackSource::new(&FakeCommand::new(wrong_retarget))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("wrong retarget");
+        assert!(error.to_string().contains("active Git Town topology"));
+
+        let mut wrong_base = stack_source_prefix("feature");
+        wrong_base.extend(stack_branch_queries(
+            "main",
+            42,
+            stack_status(
+                42,
+                "feature",
+                "main",
+                &"f".repeat(40),
+                &first,
+                "OPEN",
+                None,
+                None,
+                None,
+            ),
+        ));
+        wrong_base.extend([
+            successful_output(format!("{first}\n").into_bytes()),
+            successful_output(format!("{main}\n").into_bytes()),
+        ]);
+        let error = GitTownStackSource::new(&FakeCommand::new(wrong_base))
+            .graph("github.com/example/d2b", Path::new("/checkout"))
+            .expect_err("wrong base OID");
+        assert!(error.to_string().contains("exact local refs"));
     }
 
     #[test]
@@ -3161,7 +3417,11 @@ mod tests {
             "mergeCommit".to_owned(),
             serde_json::json!({
                 "oid": "c".repeat(40),
-                "tree": {"oid": "d".repeat(40)}
+                "tree": {"oid": "d".repeat(40)},
+                "parents": {
+                    "nodes": [{"oid": "a".repeat(40)}],
+                    "pageInfo": {"hasNextPage": false}
+                }
             }),
         );
         let status = parse_gh_status(
@@ -3173,6 +3433,7 @@ mod tests {
         assert_eq!(status.state, PullRequestState::Merged);
         assert_eq!(status.merge_commit_oid, Some("c".repeat(40)));
         assert_eq!(status.merge_commit_tree_oid, Some("d".repeat(40)));
+        assert_eq!(status.merge_base_oid, Some("a".repeat(40)));
     }
 
     #[test]

@@ -378,6 +378,9 @@ fn graph(base: &str, head: &str) -> StackGraph {
         current_branch: "feature".to_owned(),
         branches: vec![StackBranch {
             name: "feature".to_owned(),
+            parent: "main".to_owned(),
+            base_ref: "main".to_owned(),
+            observed_base: base.to_owned(),
             head: head.to_owned(),
             base: base.to_owned(),
             is_current: true,
@@ -389,6 +392,8 @@ fn graph(base: &str, head: &str) -> StackGraph {
                 url: "https://github.com/example/d2b/pull/42".to_owned(),
                 state: "OPEN".to_owned(),
             }),
+            merge_commit_oid: None,
+            merge_commit_tree_oid: None,
         }],
     }
 }
@@ -433,6 +438,7 @@ fn status_for(
         head_oid: head.to_owned(),
         merge_commit_oid: None,
         merge_commit_tree_oid: None,
+        merge_base_oid: (state == PullRequestState::Merged).then(|| base.to_owned()),
         is_in_merge_queue: false,
         is_merge_queue_enabled: false,
         merge_queue_entry: None,
@@ -1464,6 +1470,9 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
             branches: vec![
                 StackBranch {
                     name: "first".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: base.clone(),
                     head: first.clone(),
                     base: base.clone(),
                     is_current: false,
@@ -1475,9 +1484,14 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
                 StackBranch {
                     name: "second".to_owned(),
+                    parent: "first".to_owned(),
+                    base_ref: "first".to_owned(),
+                    observed_base: first.clone(),
                     head: second.clone(),
                     base: first.clone(),
                     is_current: true,
@@ -1489,6 +1503,8 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         },
@@ -1556,6 +1572,9 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
             branches: vec![
                 StackBranch {
                     name: "first".to_owned(),
+                    parent: "main".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: base.clone(),
                     head: first.clone(),
                     base: base.clone(),
                     is_current: false,
@@ -1567,9 +1586,18 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
                         url: String::new(),
                         state: "MERGED".to_owned(),
                     }),
+                    merge_commit_oid: Some(advanced_base.clone()),
+                    merge_commit_tree_oid: Some(
+                        probe
+                            .tree_for_commit(&repository, &advanced_base)
+                            .expect("merge tree"),
+                    ),
                 },
                 StackBranch {
                     name: "second".to_owned(),
+                    parent: "first".to_owned(),
+                    base_ref: "main".to_owned(),
+                    observed_base: advanced_base.clone(),
                     head: rebased_second.clone(),
                     base: advanced_base.clone(),
                     is_current: true,
@@ -1581,6 +1609,8 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
                         url: String::new(),
                         state: "OPEN".to_owned(),
                     }),
+                    merge_commit_oid: None,
+                    merge_commit_tree_oid: None,
                 },
             ],
         },

@@ -339,16 +339,24 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
             };
             let status = status_source.status(&policy.id, node_policy.pr_number)?;
             let (expected_base_ref, base_oid) = if branch.is_merged {
-                (status.base_ref.as_str(), branch.base.as_str())
+                (branch.base_ref.as_str(), branch.base.as_str())
             } else {
                 (
                     previous_active_ref,
                     ref_oid(resolved, previous_active_ref)?.as_str(),
                 )
             };
-            if branch.head != head_oid || branch.base != base_oid {
+            if branch.head != head_oid
+                || branch.base != base_oid
+                || branch.base_ref != status.base_ref
+                || branch.observed_base != status.base_oid
+                || branch.merge_commit_oid != status.merge_commit_oid
+                || branch.merge_commit_tree_oid != status.merge_commit_tree_oid
+                || (branch.is_merged
+                    && status.merge_base_oid.as_deref() != Some(branch.base.as_str()))
+            {
                 return Err(DeliveryError::new(format!(
-                    "Git Town stack OIDs for {} do not match exact local refs",
+                    "Git Town stack authority for {} changed during collection",
                     branch.name
                 )));
             }
@@ -365,7 +373,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
                 node_policy.pr_number,
                 &policy.id,
                 expected_base_ref,
-                base_oid,
+                &branch.observed_base,
                 &branch.name,
                 head_oid,
                 snapshot_state,
@@ -418,6 +426,7 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
                 pr_number: node_policy.pr_number,
                 expected_base_ref: expected_base_ref.to_owned(),
                 expected_base_oid: base_oid.to_owned(),
+                observed_base_oid: branch.observed_base.clone(),
                 head_ref: branch.name.clone(),
                 head_oid: head_oid.to_owned(),
                 head_tree_oid: head_tree_oid.clone(),
@@ -921,7 +930,7 @@ fn verify_graph_policy(
         .iter()
         .filter(|node| node.repository == repository.id)
         .map(|node| (node.branch.as_str(), node.pr_number))
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     let observed = graph
         .branches
         .iter()
@@ -931,12 +940,22 @@ fn verify_graph_policy(
                 branch.pr.as_ref().map_or(0, |pr| pr.number),
             )
         })
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     if configured != observed {
         return Err(DeliveryError::new(format!(
-            "Git Town stack graph for {} does not match configured branches/PRs",
+            "Git Town stack graph for {} does not match configured ordered branches/PRs",
             repository.id
         )));
+    }
+    let mut expected_parent = repository.trunk_ref.as_str();
+    for branch in &graph.branches {
+        if branch.parent != expected_parent {
+            return Err(DeliveryError::new(format!(
+                "Git Town stack graph for {} does not match configured parent topology",
+                repository.id
+            )));
+        }
+        expected_parent = &branch.name;
     }
     Ok(())
 }
@@ -1070,7 +1089,7 @@ pub(crate) fn verify_pr_identity(node: &StackNode, status: &PullRequestStatus) -
         node.pr_number,
         &node.repository,
         &node.expected_base_ref,
-        &node.expected_base_oid,
+        &node.observed_base_oid,
         &node.head_ref,
         &node.head_oid,
         node.snapshot_state,
@@ -1078,6 +1097,8 @@ pub(crate) fn verify_pr_identity(node: &StackNode, status: &PullRequestStatus) -
     )?;
     if node.merge_commit_oid != status.merge_commit_oid
         || node.merge_commit_tree_oid != status.merge_commit_tree_oid
+        || (node.snapshot_state == PullRequestState::Merged
+            && status.merge_base_oid.as_deref() != Some(node.expected_base_oid.as_str()))
     {
         return Err(DeliveryError::new(format!(
             "live PR {}#{} merge commit authority changed",
@@ -1336,6 +1357,9 @@ mod tests {
             current_branch: "other".to_owned(),
             branches: vec![super::super::model::StackBranch {
                 name: "other".to_owned(),
+                parent: "main".to_owned(),
+                base_ref: "main".to_owned(),
+                observed_base: "b".repeat(40),
                 head: "a".repeat(40),
                 base: "b".repeat(40),
                 is_current: true,
@@ -1347,10 +1371,73 @@ mod tests {
                     url: String::new(),
                     state: "OPEN".to_owned(),
                 }),
+                merge_commit_oid: None,
+                merge_commit_tree_oid: None,
             }],
         };
         let error = verify_graph_policy(&manifest(), &manifest().repositories[0], &graph)
             .expect_err("graph mismatch");
         assert!(error.to_string().contains("Git Town stack"));
+    }
+
+    #[test]
+    fn git_town_graph_rejects_reordered_manifest_topology() {
+        let mut authority = manifest();
+        authority.stack_nodes = vec![
+            StackNodePolicy {
+                id: "one".to_owned(),
+                repository: "github.com/example/d2b".to_owned(),
+                branch: "one".to_owned(),
+                pr_number: 41,
+                external_dependencies: vec![],
+            },
+            StackNodePolicy {
+                id: "two".to_owned(),
+                repository: "github.com/example/d2b".to_owned(),
+                branch: "two".to_owned(),
+                pr_number: 42,
+                external_dependencies: vec![],
+            },
+            StackNodePolicy {
+                id: "feature".to_owned(),
+                repository: "github.com/example/d2b".to_owned(),
+                branch: "feature".to_owned(),
+                pr_number: 43,
+                external_dependencies: vec![],
+            },
+        ];
+        let branch = |name: &str, parent: &str, number: u64, current: bool| {
+            super::super::model::StackBranch {
+                name: name.to_owned(),
+                parent: parent.to_owned(),
+                base_ref: parent.to_owned(),
+                observed_base: "a".repeat(40),
+                head: "b".repeat(40),
+                base: "a".repeat(40),
+                is_current: current,
+                is_merged: false,
+                is_queued: false,
+                needs_rebase: false,
+                pr: Some(super::super::model::StackPr {
+                    number,
+                    url: String::new(),
+                    state: "OPEN".to_owned(),
+                }),
+                merge_commit_oid: None,
+                merge_commit_tree_oid: None,
+            }
+        };
+        let graph = StackGraph {
+            trunk: "main".to_owned(),
+            current_branch: "feature".to_owned(),
+            branches: vec![
+                branch("two", "main", 42, false),
+                branch("one", "two", 41, false),
+                branch("feature", "one", 43, true),
+            ],
+        };
+        let error = verify_graph_policy(&authority, &authority.repositories[0], &graph)
+            .expect_err("reordered topology");
+        assert!(error.to_string().contains("ordered branches/PRs"));
     }
 }
