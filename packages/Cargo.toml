@@ -28,6 +28,7 @@ members = [
     "d2b-notify",
     "d2b-wayland-proxy",
     "d2b-contract-tests",
+    "d2b-ttrpc-api-fit-spike",
     "xtask",
 ]
 

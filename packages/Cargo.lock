@@ -1144,6 +1144,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-ttrpc-api-fit-spike"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "protobuf",
+ "tokio",
+ "ttrpc",
+]
+
+[[package]]
 name = "d2b-unsafe-local-helper"
 version = "0.0.0-bootstrap"
 dependencies = [

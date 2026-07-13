@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added a hermetic async ttrpc API-fit contract that pins the selected runtime
+  and generator versions, commits drift-checked test bindings, and proves a
+  yielding Unix-socket round trip without freezing a production service schema.
 - Added the checked-in W1 delivery authority manifest so the wave is validated
   and sealed by the same immutable workflow introduced for later waves.
 - Added Rust delivery tooling for validated stack graphs, immutable

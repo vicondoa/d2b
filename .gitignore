@@ -88,6 +88,7 @@ tests/smoke-run-log.txt
 .static-fast.lock
 packages/*/t/
 .copilot-*
+/.ttrpc-api-fit-spike.*/
 .*-eval.log
 
 # CI sccache local-disk backend (restored/saved by actions/cache in test-rust).

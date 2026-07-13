@@ -351,6 +351,9 @@ fn main() -> std::process::ExitCode {
         }
         [command] if command == "gen-guest-proto" => run_task("gen-guest-proto", gen_guest_proto),
         [command] if command == "gen-guest-ttrpc" => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
+        [command] if command == "gen-ttrpc-api-fit-spike" => {
+            run_task("gen-ttrpc-api-fit-spike", gen_ttrpc_api_fit_spike)
+        }
         [command] if command == "gen-daemon-api" => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -365,7 +368,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
+                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-ttrpc-api-fit-spike|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -402,6 +405,36 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_file = out_dir.join("guest_control_ttrpc.rs");
     sanitize_generated_rust(&out_file)?;
     Ok(vec![out_file])
+}
+
+fn gen_ttrpc_api_fit_spike() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let crate_dir = repo_root.join("packages/d2b-ttrpc-api-fit-spike");
+    let proto_dir = crate_dir.join("proto");
+    let proto = proto_dir.join("ttrpc_api_fit_spike.proto");
+    let out_dir = crate_dir.join("src/generated");
+    fs::create_dir_all(&out_dir)?;
+
+    ttrpc_codegen::Codegen::new()
+        .out_dir(&out_dir)
+        .input(&proto)
+        .include(&proto_dir)
+        .rust_protobuf()
+        .rust_protobuf_customize(ttrpc_codegen::ProtobufCustomize::default().gen_mod_rs(false))
+        .customize(ttrpc_codegen::Customize {
+            async_all: true,
+            ..Default::default()
+        })
+        .run()?;
+
+    let outputs = [
+        out_dir.join("ttrpc_api_fit_spike.rs"),
+        out_dir.join("ttrpc_api_fit_spike_ttrpc.rs"),
+    ];
+    for output in &outputs {
+        sanitize_generated_rust(output)?;
+    }
+    Ok(outputs.into())
 }
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {

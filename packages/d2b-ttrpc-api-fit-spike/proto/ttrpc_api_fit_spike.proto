@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package d2b.api_fit.ttrpc_spike.v1;
+
+message ProbeRequest {
+  string nonce = 1;
+}
+
+message ProbeResponse {
+  string nonce = 1;
+  bool handler_awaited = 2;
+}
+
+service AsyncApiFitSpike {
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+}
