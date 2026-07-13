@@ -400,6 +400,8 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
         scratch.path.display().to_string(),
     );
     environment.insert("D2B_TEST_ENV".to_owned(), "manager-env-canary".to_owned());
+    environment.insert("TERM".to_owned(), "dumb".to_owned());
+    environment.insert("COLORTERM".to_owned(), "manager-value".to_owned());
     let manager = FakeScopeManager {
         environment: ManagerEnvironment::parse(
             environment
@@ -430,7 +432,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     terminal
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    let command = b"printf 'D2B_RUNTIME_ADOPT\\n'\n";
+    let command = b"printf 'D2B_RUNTIME_ENV:%s:%s\\n' \"$TERM\" \"$COLORTERM\"; if test -n \"$BASH_VERSION\"; then case $- in *i*) d2b_mode=interactive ;; *) d2b_mode=noninteractive ;; esac; if shopt -q login_shell; then d2b_login=login; else d2b_login=nonlogin; fi; printf 'D2B_RUNTIME_BASH:%s:%s\\n' \"$d2b_mode\" \"$d2b_login\"; fi\n";
     write_terminal_frame(
         &mut terminal,
         &HelperTerminalRequest::WriteStdin(HelperTerminalWriteStdin {
@@ -441,12 +443,27 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
         }),
     );
     let _ = read_terminal_frame(&mut terminal);
-    let (_, output) = read_until(&mut terminal, 2, 0, b"D2B_RUNTIME_ADOPT");
+    let bash_login_shell = user.shell().file_name().and_then(|name| name.to_str()) == Some("bash");
+    let needle = if bash_login_shell {
+        b"D2B_RUNTIME_BASH:interactive:login".as_slice()
+    } else {
+        b"D2B_RUNTIME_ENV:xterm-256color:truecolor".as_slice()
+    };
+    let (_, output) = read_until(&mut terminal, 2, 0, needle);
     assert!(
         output
-            .windows(b"D2B_RUNTIME_ADOPT".len())
-            .any(|window| window == b"D2B_RUNTIME_ADOPT")
+            .windows(b"D2B_RUNTIME_ENV:xterm-256color:truecolor".len())
+            .any(|window| window == b"D2B_RUNTIME_ENV:xterm-256color:truecolor"),
+        "persistent shell inherited non-terminal manager TERM or COLORTERM"
     );
+    if bash_login_shell {
+        assert!(
+            output
+                .windows(b"D2B_RUNTIME_BASH:interactive:login".len())
+                .any(|window| window == b"D2B_RUNTIME_BASH:interactive:login"),
+            "Bash persistent shell was not interactive and login-mode"
+        );
+    }
     drop(terminal);
 
     let reconstructed = ScopeRuntime::with_paths_and_executable(

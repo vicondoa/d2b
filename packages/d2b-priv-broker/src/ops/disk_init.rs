@@ -894,18 +894,22 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
 
     fn scratch_root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "d2b-disk-init-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        for _ in 0..32 {
+            let id = NEXT_SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("d2b-disk-init-{}-{id}", std::process::id()));
+            match fs::create_dir(&dir) {
+                Ok(()) => return dir,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create disk-init test directory: {error}"),
+            }
+        }
+        panic!("failed to reserve a unique disk-init test directory")
     }
 
     fn test_spec(path: PathBuf, size_bytes: u64, if_absent: bool) -> ResolvedDiskInitOp {
