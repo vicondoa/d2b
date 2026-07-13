@@ -309,8 +309,8 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         delivery_command.contains(r#""git-town""#)
             && delivery_command.contains(r#""config".to_owned()"#)
             && delivery_command.contains(r#""get-parent".to_owned()"#)
-            && delivery_command.contains(r#""pr".to_owned()"#)
-            && delivery_command.contains(r#""view".to_owned()"#)
+            && delivery_command.contains(r#""api".to_owned()"#)
+            && delivery_command.contains(r#""graphql".to_owned()"#)
             && !delivery_command.contains("cli_internal")
             && !delivery_command.contains("pulls/stacks"),
         "xtask must derive topology from Git Town and ordinary GitHub PR authority"
