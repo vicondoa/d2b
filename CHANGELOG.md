@@ -52,6 +52,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Hardened final delivery authority with secret-free validation environments,
+  authenticated merged-prefix topology, tolerant external GraphQL decoding,
+  shared signal forwarding, and kernel-backed child-output polling.
+- Made delivery state use true open-file-description locks and exact
+  post-creation private modes independent of the caller's umask.
+- Preserved Unix signal termination in Layer-1 results and required canonical,
+  duplicate-free fingerprint declarations.
+- Pinned Git Town and GitHub CLI source builds and separated stacked-wave
+  procedures from the delivery contract reference.
 - Reconstructed merged stack prefixes from historical GitHub merge authority
   and authoritative manifest order after Git Town removes merged lineage,
   while requiring exact retargeted local lineage for every remaining active
