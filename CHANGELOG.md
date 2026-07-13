@@ -10,9 +10,11 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-12
+
 ### Added
 
-- Added proposed ADR 0045, defining parent-owned workload-hosted realm
+- Added ADR 0045, defining parent-owned workload-hosted realm
   controllers; explicit runtime, infrastructure, transport, substrate,
   credential, and display provider responsibilities; type-first sortable
   provider crates; generic Unix/vsock/direct/Azure-Relay byte transports;
@@ -22,6 +24,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed unsafe-local persistent shells inheriting `TERM=dumb` from the systemd
+  user manager by supplying a fixed true-color terminal baseline while
+  preserving the rest of the manager environment and login-shell startup.
 - Made the mkfs diagnostic bound test exercise the formatter directly instead
   of depending on unrelated existing-image repair stages.
 - Made output-ring wake coverage observe data and EOF as separate valid
@@ -30,7 +35,6 @@ deprecations ship one minor release before removal.
   tests cannot silently share and remove each other's scratch state.
 - Made failed-fd-send coverage track the original pipe identity so concurrent
   numeric fd reuse cannot produce a false leak report.
-
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
   waking the supervisor accept loop so its owned listener unlinks before forced
