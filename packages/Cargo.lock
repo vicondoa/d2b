@@ -4846,6 +4846,7 @@ dependencies = [
  "d2b-core",
  "d2b-realm-core",
  "protobuf-codegen",
+ "rustix 0.38.44",
  "schemars",
  "serde",
  "serde_json",

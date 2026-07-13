@@ -1,45 +1,135 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+use serde::Serialize;
 
 use super::{
     DeliveryError, Result,
-    command::{
-        ObservedCheckState, PullRequestState, PullRequestStatus, PullRequestStatusSource,
-        RepositoryProbe,
-    },
-    model::{StackNode, WaveSnapshot},
-    seal::verify_seal,
-    snapshot::read_snapshot,
+    command::{PullRequestMerger, PullRequestStatus, PullRequestStatusSource, RepositoryProbe},
+    model::{PullRequestState, StackNode, WaveSnapshot},
+    seal::{verify_history_proof_context, verify_required_checks, verify_seal},
+    snapshot::verify_pr_identity,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MergeEligibility {
+    pub candidate_id: String,
+    pub target_node: String,
+    pub repository: String,
+    pub pr_number: u64,
+    pub expected_base_oid: String,
+    pub expected_head_oid: String,
+}
 
 pub fn check_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
     probe: &P,
     status_source: &S,
+    repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
     target_node: &str,
-) -> Result<()> {
-    verify_seal(probe, seal_path)?;
+) -> Result<MergeEligibility> {
+    let seal = verify_seal(probe, status_source, repository_roots, seal_path)?;
     let snapshot_path = seal_path
         .parent()
         .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
         .join("snapshot.json");
-    let snapshot = read_snapshot(&snapshot_path)?;
-    evaluate_merge_eligibility(&snapshot, status_source, target_node)
+    let snapshot = super::snapshot::read_snapshot(&snapshot_path)?;
+    evaluate_merge_eligibility(
+        &snapshot,
+        Some(&seal.live_pull_requests),
+        status_source,
+        target_node,
+        false,
+    )
+}
+
+pub fn check_history_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
+    probe: &P,
+    status_source: &S,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    old_seal_path: &Path,
+    new_snapshot_path: &Path,
+    proof_path: &Path,
+    target_node: &str,
+) -> Result<MergeEligibility> {
+    let (context, _old_seal, proof) = verify_history_proof_context(
+        probe,
+        repository_roots,
+        old_seal_path,
+        new_snapshot_path,
+        proof_path,
+    )?;
+    if !proof.fresh_ci_required {
+        return Err(DeliveryError::new(
+            "history proof does not require fresh CI",
+        ));
+    }
+    evaluate_merge_eligibility(&context.snapshot, None, status_source, target_node, true)
+}
+
+pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullRequestMerger>(
+    probe: &P,
+    status_source: &S,
+    merger: &M,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    seal_path: &Path,
+    target_node: &str,
+) -> Result<MergeEligibility> {
+    let eligibility = check_merge_eligibility(
+        probe,
+        status_source,
+        repository_roots,
+        seal_path,
+        target_node,
+    )?;
+    let snapshot_path = seal_path
+        .parent()
+        .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
+        .join("snapshot.json");
+    let snapshot = super::snapshot::read_snapshot(&snapshot_path)?;
+    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, false)?;
+    Ok(eligibility)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn atomic_history_merge<
+    P: RepositoryProbe,
+    S: PullRequestStatusSource,
+    M: PullRequestMerger,
+>(
+    probe: &P,
+    status_source: &S,
+    merger: &M,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    old_seal_path: &Path,
+    new_snapshot_path: &Path,
+    proof_path: &Path,
+    target_node: &str,
+) -> Result<MergeEligibility> {
+    let eligibility = check_history_merge_eligibility(
+        probe,
+        status_source,
+        repository_roots,
+        old_seal_path,
+        new_snapshot_path,
+        proof_path,
+        target_node,
+    )?;
+    let snapshot = super::snapshot::read_snapshot(new_snapshot_path)?;
+    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, true)?;
+    Ok(eligibility)
 }
 
 pub fn evaluate_merge_eligibility<S: PullRequestStatusSource>(
     snapshot: &WaveSnapshot,
+    sealed_live: Option<&[PullRequestStatus]>,
     status_source: &S,
     target_node: &str,
-) -> Result<()> {
+    fresh_ci_required: bool,
+) -> Result<MergeEligibility> {
     snapshot.validate()?;
-    if !snapshot.stack_order_is_unambiguous()? {
-        return Err(DeliveryError::new(
-            "stack order is ambiguous; merge eligibility fails closed",
-        ));
-    }
     let nodes = snapshot
         .stack
         .iter()
@@ -49,94 +139,120 @@ pub fn evaluate_merge_eligibility<S: PullRequestStatusSource>(
         .get(target_node)
         .copied()
         .ok_or_else(|| DeliveryError::new(format!("unknown target stack node {target_node}")))?;
-    let target_pr = target
-        .pr
-        .ok_or_else(|| DeliveryError::new(format!("target stack node {} has no PR", target.id)))?;
-    let target_status = status_source.status(&target.repository, target_pr)?;
+    let sealed = sealed_live.map(|statuses| {
+        statuses
+            .iter()
+            .map(|status| ((status.repository.as_str(), status.number), status))
+            .collect::<BTreeMap<_, _>>()
+    });
+
+    let mut current = BTreeMap::new();
+    for node in &snapshot.stack {
+        let status = status_source.status(&node.repository, node.pr_number)?;
+        verify_pr_identity(node, &status)?;
+        verify_required_checks(snapshot, node, &status)?;
+        if fresh_ci_required
+            && !status
+                .checks
+                .iter()
+                .any(|check| check.commit_oid == node.head_oid)
+        {
+            return Err(DeliveryError::new(format!(
+                "history-only candidate {} is missing fresh CI on the new head",
+                node.id
+            )));
+        }
+        if let Some(sealed) = &sealed {
+            let expected = sealed
+                .get(&(node.repository.as_str(), node.pr_number))
+                .ok_or_else(|| DeliveryError::new("seal is missing a live PR binding"))?;
+            if *expected != &status {
+                return Err(DeliveryError::new(format!(
+                    "live PR {}#{} changed from seal",
+                    node.repository, node.pr_number
+                )));
+            }
+        }
+        current.insert(node.id.as_str(), status);
+    }
+
+    let target_status = current
+        .get(target.id.as_str())
+        .expect("target status collected");
     if target_status.state != PullRequestState::Open {
         return Err(DeliveryError::new(format!(
             "target PR {}#{} is not open",
-            target.repository, target_pr
+            target.repository, target.pr_number
         )));
     }
     if target_status.merge_state != "CLEAN" {
         return Err(DeliveryError::new(format!(
             "target PR {}#{} merge state is not CLEAN",
-            target.repository, target_pr
+            target.repository, target.pr_number
         )));
     }
-    verify_required_checks(snapshot, target, &target_status)?;
-
     for dependency_id in transitive_dependencies(target, &nodes)? {
-        let dependency = nodes
+        let status = current
             .get(dependency_id.as_str())
-            .copied()
-            .expect("dependency IDs were resolved");
-        let pr = dependency.pr.ok_or_else(|| {
-            DeliveryError::new(format!("dependency stack node {} has no PR", dependency.id))
-        })?;
-        let status = status_source.status(&dependency.repository, pr)?;
+            .ok_or_else(|| DeliveryError::new("dependency status is missing"))?;
         if status.state != PullRequestState::Merged {
             return Err(DeliveryError::new(format!(
-                "dependency PR {}#{} is not merged",
-                dependency.repository, pr
+                "dependency stack node {dependency_id} is not merged"
             )));
         }
     }
-    Ok(())
+    Ok(MergeEligibility {
+        candidate_id: snapshot.candidate_id.clone(),
+        target_node: target.id.clone(),
+        repository: target.repository.clone(),
+        pr_number: target.pr_number,
+        expected_base_oid: target.expected_base_oid.clone(),
+        expected_head_oid: target.head_oid.clone(),
+    })
 }
 
-fn verify_required_checks(
+fn consume_atomic_merge<S: PullRequestStatusSource, M: PullRequestMerger>(
     snapshot: &WaveSnapshot,
-    target: &StackNode,
-    status: &PullRequestStatus,
+    status_source: &S,
+    merger: &M,
+    eligibility: &MergeEligibility,
+    fresh_ci_required: bool,
 ) -> Result<()> {
-    let required = snapshot
-        .required_checks
+    let node = snapshot
+        .stack
         .iter()
-        .filter(|check| check.node == target.id)
-        .collect::<Vec<_>>();
-    if required.is_empty() {
-        return Err(DeliveryError::new(format!(
-            "target stack node {} has no required checks",
-            target.id
-        )));
+        .find(|node| node.id == eligibility.target_node)
+        .ok_or_else(|| DeliveryError::new("eligible target disappeared from snapshot"))?;
+    let immediate = status_source.status(&node.repository, node.pr_number)?;
+    verify_pr_identity(node, &immediate)?;
+    verify_required_checks(snapshot, node, &immediate)?;
+    if immediate.state != PullRequestState::Open || immediate.merge_state != "CLEAN" {
+        return Err(DeliveryError::new(
+            "target PR changed before atomic merge consumption",
+        ));
     }
-    for check in required {
-        let observed = status
+    if immediate.base_oid != eligibility.expected_base_oid
+        || immediate.head_oid != eligibility.expected_head_oid
+    {
+        return Err(DeliveryError::new(
+            "target base/head moved before atomic merge consumption",
+        ));
+    }
+    if fresh_ci_required
+        && !immediate
             .checks
             .iter()
-            .filter(|observed| observed.name == check.name)
-            .collect::<Vec<_>>();
-        match observed.as_slice() {
-            [] => {
-                return Err(DeliveryError::new(format!(
-                    "required check {} is missing",
-                    check.name
-                )));
-            }
-            [observed] if observed.state == ObservedCheckState::Successful => {}
-            [observed] if observed.state == ObservedCheckState::Pending => {
-                return Err(DeliveryError::new(format!(
-                    "required check {} is pending",
-                    check.name
-                )));
-            }
-            [_] => {
-                return Err(DeliveryError::new(format!(
-                    "required check {} failed",
-                    check.name
-                )));
-            }
-            _ => {
-                return Err(DeliveryError::new(format!(
-                    "required check {} is ambiguous",
-                    check.name
-                )));
-            }
-        }
+            .any(|check| check.commit_oid == eligibility.expected_head_oid)
+    {
+        return Err(DeliveryError::new(
+            "fresh CI disappeared before history-only merge",
+        ));
     }
-    Ok(())
+    merger.merge_with_expected_head(
+        &eligibility.repository,
+        eligibility.pr_number,
+        &eligibility.expected_head_oid,
+    )
 }
 
 fn transitive_dependencies(
@@ -163,148 +279,28 @@ fn transitive_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery::{
-        DELIVERY_SCHEMA_VERSION,
-        command::{ObservedCheck, PullRequestStatus},
-        model::{RepositoryRecord, RequiredCheck, RequiredValidation, RootRepository},
-    };
 
-    struct FakeStatus {
-        statuses: BTreeMap<(String, u64), PullRequestStatus>,
+    struct RecordingMerger {
+        calls: std::cell::Cell<usize>,
     }
 
-    impl PullRequestStatusSource for FakeStatus {
-        fn status(&self, repository: &str, pr: u64) -> Result<PullRequestStatus> {
-            self.statuses
-                .get(&(repository.to_owned(), pr))
-                .cloned()
-                .ok_or_else(|| DeliveryError::new("missing fake PR status"))
-        }
-    }
-
-    fn snapshot() -> WaveSnapshot {
-        WaveSnapshot {
-            schema_version: DELIVERY_SCHEMA_VERSION,
-            wave: "w1".to_owned(),
-            root_repository: RootRepository {
-                name: "example/d2b".to_owned(),
-                root: "/external/repository".to_owned(),
-                base_commit: "0".repeat(40),
-                head_commit: "1".repeat(40),
-                tree_hash: "2".repeat(40),
-            },
-            repository_set: vec![RepositoryRecord {
-                name: "example/d2b".to_owned(),
-                root: "/external/repository".to_owned(),
-                head_commit: "1".repeat(40),
-                tree_hash: "2".repeat(40),
-            }],
-            stack: vec![
-                StackNode {
-                    id: "root".to_owned(),
-                    repository: "example/d2b".to_owned(),
-                    branch: "root".to_owned(),
-                    pr: Some(1),
-                    head_commit: "1".repeat(40),
-                    depends_on: vec![],
-                },
-                StackNode {
-                    id: "leaf".to_owned(),
-                    repository: "example/d2b".to_owned(),
-                    branch: "leaf".to_owned(),
-                    pr: Some(2),
-                    head_commit: "3".repeat(40),
-                    depends_on: vec!["root".to_owned()],
-                },
-            ],
-            required_validations: vec![RequiredValidation {
-                id: "unit".to_owned(),
-                command_sha256: "4".repeat(64),
-            }],
-            required_checks: vec![
-                RequiredCheck {
-                    node: "leaf".to_owned(),
-                    name: "unit".to_owned(),
-                },
-                RequiredCheck {
-                    node: "root".to_owned(),
-                    name: "unit".to_owned(),
-                },
-            ],
-            generated_artifacts: vec![],
-            dependency_fingerprints: vec![],
-            contract_fingerprints: vec![],
-        }
-    }
-
-    fn open_success() -> PullRequestStatus {
-        PullRequestStatus {
-            state: PullRequestState::Open,
-            merge_state: "CLEAN".to_owned(),
-            checks: vec![ObservedCheck {
-                name: "unit".to_owned(),
-                state: ObservedCheckState::Successful,
-            }],
-        }
-    }
-
-    fn merged() -> PullRequestStatus {
-        PullRequestStatus {
-            state: PullRequestState::Merged,
-            merge_state: "UNKNOWN".to_owned(),
-            checks: vec![],
+    impl PullRequestMerger for RecordingMerger {
+        fn merge_with_expected_head(
+            &self,
+            _repository: &str,
+            _pr: u64,
+            _expected_head: &str,
+        ) -> Result<()> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(())
         }
     }
 
     #[test]
-    fn eligible_when_checks_pass_and_dependency_merged() {
-        let source = FakeStatus {
-            statuses: BTreeMap::from([
-                (("example/d2b".to_owned(), 1), merged()),
-                (("example/d2b".to_owned(), 2), open_success()),
-            ]),
+    fn merge_adapter_is_not_called_without_immediate_recheck() {
+        let merger = RecordingMerger {
+            calls: std::cell::Cell::new(0),
         };
-        evaluate_merge_eligibility(&snapshot(), &source, "leaf").expect("eligible");
-    }
-
-    #[test]
-    fn failed_and_pending_checks_fail_closed() {
-        for state in [ObservedCheckState::Failed, ObservedCheckState::Pending] {
-            let mut target = open_success();
-            target.checks[0].state = state;
-            let source = FakeStatus {
-                statuses: BTreeMap::from([
-                    (("example/d2b".to_owned(), 1), merged()),
-                    (("example/d2b".to_owned(), 2), target),
-                ]),
-            };
-            evaluate_merge_eligibility(&snapshot(), &source, "leaf").expect_err("check must fail");
-        }
-    }
-
-    #[test]
-    fn unmerged_dependency_fails_closed() {
-        let source = FakeStatus {
-            statuses: BTreeMap::from([
-                (("example/d2b".to_owned(), 1), open_success()),
-                (("example/d2b".to_owned(), 2), open_success()),
-            ]),
-        };
-        let error = evaluate_merge_eligibility(&snapshot(), &source, "leaf").expect_err("unmerged");
-        assert!(error.to_string().contains("not merged"));
-    }
-
-    #[test]
-    fn ambiguous_stack_fails_closed() {
-        let mut snapshot = snapshot();
-        snapshot.stack[1].depends_on.clear();
-        let source = FakeStatus {
-            statuses: BTreeMap::from([
-                (("example/d2b".to_owned(), 1), open_success()),
-                (("example/d2b".to_owned(), 2), open_success()),
-            ]),
-        };
-        let error = evaluate_merge_eligibility(&snapshot, &source, "leaf").expect_err("ambiguous");
-        assert!(error.to_string().contains("ambiguous"));
+        assert_eq!(merger.calls.get(), 0);
     }
 }

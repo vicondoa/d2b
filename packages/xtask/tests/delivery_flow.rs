@@ -1,22 +1,40 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    cell::Cell,
-    collections::BTreeMap,
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, VecDeque},
     fs,
+    os::unix::fs::symlink,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use xtask::delivery::{
-    DELIVERY_SCHEMA_VERSION, EvidenceImportRequest, EvidencePayloadSource, EvidenceResultClass,
-    FingerprintSpec, PANEL_ROLES, PanelRecord, RepositorySpec, RequiredCheck,
-    RequiredValidationSpec, RootRepositorySpec, StackManifest, StackNodeSpec,
-    command::RepositoryProbe, construct_seal, create_snapshot, import_evidence, read_snapshot,
-    storage::verify_json_digest, validate_and_store_panel, verify_seal,
+    DELIVERY_SCHEMA_VERSION, DeliveryError, Result, atomic_merge, check_history_merge_eligibility,
+    check_merge_eligibility,
+    command::{
+        GitProbe, ObservedCheck, ObservedCheckState, ProcessCommandOutput, PullRequestMerger,
+        PullRequestStatus, PullRequestStatusSource, RepositoryProbe, StackGraphSource, TrackedBlob,
+    },
+    construct_history_proof, construct_seal, create_snapshot,
+    evidence::{CiAttestationClaims, CiAttestationVerifier, VerifiedCiAttestation},
+    import_ci_evidence,
+    model::{
+        CheckPublisher, CheckPublisherKind, DeliveryManifest, FingerprintSpec, GhStackBranch,
+        GhStackGraph, GhStackPr, GitObjectFormat, LogicalPath, PANEL_ATTESTATION_ARTIFACT_KIND,
+        PANEL_MODEL_POLICY, PANEL_ROLES, PullRequestState, RepositoryPolicy, RequiredCheck,
+        RequiredValidation, SnapshotRequest, StackNodePolicy, ValidationAuthority,
+    },
+    panel::PanelAttestation,
+    read_snapshot, run_validation,
+    seal::HistoryProof,
+    storage::{sha256_file, verify_json_digest, write_immutable_json},
+    validate_and_store_panel, verify_seal,
 };
-use xtask::delivery::{DeliveryError, Result};
 
+const REPOSITORY_ID: &str = "github.com/example/d2b";
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(1);
 
 struct Scratch {
@@ -34,7 +52,7 @@ impl Scratch {
             .parent()
             .expect("repository parent")
             .join(format!(
-                ".d2b-xtask-delivery-{label}-{}-{}",
+                ".d2b-delivery-{label}-{}-{}",
                 std::process::id(),
                 NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed)
             ));
@@ -49,277 +67,844 @@ impl Drop for Scratch {
     }
 }
 
-struct FakeProbe {
-    commits: BTreeMap<String, String>,
-    trees: BTreeMap<String, String>,
-    dirty: Cell<bool>,
-    common: PathBuf,
+#[derive(Clone)]
+struct StaticGraph {
+    graph: GhStackGraph,
 }
 
-impl RepositoryProbe for FakeProbe {
-    fn canonical_root(&self, root: &Path) -> Result<PathBuf> {
-        Ok(fs::canonicalize(root)?)
-    }
-
-    fn git_common_dir(&self, _root: &Path) -> Result<PathBuf> {
-        Ok(self.common.clone())
-    }
-
-    fn resolve_commit(&self, _root: &Path, revision: &str) -> Result<String> {
-        self.commits
-            .get(revision)
-            .cloned()
-            .ok_or_else(|| DeliveryError::new(format!("missing fake commit {revision}")))
-    }
-
-    fn resolve_tree(&self, _root: &Path, revision: &str) -> Result<String> {
-        self.trees
-            .get(revision)
-            .cloned()
-            .ok_or_else(|| DeliveryError::new(format!("missing fake tree {revision}")))
-    }
-
-    fn is_dirty(&self, _root: &Path) -> Result<bool> {
-        Ok(self.dirty.get())
+impl StackGraphSource for StaticGraph {
+    fn graph(&self, repository: &str, _checkout_root: &Path) -> Result<GhStackGraph> {
+        if repository != REPOSITORY_ID {
+            return Err(DeliveryError::new("unexpected graph repository"));
+        }
+        Ok(self.graph.clone())
     }
 }
 
-fn fixture(scratch: &Scratch) -> (FakeProbe, StackManifest) {
-    let repository = scratch.path.join("repository");
-    let common = scratch.path.join("git-common");
-    fs::create_dir(&repository).expect("fake repository");
-    fs::create_dir(&common).expect("fake common dir");
-    fs::write(repository.join("contract.json"), b"{\"schema\":1}\n").expect("contract");
-    let tree = "a".repeat(40);
-    let probe = FakeProbe {
-        commits: BTreeMap::from([
-            ("base".to_owned(), "0".repeat(40)),
-            ("head".to_owned(), "1".repeat(40)),
-            ("feature".to_owned(), "1".repeat(40)),
-        ]),
-        trees: BTreeMap::from([("head".to_owned(), tree.clone()), ("HEAD".to_owned(), tree)]),
-        dirty: Cell::new(false),
-        common,
-    };
-    let manifest = StackManifest {
+struct StaticStatus {
+    status: PullRequestStatus,
+}
+
+impl PullRequestStatusSource for StaticStatus {
+    fn status(&self, repository: &str, pr: u64) -> Result<PullRequestStatus> {
+        if repository != self.status.repository || pr != self.status.number {
+            return Err(DeliveryError::new("unexpected PR query"));
+        }
+        Ok(self.status.clone())
+    }
+}
+
+struct SequenceStatus {
+    statuses: RefCell<VecDeque<PullRequestStatus>>,
+    fallback: PullRequestStatus,
+}
+
+impl PullRequestStatusSource for SequenceStatus {
+    fn status(&self, _repository: &str, _pr: u64) -> Result<PullRequestStatus> {
+        Ok(self
+            .statuses
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| self.fallback.clone()))
+    }
+}
+
+struct RecordingMerger {
+    calls: Cell<usize>,
+}
+
+impl PullRequestMerger for RecordingMerger {
+    fn merge_with_expected_head(
+        &self,
+        _repository: &str,
+        _pr: u64,
+        _expected_head: &str,
+    ) -> Result<()> {
+        self.calls.set(self.calls.get() + 1);
+        Ok(())
+    }
+}
+
+struct Fixture {
+    scratch: Scratch,
+    repository: PathBuf,
+    roots: BTreeMap<String, PathBuf>,
+    state: PathBuf,
+    graph: StaticGraph,
+    status: PullRequestStatus,
+    request: SnapshotRequest,
+}
+
+impl Fixture {
+    fn new(label: &str, validation_authority: ValidationAuthority) -> Self {
+        let scratch = Scratch::new(label);
+        let repository = scratch.path.join("repository");
+        fs::create_dir(&repository).expect("repository");
+        git(&repository, &["init", "--object-format=sha1", "-b", "main"]);
+        git(&repository, &["config", "user.name", "Example"]);
+        git(
+            &repository,
+            &["config", "user.email", "example@example.invalid"],
+        );
+        git(
+            &repository,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/d2b.git",
+            ],
+        );
+        fs::write(repository.join("contract.json"), b"{\"version\":1}\n").expect("base contract");
+        fs::write(repository.join("dependencies.txt"), b"none\n").expect("dependencies");
+        git(&repository, &["add", "contract.json", "dependencies.txt"]);
+        git(&repository, &["commit", "-m", "base"]);
+        let probe = GitProbe::new(ProcessCommandOutput);
+        let base = probe.resolve_commit(&repository, "main").expect("base OID");
+
+        git(&repository, &["checkout", "-b", "feature"]);
+        fs::write(repository.join("contract.json"), b"{\"version\":2}\n")
+            .expect("feature contract");
+        let manifest = manifest(validation_authority);
+        fs::create_dir(repository.join("delivery")).expect("delivery directory");
+        fs::write(
+            repository.join("delivery/manifest.json"),
+            serde_json::to_vec_pretty(&manifest).expect("manifest JSON"),
+        )
+        .expect("delivery manifest");
+        git(
+            &repository,
+            &["add", "contract.json", "delivery/manifest.json"],
+        );
+        git(&repository, &["commit", "-m", "feature"]);
+        let head = probe
+            .resolve_commit(&repository, "feature")
+            .expect("head OID");
+
+        let graph = StaticGraph {
+            graph: graph(&base, &head),
+        };
+        let status = status(&base, &head);
+        let roots = BTreeMap::from([(REPOSITORY_ID.to_owned(), repository.clone())]);
+        let state = scratch.path.join("state");
+        let request = SnapshotRequest {
+            authority_repository: REPOSITORY_ID.to_owned(),
+            authority_ref: "feature".to_owned(),
+            manifest_path: PathBuf::from("delivery/manifest.json"),
+            repository_roots: roots.clone(),
+            state_root: Some(state.clone()),
+        };
+        Self {
+            scratch,
+            repository,
+            roots,
+            state,
+            graph,
+            status,
+            request,
+        }
+    }
+
+    fn snapshot(&self) -> PathBuf {
+        let probe = GitProbe::new(ProcessCommandOutput);
+        create_snapshot(
+            &probe,
+            &self.graph,
+            &StaticStatus {
+                status: self.status.clone(),
+            },
+            &self.request,
+        )
+        .expect("create snapshot")
+    }
+
+    fn panel_source(&self, snapshot_path: &Path) -> PathBuf {
+        let snapshot = read_snapshot(snapshot_path).expect("snapshot");
+        let snapshot_sha256 = verify_json_digest(snapshot_path).expect("snapshot digest");
+        let records = self.scratch.path.join(format!(
+            "panel-source-{}",
+            NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&records).expect("panel source");
+        for (index, role) in PANEL_ROLES.iter().enumerate() {
+            let record = PanelAttestation {
+                artifact_kind: PANEL_ATTESTATION_ARTIFACT_KIND.to_owned(),
+                schema_version: DELIVERY_SCHEMA_VERSION,
+                role: *role,
+                candidate_id: snapshot.candidate_id.clone(),
+                content_id: snapshot.content_id.clone(),
+                snapshot_sha256: snapshot_sha256.clone(),
+                model_version: PANEL_MODEL_POLICY.to_owned(),
+                provider: "panel-provider".to_owned(),
+                run_id: format!("run-{index}"),
+                output_sha256: format!("{index:064x}"),
+                signoff: true,
+                recommendations: vec![],
+            };
+            write_source_json(&records.join(format!("{}.json", role.as_str())), &record);
+        }
+        records
+    }
+
+    fn seal(&self, snapshot: &Path) -> PathBuf {
+        let probe = GitProbe::new(ProcessCommandOutput);
+        run_validation(&probe, &ProcessCommandOutput, &self.roots, snapshot, "unit")
+            .expect("validation evidence");
+        let panel = self.panel_source(snapshot);
+        validate_and_store_panel(&probe, &self.roots, snapshot, &panel).expect("panel");
+        construct_seal(
+            &probe,
+            &StaticStatus {
+                status: self.status.clone(),
+            },
+            &self.roots,
+            snapshot,
+        )
+        .expect("seal")
+    }
+}
+
+fn manifest(authority: ValidationAuthority) -> DeliveryManifest {
+    DeliveryManifest {
         schema_version: DELIVERY_SCHEMA_VERSION,
+        program: "adr0045".to_owned(),
         wave: "w1".to_owned(),
-        root_repository: RootRepositorySpec {
-            name: "example/d2b".to_owned(),
-            root: repository.clone(),
-            base: "base".to_owned(),
-            head: "head".to_owned(),
-        },
-        repository_set: vec![RepositorySpec {
-            name: "example/d2b".to_owned(),
-            root: repository,
-            head: "head".to_owned(),
+        authority_repository: REPOSITORY_ID.to_owned(),
+        repositories: vec![RepositoryPolicy {
+            id: REPOSITORY_ID.to_owned(),
+            object_format: GitObjectFormat::Sha1,
+            trunk_ref: "main".to_owned(),
+            integration_ref: "feature".to_owned(),
         }],
-        stack: vec![StackNodeSpec {
-            id: "root".to_owned(),
-            repository: "example/d2b".to_owned(),
+        stack_nodes: vec![StackNodePolicy {
+            id: "xtask".to_owned(),
+            repository: REPOSITORY_ID.to_owned(),
             branch: "feature".to_owned(),
-            pr: Some(42),
-            head: "head".to_owned(),
-            depends_on: vec![],
+            pr_number: 42,
+            external_dependencies: vec![],
         }],
-        required_validations: vec![RequiredValidationSpec {
+        required_validations: vec![RequiredValidation {
             id: "unit".to_owned(),
-            command: "cargo test -p xtask".to_owned(),
+            argv: vec!["sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()],
+            cwd: LogicalPath {
+                repository: REPOSITORY_ID.to_owned(),
+                path: ".".to_owned(),
+            },
+            authority,
+            ci_publisher: (authority == ValidationAuthority::GithubAttestation).then(publisher),
+            ci_signer_workflow: (authority == ValidationAuthority::GithubAttestation)
+                .then(|| "github.com/example/d2b/.github/workflows/layer1.yml".to_owned()),
+            timeout_seconds: 10,
         }],
         required_checks: vec![RequiredCheck {
-            node: "root".to_owned(),
-            name: "unit".to_owned(),
+            node: "xtask".to_owned(),
+            name: "check".to_owned(),
+            publisher: publisher(),
         }],
         generated_artifacts: vec![],
-        dependency_fingerprints: vec![],
+        dependency_fingerprints: vec![FingerprintSpec {
+            name: "dependencies".to_owned(),
+            repository: REPOSITORY_ID.to_owned(),
+            path: "dependencies.txt".to_owned(),
+        }],
         contract_fingerprints: vec![FingerprintSpec {
             name: "contract".to_owned(),
-            repository: "example/d2b".to_owned(),
-            path: PathBuf::from("contract.json"),
+            repository: REPOSITORY_ID.to_owned(),
+            path: "contract.json".to_owned(),
         }],
-    };
-    (probe, manifest)
-}
-
-fn write_json(path: &Path, value: &impl serde::Serialize) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create JSON parent");
-    }
-    let mut bytes = serde_json::to_vec_pretty(value).expect("serialize JSON");
-    bytes.push(b'\n');
-    fs::write(path, bytes).expect("write JSON");
-}
-
-fn import_evidence_result(
-    scratch: &Scratch,
-    probe: &FakeProbe,
-    snapshot_path: &Path,
-    result_class: EvidenceResultClass,
-) {
-    let snapshot = read_snapshot(snapshot_path).expect("read snapshot");
-    let request = EvidenceImportRequest {
-        schema_version: DELIVERY_SCHEMA_VERSION,
-        id: "unit".to_owned(),
-        command: "cargo test -p xtask".to_owned(),
-        result_class,
-        timestamp: "2026-07-13T07:41:58Z".to_owned(),
-        tree_hash: snapshot.root_repository.tree_hash,
-        payload: EvidencePayloadSource {
-            path: None,
-            sha256: Some("b".repeat(64)),
-            external_locator: Some("artifact://local/unit".to_owned()),
-        },
-    };
-    let request_path = scratch.path.join("requests/unit.json");
-    write_json(&request_path, &request);
-    import_evidence(probe, snapshot_path, &request_path).expect("import evidence");
-}
-
-fn import_passing_evidence(scratch: &Scratch, probe: &FakeProbe, snapshot_path: &Path) {
-    import_evidence_result(scratch, probe, snapshot_path, EvidenceResultClass::Passed);
-}
-
-fn write_panel(
-    scratch: &Scratch,
-    snapshot_path: &Path,
-    finding_role: Option<xtask::delivery::PanelRole>,
-    omit_last: bool,
-) -> PathBuf {
-    let snapshot = read_snapshot(snapshot_path).expect("snapshot");
-    let snapshot_sha256 = verify_json_digest(snapshot_path).expect("snapshot digest");
-    let records = scratch.path.join(format!(
-        "panel-source-{}",
-        NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&records).expect("panel source");
-    let roles = if omit_last {
-        &PANEL_ROLES[..PANEL_ROLES.len() - 1]
-    } else {
-        &PANEL_ROLES[..]
-    };
-    for role in roles {
-        let has_finding = finding_role == Some(*role);
-        let record = PanelRecord {
-            schema_version: DELIVERY_SCHEMA_VERSION,
-            role: *role,
-            tree_hash: snapshot.root_repository.tree_hash.clone(),
-            snapshot_sha256: snapshot_sha256.clone(),
-            repository_set: snapshot.repository_bindings(),
-            signoff: !has_finding,
-            recommendations: if has_finding {
-                vec!["correct the finding".to_owned()]
-            } else {
-                vec![]
-            },
-        };
-        write_json(&records.join(format!("{}.json", role.as_str())), &record);
-    }
-    records
-}
-
-#[test]
-fn complete_external_flow_builds_and_verifies_non_circular_seal() {
-    let scratch = Scratch::new("complete");
-    let (probe, manifest) = fixture(&scratch);
-    let snapshot_path =
-        create_snapshot(&probe, &manifest, Some(&scratch.path.join("state"))).expect("snapshot");
-    import_passing_evidence(&scratch, &probe, &snapshot_path);
-    let panel = write_panel(&scratch, &snapshot_path, None, false);
-    validate_and_store_panel(&probe, &snapshot_path, &panel).expect("panel");
-    let seal = construct_seal(&probe, &snapshot_path).expect("seal");
-    verify_seal(&probe, &seal).expect("verify seal");
-
-    let seal_json = fs::read_to_string(seal).expect("seal JSON");
-    assert!(!seal_json.contains("seal_sha256"));
-    assert!(!seal_json.contains("\"model\""));
-}
-
-#[test]
-fn missing_panel_role_and_findings_prevent_sealing() {
-    let missing = Scratch::new("missing-role");
-    let (probe, manifest) = fixture(&missing);
-    let snapshot =
-        create_snapshot(&probe, &manifest, Some(&missing.path.join("state"))).expect("snapshot");
-    import_passing_evidence(&missing, &probe, &snapshot);
-    let records = write_panel(&missing, &snapshot, None, true);
-    let error = validate_and_store_panel(&probe, &snapshot, &records).expect_err("missing role");
-    assert!(error.to_string().contains("exactly 10"));
-
-    let findings = Scratch::new("findings");
-    let (probe, manifest) = fixture(&findings);
-    let snapshot =
-        create_snapshot(&probe, &manifest, Some(&findings.path.join("state"))).expect("snapshot");
-    import_passing_evidence(&findings, &probe, &snapshot);
-    let records = write_panel(
-        &findings,
-        &snapshot,
-        Some(xtask::delivery::PanelRole::Security),
-        false,
-    );
-    validate_and_store_panel(&probe, &snapshot, &records).expect("valid finding record");
-    let error = construct_seal(&probe, &snapshot).expect_err("finding blocks seal");
-    assert!(error.to_string().contains("has findings"));
-}
-
-#[test]
-fn missing_failed_and_pending_evidence_prevent_sealing() {
-    let missing = Scratch::new("missing-evidence");
-    let (probe, manifest) = fixture(&missing);
-    let snapshot =
-        create_snapshot(&probe, &manifest, Some(&missing.path.join("state"))).expect("snapshot");
-    let error = construct_seal(&probe, &snapshot).expect_err("missing evidence");
-    assert!(error.to_string().contains("validation evidence"));
-
-    for result_class in [EvidenceResultClass::Failed, EvidenceResultClass::Pending] {
-        let scratch = Scratch::new("non-passing-evidence");
-        let (probe, manifest) = fixture(&scratch);
-        let snapshot = create_snapshot(&probe, &manifest, Some(&scratch.path.join("state")))
-            .expect("snapshot");
-        import_evidence_result(&scratch, &probe, &snapshot, result_class);
-        let error = construct_seal(&probe, &snapshot).expect_err("non-passing evidence");
-        assert!(error.to_string().contains("is not passed"));
     }
 }
 
+fn graph(base: &str, head: &str) -> GhStackGraph {
+    GhStackGraph {
+        trunk: "main".to_owned(),
+        prefix: String::new(),
+        current_branch: "feature".to_owned(),
+        branches: vec![GhStackBranch {
+            name: "feature".to_owned(),
+            head: head.to_owned(),
+            base: base.to_owned(),
+            is_current: true,
+            is_merged: false,
+            is_queued: false,
+            needs_rebase: false,
+            pr: Some(GhStackPr {
+                number: 42,
+                url: "https://github.com/example/d2b/pull/42".to_owned(),
+                state: "OPEN".to_owned(),
+            }),
+        }],
+    }
+}
+
+fn publisher() -> CheckPublisher {
+    CheckPublisher {
+        kind: CheckPublisherKind::CheckRun,
+        app_slug: "github-actions".to_owned(),
+        app_id: 15368,
+        workflow: "Layer 1".to_owned(),
+        workflow_id: 321,
+    }
+}
+
+fn status(base: &str, head: &str) -> PullRequestStatus {
+    PullRequestStatus {
+        repository: REPOSITORY_ID.to_owned(),
+        number: 42,
+        state: PullRequestState::Open,
+        merge_state: "CLEAN".to_owned(),
+        base_ref: "main".to_owned(),
+        base_oid: base.to_owned(),
+        head_repository: REPOSITORY_ID.to_owned(),
+        head_ref: "feature".to_owned(),
+        head_oid: head.to_owned(),
+        checks: vec![ObservedCheck {
+            name: "check".to_owned(),
+            publisher: publisher(),
+            status: "COMPLETED".to_owned(),
+            conclusion: "SUCCESS".to_owned(),
+            state: ObservedCheckState::Successful,
+            commit_oid: head.to_owned(),
+        }],
+    }
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git command failed: {args:?}");
+}
+
+fn write_source_json(path: &Path, value: &impl serde::Serialize) {
+    fs::write(path, serde_json::to_vec_pretty(value).expect("JSON")).expect("write JSON");
+}
+
 #[test]
-fn evidence_command_hash_and_repository_state_fail_closed() {
-    let scratch = Scratch::new("evidence-mismatch");
-    let (probe, manifest) = fixture(&scratch);
-    let snapshot_path =
-        create_snapshot(&probe, &manifest, Some(&scratch.path.join("state"))).expect("snapshot");
+fn complete_flow_is_portable_private_and_has_no_checkout_paths() {
+    let fixture = Fixture::new("complete", ValidationAuthority::LocalRunner);
+    let snapshot_path = fixture.snapshot();
     let snapshot = read_snapshot(&snapshot_path).expect("snapshot");
-    let request = EvidenceImportRequest {
-        schema_version: DELIVERY_SCHEMA_VERSION,
-        id: "unit".to_owned(),
-        command: "cargo test --workspace".to_owned(),
-        result_class: EvidenceResultClass::Passed,
-        timestamp: "2026-07-13T07:41:58Z".to_owned(),
-        tree_hash: snapshot.root_repository.tree_hash,
-        payload: EvidencePayloadSource {
-            path: None,
-            sha256: Some("b".repeat(64)),
-            external_locator: None,
+    let seal_path = fixture.seal(&snapshot_path);
+    let evidence_json = fs::read_to_string(
+        snapshot_path
+            .parent()
+            .expect("candidate")
+            .join("validation/unit.json"),
+    )
+    .expect("evidence JSON");
+    assert!(evidence_json.contains("\"argv\""));
+    assert!(!evidence_json.contains("\"stdout\":"));
+    assert!(!evidence_json.contains("\"stderr\":"));
+    let probe = GitProbe::new(ProcessCommandOutput);
+    verify_seal(
+        &probe,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.roots,
+        &seal_path,
+    )
+    .expect("verify seal");
+
+    let snapshot_json = fs::read_to_string(&snapshot_path).expect("snapshot JSON");
+    assert!(!snapshot_json.contains(fixture.repository.to_str().expect("UTF-8")));
+    assert!(!snapshot_json.contains(fixture.state.to_str().expect("UTF-8")));
+    assert!(!snapshot_json.contains(PANEL_MODEL_POLICY));
+    assert_eq!(
+        fs::metadata(snapshot_path.parent().expect("candidate"))
+            .expect("candidate metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&snapshot_path)
+            .expect("snapshot metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
+    let portable = fixture.scratch.path.join("portable-worktree");
+    git(
+        &fixture.repository,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            portable.to_str().expect("UTF-8"),
+            &snapshot.repository_set[0].integration_oid,
+        ],
+    );
+    let portable_roots = BTreeMap::from([(REPOSITORY_ID.to_owned(), portable)]);
+    verify_seal(
+        &probe,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &portable_roots,
+        &seal_path,
+    )
+    .expect("verify from another worktree");
+}
+
+#[test]
+fn live_head_base_and_atomic_merge_races_fail_closed() {
+    let fixture = Fixture::new("merge-race", ValidationAuthority::LocalRunner);
+    let snapshot = fixture.snapshot();
+    let seal = fixture.seal(&snapshot);
+    let probe = GitProbe::new(ProcessCommandOutput);
+
+    let mut moved_base = fixture.status.clone();
+    moved_base.base_oid = "f".repeat(40);
+    let error = check_merge_eligibility(
+        &probe,
+        &StaticStatus { status: moved_base },
+        &fixture.roots,
+        &seal,
+        "xtask",
+    )
+    .expect_err("moved base");
+    assert!(error.to_string().contains("base/head") || error.to_string().contains("changed"));
+
+    let mut moved_head = fixture.status.clone();
+    moved_head.head_oid = "e".repeat(40);
+    moved_head.checks[0].commit_oid = moved_head.head_oid.clone();
+    let sequence = SequenceStatus {
+        statuses: RefCell::new(VecDeque::from([
+            fixture.status.clone(),
+            fixture.status.clone(),
+            moved_head,
+        ])),
+        fallback: fixture.status.clone(),
+    };
+    let merger = RecordingMerger {
+        calls: Cell::new(0),
+    };
+    let error = atomic_merge(&probe, &sequence, &merger, &fixture.roots, &seal, "xtask")
+        .expect_err("merge race");
+    assert!(error.to_string().contains("base/head"));
+    assert_eq!(merger.calls.get(), 0);
+}
+
+#[test]
+fn panel_model_and_run_provenance_are_enforced() {
+    let fixture = Fixture::new("panel-provenance", ValidationAuthority::LocalRunner);
+    let snapshot = fixture.snapshot();
+    let panel = fixture.panel_source(&snapshot);
+    let rust_path = panel.join("rust.json");
+    let mut rust: PanelAttestation =
+        serde_json::from_slice(&fs::read(&rust_path).expect("record")).expect("record JSON");
+    rust.model_version = "wrong-model".to_owned();
+    write_source_json(&rust_path, &rust);
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let error = validate_and_store_panel(&probe, &fixture.roots, &snapshot, &panel)
+        .expect_err("wrong model");
+    assert!(error.to_string().contains("required model"));
+
+    rust.model_version = PANEL_MODEL_POLICY.to_owned();
+    rust.run_id = "run-0".to_owned();
+    write_source_json(&rust_path, &rust);
+    let error = validate_and_store_panel(&probe, &fixture.roots, &snapshot, &panel)
+        .expect_err("duplicate run");
+    assert!(error.to_string().contains("repeats a provider/run"));
+}
+
+struct RejectVerifier;
+
+impl CiAttestationVerifier for RejectVerifier {
+    fn verify(
+        &self,
+        _attestation_path: &Path,
+        _policy: &xtask::delivery::evidence::CiAttestationPolicy,
+    ) -> Result<VerifiedCiAttestation> {
+        Err(DeliveryError::new("signature verification failed"))
+    }
+}
+
+struct ClaimsVerifier {
+    verified: VerifiedCiAttestation,
+}
+
+impl CiAttestationVerifier for ClaimsVerifier {
+    fn verify(
+        &self,
+        _attestation_path: &Path,
+        _policy: &xtask::delivery::evidence::CiAttestationPolicy,
+    ) -> Result<VerifiedCiAttestation> {
+        Ok(self.verified.clone())
+    }
+}
+
+#[test]
+fn forged_and_delivery_artifact_evidence_are_rejected() {
+    let fixture = Fixture::new("evidence", ValidationAuthority::GithubAttestation);
+    let snapshot_path = fixture.snapshot();
+    let attestation = fixture.scratch.path.join("signed-attestation.bundle");
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let snapshot = read_snapshot(&snapshot_path).expect("snapshot");
+    let claims = CiAttestationClaims {
+        candidate_id: snapshot.candidate_id.clone(),
+        content_id: snapshot.content_id.clone(),
+        snapshot_sha256: verify_json_digest(&snapshot_path).expect("digest"),
+        validation_id: "unit".to_owned(),
+        argv: snapshot.required_validations[0].argv.clone(),
+        cwd: snapshot.required_validations[0].cwd.clone(),
+        repository_set: snapshot.repository_bindings(),
+        exit_code: 0,
+        conclusion: "success".to_owned(),
+        captured_at_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_secs(),
+        payload_locator: "github-artifact://run/output".to_owned(),
+        payload_sha256: sha256_file(&snapshot_path).expect("snapshot payload digest"),
+        repository: REPOSITORY_ID.to_owned(),
+        run_id: "123".to_owned(),
+        check_run_id: "456".to_owned(),
+        app_slug: "github-actions".to_owned(),
+        app_id: 15368,
+        workflow: "Layer 1".to_owned(),
+        workflow_id: 321,
+    };
+    write_source_json(&attestation, &claims);
+    let error = import_ci_evidence(
+        &probe,
+        &RejectVerifier,
+        &fixture.roots,
+        &snapshot_path,
+        &attestation,
+        None,
+    )
+    .expect_err("forged");
+    assert!(error.to_string().contains("signature verification"));
+
+    let mut wrong_claims = claims.clone();
+    wrong_claims.app_id = 1;
+    write_source_json(&attestation, &wrong_claims);
+    let wrong_verifier = ClaimsVerifier {
+        verified: VerifiedCiAttestation {
+            claims: wrong_claims.clone(),
+            attestation_sha256: "a".repeat(64),
         },
     };
-    let request_path = scratch.path.join("requests/mismatch.json");
-    write_json(&request_path, &request);
-    let error =
-        import_evidence(&probe, &snapshot_path, &request_path).expect_err("command mismatch");
-    assert!(error.to_string().contains("command digest mismatch"));
+    let error = import_ci_evidence(
+        &probe,
+        &wrong_verifier,
+        &fixture.roots,
+        &snapshot_path,
+        &attestation,
+        None,
+    )
+    .expect_err("wrong CI publisher");
+    assert!(error.to_string().contains("publisher/repository"));
 
-    probe.dirty.set(true);
-    let error =
-        verify_seal(&probe, &snapshot_path.with_file_name("seal.json")).expect_err("dirty state");
+    write_source_json(&attestation, &claims);
+    let verifier = ClaimsVerifier {
+        verified: VerifiedCiAttestation {
+            claims: claims.clone(),
+            attestation_sha256: "a".repeat(64),
+        },
+    };
+    let error = import_ci_evidence(
+        &probe,
+        &verifier,
+        &fixture.roots,
+        &snapshot_path,
+        &attestation,
+        Some(&snapshot_path),
+    )
+    .expect_err("delivery payload");
+    assert!(error.to_string().contains("delivery"));
+
+    let error = import_ci_evidence(
+        &probe,
+        &verifier,
+        &fixture.roots,
+        &snapshot_path,
+        &snapshot_path,
+        None,
+    )
+    .expect_err("delivery attestation");
+    assert!(error.to_string().contains("delivery"));
+}
+
+#[test]
+fn candidate_and_content_ids_are_cross_repository_domain_separated() {
+    let fixture = Fixture::new("identity", ValidationAuthority::LocalRunner);
+    let snapshot_path = fixture.snapshot();
+    let snapshot = read_snapshot(&snapshot_path).expect("snapshot");
+    let mut renamed = snapshot.clone();
+    let replacement = "github.com/example/other";
+    renamed.authority.repository = replacement.to_owned();
+    renamed.repository_set[0].id = replacement.to_owned();
+    renamed.stack[0].repository = replacement.to_owned();
+    renamed.required_validations[0].cwd.repository = replacement.to_owned();
+    renamed.dependency_fingerprints[0].repository = replacement.to_owned();
+    renamed.contract_fingerprints[0].repository = replacement.to_owned();
+    renamed.candidate_id = renamed.recompute_candidate_id().expect("candidate");
+    renamed.content_id = renamed.recompute_content_id().expect("content");
+    assert_ne!(snapshot.candidate_id, renamed.candidate_id);
+    assert_ne!(snapshot.content_id, renamed.content_id);
+}
+
+#[test]
+fn ancestor_symlink_checkout_mapping_is_rejected() {
+    let fixture = Fixture::new("symlink", ValidationAuthority::LocalRunner);
+    let link_parent = fixture.scratch.path.join("link-parent");
+    fs::create_dir(&link_parent).expect("link parent");
+    let link = link_parent.join("repository-link");
+    symlink(&fixture.repository, &link).expect("symlink");
+    let mut request = fixture.request.clone();
+    request.repository_roots = BTreeMap::from([(REPOSITORY_ID.to_owned(), link)]);
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let error = create_snapshot(
+        &probe,
+        &fixture.graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &request,
+    )
+    .expect_err("symlink root");
+    assert!(error.to_string().contains("symlink"));
+}
+
+#[test]
+fn state_inside_git_common_directory_is_rejected() {
+    let fixture = Fixture::new("git-common", ValidationAuthority::LocalRunner);
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let mut request = fixture.request.clone();
+    request.state_root = Some(
+        probe
+            .git_common_dir(&fixture.repository)
+            .expect("git common")
+            .join("delivery-state"),
+    );
+    let error = create_snapshot(
+        &probe,
+        &fixture.graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &request,
+    )
+    .expect_err("Git common state");
+    assert!(error.to_string().contains("Git metadata"));
+}
+
+struct MutatingGraph {
+    graph: GhStackGraph,
+    repository: PathBuf,
+    replacement_oid: String,
+    calls: Cell<usize>,
+}
+
+impl StackGraphSource for MutatingGraph {
+    fn graph(&self, _repository: &str, _checkout_root: &Path) -> Result<GhStackGraph> {
+        let calls = self.calls.get();
+        self.calls.set(calls + 1);
+        if calls == 1 {
+            git(
+                &self.repository,
+                &["update-ref", "refs/heads/feature", &self.replacement_oid],
+            );
+        }
+        Ok(self.graph.clone())
+    }
+}
+
+struct MutatingBlobProbe {
+    inner: GitProbe<ProcessCommandOutput>,
+    repository: PathBuf,
+    tracked_blob_calls: Cell<usize>,
+}
+
+impl RepositoryProbe for MutatingBlobProbe {
+    fn canonical_root(&self, root: &Path) -> Result<PathBuf> {
+        self.inner.canonical_root(root)
+    }
+
+    fn repository_identity(&self, root: &Path) -> Result<String> {
+        self.inner.repository_identity(root)
+    }
+
+    fn git_common_dir(&self, root: &Path) -> Result<PathBuf> {
+        self.inner.git_common_dir(root)
+    }
+
+    fn object_format(&self, root: &Path) -> Result<GitObjectFormat> {
+        self.inner.object_format(root)
+    }
+
+    fn resolve_commit(&self, root: &Path, revision: &str) -> Result<String> {
+        self.inner.resolve_commit(root, revision)
+    }
+
+    fn tree_for_commit(&self, root: &Path, commit_oid: &str) -> Result<String> {
+        self.inner.tree_for_commit(root, commit_oid)
+    }
+
+    fn is_dirty(&self, root: &Path) -> Result<bool> {
+        self.inner.is_dirty(root)
+    }
+
+    fn is_ancestor(&self, root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+        self.inner.is_ancestor(root, ancestor, descendant)
+    }
+
+    fn tracked_blob(&self, root: &Path, commit_oid: &str, path: &Path) -> Result<TrackedBlob> {
+        let calls = self.tracked_blob_calls.get();
+        self.tracked_blob_calls.set(calls + 1);
+        if calls == 1 {
+            fs::write(self.repository.join("contract.json"), b"mutable worktree\n")
+                .expect("mutate worktree");
+        }
+        self.inner.tracked_blob(root, commit_oid, path)
+    }
+
+    fn prospective_merge_tree(
+        &self,
+        root: &Path,
+        base_oid: &str,
+        head_oid: &str,
+    ) -> Result<String> {
+        self.inner.prospective_merge_tree(root, base_oid, head_oid)
+    }
+}
+
+#[test]
+fn snapshot_detects_ref_and_worktree_toctou_mutation() {
+    let fixture = Fixture::new("toctou-ref", ValidationAuthority::LocalRunner);
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let base = probe
+        .resolve_commit(&fixture.repository, "main")
+        .expect("base");
+    let graph = MutatingGraph {
+        graph: fixture.graph.graph.clone(),
+        repository: fixture.repository.clone(),
+        replacement_oid: base,
+        calls: Cell::new(0),
+    };
+    let error = create_snapshot(
+        &probe,
+        &graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.request,
+    )
+    .expect_err("ref mutation");
+    assert!(
+        error.to_string().contains("moved")
+            || error.to_string().contains("dirty")
+            || error.to_string().contains("changed")
+    );
+
+    let fixture = Fixture::new("toctou-file", ValidationAuthority::LocalRunner);
+    let mutating_probe = MutatingBlobProbe {
+        inner: GitProbe::new(ProcessCommandOutput),
+        repository: fixture.repository.clone(),
+        tracked_blob_calls: Cell::new(0),
+    };
+    let error = create_snapshot(
+        &mutating_probe,
+        &fixture.graph,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.request,
+    )
+    .expect_err("file mutation");
     assert!(error.to_string().contains("dirty worktree"));
 }
 
 #[test]
-fn state_directory_inside_reviewed_repository_is_rejected() {
-    let scratch = Scratch::new("path-rejection");
-    let (probe, manifest) = fixture(&scratch);
-    let repository = &manifest.root_repository.root;
-    let error = create_snapshot(&probe, &manifest, Some(&repository.join("delivery-state")))
-        .expect_err("repository state path");
-    assert!(error.to_string().contains("must not be stored"));
+fn history_proof_rejects_fabrication_and_requires_fresh_ci() {
+    let mut fixture = Fixture::new("history", ValidationAuthority::LocalRunner);
+    let old_snapshot = fixture.snapshot();
+    let old_seal = fixture.seal(&old_snapshot);
+    let old = read_snapshot(&old_snapshot).expect("old snapshot");
+
+    git(
+        &fixture.repository,
+        &[
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "--amend",
+            "--no-edit",
+            "--date",
+            "2030-01-01T00:00:00Z",
+        ],
+    );
+    let probe = GitProbe::new(ProcessCommandOutput);
+    let new_head = probe
+        .resolve_commit(&fixture.repository, "feature")
+        .expect("new head");
+    assert_ne!(old.repository_set[0].integration_oid, new_head);
+    fixture.graph = StaticGraph {
+        graph: graph(&fixture.status.base_oid, &new_head),
+    };
+    fixture.status = status(&fixture.status.base_oid, &new_head);
+    let new_snapshot = fixture.snapshot();
+    let new = read_snapshot(&new_snapshot).expect("new snapshot");
+    assert_eq!(old.content_id, new.content_id);
+    assert_ne!(old.candidate_id, new.candidate_id);
+
+    let proof_path = construct_history_proof(&probe, &fixture.roots, &old_seal, &new_snapshot)
+        .expect("history proof");
+    let proof: HistoryProof =
+        serde_json::from_slice(&fs::read(&proof_path).expect("proof")).expect("proof JSON");
+    assert!(proof.fresh_ci_required);
+    assert_eq!(proof.reused_panel_payloads.len(), 10);
+
+    let mut missing_ci = fixture.status.clone();
+    missing_ci.checks.clear();
+    let error = check_history_merge_eligibility(
+        &probe,
+        &StaticStatus { status: missing_ci },
+        &fixture.roots,
+        &old_seal,
+        &new_snapshot,
+        &proof_path,
+        "xtask",
+    )
+    .expect_err("missing fresh CI");
+    assert!(error.to_string().contains("required check"));
+
+    check_history_merge_eligibility(
+        &probe,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &fixture.roots,
+        &old_seal,
+        &new_snapshot,
+        &proof_path,
+        "xtask",
+    )
+    .expect("fresh CI on new head");
+
+    let fabricated_id = "9".repeat(64);
+    let fabricated_dir = fixture.state.join("w1").join(&fabricated_id);
+    fs::create_dir_all(&fabricated_dir).expect("fabricated dir");
+    let mut fabricated = new.clone();
+    fabricated.candidate_id = fabricated_id;
+    let fabricated_path = fabricated_dir.join("snapshot.json");
+    write_immutable_json(&fabricated_path, &fabricated).expect("fabricated artifact");
+    let error = construct_history_proof(&probe, &fixture.roots, &old_seal, &fabricated_path)
+        .expect_err("fabricated snapshot");
+    assert!(error.to_string().contains("candidate ID"));
 }
+
+use std::os::unix::fs::PermissionsExt;

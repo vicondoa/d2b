@@ -13,12 +13,16 @@ deprecations ship one minor release before removal.
 ### Added
 
 - Added Rust delivery tooling for validated stack graphs, immutable
-  tree-addressed snapshots, hashed validation evidence, exact-role panel
-  records, non-circular wave seals, history-only reuse proofs, and fail-closed
-  merge eligibility.
+  candidate-addressed snapshots, authority-captured validation evidence,
+  exact-role panel attestations, non-circular wave seals, history-only reuse
+  proofs, and fail-closed merge eligibility.
 
 ### Changed
 
+- Bound delivery snapshots and seals to checked-in manifests, official
+  `gh-stack` graphs, exact GitHub PR/check publishers and OIDs, verified
+  validation and panel provenance, portable multi-repository content IDs,
+  private XDG state, history-only proofs, and expected-head atomic merges.
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
