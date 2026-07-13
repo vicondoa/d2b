@@ -54,8 +54,9 @@ if [ ! -f "$wf" ]; then
   exit 1
 fi
 
-# discover job sources the names from the live flake via make test-flake-list
-assert_wf "discover enumerates via make test-flake-list" 'make -s test-flake-list'
+# discover job sources the names from the live flake with wrappers disabled.
+assert_wf "discover enumerates via make test-flake-list" \
+  'RUSTC_WRAPPER=""[[:space:]]+CARGO_BUILD_RUSTC_WRAPPER=""[[:space:]]+make -s -- test-flake-list'
 # matrix consumes the discovered JSON (not a hardcoded list)
 assert_wf "matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.checks\)'
 # each shard runs the make-routed single-check evaluation
@@ -72,7 +73,7 @@ aarch64_block=$(awk '
   in_block { print }
   in_block && /^  test-drift:/ { exit }
 ' "$wf")
-if grep -q 'make test-flake' <<<"$aarch64_block"; then
+if grep -Eq 'make([[:space:]]+--)?[[:space:]]+test-flake' <<<"$aarch64_block"; then
   fail "wiring: aarch64 job must not run make test-flake"
   rc=1
 else

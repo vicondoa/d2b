@@ -9,6 +9,7 @@ pub const CHECKOUT_ACTION: &str = "actions/checkout@34e114876b0b11c390a56381ad16
 pub const INSTALL_NIX_ACTION: &str =
     "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077";
 pub const RUST_CACHE_ACTION: &str = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32";
+const CLEAR_RUSTC_WRAPPERS: &str = r#"RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="""#;
 
 pub fn render_workflow(manifest: &Layer1Manifest, template: &str) -> Result<String> {
     manifest.validate()?;
@@ -129,6 +130,14 @@ fn make_target(job: &JobSpec) -> &str {
     job.make_target.as_deref().expect("validated makeTarget")
 }
 
+fn ci_make_command(target: &str) -> String {
+    format!("{CLEAR_RUSTC_WRAPPERS} make -- {target}")
+}
+
+fn ci_silent_make_command(target: &str) -> String {
+    format!("{CLEAR_RUSTC_WRAPPERS} make -s -- {target}")
+}
+
 fn nix_setup_step() -> String {
     format!(
         r#"      - uses: {INSTALL_NIX_ACTION}
@@ -148,7 +157,7 @@ fn simple_nix_job(job: &JobSpec) -> String {
       - uses: {}
 {}
       - name: {}
-        run: make {}"#,
+        run: {}"#,
         ci_job_id(job),
         needs_line(job),
         runs_on(job),
@@ -156,19 +165,19 @@ fn simple_nix_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         nix_setup_step(),
         job.display_name,
-        make_target(job)
+        ci_make_command(make_target(job))
     )
 }
 
 fn tier0_job(job: &JobSpec) -> String {
     format!(
         r#"  {}:
-    runs-on: {}
+{}    runs-on: {}
     timeout-minutes: {}
     steps:
       - uses: {}
       - name: {}
-        run: make {}
+        run: {}
       - name: ADR index coverage guard
         run: bash tests/unit/meta/adr-index-coverage.sh
       - name: CI coverage structural guard
@@ -176,11 +185,12 @@ fn tier0_job(job: &JobSpec) -> String {
       - name: Test rearchitecture fail-closed gates
         run: bash tests/tools/gen-migration-ledger.sh --check"#,
         ci_job_id(job),
+        needs_line(job),
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
         job.display_name,
-        make_target(job)
+        ci_make_command(make_target(job))
     )
 }
 
@@ -223,6 +233,7 @@ fn rust_job(job: &JobSpec) -> String {
       # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
       # rust-cache's post-step `cargo metadata` doesn't fail looking for
       # an sccache binary that isn't installed.
+      RUSTC_WRAPPER: ""
       CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: {}
@@ -273,7 +284,7 @@ fn rust_job(job: &JobSpec) -> String {
         # the Rust compilation + unit/integration tests.
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
-        run: make {}"#,
+        run: {}"#,
         ci_job_id(job),
         needs_line(job),
         runs_on(job),
@@ -282,7 +293,7 @@ fn rust_job(job: &JobSpec) -> String {
         nix_setup_step(),
         RUST_CACHE_ACTION,
         job.display_name,
-        make_target(job)
+        ci_make_command(make_target(job))
     )
 }
 
@@ -299,7 +310,7 @@ fn flake_discover_job(job: &JobSpec) -> String {
       - id: list
         name: {}
         run: |
-          checks=$(make -s test-flake-list)
+          checks=$({})
           echo "discovered checks: $checks"
           echo "checks=$checks" >> "$GITHUB_OUTPUT"
 "#,
@@ -309,7 +320,8 @@ fn flake_discover_job(job: &JobSpec) -> String {
         timeout(job),
         CHECKOUT_ACTION,
         nix_setup_step(),
-        job.display_name
+        job.display_name,
+        ci_silent_make_command("test-flake-list")
     )
 }
 
@@ -348,7 +360,7 @@ fn flake_x86_shards_job(job: &JobSpec) -> String {
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
           D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
-        run: make test-flake"#,
+        run: {}"#,
         ci_job_id(job),
         needs_line(job),
         runs_on(job),
@@ -357,7 +369,8 @@ fn flake_x86_shards_job(job: &JobSpec) -> String {
         discover_job,
         CHECKOUT_ACTION,
         nix_setup_step(),
-        job.display_name
+        job.display_name,
+        ci_make_command("test-flake")
     )
 }
 
@@ -372,14 +385,15 @@ fn flake_x86_outputs_job(job: &JobSpec) -> String {
       - name: {}
         env:
           D2B_FLAKE_OUTPUTS: "1"
-        run: make test-flake"#,
+        run: {}"#,
         ci_job_id(job),
         needs_line(job),
         runs_on(job),
         timeout(job),
         CHECKOUT_ACTION,
         nix_setup_step(),
-        job.display_name
+        job.display_name,
+        ci_make_command("test-flake")
     )
 }
 
@@ -522,6 +536,69 @@ mod tests {
         assert!(first.contains(RUST_CACHE_ACTION));
         assert!(first.contains("  pull_request:\n  push:\n    branches: [main]"));
         assert!(!first.contains("  pull_request:\n    branches: [main]"));
+        assert!(
+            first.contains(
+                r#"run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-lint"#
+            )
+        );
+        assert!(first.contains(
+            r#"checks=$(RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -s -- test-flake-list)"#
+        ));
+        assert!(first.contains("      RUSTC_WRAPPER: \"\"\n      CARGO_BUILD_RUSTC_WRAPPER: \"\""));
+        assert!(!first.contains("run: make "));
+    }
+
+    #[test]
+    fn generated_rollup_distinguishes_required_and_skippable_roots() {
+        let manifest = committed_manifest();
+        let template = include_str!("../../../../tests/ci/layer1-workflow.template.yml");
+        let rendered = render_workflow(&manifest, template).expect("render");
+        assert!(rendered.contains("require_success tier0 '${{ needs.tier0.result }}'"));
+        assert!(rendered.contains(
+            "allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'"
+        ));
+        assert!(!rendered.contains("allow_success_or_skipped tier0 "));
+
+        let mut invalid = manifest;
+        invalid
+            .ci
+            .rollup_needs
+            .retain(|job_id| job_id != "test-policy");
+        invalid
+            .jobs
+            .get_mut("test-changelog")
+            .expect("test-changelog")
+            .needs
+            .push("test-policy".to_owned());
+        let error = render_workflow(&invalid, template)
+            .expect_err("skippable root must not provide the only coverage path");
+        assert!(error.to_string().contains("non-skippable rollup root"));
+    }
+
+    #[test]
+    fn tier0_jobs_render_validated_needs_and_preserve_transitive_rollup_coverage() {
+        let mut manifest = committed_manifest();
+        let mut bootstrap = manifest.jobs["tier0"].clone();
+        bootstrap.display_name = "Bootstrap Tier 0".to_owned();
+        bootstrap.ci_job_id = Some("bootstrap".to_owned());
+        bootstrap.needs.clear();
+        manifest.jobs.insert("bootstrap".to_owned(), bootstrap);
+        manifest.local.phases[0]
+            .jobs
+            .insert(0, "bootstrap".to_owned());
+        manifest.jobs.get_mut("tier0").expect("tier0").needs = vec!["bootstrap".to_owned()];
+        manifest.ci.jobs.insert(0, "bootstrap".to_owned());
+
+        manifest
+            .validate()
+            .expect("tier0 dependency is covered transitively by the tier0 rollup root");
+        assert!(!manifest.ci.rollup_needs.contains(&"bootstrap".to_owned()));
+        let rendered = render_workflow(
+            &manifest,
+            include_str!("../../../../tests/ci/layer1-workflow.template.yml"),
+        )
+        .expect("render");
+        assert!(rendered.contains("  tier0:\n    needs: [bootstrap]\n    runs-on:"));
     }
 
     #[test]

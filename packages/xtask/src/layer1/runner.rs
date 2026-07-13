@@ -95,15 +95,13 @@ impl ProcessJobRunner {
                 log_path.display()
             ))
         })?;
-        let status = Command::new("make")
-            .arg(target)
-            .current_dir(&self.root)
-            .envs(&job.local_env)
+        let status = self
+            .make_command(target, job)
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr_log))
             .status()
             .map_err(|error| {
-                Layer1Error::new(format!("could not execute make {target}: {error}"))
+                Layer1Error::new(format!("could not execute make -- {target}: {error}"))
             })?;
 
         if status.success() {
@@ -168,6 +166,15 @@ impl ProcessJobRunner {
             "could not reserve a unique log directory for {job_id}"
         )))
     }
+
+    fn make_command(&self, target: &str, job: &JobSpec) -> Command {
+        let mut command = Command::new("make");
+        command
+            .args(["--", target])
+            .current_dir(&self.root)
+            .envs(&job.local_env);
+        command
+    }
 }
 
 impl LocalJobRunner for ProcessJobRunner {
@@ -229,7 +236,7 @@ pub fn render_local_plan(
                 .make_target
                 .as_deref()
                 .ok_or_else(|| Layer1Error::new(format!("local job {job_id} has no makeTarget")))?;
-            rendered.push_str(&format!("  {job_id}: make {target}\n"));
+            rendered.push_str(&format!("  {job_id}: make -- {target}\n"));
         }
     }
     Ok(rendered)
@@ -312,6 +319,12 @@ pub fn execute_local<R: LocalJobRunner>(
     Ok(report(outcomes))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SchedulerEvent {
+    BeforeSchedule,
+    Waiting,
+}
+
 fn run_parallel_phase<R: LocalJobRunner>(
     manifest: &Layer1Manifest,
     phase: &LocalPhase,
@@ -320,6 +333,30 @@ fn run_parallel_phase<R: LocalJobRunner>(
     succeeded: &mut BTreeSet<String>,
     outcomes: &mut Vec<JobOutcome>,
 ) -> Result<()> {
+    run_parallel_phase_observed(
+        manifest,
+        phase,
+        max_jobs,
+        runner,
+        succeeded,
+        outcomes,
+        &|_, _| {},
+    )
+}
+
+fn run_parallel_phase_observed<R, O>(
+    manifest: &Layer1Manifest,
+    phase: &LocalPhase,
+    max_jobs: usize,
+    runner: &R,
+    succeeded: &mut BTreeSet<String>,
+    outcomes: &mut Vec<JobOutcome>,
+    observer: &O,
+) -> Result<()>
+where
+    R: LocalJobRunner,
+    O: Fn(SchedulerEvent, &str) + Sync,
+{
     #[derive(Default)]
     struct SchedulerState {
         running: usize,
@@ -340,6 +377,7 @@ fn run_parallel_phase<R: LocalJobRunner>(
                 let state = &state;
                 let changed = &changed;
                 scope.spawn(move || {
+                    observer(SchedulerEvent::BeforeSchedule, job_id);
                     let job = &manifest.jobs[job_id];
                     let target = job
                         .make_target
@@ -388,6 +426,7 @@ fn run_parallel_phase<R: LocalJobRunner>(
                             })
                         });
                         if waiting || earlier_ready || scheduler.running >= max_jobs {
+                            observer(SchedulerEvent::Waiting, job_id);
                             drop(
                                 changed
                                     .wait(scheduler)
@@ -397,6 +436,7 @@ fn run_parallel_phase<R: LocalJobRunner>(
                         }
                         scheduler.running += 1;
                         scheduler.started.insert(job_id.clone());
+                        changed.notify_all();
                         drop(scheduler);
 
                         let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -541,7 +581,11 @@ fn flush_stdout() {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Mutex};
+    use std::{
+        collections::BTreeMap,
+        sync::{Condvar, Mutex},
+        time::{Duration, Instant},
+    };
 
     use super::*;
 
@@ -563,6 +607,61 @@ mod tests {
                 .expect("events")
                 .push(format!("end:{job_id}"));
             status
+        }
+    }
+
+    #[derive(Default)]
+    struct BlockingState {
+        active: usize,
+        max_active: usize,
+        release: bool,
+    }
+
+    #[derive(Default)]
+    struct BlockingRunner {
+        state: Mutex<BlockingState>,
+        changed: Condvar,
+    }
+
+    impl BlockingRunner {
+        fn wait_for_active(&self, expected: usize) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut state = self.state.lock().expect("blocking runner state");
+            while state.max_active < expected {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let (next, timeout) = self
+                    .changed
+                    .wait_timeout(state, deadline.saturating_duration_since(now))
+                    .expect("blocking runner wait");
+                state = next;
+                if timeout.timed_out() {
+                    break;
+                }
+            }
+            state.max_active >= expected
+        }
+
+        fn release(&self) {
+            let mut state = self.state.lock().expect("blocking runner state");
+            state.release = true;
+            self.changed.notify_all();
+        }
+    }
+
+    impl LocalJobRunner for BlockingRunner {
+        fn run(&self, _job_id: &str, _job: &JobSpec) -> i32 {
+            let mut state = self.state.lock().expect("blocking runner state");
+            state.active += 1;
+            state.max_active = state.max_active.max(state.active);
+            self.changed.notify_all();
+            while !state.release {
+                state = self.changed.wait(state).expect("blocking runner wait");
+            }
+            state.active -= 1;
+            0
         }
     }
 
@@ -631,6 +730,70 @@ mod tests {
     }
 
     #[test]
+    fn parallel_scheduler_fills_max_jobs_before_first_completion() {
+        let manifest = manifest(
+            serde_json::json!(["one", "two"]),
+            serde_json::json!({
+                "pre": job("pre", &[]),
+                "one": job("one", &["pre"]),
+                "two": job("two", &["pre"]),
+                "after": job("after", &["one", "two"])
+            }),
+        );
+        let runner = BlockingRunner::default();
+        let schedule_release = (Mutex::new(false), Condvar::new());
+        let observer = |event: SchedulerEvent, job_id: &str| match (event, job_id) {
+            (SchedulerEvent::BeforeSchedule, "one") => {
+                let (lock, changed) = &schedule_release;
+                let mut released = lock.lock().expect("schedule release");
+                while !*released {
+                    released = changed.wait(released).expect("schedule release wait");
+                }
+            }
+            (SchedulerEvent::Waiting, "two") => {
+                let (lock, changed) = &schedule_release;
+                *lock.lock().expect("schedule release") = true;
+                changed.notify_all();
+            }
+            _ => {}
+        };
+
+        let (reached_limit, result) = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut succeeded = BTreeSet::from(["pre".to_owned()]);
+                let mut outcomes = Vec::new();
+                run_parallel_phase_observed(
+                    &manifest,
+                    &manifest.local.phases[1],
+                    2,
+                    &runner,
+                    &mut succeeded,
+                    &mut outcomes,
+                    &observer,
+                )
+                .map(|()| outcomes)
+            });
+            let reached_limit = runner.wait_for_active(2);
+            runner.release();
+            (
+                reached_limit,
+                handle.join().expect("parallel scheduler thread"),
+            )
+        });
+
+        let outcomes = result.expect("parallel phase");
+        assert!(
+            reached_limit,
+            "scheduler waited for a completion instead of filling max_jobs"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.status == JobStatus::Succeeded)
+        );
+    }
+
+    #[test]
     fn parallel_failures_are_aggregated_before_stopping() {
         let mut manifest = manifest(
             serde_json::json!(["one", "two"]),
@@ -661,6 +824,19 @@ mod tests {
         assert!(!events.contains(&"start:after".to_owned()));
         assert!(report.failure_summary().contains("one (exit 3)"));
         assert!(report.failure_summary().contains("two (exit 7)"));
+    }
+
+    #[test]
+    fn make_argv_terminates_options_before_the_validated_target() {
+        let runner = ProcessJobRunner::new(PathBuf::from("repository"));
+        let mut spec: JobSpec = serde_json::from_value(job("one", &[])).expect("job");
+        spec.make_target = Some("--version".to_owned());
+        let command = runner.make_command("--version", &spec);
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments, ["--", "--version"]);
     }
 
     #[test]

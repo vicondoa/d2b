@@ -30,6 +30,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Hardened Layer-1 scheduling and generated CI rollups against slot underfill,
+  skippable-only dependency coverage, invalid workflow job IDs, option-like Make
+  targets, and clean environments without `sccache`.
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
   concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process

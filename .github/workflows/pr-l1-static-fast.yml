@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Tier 0 first-pass gate
-        run: make check-tier0
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- check-tier0
       - name: ADR index coverage guard
         run: bash tests/unit/meta/adr-index-coverage.sh
       - name: CI coverage structural guard
@@ -37,7 +37,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Lint gate (preflight + parse + shellcheck)
-        run: make test-lint
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-lint
 
   test-changelog:
     if: github.event_name == 'pull_request'
@@ -68,6 +68,7 @@ jobs:
       # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
       # rust-cache's post-step `cargo metadata` doesn't fail looking for
       # an sccache binary that isn't installed.
+      RUSTC_WRAPPER: ""
       CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -122,7 +123,7 @@ jobs:
         # the Rust compilation + unit/integration tests.
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
-        run: make test-rust
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-rust
 
   test-proofs:
     needs: [tier0]
@@ -136,7 +137,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Proof crates gate
-        run: make test-proofs
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-proofs
 
   flake-eval-discover:
     needs: [tier0]
@@ -154,7 +155,7 @@ jobs:
       - id: list
         name: Enumerate flake checks (x86_64-linux)
         run: |
-          checks=$(make -s test-flake-list)
+          checks=$(RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -s -- test-flake-list)
           echo "discovered checks: $checks"
           echo "checks=$checks" >> "$GITHUB_OUTPUT"
 
@@ -196,7 +197,7 @@ jobs:
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
           D2B_FLAKE_CHECK: ${{ matrix.check }}
-        run: make test-flake
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-flake
 
   flake-eval-x86-outputs:
     needs: [tier0]
@@ -212,7 +213,7 @@ jobs:
       - name: Flake non-checks outputs (x86_64-linux)
         env:
           D2B_FLAKE_OUTPUTS: "1"
-        run: make test-flake
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-flake
 
   test-flake-x86:
     needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-outputs]
@@ -262,7 +263,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Drift gate
-        run: make test-drift
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-drift
 
   test-policy:
     needs: [tier0]
@@ -276,7 +277,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Policy meta-gates
-        run: make test-policy
+        run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-policy
 
   check:
     needs: [tier0, test-lint, test-changelog, test-rust, test-proofs, test-flake-x86, test-flake-aarch64, test-drift, test-policy]

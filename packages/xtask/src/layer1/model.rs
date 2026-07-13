@@ -105,7 +105,15 @@ impl Layer1Manifest {
                 )));
             }
             if let Some(target) = &job.make_target {
-                validate_token(target, &format!("job {job_id} makeTarget"))?;
+                validate_make_target(target, &format!("job {job_id} makeTarget"))?;
+            }
+            if let Some(ci_job_id) = &job.ci_job_id {
+                validate_github_job_id(ci_job_id, &format!("job {job_id} ciJobId"))?;
+            }
+            if job.ci_kind.is_some() {
+                for dependency in &job.needs {
+                    validate_github_job_id(dependency, &format!("CI job {job_id} needs entry"))?;
+                }
             }
             for (name, value) in &job.local_env {
                 validate_env_name(name, job_id)?;
@@ -229,6 +237,7 @@ impl Layer1Manifest {
     }
 
     fn validate_ci(&self) -> Result<()> {
+        validate_github_job_id(&self.ci.rollup_job, "ci.rollupJob")?;
         if self.ci.rollup_job != "check" {
             return Err(Layer1Error::new(
                 "ci.rollupJob must be the stable required context check",
@@ -251,12 +260,23 @@ impl Layer1Manifest {
             ));
         }
 
+        for job_id in &self.ci.jobs {
+            validate_github_job_id(job_id, "ci.jobs entry")?;
+        }
+        for job_id in &self.ci.rollup_needs {
+            validate_github_job_id(job_id, "ci.rollupNeeds entry")?;
+        }
+        for job_id in &self.ci.allowed_skipped_rollup_jobs {
+            validate_github_job_id(job_id, "ci.allowedSkippedRollupJobs entry")?;
+        }
+
         let ci_jobs = self
             .ci
             .jobs
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
+        let mut rendered_job_ids = BTreeMap::new();
         for job_id in &self.ci.jobs {
             let Some(job) = self.jobs.get(job_id) else {
                 return Err(Layer1Error::new(format!(
@@ -266,7 +286,16 @@ impl Layer1Manifest {
             let Some(kind) = job.ci_kind else {
                 return Err(Layer1Error::new(format!("CI job {job_id} has no ciKind")));
             };
-            if job.ci_job_id.as_deref() != Some(job_id) {
+            let Some(ci_job_id) = job.ci_job_id.as_deref() else {
+                return Err(Layer1Error::new(format!("CI job {job_id} has no ciJobId")));
+            };
+            validate_github_job_id(ci_job_id, &format!("CI job {job_id} ciJobId"))?;
+            if let Some(existing) = rendered_job_ids.insert(ci_job_id, job_id.as_str()) {
+                return Err(Layer1Error::new(format!(
+                    "GitHub job id collision: jobs {existing} and {job_id} both render as {ci_job_id}"
+                )));
+            }
+            if ci_job_id != job_id {
                 return Err(Layer1Error::new(format!(
                     "CI job {job_id} ciJobId must equal its manifest job id"
                 )));
@@ -286,6 +315,7 @@ impl Layer1Manifest {
                 )));
             }
             for dependency in &job.needs {
+                validate_github_job_id(dependency, &format!("CI job {job_id} needs entry"))?;
                 if !ci_jobs.contains(dependency.as_str()) {
                     return Err(Layer1Error::new(format!(
                         "CI job {job_id} depends on job {dependency} absent from ci.jobs"
@@ -293,6 +323,12 @@ impl Layer1Manifest {
                 }
             }
             validate_kind_fields(job_id, job, kind)?;
+        }
+        if let Some(existing) = rendered_job_ids.insert(self.ci.rollup_job.as_str(), "<rollup>") {
+            return Err(Layer1Error::new(format!(
+                "GitHub job id collision: job {existing} and ci.rollupJob both render as {}",
+                self.ci.rollup_job
+            )));
         }
 
         detect_cycle(ci_jobs.iter().copied(), |job_id| {
@@ -339,6 +375,39 @@ impl Layer1Manifest {
             return Err(Layer1Error::new(format!(
                 "ci.rollupNeeds does not cover CI job(s): {}",
                 uncovered.join(", ")
+            )));
+        }
+
+        let skipped = self
+            .ci
+            .allowed_skipped_rollup_jobs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut guaranteed = BTreeSet::new();
+        let mut pending = self
+            .ci
+            .rollup_needs
+            .iter()
+            .filter(|job_id| !skipped.contains(job_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        while let Some(job_id) = pending.pop() {
+            if guaranteed.insert(job_id.clone()) {
+                pending.extend(self.jobs[&job_id].needs.iter().cloned());
+            }
+        }
+        let skippable_only = self
+            .ci
+            .jobs
+            .iter()
+            .filter(|job_id| !skipped.contains(job_id.as_str()) && !guaranteed.contains(*job_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !skippable_only.is_empty() {
+            return Err(Layer1Error::new(format!(
+                "ci.rollupNeeds must cover required CI job(s) through a non-skippable rollup root: {}",
+                skippable_only.join(", ")
             )));
         }
 
@@ -489,6 +558,36 @@ fn validate_token(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_make_target(value: &str, label: &str) -> Result<()> {
+    let mut bytes = value.bytes();
+    let valid_first = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    if !valid_first
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(Layer1Error::new(format!(
+            "invalid {label} {value:?}; expected [A-Za-z0-9_][A-Za-z0-9_.-]*"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_github_job_id(value: &str, label: &str) -> Result<()> {
+    let mut bytes = value.bytes();
+    let valid_first = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
+    if !valid_first
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(Layer1Error::new(format!(
+            "invalid GitHub job id for {label}: {value:?}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_single_line(value: &str, label: &str) -> Result<()> {
     if value.chars().any(char::is_control) {
         return Err(Layer1Error::new(format!(
@@ -622,6 +721,114 @@ mod tests {
                 .expect_err("uncovered jobs")
                 .to_string()
                 .contains("does not cover")
+        );
+    }
+
+    #[test]
+    fn skippable_rollup_roots_cannot_be_the_only_required_coverage_path() {
+        let mut all_skippable = manifest();
+        all_skippable.ci.allowed_skipped_rollup_jobs = vec!["after".to_owned()];
+        let error = all_skippable
+            .validate()
+            .expect_err("all required jobs are covered only by a skippable root");
+        assert!(error.to_string().contains("non-skippable rollup root"));
+
+        let mut transitive_gap = manifest();
+        transitive_gap.ci.rollup_needs = vec!["after".to_owned(), "one".to_owned()];
+        transitive_gap.ci.allowed_skipped_rollup_jobs = vec!["after".to_owned()];
+        let error = transitive_gap
+            .validate()
+            .expect_err("two is covered only through the skippable after root");
+        let message = error.to_string();
+        assert!(message.contains("non-skippable rollup root"));
+        assert!(message.contains("two"));
+    }
+
+    #[test]
+    fn skippable_rollup_root_is_valid_when_required_dependencies_are_guaranteed() {
+        let mut manifest = manifest();
+        manifest.ci.rollup_needs = vec!["after".to_owned(), "two".to_owned()];
+        manifest.ci.allowed_skipped_rollup_jobs = vec!["after".to_owned()];
+        manifest
+            .validate()
+            .expect("two guarantees every dependency and after is explicitly skippable");
+    }
+
+    #[test]
+    fn unsafe_make_targets_fail_closed_including_option_bypass() {
+        for target in [
+            "--version",
+            "-s",
+            ".DEFAULT",
+            "name with space",
+            "name\nnext",
+            "name;echo",
+            "$(command)",
+            "NAME=value",
+            "path/target",
+        ] {
+            let mut candidate = manifest();
+            candidate.jobs.get_mut("pre").expect("pre").make_target = Some(target.to_owned());
+            let error = candidate
+                .validate()
+                .expect_err("unsafe make target must be rejected");
+            assert!(
+                error.to_string().contains("makeTarget"),
+                "unexpected error for {target:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_job_id_grammar_and_collisions_fail_closed() {
+        for valid in ["job", "_job", "Job_9", "job-name"] {
+            validate_github_job_id(valid, "test").expect("valid GitHub job id");
+        }
+        for invalid in ["1job", ".job", "-job", "job.name", "job/name", "job name"] {
+            assert!(
+                validate_github_job_id(invalid, "test").is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
+
+        let mut invalid_ci_id = manifest();
+        invalid_ci_id.jobs.get_mut("one").expect("one").ci_job_id = Some("1one".to_owned());
+        assert!(
+            invalid_ci_id
+                .validate()
+                .expect_err("digit-first ciJobId")
+                .to_string()
+                .contains("invalid GitHub job id")
+        );
+
+        let mut invalid_need = manifest();
+        invalid_need.jobs.get_mut("one").expect("one").needs = vec!["pre.job".to_owned()];
+        assert!(
+            invalid_need
+                .validate()
+                .expect_err("dotted needs entry")
+                .to_string()
+                .contains("invalid GitHub job id")
+        );
+
+        let mut invalid_rollup = manifest();
+        invalid_rollup.ci.rollup_job = ".check".to_owned();
+        assert!(
+            invalid_rollup
+                .validate()
+                .expect_err("dotted rollup id")
+                .to_string()
+                .contains("invalid GitHub job id")
+        );
+
+        let mut collision = manifest();
+        collision.jobs.get_mut("two").expect("two").ci_job_id = Some("one".to_owned());
+        assert!(
+            collision
+                .validate()
+                .expect_err("duplicate rendered id")
+                .to_string()
+                .contains("collision")
         );
     }
 
