@@ -150,9 +150,6 @@ d2b_activate_rust_toolchain_path() {
   local channel="${1:-}"
   local required_tool
   if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
-    for required_tool in cargo rustc rustfmt cargo-fmt cargo-clippy clippy-driver; do
-      [ -x "$D2B_RUST_TOOLCHAIN_PATH/$required_tool" ] || return 1
-    done
     d2b_prepend_path "$D2B_RUST_TOOLCHAIN_PATH"
     return 0
   fi

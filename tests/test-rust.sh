@@ -67,7 +67,11 @@ if command -v cargo >/dev/null 2>&1 \
   && command -v cargo-clippy >/dev/null 2>&1 \
   && command -v clippy-driver >/dev/null 2>&1 \
   && cargo --version | grep -Fq "$pinned_channel" \
-  && rustc --version | grep -Fq "$pinned_channel"; then
+  && rustc --version | grep -Fq "$pinned_channel" \
+  && rustfmt --version >/dev/null 2>&1 \
+  && cargo fmt --version >/dev/null 2>&1 \
+  && clippy-driver --version >/dev/null 2>&1 \
+  && cargo clippy --version >/dev/null 2>&1; then
   pinned_toolchain_active=1
 fi
 

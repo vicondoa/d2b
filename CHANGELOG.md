@@ -15,7 +15,8 @@ deprecations ship one minor release before removal.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process
   detection coverage while retaining the behavioral timeout check.
 - Isolated the pinned Rust gate's Cargo outputs by toolchain so developer builds
-  from another compiler cannot poison doctest metadata.
+  from another compiler cannot poison doctest metadata, and included the
+  isolated targets in CI caching.
 - Reused an already-installed pinned Rust toolchain before attempting a network
   bootstrap.
 
