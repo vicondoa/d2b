@@ -74,7 +74,12 @@ struct StaticGraph {
 }
 
 impl StackGraphSource for StaticGraph {
-    fn graph(&self, repository: &str, _checkout_root: &Path) -> Result<StackGraph> {
+    fn graph(
+        &self,
+        repository: &str,
+        _checkout_root: &Path,
+        _expected_nodes: &[StackNodePolicy],
+    ) -> Result<StackGraph> {
         if repository != REPOSITORY_ID {
             return Err(DeliveryError::new("unexpected graph repository"));
         }
@@ -1247,7 +1252,12 @@ struct MutatingGraph {
 }
 
 impl StackGraphSource for MutatingGraph {
-    fn graph(&self, _repository: &str, _checkout_root: &Path) -> Result<StackGraph> {
+    fn graph(
+        &self,
+        _repository: &str,
+        _checkout_root: &Path,
+        _expected_nodes: &[StackNodePolicy],
+    ) -> Result<StackGraph> {
         let calls = self.calls.get();
         self.calls.set(calls + 1);
         if calls == 1 {
@@ -1645,7 +1655,10 @@ fn git_town_merged_prefix_progresses_without_changing_content() {
     assert_eq!(old.content_id, new.content_id);
     assert_ne!(old.candidate_id, new.candidate_id);
     assert_eq!(new.stack[0].snapshot_state, PullRequestState::Merged);
+    assert_eq!(new.stack[0].expected_base_oid, base);
     assert_eq!(new.stack[1].expected_base_ref, "main");
+    assert_eq!(new.stack[1].expected_base_oid, advanced_base);
+    assert_eq!(new.stack[1].depends_on, ["first"]);
     xtask::delivery::verify_history_only_equivalence(&old, &new)
         .expect("merged prefix progression");
     let proof = construct_history_proof(

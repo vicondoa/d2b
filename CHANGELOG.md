@@ -52,9 +52,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Reconstructed merged stack prefixes from historical GitHub merge authority,
-  enforced manifest stack order and parent edges, and accepted correctly
-  retargeted active descendants without requiring stale merged branch refs.
+- Reconstructed merged stack prefixes from historical GitHub merge authority
+  and authoritative manifest order after Git Town removes merged lineage,
+  while requiring exact retargeted local lineage for every remaining active
+  branch.
 - Hardened delivery subprocess supervision against PID reuse, orphaned process
   groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
   lost bounded diagnostics.

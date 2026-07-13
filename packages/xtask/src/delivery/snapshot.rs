@@ -100,6 +100,7 @@ pub fn create_snapshot<P: RepositoryProbe, G: StackGraphSource, S: PullRequestSt
         probe,
         graph_source,
         status_source,
+        &authority.manifest,
         &collected,
         &repository_roots,
     )?;
@@ -232,7 +233,8 @@ fn collect_candidate<P: RepositoryProbe, G: StackGraphSource, S: PullRequestStat
     let mut graphs = BTreeMap::new();
     for policy in &authority.manifest.repositories {
         let root = root_for(roots, &policy.id)?;
-        let graph = graph_source.graph(&policy.id, root)?;
+        let expected_nodes = repository_stack_nodes(&authority.manifest, &policy.id);
+        let graph = graph_source.graph(&policy.id, root, &expected_nodes)?;
         verify_graph_policy(&authority.manifest, policy, &graph)?;
         graphs.insert(policy.id.clone(), graph);
     }
@@ -531,13 +533,15 @@ fn verify_collection_unchanged<
     probe: &P,
     graph_source: &G,
     status_source: &S,
+    manifest: &DeliveryManifest,
     snapshot: &WaveSnapshot,
     roots: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     verify_repository_identities(probe, roots)?;
     for repository in &snapshot.repository_set {
         let root = root_for(roots, &repository.id)?;
-        let graph = graph_source.graph(&repository.id, root)?;
+        let expected_nodes = repository_stack_nodes(manifest, &repository.id);
+        let graph = graph_source.graph(&repository.id, root, &expected_nodes)?;
         if sha256_bytes(&serde_json::to_vec(&graph)?) != repository.stack_graph_sha256 {
             return Err(DeliveryError::new(format!(
                 "Git Town stack graph changed while collecting {}",
@@ -550,6 +554,18 @@ fn verify_collection_unchanged<
         verify_pr_identity(node, &status)?;
     }
     verify_exact_refs(probe, snapshot, roots)
+}
+
+fn repository_stack_nodes(
+    manifest: &DeliveryManifest,
+    repository: &str,
+) -> Vec<super::model::StackNodePolicy> {
+    manifest
+        .stack_nodes
+        .iter()
+        .filter(|node| node.repository == repository)
+        .cloned()
+        .collect()
 }
 
 fn verify_repository_identities<P: RepositoryProbe>(
