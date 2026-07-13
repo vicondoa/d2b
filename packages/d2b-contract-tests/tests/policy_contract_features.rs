@@ -80,12 +80,26 @@ fn contracts_default_is_empty_and_feature_graph_is_acyclic() {
         ("public", BTreeSet::from(["broker", "guest"])),
         ("cli-output", BTreeSet::from(["public"])),
         ("unsafe-local", BTreeSet::from(["public"])),
-        ("schema", BTreeSet::from(["cli-output", "unsafe-local"])),
+        (
+            "schema",
+            BTreeSet::from([
+                "cli-output",
+                "unsafe-local",
+                "v2-component-session",
+                "v2-identity",
+                "v2-provider",
+                "v2-services",
+                "v2-state",
+            ]),
+        ),
         ("v2-identity", BTreeSet::new()),
-        ("v2-component-session", BTreeSet::new()),
-        ("v2-services", BTreeSet::new()),
-        ("v2-provider", BTreeSet::new()),
-        ("v2-state", BTreeSet::new()),
+        ("v2-component-session", BTreeSet::from(["v2-identity"])),
+        (
+            "v2-services",
+            BTreeSet::from(["v2-component-session", "v2-provider", "v2-state"]),
+        ),
+        ("v2-provider", BTreeSet::from(["v2-component-session"])),
+        ("v2-state", BTreeSet::from(["v2-identity"])),
     ]
     .into_iter()
     .collect();
@@ -114,6 +128,7 @@ fn schema_and_protobuf_dependencies_are_optional_and_scoped() {
         "serde_json",
         "schemars",
         "protobuf",
+        "sha2",
     ] {
         let dependency_line = manifest
             .lines()
@@ -128,7 +143,7 @@ fn schema_and_protobuf_dependencies_are_optional_and_scoped() {
         manifest.contains(r#"guest = ["#)
             && manifest.contains(r#""dep:protobuf""#)
             && !manifest.contains(r#"common = ["dep:protobuf""#),
-        "protobuf must be activated only by the guest family"
+        "protobuf must be activated only by guest and v2-services"
     );
 }
 
