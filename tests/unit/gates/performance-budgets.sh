@@ -25,6 +25,8 @@ fi
 DAEMON_HELLO_BUDGET_MS=${D2B_PERF_DAEMON_HELLO_BUDGET_MS:-200}
 BROKER_VALIDATE_P99_BUDGET_MS=${D2B_PERF_BROKER_VALIDATE_P99_BUDGET_MS:-25}
 VM_START_DRY_RUN_BUDGET_MS=${D2B_PERF_VM_START_DRY_RUN_BUDGET_MS:-100}
+IDENTITY_DERIVATION_BUDGET_MS=${D2B_PERF_IDENTITY_DERIVATION_BUDGET_MS:-5000}
+IDENTITY_DERIVATION_RSS_KIB=${D2B_PERF_IDENTITY_DERIVATION_RSS_KIB:-524288}
 MARGIN_PERCENT=20
 
 scratch=$(d2b_mktemp .performance-budgets.XXXXXX)
@@ -51,6 +53,72 @@ wait_for_socket() {
 
 median_of_three() {
   printf '%s\n' "$1" "$2" "$3" | sort -n | sed -n '2p'
+}
+
+measure_identity_derivation() {
+  local expression="$scratch/identity-benchmark.nix"
+  cat >"$expression" <<EOF
+let
+  identity = import $ROOT/nixos-modules/v2-identity.nix;
+  chains = builtins.genList
+    (index:
+      let
+        suffix = builtins.toString index;
+        realm = identity.deriveRealmId "realm-\${suffix}.local-root";
+        workload = identity.deriveWorkloadId realm "workload-\${suffix}";
+        provider = identity.deriveProviderId realm "runtime" "provider-\${suffix}";
+        role = identity.deriveRoleId realm workload "cloud-hypervisor";
+      in { inherit realm workload provider role; })
+    1024;
+  realms = map (chain: chain.realm) chains;
+  workloads = map (chain: chain.workload) chains;
+  providers = map (chain: chain.provider) chains;
+  roles = map (chain: chain.role) chains;
+  checked = identity.validateGlobalIdentities {
+    inherit realms workloads providers roles;
+  };
+  allIds = realms ++ workloads ++ providers ++ roles;
+in
+builtins.deepSeq checked {
+  count = builtins.length allIds;
+  digest = builtins.hashString "sha256" (builtins.concatStringsSep "" allIds);
+}
+EOF
+
+  python3 - "$expression" <<'PY'
+import json
+import resource
+import subprocess
+import sys
+import time
+
+expression = sys.argv[1]
+command = [
+    "nix", "eval", "--impure", "--json", "--file", expression,
+]
+
+def run_once():
+    start = time.monotonic_ns()
+    completed = subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    elapsed_ms = (time.monotonic_ns() - start + 999_999) // 1_000_000
+    result = json.loads(completed.stdout)
+    if result.get("count") != 4096 or len(result.get("digest", "")) != 64:
+        raise SystemExit("identity benchmark did not derive and check exactly 4,096 IDs")
+    rss_kib = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    return elapsed_ms, rss_kib
+
+run_once()
+for _ in range(3):
+    elapsed_ms, rss_kib = run_once()
+    print(f"{elapsed_ms} {rss_kib}")
+PY
 }
 
 measure_daemon_cold_start_ms() {
@@ -214,7 +282,28 @@ assert_budget() {
 daemon_hello_ms=$(measure_daemon_cold_start_ms)
 broker_validate_p99_ms=$(measure_broker_validate_p99_ms)
 vm_start_dry_run_ms=$(measure_vm_start_dry_run_ms)
+identity_output=$(measure_identity_derivation)
+mapfile -t identity_samples <<<"$identity_output"
+if [ "${#identity_samples[@]}" -ne 3 ]; then
+  fail "identity derivation benchmark did not return three measured samples"
+  exit 1
+fi
+identity_sample1_ms=${identity_samples[0]%% *}
+identity_sample2_ms=${identity_samples[1]%% *}
+identity_sample3_ms=${identity_samples[2]%% *}
+identity_derivation_ms=$(median_of_three \
+  "$identity_sample1_ms" "$identity_sample2_ms" "$identity_sample3_ms")
 
+assert_budget "derive and collision-check 4,096 canonical IDs" \
+  "$identity_derivation_ms" "$IDENTITY_DERIVATION_BUDGET_MS"
+for sample in "${identity_samples[@]}"; do
+  sample_rss_kib=${sample##* }
+  if [ "$sample_rss_kib" -gt "$IDENTITY_DERIVATION_RSS_KIB" ]; then
+    fail "identity derivation peak RSS ${sample_rss_kib}KiB exceeds ${IDENTITY_DERIVATION_RSS_KIB}KiB ceiling"
+    exit 1
+  fi
+done
+ok "identity derivation peak RSS stayed within ${IDENTITY_DERIVATION_RSS_KIB}KiB"
 assert_budget "daemon cold start → first Hello" "$daemon_hello_ms" "$DAEMON_HELLO_BUDGET_MS"
 assert_budget "broker ValidateBundle p99" "$broker_validate_p99_ms" "$BROKER_VALIDATE_P99_BUDGET_MS"
 assert_budget "d2b vm start --dry-run wall time" "$vm_start_dry_run_ms" "$VM_START_DRY_RUN_BUDGET_MS"
