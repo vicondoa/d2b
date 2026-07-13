@@ -56,10 +56,20 @@ guest_shell_runner_target_dir=$(d2b_cargo_gate_target_dir guest-shell-runner "$p
 # Full D2B_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
 workspace_test_excludes=(--exclude d2b-contract-tests)
 
-d2b_activate_rust_toolchain_path || true
+d2b_activate_rust_toolchain_path "$pinned_channel" || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
+pinned_toolchain_active=0
+if command -v cargo >/dev/null 2>&1 \
+  && command -v rustc >/dev/null 2>&1 \
+  && cargo --version | grep -Fq "$pinned_channel" \
+  && rustc --version | grep -Fq "$pinned_channel"; then
+  pinned_toolchain_active=1
+fi
+
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && ! command -v rustup >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "rustup not on PATH and nix is unavailable; rust gate cannot run pinned Rust $pinned_channel"
     exit 1
@@ -77,7 +87,9 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>
   exit $?
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && command -v rustup >/dev/null 2>&1; then
   export D2B_RUST_GATE_IN_NIX_SHELL=1
   export D2B_RUST_GATE_BOOTSTRAP_RUSTUP=1
   export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
@@ -85,7 +97,9 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1
   rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] \
+  && [ "$pinned_toolchain_active" = 0 ] \
+  && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "neither cargo nor nix is on PATH; rust gate cannot run"
     exit 1

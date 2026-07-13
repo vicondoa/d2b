@@ -147,9 +147,21 @@ d2b_prepend_path() {
 }
 
 d2b_activate_rust_toolchain_path() {
+  local channel="${1:-}"
   if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
     d2b_prepend_path "$D2B_RUST_TOOLCHAIN_PATH"
     return 0
+  fi
+  if [ -n "$channel" ]; then
+    local candidate
+    for candidate in "$HOME"/.rustup/toolchains/"$channel"-*/bin; do
+      if [ -x "$candidate/cargo" ] && [ -x "$candidate/rustc" ]; then
+        D2B_RUST_TOOLCHAIN_PATH="$candidate"
+        export D2B_RUST_TOOLCHAIN_PATH
+        d2b_prepend_path "$candidate"
+        return 0
+      fi
+    done
   fi
   return 1
 }
