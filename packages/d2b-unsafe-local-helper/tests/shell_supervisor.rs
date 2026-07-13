@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -39,20 +39,21 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("repository root");
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
         for _ in 0..32 {
-            let mut random = [0u8; 2];
+            let mut random = [0u8; 4];
             getrandom::getrandom(&mut random).unwrap();
-            let path = root.join(format!("i{:02x}{:02x}", random[0], random[1]));
-            if fs::create_dir(&path).is_ok() {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            let path = Path::new("/tmp").join(format!(
+                "d2b-sh-{}-{:08x}",
+                std::process::id(),
+                u32::from_ne_bytes(random)
+            ));
+            if builder.create(&path).is_ok() {
                 return Self { path };
             }
         }
-        panic!("could not reserve repository-local integration directory");
+        panic!("could not reserve integration directory");
     }
 
     fn socket(&self) -> PathBuf {

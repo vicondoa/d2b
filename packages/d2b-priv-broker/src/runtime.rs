@@ -2401,6 +2401,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             cleanup_cloud_hypervisor_stale_sockets(&req.role, &intent.argv)?;
             cleanup_video_stale_socket(&req.role, &intent.argv)?;
             cleanup_otel_host_bridge_stale_socket(&req.role, &intent.argv)?;
+            cleanup_vsock_relay_stale_socket(
+                &req.role,
+                resolver
+                    .find_manifest_vm(req.vm_id.as_str())
+                    .map(|vm| vm.state_dir.as_str()),
+                &intent.argv,
+            )?;
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
                 argv: intent.argv.clone(),
@@ -7499,7 +7506,7 @@ fn cleanup_otel_host_bridge_stale_socket(
     if !matches!(role, d2b_contracts::broker_wire::RunnerRole::OtelHostBridge) {
         return Ok(());
     }
-    let path = otel_host_bridge_socket_path(argv)?;
+    let path = socat_unix_listen_socket_path(argv, "otel-host-bridge socket preflight")?;
     if !path.starts_with("/run/d2b/otel/") {
         return Err(BrokerError::LiveHandler(format!(
             "otel-host-bridge socket preflight refusing non-d2b socket path {}",
@@ -7510,7 +7517,36 @@ fn cleanup_otel_host_bridge_stale_socket(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
+fn cleanup_vsock_relay_stale_socket(
+    role: &d2b_contracts::broker_wire::RunnerRole,
+    vm_state_dir: Option<&str>,
+    argv: &[String],
+) -> Result<(), BrokerError> {
+    if !matches!(role, d2b_contracts::broker_wire::RunnerRole::VsockRelay) {
+        return Ok(());
+    }
+    let state_dir = vm_state_dir.ok_or_else(|| {
+        BrokerError::LiveHandler(
+            "vsock-relay socket preflight could not resolve VM state directory".to_owned(),
+        )
+    })?;
+    let path = socat_unix_listen_socket_path(argv, "vsock-relay socket preflight")?;
+    let socket_name_valid = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("vsock.sock_"))
+        .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()));
+    if path.parent() != Some(Path::new(state_dir)) || !socket_name_valid {
+        return Err(BrokerError::LiveHandler(format!(
+            "vsock-relay socket preflight refusing socket outside the VM state directory: {}",
+            path.display()
+        )));
+    }
+    cleanup_stale_unix_socket_without_probe(&path, "vsock-relay socket preflight")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn socat_unix_listen_socket_path(argv: &[String], context: &str) -> Result<PathBuf, BrokerError> {
     for arg in argv {
         if let Some(rest) = arg.strip_prefix("UNIX-LISTEN:") {
             let path = rest.split(',').next().unwrap_or(rest);
@@ -7519,10 +7555,9 @@ fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError>
             }
         }
     }
-    Err(BrokerError::LiveHandler(
-        "otel-host-bridge socket preflight could not find UNIX-LISTEN socket in runner argv"
-            .to_owned(),
-    ))
+    Err(BrokerError::LiveHandler(format!(
+        "{context} could not find UNIX-LISTEN socket in runner argv"
+    )))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12487,7 +12522,8 @@ mod tests {
              /var/lib/d2b/vms/sys-obs/vsock.sock 14317\""
                 .to_owned(),
         ];
-        let path = otel_host_bridge_socket_path(&argv).expect("extract UNIX-LISTEN target");
+        let path =
+            socat_unix_listen_socket_path(&argv, "test").expect("extract UNIX-LISTEN target");
         assert_eq!(
             path,
             PathBuf::from("/run/d2b/otel/host-egress.sock"),
@@ -12503,7 +12539,7 @@ mod tests {
             "-d".to_owned(),
         ];
         assert!(
-            otel_host_bridge_socket_path(&argv).is_err(),
+            socat_unix_listen_socket_path(&argv, "test").is_err(),
             "argv without a UNIX-LISTEN address must be rejected"
         );
     }
@@ -12531,6 +12567,87 @@ mod tests {
             cleanup_otel_host_bridge_stale_socket(&RunnerRole::OtelHostBridge, &argv).is_err(),
             "socket path outside /run/d2b/otel/ must be refused"
         );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn cleanup_vsock_relay_stale_socket_removes_only_stale_vm_socket() {
+        use d2b_contracts::broker_wire::RunnerRole;
+        use std::os::unix::net::UnixListener;
+
+        let root = tempfile::tempdir().expect("short socket fixture root");
+        let state_dir = root.path().join("vms/corp-vm");
+        fs::create_dir_all(&state_dir).expect("create VM state dir");
+        let socket_path = state_dir.join("vsock.sock_14317");
+        let listener = UnixListener::bind(&socket_path).expect("bind stale relay socket");
+        drop(listener);
+        assert!(
+            socket_path.exists(),
+            "socket fixture must remain after close"
+        );
+
+        let argv = vec![format!(
+            "UNIX-LISTEN:{},fork,reuseaddr,mode=0660",
+            socket_path.display()
+        )];
+        cleanup_vsock_relay_stale_socket(&RunnerRole::VsockRelay, state_dir.to_str(), &argv)
+            .expect("remove stale relay socket");
+        assert!(!socket_path.exists(), "stale relay socket must be removed");
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn cleanup_vsock_relay_stale_socket_refuses_active_listener() {
+        use d2b_contracts::broker_wire::RunnerRole;
+        use std::os::unix::net::UnixListener;
+
+        let root = tempfile::tempdir().expect("short socket fixture root");
+        let state_dir = root.path().join("vms/corp-vm");
+        fs::create_dir_all(&state_dir).expect("create VM state dir");
+        let socket_path = state_dir.join("vsock.sock_14317");
+        let listener = UnixListener::bind(&socket_path).expect("bind active relay socket");
+        let argv = vec![format!(
+            "UNIX-LISTEN:{},fork,reuseaddr,mode=0660",
+            socket_path.display()
+        )];
+
+        assert!(
+            cleanup_vsock_relay_stale_socket(&RunnerRole::VsockRelay, state_dir.to_str(), &argv,)
+                .is_err(),
+            "an active relay listener must never be unlinked"
+        );
+        assert!(socket_path.exists(), "active listener path must remain");
+        drop(listener);
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn cleanup_vsock_relay_stale_socket_rejects_untrusted_paths() {
+        use d2b_contracts::broker_wire::RunnerRole;
+
+        for path in [
+            "/tmp/vsock.sock_14317",
+            "/var/lib/d2b/vms/corp-vm/not-vsock.sock",
+            "/var/lib/d2b/vms/corp-vm/vsock.sock_not-a-port",
+        ] {
+            let argv = vec![format!("UNIX-LISTEN:{path},fork,reuseaddr")];
+            assert!(
+                cleanup_vsock_relay_stale_socket(
+                    &RunnerRole::VsockRelay,
+                    Some("/var/lib/d2b/vms/corp-vm"),
+                    &argv,
+                )
+                .is_err(),
+                "untrusted relay socket path must be rejected: {path}"
+            );
+        }
+        cleanup_vsock_relay_stale_socket(
+            &RunnerRole::CloudHypervisor,
+            None,
+            &["UNIX-LISTEN:/etc/shadow,fork".to_owned()],
+        )
+        .expect("non-relay role must not inspect the path");
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
