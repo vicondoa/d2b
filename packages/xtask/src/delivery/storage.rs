@@ -18,6 +18,7 @@ use nix::{
     errno::Errno as NixErrno,
     fcntl::{FcntlArg, fcntl},
     libc,
+    sys::stat::{FchmodatFlags, Mode as NixMode, fchmodat},
 };
 use rustix::{
     fs::{Mode, OFlags, RenameFlags, fchmod, mkdirat, open, openat, renameat_with, unlinkat},
@@ -959,6 +960,7 @@ fn create_private_dir(path: &Path) -> Result<()> {
                     absolute.display()
                 ))
             })?;
+            secure_created_directory_entry(&parent, name, "delivery state directory")?;
             let fd = openat(
                 parent.as_fd(),
                 name,
@@ -1051,6 +1053,7 @@ fn open_relative_directory_chain(
                 mkdirat(current.as_fd(), name, Mode::from_raw_mode(0o700)).map_err(|error| {
                     DeliveryError::new(format!("cannot create anchored state directory: {error}"))
                 })?;
+                secure_created_directory_entry(&current, name, "delivery state directory")?;
                 let next = openat(
                     current.as_fd(),
                     name,
@@ -1137,6 +1140,7 @@ fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
                         "cannot create anchored directory component: {error}"
                     ))
                 })?;
+                secure_created_directory_entry(&current, name, "delivery state directory")?;
                 let next = openat(
                     current.as_fd(),
                     *name,
@@ -1295,9 +1299,20 @@ fn secure_opened_directory(fd: &OwnedFd, label: &str) -> Result<()> {
     if !metadata.is_dir() {
         return Err(DeliveryError::new(format!("{label} is not a directory")));
     }
+
     verify_owner(&metadata, label)?;
     fchmod(fd, Mode::from_raw_mode(0o700))
         .map_err(|error| DeliveryError::new(format!("cannot secure {label}: {error}")))
+}
+
+fn secure_created_directory_entry(parent: &OwnedFd, name: &OsStr, label: &str) -> Result<()> {
+    fchmodat(
+        Some(parent.as_raw_fd()),
+        name,
+        NixMode::from_bits_truncate(0o700),
+        FchmodatFlags::NoFollowSymlink,
+    )
+    .map_err(|error| DeliveryError::new(format!("cannot secure new {label}: {error}")))
 }
 
 fn secure_private_file_fd(fd: &OwnedFd, label: &str) -> Result<()> {
@@ -1582,7 +1597,7 @@ mod tests {
 
     #[test]
     fn private_modes_ignore_restrictive_and_permissive_umasks() {
-        for umask in ["000", "077", "0200"] {
+        for umask in ["000", "077", "0200", "0700", "0777"] {
             let root = scratch(&format!("umask-{umask}"));
             fs::write(root.join("source"), b"staged").expect("staging source");
             let executable = std::env::current_exe().expect("current test executable");

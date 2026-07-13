@@ -55,6 +55,8 @@ deprecations ship one minor release before removal.
 - Hardened final delivery authority with secret-free validation environments,
   authenticated merged-prefix topology, tolerant external GraphQL decoding,
   shared signal forwarding, and kernel-backed child-output polling.
+- Isolated Cargo state for validation commands and normalized newly created
+  private directories before restrictive umasks can prevent fd anchoring.
 - Made delivery state use true open-file-description locks and exact
   post-creation private modes independent of the caller's umask.
 - Preserved Unix signal termination in Layer-1 results and required canonical,

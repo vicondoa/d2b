@@ -268,7 +268,7 @@ fn controlled_environment(
         .and_then(|value| sanitize_path_list(value))
         .unwrap_or_else(|| OsString::from("/run/current-system/sw/bin:/usr/bin:/bin"));
     environment.insert(OsString::from("PATH"), path);
-    for variable in ["CARGO_HOME", "RUSTUP_HOME"] {
+    for variable in ["RUSTUP_HOME"] {
         if let Some(value) = inherited
             .get(std::ffi::OsStr::new(variable))
             .filter(|value| safe_absolute_path(value))
@@ -3044,8 +3044,13 @@ mod tests {
                 OsString::from("/var/lib/toolchain/cargo"),
             ),
         ]);
-        let explicit =
-            BTreeMap::from([(OsString::from("D2B_REQUIRED"), OsString::from("present"))]);
+        let explicit = BTreeMap::from([
+            (OsString::from("D2B_REQUIRED"), OsString::from("present")),
+            (
+                OsString::from("CARGO_HOME"),
+                OsString::from("/private/validation/cargo-home"),
+            ),
+        ]);
         let controlled = controlled_environment(
             "sh",
             &explicit,
@@ -3060,7 +3065,10 @@ mod tests {
             controlled.get(std::ffi::OsStr::new("LC_ALL")),
             Some(&OsString::from("C"))
         );
-        assert!(controlled.contains_key(std::ffi::OsStr::new("CARGO_HOME")));
+        assert_eq!(
+            controlled.get(std::ffi::OsStr::new("CARGO_HOME")),
+            Some(&OsString::from("/private/validation/cargo-home"))
+        );
         for secret in ["GITHUB_TOKEN", "SSH_AUTH_SOCK", "AWS_ACCESS_KEY_ID"] {
             assert!(!controlled.contains_key(std::ffi::OsStr::new(secret)));
         }

@@ -288,6 +288,7 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
     create_private_directory(&output_root)?;
     create_private_directory(&output_root.join("tmp"))?;
     create_private_directory(&output_root.join("home"))?;
+    create_private_directory(&output_root.join("cargo-home"))?;
     create_private_directory(&output_root.join("cargo-target"))?;
     run_checked(
         runner,
@@ -330,6 +331,10 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         (
             OsString::from("CARGO_TARGET_DIR"),
             output_root.join("cargo-target").into_os_string(),
+        ),
+        (
+            OsString::from("CARGO_HOME"),
+            output_root.join("cargo-home").into_os_string(),
         ),
         (
             OsString::from("TMPDIR"),
