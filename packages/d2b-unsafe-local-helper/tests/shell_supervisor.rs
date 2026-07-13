@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -39,6 +39,8 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
         for _ in 0..32 {
             let mut random = [0u8; 4];
             getrandom::getrandom(&mut random).unwrap();
@@ -47,8 +49,7 @@ impl Scratch {
                 std::process::id(),
                 u32::from_ne_bytes(random)
             ));
-            if fs::create_dir(&path).is_ok() {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            if builder.create(&path).is_ok() {
                 return Self { path };
             }
         }
