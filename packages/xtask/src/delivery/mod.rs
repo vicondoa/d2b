@@ -158,35 +158,14 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             ],
             commands: workflow_command_help(),
         }),
-        [area, action, rest @ ..] if area == "stack" && action == "validate" => {
-            let mut options = CliOptions::parse(rest)?;
-            let manifest_path = options.required_path("--manifest")?;
-            options.finish()?;
-            let manifest: DeliveryManifest = storage::read_json(&manifest_path)?;
-            manifest.validate()?;
-            Ok(WorkflowOutput {
-                schema_version: DELIVERY_SCHEMA_VERSION,
-                operation: "stack-validate".to_owned(),
-                status: "ok".to_owned(),
-                candidate_id: None,
-                artifact: None,
-                stages: vec![],
-                integration_points: vec!["checked-in-authoritative-manifest".to_owned()],
-                commands: vec![],
-            })
-        }
         [area, action, rest @ ..] if area == "stack" && action == "capability" => {
             let mut options = CliOptions::parse(rest)?;
-            let manifest_path = options.required_path("--manifest")?;
+            let repository_id = options.required_string("--repository")?;
             options.finish()?;
-            let manifest: DeliveryManifest = storage::read_json(&manifest_path)?;
-            manifest.validate()?;
-            let repository = manifest
-                .authority_repository
-                .strip_prefix("github.com/")
-                .ok_or_else(|| {
-                    DeliveryError::new("authority repository is not hosted by GitHub")
-                })?;
+            validate_repository_id(&repository_id)?;
+            let repository = repository_id.strip_prefix("github.com/").ok_or_else(|| {
+                DeliveryError::new("authority repository is not hosted by GitHub")
+            })?;
             check_gh_stack_private_preview(&ProcessCommandOutput, repository)?;
             Ok(WorkflowOutput {
                 schema_version: DELIVERY_SCHEMA_VERSION,
@@ -408,7 +387,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             output_for_eligibility("merge", merged)
         }
         _ => Err(DeliveryError::new(
-            "usage: cargo xtask delivery <stack <validate|capability> --manifest PATH|wave <help|snapshot|validation-run|validation-import|panel-request|panel-attest|seal|verify|eligibility|history-proof|retarget-preflight|merge> [options]>",
+            "usage: cargo xtask delivery <stack capability --repository github.com/OWNER/REPOSITORY|wave <help|snapshot|validation-run|validation-import|panel-request|panel-attest|seal|verify|eligibility|history-proof|retarget-preflight|merge> [options]>",
         )),
     }
 }

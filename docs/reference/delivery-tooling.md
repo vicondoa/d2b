@@ -35,17 +35,17 @@ crates with native build dependencies.
 ## Stack authority and private preview
 
 Official `gh-stack` is the only stack mutator. It owns stack creation,
-restacking, submission, and retargeting. The delivery `xtask` may validate a
-declared graph or inspect GitHub state, but it never substitutes `gh pr edit`,
-custom API mutations, or local branch rewriting for a failed `gh stack`
+restacking, submission, and retargeting. The delivery `xtask` imports the
+checked-in manifest and declared graph while creating an immutable snapshot;
+it never accepts a caller-authored manifest, substitutes `gh pr edit`, performs
+custom API mutations, or rewrites local branches for a failed `gh stack`
 operation.
 
-Before creating a stack, validate the manifest and verify that the repository
-has the private preview:
+Before creating a stack, verify that the repository has the private preview:
 
 ```console
-nix run .#delivery -- stack validate --manifest "$MANIFEST"
-nix run .#delivery -- stack capability --manifest "$MANIFEST"
+nix run .#delivery -- stack capability \
+  --repository github.com/example/d2b
 ```
 
 The capability check accepts only official `gh-stack` `0.0.7` and performs a
