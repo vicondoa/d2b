@@ -28,6 +28,9 @@ deprecations ship one minor release before removal.
   receipts, fresh history CI run identities, base-relative diff bindings,
   squash/rebase/merge stack progression, immutable validation checkouts, and
   exact base-and-head merge compare-and-swap requirements.
+- Moved Layer-1 manifest validation, bounded local orchestration, flake-check
+  discovery, and generated workflow ownership from Python and Bash into Rust
+  `xtask`, and enabled the generated PR workflow for stacked non-main bases.
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
@@ -36,6 +39,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Hardened Layer-1 scheduling and generated CI rollups against slot underfill,
+  skippable-only dependency coverage, invalid workflow job IDs, option-like Make
+  targets, and clean environments without `sccache`.
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
   concurrent numeric descriptor reuse cannot report a false leak.
 - Removed a scheduler-sensitive wall-clock assertion from zombie process
