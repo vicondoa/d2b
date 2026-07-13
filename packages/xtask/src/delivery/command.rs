@@ -3321,55 +3321,110 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
-    struct DelayedTerminalSignal {
-        polls: usize,
+    struct ReadyTerminalSignal {
+        ready: PathBuf,
         signal: Option<TerminalSignal>,
     }
 
-    impl TerminalSignalSource for DelayedTerminalSignal {
+    impl TerminalSignalSource for ReadyTerminalSignal {
         fn pending(&mut self) -> Option<TerminalSignal> {
-            if self.polls == 0 {
+            if self.ready.exists() {
                 return self.signal.take();
             }
-            self.polls -= 1;
             None
         }
     }
 
     #[test]
+    fn terminal_signal_process_child() {
+        let Some(role) = std::env::var_os("D2B_TERMINAL_SIGNAL_CHILD") else {
+            return;
+        };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let terminate = Arc::new(AtomicBool::new(false));
+        let _interrupt_id = flag::register(SIGINT, Arc::clone(&interrupt)).expect("SIGINT handler");
+        let _terminate_id =
+            flag::register(SIGTERM, Arc::clone(&terminate)).expect("SIGTERM handler");
+        match role.to_str().expect("child role") {
+            "leader" => {
+                let executable = std::env::current_exe().expect("current test executable");
+                let mut descendant = Command::new(executable)
+                    .args([
+                        "delivery::command::tests::terminal_signal_process_child",
+                        "--exact",
+                        "--nocapture",
+                    ])
+                    .env("D2B_TERMINAL_SIGNAL_CHILD", "descendant")
+                    .env(
+                        "D2B_TERMINAL_SIGNAL_READY",
+                        std::env::var_os("D2B_TERMINAL_SIGNAL_READY")
+                            .expect("descendant ready marker"),
+                    )
+                    .env(
+                        "D2B_TERMINAL_SIGNAL_ORPHAN",
+                        std::env::var_os("D2B_TERMINAL_SIGNAL_ORPHAN")
+                            .expect("descendant orphan marker"),
+                    )
+                    .spawn()
+                    .expect("spawn descendant");
+                while !interrupt.load(Ordering::Acquire) && !terminate.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                eprintln!("leader-signaled");
+                let _ = descendant.wait();
+            }
+            "descendant" => {
+                let ready = PathBuf::from(
+                    std::env::var_os("D2B_TERMINAL_SIGNAL_READY").expect("ready marker"),
+                );
+                let orphan = PathBuf::from(
+                    std::env::var_os("D2B_TERMINAL_SIGNAL_ORPHAN").expect("orphan marker"),
+                );
+                fs::write(ready, b"ready").expect("write ready marker");
+                thread::sleep(Duration::from_millis(400));
+                fs::write(orphan, b"orphan").expect("write orphan marker");
+            }
+            _ => panic!("unknown terminal-signal child role"),
+        }
+    }
+
+    #[test]
     fn terminal_signal_forwards_to_and_cleans_exact_process_group() {
-        for (signal, shell_signal, expected) in [
-            (
-                TerminalSignal::Interrupt,
-                "INT",
-                CommandFailure::Interrupted,
-            ),
-            (
-                TerminalSignal::Terminate,
-                "TERM",
-                CommandFailure::Terminated,
-            ),
+        for (signal, expected) in [
+            (TerminalSignal::Interrupt, CommandFailure::Interrupted),
+            (TerminalSignal::Terminate, CommandFailure::Terminated),
         ] {
             let marker = unique_test_path("signal-orphan-marker");
-            let marker_string = marker.to_string_lossy().into_owned();
-            let script = format!(
-                "trap 'printf leader-signaled >&2; exit 0' {shell_signal}; \
-                 (trap '' {shell_signal}; sleep 0.4; printf orphan > \"$1\") & wait"
-            );
-            let mut signals = DelayedTerminalSignal {
-                polls: 20,
+            let ready = unique_test_path("signal-ready-marker");
+            let mut signals = ReadyTerminalSignal {
+                ready: ready.clone(),
                 signal: Some(signal),
             };
-            let environment = controlled_environment(
-                "sh",
-                &BTreeMap::new(),
-                CommandEnvironment::Validation,
-                std::env::vars_os(),
-            );
+            let environment = BTreeMap::from([
+                (
+                    OsString::from("D2B_TERMINAL_SIGNAL_CHILD"),
+                    OsString::from("leader"),
+                ),
+                (
+                    OsString::from("D2B_TERMINAL_SIGNAL_READY"),
+                    ready.as_os_str().to_owned(),
+                ),
+                (
+                    OsString::from("D2B_TERMINAL_SIGNAL_ORPHAN"),
+                    marker.as_os_str().to_owned(),
+                ),
+            ]);
             let started = Instant::now();
             let output = run_process(
-                "sh",
-                &["-c".to_owned(), script, "sh".to_owned(), marker_string],
+                std::env::current_exe()
+                    .expect("current test executable")
+                    .to_str()
+                    .expect("UTF-8 test executable"),
+                &[
+                    "delivery::command::tests::terminal_signal_process_child".to_owned(),
+                    "--exact".to_owned(),
+                    "--nocapture".to_owned(),
+                ],
                 None,
                 &environment,
                 CommandLimits {
@@ -3391,6 +3446,7 @@ mod tests {
             if survived {
                 fs::remove_file(&marker).expect("remove orphan marker");
             }
+            let _ = fs::remove_file(&ready);
             assert!(!survived, "descendant survived process-group cleanup");
         }
     }
