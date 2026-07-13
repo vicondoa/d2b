@@ -1548,6 +1548,9 @@ mod tests {
         if std::env::var_os("D2B_STORAGE_TEST_CHILD").is_none() {
             return;
         }
+        let umask = std::env::var("D2B_STORAGE_UMASK").expect("mode test umask");
+        let umask = u32::from_str_radix(&umask, 8).expect("octal mode test umask");
+        nix::sys::stat::umask(NixMode::from_bits_truncate(umask));
         let root =
             PathBuf::from(std::env::var_os("D2B_STORAGE_MODE_ROOT").expect("mode test root"));
         let state = root.join("intermediate/state");
@@ -1601,16 +1604,12 @@ mod tests {
             let root = scratch(&format!("umask-{umask}"));
             fs::write(root.join("source"), b"staged").expect("staging source");
             let executable = std::env::current_exe().expect("current test executable");
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg("umask \"$1\"; shift; exec \"$@\"")
-                .arg("sh")
-                .arg(umask)
-                .arg(executable)
+            let status = Command::new(executable)
                 .arg("private_modes_umask_child")
                 .arg("--nocapture")
                 .env("D2B_STORAGE_TEST_CHILD", "1")
                 .env("D2B_STORAGE_MODE_ROOT", &root)
+                .env("D2B_STORAGE_UMASK", umask)
                 .status()
                 .expect("run isolated umask child");
             assert!(status.success(), "umask {umask} child failed");

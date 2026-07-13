@@ -63,6 +63,8 @@ deprecations ship one minor release before removal.
   post-creation private modes independent of the caller's umask.
 - Preserved Unix signal termination in Layer-1 results and required canonical,
   duplicate-free fingerprint declarations.
+- Kept signal and umask regression coverage Rust-native so the no-shell AST gate
+  remains closed.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
   procedures from the delivery contract reference.
 - Reconstructed merged stack prefixes from historical GitHub merge authority

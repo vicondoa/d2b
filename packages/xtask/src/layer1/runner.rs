@@ -1136,21 +1136,51 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn process_result_child() {
+        let Some(mode) = std::env::var_os("D2B_PROCESS_RESULT_CHILD") else {
+            return;
+        };
+        match mode.to_str().expect("child mode") {
+            "exit" => std::process::exit(23),
+            "sigkill" => {
+                rustix::process::kill_process(
+                    rustix::process::getpid(),
+                    rustix::process::Signal::Kill,
+                )
+                .expect("send SIGKILL");
+            }
+            "sigterm" => {
+                rustix::process::kill_process(
+                    rustix::process::getpid(),
+                    rustix::process::Signal::Term,
+                )
+                .expect("send SIGTERM");
+            }
+            _ => panic!("unknown child mode"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_result_child_status(mode: &str) -> std::process::ExitStatus {
+        Command::new(std::env::current_exe().expect("current test executable"))
+            .args([
+                "layer1::runner::tests::process_result_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("D2B_PROCESS_RESULT_CHILD", mode)
+            .status()
+            .expect("process-result child")
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn process_results_preserve_exit_codes_and_termination_signals() {
         use signal_hook::consts::{SIGKILL, SIGTERM};
 
-        let exit = Command::new("sh")
-            .args(["-c", "exit 23"])
-            .status()
-            .expect("normal exit");
-        let sigkill = Command::new("sh")
-            .args(["-c", "kill -KILL $$"])
-            .status()
-            .expect("SIGKILL exit");
-        let sigterm = Command::new("sh")
-            .args(["-c", "kill -TERM $$"])
-            .status()
-            .expect("SIGTERM exit");
+        let exit = process_result_child_status("exit");
+        let sigkill = process_result_child_status("sigkill");
+        let sigterm = process_result_child_status("sigterm");
 
         assert_eq!(job_result(exit), JobResult::ExitCode(23));
         assert_eq!(job_result(sigkill), JobResult::Signal(SIGKILL));
