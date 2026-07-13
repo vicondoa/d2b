@@ -292,7 +292,10 @@ let
       # when not set.
       iconName = workload.launcher.icon.name;
       inherit iconGroupKey;
-      capabilityRefs = sortNames (lib.unique workload.launcher.capabilities);
+      capabilityRefs = sortNames (lib.unique (
+        workload.launcher.capabilities
+        ++ lib.optionals workload.shell.enable [ "persistent-shell" "pty" ]
+      ));
       launcherEnabled = workload.launcher.enable;
       defaultItemId = workload.launcher.defaultItem;
       inherit launcherItems;

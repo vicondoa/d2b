@@ -1378,11 +1378,13 @@ in
         count = builtins.length shellItems;
         id = (builtins.head shellItems).id;
         capabilities = (builtins.head shellItems).capabilityRefs;
+        workloadCapabilities = row.capabilityRefs;
       };
     expected = {
       count = 1;
       id = "terminal";
       capabilities = [ "persistent-shell" "pty" ];
+      workloadCapabilities = [ "graphics" "guest-exec" "persistent-shell" "pty" ];
     };
   };
 
