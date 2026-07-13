@@ -1362,6 +1362,11 @@ in
         cfg = (mkEval [
           (lib.recursiveUpdate workloadFixture {
             d2b.realms.work.workloads.corp-laptop.shell.enable = true;
+            d2b.vms.corpbox.guest = {
+              control.enable = true;
+              exec.enable = true;
+              shell.enable = true;
+            };
           })
         ]).config;
         row = lib.findFirst
@@ -1379,6 +1384,20 @@ in
       id = "terminal";
       capabilities = [ "persistent-shell" "pty" ];
     };
+  };
+
+  "realm-workloads/local-vm-shell-requires-guest-shell" = {
+    expr = hasMessage
+      [
+        "workloads.corp-laptop.shell.enable is true"
+        "d2b.vms.corpbox.guest.shell.enable is false"
+      ]
+      (failureMessages [
+        (lib.recursiveUpdate workloadFixture {
+          d2b.realms.work.workloads.corp-laptop.shell.enable = true;
+        })
+      ]);
+    expected = true;
   };
 
   # ── cross-realm vsock CID collision: assertion fires ─────────────────────────

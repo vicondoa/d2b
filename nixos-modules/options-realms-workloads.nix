@@ -281,7 +281,11 @@ let
           enable = lib.mkOption {
             type = lib.types.bool;
             default = false;
-            description = "Enable persistent-shell semantics for this workload.";
+            description = ''
+              Enable persistent-shell semantics for this workload. A local-vm
+              workload that references an existing VM through `legacyVmName`
+              also requires `d2b.vms.<name>.guest.shell.enable = true`.
+            '';
           };
 
           defaultName = lib.mkOption {

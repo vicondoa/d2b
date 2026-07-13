@@ -716,6 +716,11 @@ let
                   (row: builtins.elem row.item.type [ "exec" "shell" ])
                   itemRows);
               unsafeLocal = workload.kind == "unsafe-local";
+              linkedLocalVm =
+                workload.enable
+                && workload.kind == "local-vm"
+                && workload.legacyVmName != null
+                && builtins.hasAttr workload.legacyVmName cfg.vms;
               configuredLocalVm =
                 workload.enable
                 && workload.kind == "local-vm"
@@ -829,6 +834,18 @@ let
                 message = ''
                   ${path} declares a shell launcher item but shell.enable is
                   false.
+                '';
+              }
+              {
+                assertion =
+                  !linkedLocalVm
+                  || !workload.shell.enable
+                  || cfg.vms.${workload.legacyVmName}.guest.shell.enable;
+                message = ''
+                  ${path}.shell.enable is true, but its referenced local VM
+                  d2b.vms.${workload.legacyVmName}.guest.shell.enable is false.
+                  Enable persistent shells in the guest before advertising the
+                  workload as shell-capable.
                 '';
               }
             ]

@@ -5,6 +5,7 @@ let
     inherit self;
     inherit (pkgs) lib;
   };
+  waylandProxy = self.packages.${pkgs.stdenv.hostPlatform.system}.d2b-wayland-proxy;
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-unsafe-local-helper";
@@ -412,6 +413,7 @@ PY
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/missing "
         "XDG_RUNTIME_DIR=/run/user/1000 "
         "setsid -f /run/current-system/sw/bin/d2b-unsafe-local-helper "
+        "--wayland-proxy ${waylandProxy}/bin/d2b-wayland-proxy "
         "</dev/null >/run/d2b/no-manager-helper.log 2>&1"
     )
     machine.wait_until_succeeds(
