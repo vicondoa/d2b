@@ -2,8 +2,7 @@ name: pr-eval-shell-tests
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 permissions:
   contents: read
@@ -13,7 +12,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout candidate head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify candidate checkout
+        id: candidate
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse HEAD)
+          test "$actual_sha" = "$EXPECTED_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
 
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
@@ -25,6 +38,7 @@ jobs:
       # Static text/grep eval tests.
       # ---------------------------------------------------------------------------
       - name: Static eval tests
+        id: static_eval
         run: |
           set -euo pipefail
           for t in \
@@ -41,6 +55,7 @@ jobs:
       # Nix eval tests — require `nix` on PATH.
       # ---------------------------------------------------------------------------
       - name: Nix eval tests
+        id: nix_eval
         run: |
           set -euo pipefail
           for t in \
@@ -56,6 +71,7 @@ jobs:
       # cargo is not on PATH.  No live daemon, no KVM, no privileged broker.
       # ---------------------------------------------------------------------------
       - name: Cargo/Rust eval tests
+        id: rust_eval
         run: |
           set -euo pipefail
           for t in \
@@ -67,3 +83,19 @@ jobs:
               bash "$t"
             fi
           done
+
+      - name: Summarize checked tree
+        if: always()
+        env:
+          CHECKED_TREE: ${{ steps.candidate.outputs.sha }}
+          STATIC_OUTCOME: ${{ steps.static_eval.outcome }}
+          NIX_OUTCOME: ${{ steps.nix_eval.outcome }}
+          RUST_OUTCOME: ${{ steps.rust_eval.outcome }}
+        run: |
+          {
+            printf '## PR eval and shell checks\n\n'
+            printf -- '- tree: `%s`\n' "$CHECKED_TREE"
+            printf -- '- static eval: `%s`\n' "$STATIC_OUTCOME"
+            printf -- '- Nix eval: `%s`\n' "$NIX_OUTCOME"
+            printf -- '- Rust eval: `%s`\n' "$RUST_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"

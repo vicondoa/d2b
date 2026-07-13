@@ -15,7 +15,10 @@ pub mod seal;
 pub mod snapshot;
 pub mod storage;
 
-pub use command::{GhMergeSource, GhStackSource, GhStatusSource, GitProbe, ProcessCommandOutput};
+pub use command::{
+    GH_STACK_VERSION, GhMergeSource, GhStackSource, GhStatusSource, GitProbe, ProcessCommandOutput,
+    check_gh_stack_private_preview,
+};
 pub use eligibility::{
     MergeEligibility, atomic_history_merge, atomic_merge, check_history_merge_eligibility,
     check_merge_eligibility, evaluate_merge_eligibility,
@@ -155,6 +158,43 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             ],
             commands: workflow_command_help(),
         }),
+        [area, action, rest @ ..] if area == "stack" && action == "validate" => {
+            let mut options = CliOptions::parse(rest)?;
+            let manifest_path = options.required_path("--manifest")?;
+            options.finish()?;
+            let manifest: StackManifest = storage::read_json(&manifest_path)?;
+            manifest.validate()?;
+            Ok(WorkflowOutput {
+                schema_version: DELIVERY_SCHEMA_VERSION,
+                operation: "stack-validate".to_owned(),
+                status: "ok".to_owned(),
+                candidate_id: None,
+                artifact: None,
+                stages: vec![],
+                integration_points: vec!["checked-in-authoritative-manifest".to_owned()],
+                commands: vec![],
+            })
+        }
+        [area, action, rest @ ..] if area == "stack" && action == "capability" => {
+            let mut options = CliOptions::parse(rest)?;
+            let manifest_path = options.required_path("--manifest")?;
+            options.finish()?;
+            let manifest: StackManifest = storage::read_json(&manifest_path)?;
+            manifest.validate()?;
+            check_gh_stack_private_preview(&ProcessCommandOutput, &manifest.root_repository.name)?;
+            Ok(WorkflowOutput {
+                schema_version: DELIVERY_SCHEMA_VERSION,
+                operation: "stack-capability".to_owned(),
+                status: "ok".to_owned(),
+                candidate_id: None,
+                artifact: None,
+                stages: vec![],
+                integration_points: vec![format!(
+                    "official-gh-stack-{GH_STACK_VERSION}-private-preview"
+                )],
+                commands: vec![],
+            })
+        }
         [area, action, rest @ ..] if area == "wave" && action == "snapshot" => {
             let mut options = CliOptions::parse(rest)?;
             let authority_repository = options.required_string("--authority-repository")?;
@@ -362,7 +402,7 @@ fn run_cli_inner(args: &[String]) -> Result<WorkflowOutput> {
             output_for_eligibility("merge", merged)
         }
         _ => Err(DeliveryError::new(
-            "usage: cargo xtask delivery wave <help|snapshot|validation-run|validation-import|panel-request|panel-attest|seal|verify|eligibility|history-proof|retarget-preflight|merge> [options]",
+            "usage: cargo xtask delivery <stack <validate|capability> --manifest PATH|wave <help|snapshot|validation-run|validation-import|panel-request|panel-attest|seal|verify|eligibility|history-proof|retarget-preflight|merge> [options]>",
         )),
     }
 }

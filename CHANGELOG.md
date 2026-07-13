@@ -16,6 +16,11 @@ deprecations ship one minor release before removal.
   candidate-addressed snapshots, authority-captured validation evidence,
   exact-role panel attestations, non-circular wave seals, history-only reuse
   proofs, and fail-closed merge eligibility.
+- Added reproducible delivery packages and a default development shell with
+  official `gh-stack`, GitHub CLI, pinned-nightly `cargo-udeps`, and
+  `cargo-semver-checks`; stacked-base PR workflows now emit tree-bound check
+  summaries, and private-preview unavailability fails closed without a custom
+  stack-mutation fallback.
 
 ### Changed
 
@@ -53,6 +58,10 @@ deprecations ship one minor release before removal.
   bootstrap.
 - Made broker audit tests reserve exclusive process-local scratch directories
   before opening their logs.
+- Hardened the delivery environment with native build tools and `sccache`,
+  built the delivery app with pinned Rust 1.94.1 on both supported systems,
+  kept delivery evidence outside Git metadata, and bound non-generated PR
+  workflow summaries to the exact checked-out candidate commit.
 
 ## [1.4.1] - 2026-07-12
 

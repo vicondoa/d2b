@@ -29,6 +29,9 @@ pub const DEFAULT_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_GIT_BLOB_BYTES: usize = 16 * 1024 * 1024;
 const MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+pub const GH_STACK_VERSION: &str = "0.0.7";
+const GH_STACK_CANNOT_OPERATE: &str = "cannot operate: official gh-stack private preview is \
+    unavailable or unverifiable; no fallback stack mutation is permitted";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandLimits {
@@ -45,6 +48,13 @@ impl Default for CommandLimits {
             timeout: DEFAULT_COMMAND_TIMEOUT,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GhStackPreviewRecord {
+    id: u64,
+    pull_requests: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,6 +336,55 @@ fn receive_reader(
             "child output reader disconnected before completion",
         )),
     }
+}
+
+pub fn check_gh_stack_private_preview<A: CommandOutputAdapter>(
+    command: &A,
+    repository: &str,
+) -> Result<()> {
+    validate_repository_slug(repository)?;
+
+    let version = command
+        .output("gh-stack", &["--version".to_owned()], None)
+        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+    if !version.success {
+        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+    }
+    let version = String::from_utf8(version.stdout)
+        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+    let expected = format!("gh stack version {GH_STACK_VERSION}");
+    if version.trim() != expected {
+        return Err(DeliveryError::new(format!(
+            "cannot operate: expected official gh-stack {GH_STACK_VERSION}; \
+             no fallback stack mutation is permitted"
+        )));
+    }
+
+    let path = format!("repos/{repository}/cli_internal/pulls/stacks");
+    let response = command
+        .output(
+            "gh",
+            &[
+                "api".to_owned(),
+                "--method".to_owned(),
+                "GET".to_owned(),
+                path,
+            ],
+            None,
+        )
+        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+    if !response.success {
+        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+    }
+    let stacks: Vec<GhStackPreviewRecord> = serde_json::from_slice(&response.stdout)
+        .map_err(|_| DeliveryError::new(GH_STACK_CANNOT_OPERATE))?;
+    if stacks
+        .iter()
+        .any(|stack| stack.id == 0 || stack.pull_requests.contains(&0))
+    {
+        return Err(DeliveryError::new(GH_STACK_CANNOT_OPERATE));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1567,8 +1626,27 @@ pub fn reject_symlink_components(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_repository_slug(repository: &str) -> Result<()> {
+    let parts = repository.split('/').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || part.len() > 100
+                || part.starts_with('.')
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+    {
+        return Err(DeliveryError::new("invalid GitHub repository identity"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, collections::VecDeque};
+
     use super::*;
     use std::{cell::RefCell, collections::VecDeque};
 
@@ -1673,6 +1751,37 @@ mod tests {
                 }
             }
         })
+    }
+
+    struct FakeCommand {
+        outputs: RefCell<VecDeque<CommandOutput>>,
+        calls: RefCell<Vec<(String, Vec<String>)>>,
+    }
+
+    impl FakeCommand {
+        fn new(outputs: impl IntoIterator<Item = CommandOutput>) -> Self {
+            Self {
+                outputs: RefCell::new(outputs.into_iter().collect()),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl CommandOutputAdapter for FakeCommand {
+        fn output(
+            &self,
+            program: &str,
+            args: &[String],
+            _cwd: Option<&Path>,
+        ) -> Result<CommandOutput> {
+            self.calls
+                .borrow_mut()
+                .push((program.to_owned(), args.to_vec()));
+            self.outputs
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| DeliveryError::new("missing fake command output"))
+        }
     }
 
     #[test]
@@ -1984,5 +2093,118 @@ mod tests {
             .expect_err("no base compare-and-swap");
         assert!(error.to_string().contains("base+head compare-and-swap"));
         assert!(command.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn gh_stack_private_preview_probe_is_read_only_and_version_pinned() {
+        let command = FakeCommand::new([
+            CommandOutput {
+                success: true,
+                stdout: b"gh stack version 0.0.7\n".to_vec(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: b"[]\n".to_vec(),
+            },
+        ]);
+
+        check_gh_stack_private_preview(&command, "example/d2b").expect("available");
+
+        assert_eq!(
+            *command.calls.borrow(),
+            vec![
+                ("gh-stack".to_owned(), vec!["--version".to_owned()]),
+                (
+                    "gh".to_owned(),
+                    vec![
+                        "api".to_owned(),
+                        "--method".to_owned(),
+                        "GET".to_owned(),
+                        "repos/example/d2b/cli_internal/pulls/stacks".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn gh_stack_private_preview_failure_has_no_mutating_fallback() {
+        let command = FakeCommand::new([
+            CommandOutput {
+                success: true,
+                stdout: b"gh stack version 0.0.7\n".to_vec(),
+            },
+            CommandOutput {
+                success: false,
+                stdout: Vec::new(),
+            },
+        ]);
+
+        let error =
+            check_gh_stack_private_preview(&command, "example/d2b").expect_err("unavailable");
+        assert!(error.to_string().contains("cannot operate"));
+        assert!(error.to_string().contains("no fallback stack mutation"));
+        assert_eq!(command.calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn gh_stack_version_or_malformed_preview_response_fails_closed() {
+        let wrong_version = FakeCommand::new([CommandOutput {
+            success: true,
+            stdout: b"gh stack version 0.0.6\n".to_vec(),
+        }]);
+        let error = check_gh_stack_private_preview(&wrong_version, "example/d2b")
+            .expect_err("wrong version");
+        assert!(
+            error
+                .to_string()
+                .contains("expected official gh-stack 0.0.7")
+        );
+
+        let malformed = FakeCommand::new([
+            CommandOutput {
+                success: true,
+                stdout: b"gh stack version 0.0.7\n".to_vec(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: br#"{"unexpected":true}"#.to_vec(),
+            },
+        ]);
+        let error =
+            check_gh_stack_private_preview(&malformed, "example/d2b").expect_err("malformed");
+        assert!(error.to_string().contains("cannot operate"));
+
+        for payload in [
+            br#"[null]"#.as_slice(),
+            br#"[{"unexpected":true}]"#.as_slice(),
+            br#"[{"id":0,"pull_requests":[1]}]"#.as_slice(),
+            br#"[{"id":1,"pull_requests":[0]}]"#.as_slice(),
+        ] {
+            let malformed_array = FakeCommand::new([
+                CommandOutput {
+                    success: true,
+                    stdout: b"gh stack version 0.0.7\n".to_vec(),
+                },
+                CommandOutput {
+                    success: true,
+                    stdout: payload.to_vec(),
+                },
+            ]);
+            check_gh_stack_private_preview(&malformed_array, "example/d2b")
+                .expect_err("malformed stack record");
+        }
+
+        let valid = FakeCommand::new([
+            CommandOutput {
+                success: true,
+                stdout: b"gh stack version 0.0.7\n".to_vec(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: br#"[{"id":7,"pull_requests":[101,102]}]"#.to_vec(),
+            },
+        ]);
+        check_gh_stack_private_preview(&valid, "example/d2b").expect("typed stack record");
     }
 }

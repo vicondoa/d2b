@@ -53,6 +53,7 @@ fn v1_1_kernel_floor_declared_in_adr_and_migration_guide() {
 fn adr_0015_present_with_header_and_cross_references() {
     for f in [
         "docs/adr/0015-daemon-only-clean-break.md",
+        "docs/adr/0045-provider-and-transport-framework.md",
         "AGENTS.md",
         "docs/adr/README.md",
     ] {
@@ -60,7 +61,11 @@ fn adr_0015_present_with_header_and_cross_references() {
     }
     let adr = read_repo_file("docs/adr/0015-daemon-only-clean-break.md");
     assert_line_matches(&adr, r"(?m)^# 0015\. ", "ADR 0015 title");
-    assert_line_matches(&adr, r"(?m)^- Status: Accepted$", "ADR 0015 Status header");
+    assert_line_matches(
+        &adr,
+        r"(?m)^- Status: Superseded by \[ADR 0045\]\(0045-provider-and-transport-framework\.md\)$",
+        "ADR 0015 canonical superseded Status header",
+    );
     assert_line_matches(&adr, r"(?m)^- Wave: P6$", "ADR 0015 Wave header");
     assert_line_matches(
         &adr,
@@ -75,6 +80,18 @@ fn adr_0015_present_with_header_and_cross_references() {
         assert_line_matches(&adr, section, "ADR 0015 required section");
     }
 
+    let adr_0045 = read_repo_file("docs/adr/0045-provider-and-transport-framework.md");
+    assert_line_matches(&adr_0045, r"(?m)^# ADR 0045: ", "ADR 0045 title");
+    assert_line_matches(
+        &adr_0045,
+        r"(?m)^- Status: Accepted$",
+        "ADR 0045 accepted Status header",
+    );
+    assert!(
+        adr_0045.contains("[ADR 0015](0015-daemon-only-clean-break.md)"),
+        "accepted ADR 0045 must name ADR 0015 in its supersession list"
+    );
+
     let agents = read_repo_file("AGENTS.md");
     assert!(
         agents.contains("0015-daemon-only-clean-break.md"),
@@ -84,5 +101,162 @@ fn adr_0015_present_with_header_and_cross_references() {
     assert!(
         adr_index.contains("0015-daemon-only-clean-break.md"),
         "docs/adr/README.md index must list 0015-daemon-only-clean-break.md"
+    );
+}
+
+#[test]
+fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
+    let tools = read_repo_file("pkgs/delivery-tools.nix");
+    for pin in [
+        r#"ghVersion = "2.92.0";"#,
+        r#"ghStackVersion = "0.0.7";"#,
+        r#"cargoUdepsVersion = "0.1.61";"#,
+        r#"cargoUdepsNightlyDate = "2025-12-01";"#,
+        r#"cargoSemverChecksVersion = "0.47.0";"#,
+        r#"rustStableVersion = "1.94.1";"#,
+        r#"hash = "sha256-mD76Ef2b1loiyd807s9zuV0OD9tmRTJLLKT3WCyssug=";"#,
+        r#"vendorHash = "sha256-Qs46cUUQjdF/pU5TgSAkQ583JpVrFt22kg6g6TDCpG4=";"#,
+        r#"hash = "sha256-yT/EJWGGhQapbU1o1Gus1Vk5cAhso5ALTBecB3BH46g=";"#,
+        r#"cargoHash = "sha256-DGfAsBucFRFJkjmJkpTpNfQO79jaNa5NezXKf7hYYeM=";"#,
+        r#"hash = "sha256-1D6WFsiMOl/bJr0J+mmvLlgnRSKN6rPhDSnDsdLTC9E=";"#,
+        r#"cargoHash = "sha256-YbtYIHj899eJSrp5n5jODgTkL9L26EnruzECwBrBF00=";"#,
+    ] {
+        assert!(
+            tools.contains(pin),
+            "delivery tooling is missing exact pin {pin}"
+        );
+    }
+    assert!(
+        !tools.contains("fakeHash") && !tools.contains("fakeSha256"),
+        "delivery tooling must not contain placeholder hashes"
+    );
+    assert!(
+        !tools.contains("curl") && !tools.contains("rustup"),
+        "delivery tools must not download toolchains or binaries at runtime"
+    );
+
+    let flake = read_repo_file("flake.nix");
+    assert!(
+        flake.contains(r#"inputs.nixpkgs.follows = "nixpkgs";"#)
+            && flake.contains("rust-overlay.overlays.default"),
+        "the locked rust-overlay input must follow nixpkgs and remain scoped to delivery tooling"
+    );
+    assert!(
+        flake.contains("devShells = forAllSystems")
+            && flake.contains("shell = pkgs.mkShell {")
+            && flake.contains("pkgs.stdenv.cc")
+            && flake.contains("pkgs.pkg-config")
+            && flake.contains("pkgs.openssl")
+            && flake.contains("pkgs.cmake")
+            && flake.contains("pkgs.sccache")
+            && flake.contains("cargo-udeps-nightly = deliveryTools.cargoUdepsNightly;")
+            && flake.contains("cargo-semver-checks = deliveryTools.cargoSemverChecks;"),
+        "supported systems must expose the pinned delivery tools and native-capable shell"
+    );
+    assert!(
+        tools.contains("stableRustPlatform = pkgs.makeRustPlatform")
+            && tools.contains("cargo = stableRust;")
+            && tools.contains("rustc = stableRust;")
+            && tools.contains("pkgs.lib.makeBinPath [ nightlyRust pkgs.sccache ]")
+            && tools.contains("--set CARGO ${nightlyRust}/bin/cargo")
+            && tools.contains("--set RUSTC ${nightlyRust}/bin/rustc"),
+        "cargo-udeps must contain nightly and sccache without replacing ordinary stable cargo"
+    );
+    assert!(
+        flake.contains(
+            "deliveryRustWorkspace =\n          rustWorkspaceWith deliveryTools.stableRustPlatform;"
+        ) && flake.contains("d2b-delivery = deliveryRustWorkspace {")
+            && flake.contains(
+                "passthru.rustToolchainVersion = deliveryTools.rustStableVersion;"
+            )
+            && flake.contains(
+                r#"outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";"#
+            ),
+        "d2b-delivery must use the pinned stable Rust platform and locked Cargo sources"
+    );
+    assert!(
+        flake.contains("export CARGO_NET_OFFLINE=true")
+            && flake.contains("cargo metadata \\")
+            && flake.contains("find_package(OpenSSL REQUIRED)")
+            && flake.contains("native-smoke/build/d2b-delivery-native-smoke"),
+        "delivery tooling check must smoke metadata and native compilation without network"
+    );
+    assert!(
+        flake.contains("overlays.default = _final: _prev: { };"),
+        "developer tooling must not expand the public overlay"
+    );
+    let lock = read_repo_file("flake.lock");
+    for pin in [
+        r#""rev": "e013376c32a8fcf07ddb6ec71739552bc118b7bd""#,
+        r#""narHash": "sha256-DsSIQSRMrLOz40LrGZ03sp2RlJ9sz3wKpd8XPTOzXnw=""#,
+    ] {
+        assert!(
+            lock.contains(pin),
+            "rust-overlay lock is missing exact pin {pin}"
+        );
+    }
+
+    let delivery_command = read_repo_file("packages/xtask/src/delivery/command.rs");
+    assert!(
+        delivery_command.contains(r#""GET".to_owned()"#)
+            && delivery_command.contains("no fallback stack mutation is permitted"),
+        "xtask must encode read-only private-preview inspection and fail-closed fallback"
+    );
+    for mutation in [
+        r#""POST".to_owned()"#,
+        r#""PUT".to_owned()"#,
+        r#""PATCH".to_owned()"#,
+        r#""DELETE".to_owned()"#,
+    ] {
+        assert!(
+            !delivery_command.contains(mutation),
+            "xtask must not implement a GitHub stack mutation with {mutation}"
+        );
+    }
+}
+
+#[test]
+fn non_generated_pr_workflows_cover_stacked_bases_safely() {
+    for path in [
+        ".github/workflows/pr-eval-shell-tests.yml",
+        ".github/workflows/eval-with-entra-id.yml",
+    ] {
+        let workflow = read_repo_file(path);
+        assert!(
+            workflow.contains("  pull_request: {}"),
+            "{path} must run for pull requests targeting feature branches"
+        );
+        assert!(
+            !workflow.contains("pull_request_target"),
+            "{path} must not execute untrusted code through pull_request_target"
+        );
+        assert!(
+            workflow.contains("permissions:\n  contents: read"),
+            "{path} must retain read-only workflow permissions"
+        );
+        assert!(
+            workflow.contains("ref: ${{ github.event.pull_request.head.sha || github.sha }}")
+                && workflow.contains("persist-credentials: false"),
+            "{path} must explicitly check out the exact candidate SHA without credentials"
+        );
+        assert!(
+            workflow.contains("actual_sha=$(git rev-parse HEAD)")
+                && workflow.contains(r#"test "$actual_sha" = "$EXPECTED_SHA""#)
+                && workflow.contains("CHECKED_TREE: ${{ steps.candidate.outputs.sha }}")
+                && workflow.contains("GITHUB_STEP_SUMMARY"),
+            "{path} must bind its summary to the verified actual checkout"
+        );
+    }
+
+    let reference = read_repo_file("docs/reference/delivery-tooling.md");
+    assert!(
+        reference.contains("Official `gh-stack` is the only stack mutator")
+            && reference.contains("There is no fallback stack mutation")
+            && reference.contains("Private-preview\navailability is mandatory and fail-closed")
+            && reference.contains("Use `$XDG_STATE_HOME/d2b/delivery`")
+            && reference.contains("Git metadata is never delivery state")
+            && reference.contains("must never be added\nto the reviewed tree")
+            && reference.contains(r#"--state-dir "$XDG_STATE_HOME/d2b/delivery""#),
+        "delivery reference must fail closed and keep evidence external"
     );
 }
