@@ -19,7 +19,7 @@ use xtask::delivery::{
         PullRequestStatus, PullRequestStatusSource, RepositoryProbe, StackGraphSource, TrackedBlob,
     },
     construct_history_proof, construct_seal, create_snapshot,
-    evidence::{CiAttestationClaims, CiAttestationVerifier, VerifiedCiAttestation},
+    evidence::{CiAttestationClaims, CiAttestationVerifier, EvidenceRecord, VerifiedCiAttestation},
     import_ci_evidence,
     model::{
         CheckPublisher, CheckPublisherKind, DeliveryManifest, FingerprintSpec, GhStackBranch,
@@ -534,6 +534,32 @@ fn complete_flow_is_portable_private_and_has_no_checkout_paths() {
     assert!(evidence_json.contains("\"argv\""));
     assert!(!evidence_json.contains("\"stdout\":"));
     assert!(!evidence_json.contains("\"stderr\":"));
+    let evidence: EvidenceRecord = serde_json::from_str(&evidence_json).expect("evidence record");
+    let capture = evidence.output_capture.expect("private output metadata");
+    assert!(!capture.stdout_truncated);
+    assert!(!capture.stderr_truncated);
+    let payload_name = evidence
+        .payload_locator
+        .strip_prefix("private://validation-output/")
+        .expect("private output locator");
+    let payload = snapshot_path
+        .parent()
+        .expect("candidate")
+        .join("validation-output")
+        .join(payload_name);
+    assert!(payload.is_file());
+    assert_eq!(
+        sha256_file(&payload).expect("output digest"),
+        evidence.payload_sha256
+    );
+    assert_eq!(
+        fs::metadata(&payload)
+            .expect("output metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     let probe = GitProbe::new(ProcessCommandOutput);
     verify_seal(
         &probe,

@@ -17,7 +17,7 @@ use super::{
     },
     storage::{
         MAX_JSON_BYTES, StateLayout, acquire_candidate_lock, ensure_external_path,
-        read_verified_json, sha256_bytes, write_immutable_json,
+        read_verified_json, sha256_bytes,
     },
 };
 
@@ -111,7 +111,7 @@ pub fn create_snapshot<P: RepositoryProbe, G: StackGraphSource, S: PullRequestSt
         &collected.candidate_id,
     )?;
     let path = layout.snapshot();
-    write_immutable_json(&path, &collected)?;
+    layout.write_candidate_json("snapshot.json", &collected)?;
     Ok(path)
 }
 
@@ -127,7 +127,20 @@ pub(crate) fn load_snapshot_context<P: RepositoryProbe>(
     snapshot_path: &Path,
     verification: CurrentVerification,
 ) -> Result<SnapshotContext> {
-    let (snapshot, digest): (WaveSnapshot, String) = read_verified_json(snapshot_path)?;
+    let (initial_snapshot, _initial_digest): (WaveSnapshot, String) =
+        read_verified_json(snapshot_path)?;
+    initial_snapshot.validate()?;
+    let layout = StateLayout::from_snapshot_path(
+        snapshot_path,
+        &initial_snapshot.wave,
+        &initial_snapshot.candidate_id,
+    )?;
+    let (snapshot, digest): (WaveSnapshot, String) = layout.read_candidate_json("snapshot.json")?;
+    if snapshot != initial_snapshot {
+        return Err(DeliveryError::new(
+            "snapshot changed while its state directory was being anchored",
+        ));
+    }
     snapshot.validate()?;
     let roots = canonicalize_roots(probe, repository_roots)?;
     let expected_ids = snapshot
@@ -143,8 +156,6 @@ pub(crate) fn load_snapshot_context<P: RepositoryProbe>(
     }
     let root_paths = external_exclusions(probe, &roots)?;
     ensure_external_path(snapshot_path, &root_paths)?;
-    let layout =
-        StateLayout::from_snapshot_path(snapshot_path, &snapshot.wave, &snapshot.candidate_id)?;
     ensure_external_path(&layout.root, &root_paths)?;
     verify_snapshot_objects(probe, &snapshot, &roots)?;
     if verification == CurrentVerification::ExactRefs {

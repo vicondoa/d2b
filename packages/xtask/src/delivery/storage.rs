@@ -1,17 +1,25 @@
 use std::{
+    collections::BTreeSet,
     ffi::{OsStr, OsString},
+    fmt,
     fs::{self, File},
     io::{Read, Write},
     os::{
-        fd::{AsFd, OwnedFd},
+        fd::{AsFd, AsRawFd, OwnedFd},
         unix::fs::{MetadataExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use rustix::{
-    fs::{Mode, OFlags, RenameFlags, fchmod, mkdirat, open, openat, renameat_with, unlinkat},
+    fs::{
+        FlockOperation, Mode, OFlags, RenameFlags, fchmod, fcntl_lock, mkdirat, open, openat,
+        renameat_with, unlinkat,
+    },
     io::Errno,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -29,12 +37,50 @@ pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMMUTABLE_BYTES: usize = MAX_PAYLOAD_BYTES;
 const MAX_SIDECAR_BYTES: usize = 65;
 static NEXT_PRIVATE_FILE: AtomicU64 = AtomicU64::new(1);
+static NEXT_STAGING_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+static HELD_LOCKS: OnceLock<Mutex<BTreeSet<(u64, u64)>>> = OnceLock::new();
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
+pub struct StagedInput {
+    path: PathBuf,
+    digest: String,
+}
+
+impl StagedInput {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+#[derive(Clone)]
 pub struct StateLayout {
     pub root: PathBuf,
     pub candidate: PathBuf,
+    root_fd: Arc<OwnedFd>,
+    candidate_fd: Arc<OwnedFd>,
 }
+
+impl fmt::Debug for StateLayout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StateLayout")
+            .field("root", &self.root)
+            .field("candidate", &self.candidate)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for StateLayout {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root && self.candidate == other.candidate
+    }
+}
+
+impl Eq for StateLayout {}
 
 impl StateLayout {
     pub fn create(
@@ -50,7 +96,7 @@ impl StateLayout {
         create_private_dir(&wave_dir)?;
         let candidate = wave_dir.join(candidate_id);
         create_private_dir(&candidate)?;
-        Ok(Self { root, candidate })
+        Self::anchor(root, candidate)
     }
 
     pub fn from_snapshot_path(
@@ -90,7 +136,169 @@ impl StateLayout {
         verify_private_directory(&root)?;
         verify_private_directory(wave_dir)?;
         verify_private_directory(&candidate)?;
-        Ok(Self { root, candidate })
+        Self::anchor(root, candidate)
+    }
+
+    fn anchor(root: PathBuf, candidate: PathBuf) -> Result<Self> {
+        let root_fd = Arc::new(open_directory_chain(&root, false)?);
+        let candidate_fd = Arc::new(open_directory_chain(&candidate, false)?);
+        secure_opened_directory(&root_fd, "delivery state root")?;
+        secure_opened_directory(&candidate_fd, "delivery candidate directory")?;
+        Ok(Self {
+            root,
+            candidate,
+            root_fd,
+            candidate_fd,
+        })
+    }
+
+    fn relative_path(&self, relative: impl AsRef<Path>) -> PathBuf {
+        self.candidate.join(relative)
+    }
+
+    pub fn anchored_path(&self, relative: impl AsRef<Path>) -> Result<PathBuf> {
+        self.verify_anchors()?;
+        validate_anchored_relative(relative.as_ref())?;
+        Ok(PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            self.candidate_fd.as_raw_fd()
+        ))
+        .join(relative))
+    }
+
+    pub fn write_candidate_json<T: Serialize>(
+        &self,
+        relative: impl AsRef<Path>,
+        value: &T,
+    ) -> Result<String> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        let bytes = json_bytes(value)?;
+        write_immutable_at(&self.candidate_fd, relative, &bytes)?;
+        let digest = sha256_bytes(&bytes);
+        let sidecar = digest_relative_path(relative)?;
+        write_immutable_at(
+            &self.candidate_fd,
+            &sidecar,
+            format!("{digest}\n").as_bytes(),
+        )?;
+        Ok(digest)
+    }
+
+    pub fn write_candidate_file(&self, relative: impl AsRef<Path>, bytes: &[u8]) -> Result<String> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        write_immutable_at(&self.candidate_fd, relative, bytes)?;
+        let digest = sha256_bytes(bytes);
+        let sidecar = digest_relative_path(relative)?;
+        write_immutable_at(
+            &self.candidate_fd,
+            &sidecar,
+            format!("{digest}\n").as_bytes(),
+        )?;
+        Ok(digest)
+    }
+
+    pub fn read_candidate_json<T: DeserializeOwned>(
+        &self,
+        relative: impl AsRef<Path>,
+    ) -> Result<(T, String)> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        let bytes = read_limited_at(&self.candidate_fd, relative, MAX_JSON_BYTES, true)?;
+        let digest = verify_digest_bytes_at(&self.candidate_fd, relative, &bytes)?;
+        let value = serde_json::from_slice(&bytes).map_err(|error| {
+            DeliveryError::new(format!(
+                "invalid JSON in {}: {error}",
+                self.relative_path(relative).display()
+            ))
+        })?;
+        Ok((value, digest))
+    }
+
+    pub fn verify_candidate_digest(&self, relative: impl AsRef<Path>) -> Result<String> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        let bytes = read_limited_at(&self.candidate_fd, relative, MAX_PAYLOAD_BYTES, true)?;
+        verify_digest_bytes_at(&self.candidate_fd, relative, &bytes)
+    }
+
+    pub fn retain_candidate_file(
+        &self,
+        source: &Path,
+        relative: impl AsRef<Path>,
+    ) -> Result<String> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        let bytes = read_limited(source, MAX_PAYLOAD_BYTES, true)?;
+        write_immutable_at(&self.candidate_fd, relative, &bytes)?;
+        let digest = sha256_bytes(&bytes);
+        let sidecar = digest_relative_path(relative)?;
+        write_immutable_at(
+            &self.candidate_fd,
+            &sidecar,
+            format!("{digest}\n").as_bytes(),
+        )?;
+        Ok(digest)
+    }
+
+    pub fn stage_external_file(
+        &self,
+        source: &Path,
+        label: &str,
+        limit: usize,
+    ) -> Result<StagedInput> {
+        self.verify_anchors()?;
+        validate_identifier(label, "staged input label")?;
+        let bytes = read_limited(source, limit, false)?;
+        let relative = PathBuf::from("input-staging").join(format!(
+            "{}-{}-{}",
+            std::process::id(),
+            NEXT_STAGING_DIRECTORY.fetch_add(1, Ordering::Relaxed),
+            label
+        ));
+        write_immutable_at(&self.candidate_fd, &relative, &bytes)?;
+        Ok(StagedInput {
+            path: self.anchored_path(&relative)?,
+            digest: sha256_bytes(&bytes),
+        })
+    }
+
+    pub fn list_candidate_directory(&self, relative: impl AsRef<Path>) -> Result<Vec<OsString>> {
+        self.verify_anchors()?;
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        let fd = open_relative_directory_chain(&self.candidate_fd, relative, false)?;
+        let proc_path = PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            fd.as_raw_fd()
+        ));
+        let mut names = Vec::new();
+        for entry in fs::read_dir(proc_path)? {
+            names.push(entry?.file_name());
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    fn verify_anchors(&self) -> Result<()> {
+        for (fd, label) in [
+            (&self.root_fd, "delivery state root"),
+            (&self.candidate_fd, "delivery candidate directory"),
+        ] {
+            let metadata = File::from(fd.try_clone()?).metadata()?;
+            verify_owner(&metadata, label)?;
+            if !metadata.is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+                return Err(DeliveryError::new(format!(
+                    "{label} anchor is no longer a private directory"
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn snapshot(&self) -> PathBuf {
@@ -143,8 +351,36 @@ impl StateLayout {
     }
 }
 
+#[derive(Debug)]
 pub struct CandidateLock {
-    _file: File,
+    file: File,
+    identity: (u64, u64),
+}
+
+#[derive(Debug)]
+enum CandidateLockFailure {
+    Contended,
+    Kernel(Errno),
+}
+
+impl CandidateLockFailure {
+    fn into_delivery_error(self) -> DeliveryError {
+        match self {
+            Self::Contended => DeliveryError::new("candidate lock contention"),
+            Self::Kernel(error) => {
+                DeliveryError::new(format!("cannot acquire candidate OFD lock: {error}"))
+            }
+        }
+    }
+}
+
+impl Drop for CandidateLock {
+    fn drop(&mut self) {
+        let _ = fcntl_lock(&self.file, FlockOperation::NonBlockingUnlock);
+        if let Ok(mut held) = HELD_LOCKS.get_or_init(Default::default).lock() {
+            held.remove(&self.identity);
+        }
+    }
 }
 
 pub fn acquire_candidate_lock(
@@ -178,10 +414,30 @@ pub fn acquire_candidate_lock(
     fchmod(&fd, Mode::from_raw_mode(0o600))
         .map_err(|error| DeliveryError::new(format!("cannot secure candidate lock: {error}")))?;
     let file = File::from(fd);
-    verify_private_file_metadata(&file.metadata()?, "candidate lock")?;
-    file.try_lock()
-        .map_err(|error| DeliveryError::new(format!("candidate is already locked: {error}")))?;
-    Ok((root, CandidateLock { _file: file }))
+    let metadata = file.metadata()?;
+    verify_private_file_metadata(&metadata, "candidate lock")?;
+    let identity = (metadata.dev(), metadata.ino());
+    {
+        let mut held = HELD_LOCKS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| DeliveryError::new("candidate lock registry is poisoned"))?;
+        if !held.insert(identity) {
+            return Err(CandidateLockFailure::Contended.into_delivery_error());
+        }
+    }
+    fcntl_lock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+        if let Ok(mut held) = HELD_LOCKS.get_or_init(Default::default).lock() {
+            held.remove(&identity);
+        }
+        if matches!(error, Errno::AGAIN | Errno::ACCESS) {
+            CandidateLockFailure::Contended
+        } else {
+            CandidateLockFailure::Kernel(error)
+        }
+        .into_delivery_error()
+    })?;
+    Ok((root, CandidateLock { file, identity }))
 }
 
 pub fn prepare_state_root(
@@ -385,24 +641,56 @@ pub fn digest_path(path: &Path) -> Result<PathBuf> {
     Ok(path.with_file_name(digest_name))
 }
 
+fn digest_relative_path(path: &Path) -> Result<PathBuf> {
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| DeliveryError::new("artifact path has no UTF-8 filename"))?;
+    let digest_name = match name.strip_suffix(".json") {
+        Some(stem) => format!("{stem}.sha256"),
+        None => format!("{name}.sha256"),
+    };
+    Ok(path.with_file_name(digest_name))
+}
+
 pub fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = open_parent(path, true)?;
+    let destination_name = file_name(path)?;
+    write_immutable_in(&parent, destination_name, bytes, path)
+}
+
+fn write_immutable_at(anchor: &OwnedFd, relative: &Path, bytes: &[u8]) -> Result<()> {
+    validate_anchored_relative(relative)?;
+    let (parent, destination_name) = open_relative_parent(anchor, relative, true)?;
+    write_immutable_in(
+        &parent,
+        &destination_name,
+        bytes,
+        &PathBuf::from("<anchored-state>").join(relative),
+    )
+}
+
+fn write_immutable_in(
+    parent: &OwnedFd,
+    destination_name: &OsStr,
+    bytes: &[u8],
+    display_path: &Path,
+) -> Result<()> {
     if bytes.len() > MAX_IMMUTABLE_BYTES {
         return Err(DeliveryError::new(format!(
             "immutable artifact exceeds {MAX_IMMUTABLE_BYTES} bytes"
         )));
     }
-    let parent = open_parent(path, true)?;
-    secure_opened_directory(&parent, "immutable artifact directory")?;
-    let destination_name = file_name(path)?;
-    match read_existing_at(&parent, destination_name, bytes.len())? {
+    secure_opened_directory(parent, "immutable artifact directory")?;
+    match read_existing_at(parent, destination_name, bytes.len())? {
         Some(existing) if existing == bytes => {
-            verify_private_path(path)?;
+            verify_private_file_at(parent, destination_name)?;
             return Ok(());
         }
         Some(_) => {
             return Err(DeliveryError::new(format!(
                 "immutable artifact already exists with different content: {}",
-                path.display()
+                display_path.display()
             )));
         }
         None => {}
@@ -423,7 +711,7 @@ pub fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
     .map_err(|error| {
         DeliveryError::new(format!(
             "cannot create private immutable artifact {}: {error}",
-            path.display()
+            display_path.display()
         ))
     })?;
     let mut file = File::from(fd);
@@ -437,7 +725,7 @@ pub fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
         );
         return Err(DeliveryError::new(format!(
             "cannot persist {}: {error}",
-            path.display()
+            display_path.display()
         )));
     }
     match renameat_with(
@@ -454,15 +742,15 @@ pub fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
                 &temporary_name,
                 rustix::fs::AtFlags::empty(),
             );
-            match read_existing_at(&parent, destination_name, bytes.len())? {
+            match read_existing_at(parent, destination_name, bytes.len())? {
                 Some(existing) if existing == bytes => {
-                    verify_private_path(path)?;
+                    verify_private_file_at(parent, destination_name)?;
                     return Ok(());
                 }
                 _ => {
                     return Err(DeliveryError::new(format!(
                         "immutable artifact appeared with different content: {}",
-                        path.display()
+                        display_path.display()
                     )));
                 }
             }
@@ -475,17 +763,19 @@ pub fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
             );
             return Err(DeliveryError::new(format!(
                 "cannot atomically publish {}: {error}",
-                path.display()
+                display_path.display()
             )));
         }
     }
-    File::from(parent).sync_all().map_err(|error| {
-        DeliveryError::new(format!(
-            "cannot fsync artifact directory {}: {error}",
-            path.display()
-        ))
-    })?;
-    verify_private_path(path)
+    File::from(parent.try_clone()?)
+        .sync_all()
+        .map_err(|error| {
+            DeliveryError::new(format!(
+                "cannot fsync artifact directory {}: {error}",
+                display_path.display()
+            ))
+        })?;
+    verify_private_file_at(parent, destination_name)
 }
 
 fn read_existing_at(
@@ -525,6 +815,18 @@ fn read_existing_at(
         return Ok(Some(Vec::new()));
     }
     Ok(Some(bytes))
+}
+
+fn verify_private_file_at(parent: &OwnedFd, name: &OsStr) -> Result<()> {
+    let fd = openat(
+        parent.as_fd(),
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| DeliveryError::new(format!("cannot open private artifact: {error}")))?;
+    let file = File::from(fd);
+    verify_private_file_metadata(&file.metadata()?, "immutable artifact")
 }
 
 pub fn ensure_external_path(path: &Path, repository_roots: &[PathBuf]) -> Result<()> {
@@ -617,19 +919,20 @@ pub fn reject_delivery_payload(path: &Path, state_root: &Path) -> Result<()> {
             "delivery artifacts cannot be validation evidence payloads",
         ));
     }
-    let metadata = fs::metadata(&path)?;
-    if metadata.len() <= MAX_JSON_BYTES as u64 {
-        let bytes = read_limited(&path, MAX_JSON_BYTES, false)?;
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            && value
-                .get("artifact_kind")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind.starts_with("d2b-delivery/"))
-        {
-            return Err(DeliveryError::new(
-                "delivery artifacts cannot be validation evidence payloads",
-            ));
-        }
+    Ok(())
+}
+
+pub fn reject_delivery_payload_content(path: &Path) -> Result<()> {
+    let bytes = read_limited(path, MAX_PAYLOAD_BYTES, true)?;
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && value
+            .get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| kind.starts_with("d2b-delivery/"))
+    {
+        return Err(DeliveryError::new(
+            "delivery artifacts cannot be validation evidence payloads",
+        ));
     }
     Ok(())
 }
@@ -646,6 +949,7 @@ pub fn validate_payload_locator(locator: &str) -> Result<()> {
         })
         || !(locator.starts_with("github-artifact://")
             || locator.starts_with("discarded://")
+            || locator.starts_with("private://")
             || locator.starts_with("oci://"))
     {
         return Err(DeliveryError::new(
@@ -713,19 +1017,46 @@ fn open_parent(path: &Path, create: bool) -> Result<OwnedFd> {
     open_directory_chain(parent, create)
 }
 
-fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
-    if !path.is_absolute() {
-        return Err(DeliveryError::new("anchored path must be absolute"));
+fn validate_anchored_relative(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err(DeliveryError::new(
+            "anchored state path must be non-empty and relative",
+        ));
     }
-    let mut current = open(
-        "/",
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| DeliveryError::new(format!("cannot anchor filesystem root: {error}")))?;
     for component in path.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err(DeliveryError::new("anchored state path contains traversal"));
+        }
+    }
+    Ok(())
+}
+
+fn open_relative_parent(
+    anchor: &OwnedFd,
+    relative: &Path,
+    create: bool,
+) -> Result<(OwnedFd, OsString)> {
+    validate_anchored_relative(relative)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| DeliveryError::new("anchored state path has no filename"))?
+        .to_os_string();
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let fd = open_relative_directory_chain(anchor, parent, create)?;
+    Ok((fd, name))
+}
+
+fn open_relative_directory_chain(
+    anchor: &OwnedFd,
+    relative: &Path,
+    create: bool,
+) -> Result<OwnedFd> {
+    let mut current = anchor.try_clone()?;
+    for component in relative.components() {
         let Component::Normal(name) = component else {
-            continue;
+            return Err(DeliveryError::new(
+                "anchored directory path contains traversal",
+            ));
         };
         current = match openat(
             current.as_fd(),
@@ -736,13 +1067,95 @@ fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
             Ok(next) => next,
             Err(error) if create && error == Errno::NOENT => {
                 mkdirat(current.as_fd(), name, Mode::from_raw_mode(0o700)).map_err(|error| {
+                    DeliveryError::new(format!("cannot create anchored state directory: {error}"))
+                })?;
+                openat(
+                    current.as_fd(),
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(|error| {
+                    DeliveryError::new(format!("cannot open new anchored state directory: {error}"))
+                })?
+            }
+            Err(error) => {
+                return Err(DeliveryError::new(format!(
+                    "anchored state path contains a missing, symlink, or non-directory component: {error}"
+                )));
+            }
+        };
+        secure_opened_directory(&current, "delivery state directory")?;
+    }
+    Ok(current)
+}
+
+fn open_directory_chain(path: &Path, create: bool) -> Result<OwnedFd> {
+    if !path.is_absolute() {
+        return Err(DeliveryError::new("anchored path must be absolute"));
+    }
+    let components = path.components().collect::<Vec<_>>();
+    let own_pid = std::process::id().to_string();
+    let proc_fd_prefix = match components.as_slice() {
+        [
+            Component::RootDir,
+            Component::Normal(proc),
+            Component::Normal(pid),
+            Component::Normal(fd),
+            Component::Normal(number),
+            rest @ ..,
+        ] if *proc == OsStr::new("proc")
+            && *pid == OsStr::new(&own_pid)
+            && *fd == OsStr::new("fd") =>
+        {
+            Some((*number, rest))
+        }
+        _ => None,
+    };
+    let (mut current, remaining): (OwnedFd, &[Component<'_>]) = if let Some((number, rest)) =
+        proc_fd_prefix
+    {
+        let descriptor = PathBuf::from("/proc/self/fd").join(number);
+        let fd = open(
+            &descriptor,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            DeliveryError::new(format!(
+                "cannot duplicate anchored state descriptor: {error}"
+            ))
+        })?;
+        (fd, rest)
+    } else {
+        let fd = open(
+            "/",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| DeliveryError::new(format!("cannot anchor filesystem root: {error}")))?;
+        (fd, &components)
+    };
+    for component in remaining {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        current = match openat(
+            current.as_fd(),
+            *name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(next) => next,
+            Err(error) if create && error == Errno::NOENT => {
+                mkdirat(current.as_fd(), *name, Mode::from_raw_mode(0o700)).map_err(|error| {
                     DeliveryError::new(format!(
                         "cannot create anchored directory component: {error}"
                     ))
                 })?;
                 openat(
                     current.as_fd(),
-                    name,
+                    *name,
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                     Mode::empty(),
                 )
@@ -799,6 +1212,7 @@ fn read_limited(path: &Path, limit: usize, require_private: bool) -> Result<Vec<
             path.display()
         )));
     }
+
     let size = usize::try_from(size)
         .map_err(|_| DeliveryError::new("artifact size does not fit in memory"))?;
     let mut bytes = vec![0_u8; size];
@@ -813,9 +1227,68 @@ fn read_limited(path: &Path, limit: usize, require_private: bool) -> Result<Vec<
     Ok(bytes)
 }
 
-fn verify_private_path(path: &Path) -> Result<()> {
-    let file = open_regular_file(path, true)?;
-    verify_private_file_metadata(&file.metadata()?, "immutable artifact")
+fn read_limited_at(
+    anchor: &OwnedFd,
+    relative: &Path,
+    limit: usize,
+    require_private: bool,
+) -> Result<Vec<u8>> {
+    let (parent, name) = open_relative_parent(anchor, relative, false)?;
+    let fd = openat(
+        parent.as_fd(),
+        &name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        DeliveryError::new(format!(
+            "cannot open anchored artifact {}: {error}",
+            relative.display()
+        ))
+    })?;
+    let mut file = File::from(fd);
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(DeliveryError::new(
+            "anchored artifact is not a regular file",
+        ));
+    }
+    if require_private {
+        verify_private_file_metadata(&metadata, "private anchored artifact")?;
+    }
+    if metadata.len() > limit as u64 {
+        return Err(DeliveryError::new(format!(
+            "anchored artifact exceeds {limit} bytes"
+        )));
+    }
+    let size = usize::try_from(metadata.len())
+        .map_err(|_| DeliveryError::new("anchored artifact size does not fit in memory"))?;
+    let mut bytes = vec![0_u8; size];
+    file.read_exact(&mut bytes)?;
+    let mut extra = [0_u8; 1];
+    if file.read(&mut extra)? != 0 {
+        return Err(DeliveryError::new(
+            "anchored artifact changed while reading",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn verify_digest_bytes_at(anchor: &OwnedFd, path: &Path, bytes: &[u8]) -> Result<String> {
+    let digest = sha256_bytes(bytes);
+    let sidecar = digest_relative_path(path)?;
+    let recorded = read_limited_at(anchor, &sidecar, MAX_SIDECAR_BYTES, true)?;
+    let recorded = std::str::from_utf8(&recorded)
+        .map_err(|_| DeliveryError::new("artifact digest sidecar is not UTF-8"))?
+        .trim();
+    validate_sha256(recorded, "artifact digest")?;
+    if recorded != digest {
+        return Err(DeliveryError::new(format!(
+            "digest mismatch for anchored artifact {}",
+            path.display()
+        )));
+    }
+    Ok(digest)
 }
 
 pub fn verify_private_directory(path: &Path) -> Result<()> {
@@ -869,7 +1342,10 @@ fn file_name(path: &Path) -> Result<&OsStr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        os::unix::fs::symlink,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -913,6 +1389,70 @@ mod tests {
         fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o600)).expect("mode");
         let error = verify_json_digest(&path).expect_err("oversized");
         assert!(error.to_string().contains("exceeds"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn candidate_lock_contends_between_separate_open_descriptions_and_releases() {
+        let root = scratch("ofd-lock");
+        let key = "a".repeat(64);
+        let requested = root.join("state");
+        let (_, first) =
+            acquire_candidate_lock(&[], Some(&requested), "w1", &key).expect("first lock");
+        let error = acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+            .expect_err("separate open description must contend");
+        assert!(error.to_string().contains("contention"));
+        drop(first);
+        acquire_candidate_lock(&[], Some(&requested), "w1", &key)
+            .expect("lock released with owning description");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn staged_input_survives_source_replacement() {
+        let root = scratch("staged-source");
+        let state = root.join("state");
+        let source = root.join("source");
+        fs::write(&source, b"trusted").expect("source");
+        let layout = StateLayout::create(&[], Some(&state), "w1", &"b".repeat(64)).expect("layout");
+        let staged = layout
+            .stage_external_file(&source, "receipt", MAX_JSON_BYTES)
+            .expect("stage");
+        fs::remove_file(&source).expect("remove source");
+        fs::write(root.join("replacement"), b"attacker").expect("replacement");
+        symlink(root.join("replacement"), &source).expect("replace with symlink");
+        assert_eq!(
+            sha256_file(staged.path()).expect("staged digest"),
+            staged.digest()
+        );
+        assert_eq!(
+            read_limited(staged.path(), MAX_JSON_BYTES, true).expect("staged bytes"),
+            b"trusted"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn candidate_anchor_survives_directory_rename_and_symlink_swap() {
+        let root = scratch("anchor-swap");
+        let state = root.join("state");
+        let candidate_id = "c".repeat(64);
+        let layout = StateLayout::create(&[], Some(&state), "w1", &candidate_id).expect("layout");
+        let original = layout.candidate.clone();
+        let moved = original.with_file_name("moved-candidate");
+        fs::rename(&original, &moved).expect("rename candidate");
+        let attacker = root.join("attacker");
+        fs::create_dir(&attacker).expect("attacker");
+        symlink(&attacker, &original).expect("replacement symlink");
+        layout
+            .write_candidate_file("anchored.bin", b"trusted")
+            .expect("anchored write");
+        assert_eq!(
+            fs::read(moved.join("anchored.bin")).expect("moved data"),
+            b"trusted"
+        );
+        assert!(!attacker.join("anchored.bin").exists());
+        fs::remove_file(original).expect("remove symlink");
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
