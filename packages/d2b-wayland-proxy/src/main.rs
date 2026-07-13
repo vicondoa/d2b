@@ -606,6 +606,8 @@ struct AcceptLoopControl {
     first_client_timeout: Option<Duration>,
 }
 
+const TERMINAL_FIRST_CLIENT_STABILITY: Duration = Duration::from_secs(1);
+
 fn report_first_client_ready(
     readiness: &mut ReadinessReporter,
     pending: &mut bool,
@@ -617,6 +619,39 @@ fn report_first_client_ready(
     *pending = false;
     *deadline = None;
     readiness.ready(ProxyReadinessStage::FirstClient)
+}
+
+fn observe_first_client(
+    readiness: &mut ReadinessReporter,
+    pending: &mut bool,
+    deadline: &mut Option<Instant>,
+    terminal_stable_at: &mut Option<Instant>,
+    terminal_child_present: bool,
+    now: Instant,
+) -> io::Result<()> {
+    if !*pending {
+        return Ok(());
+    }
+    if terminal_child_present {
+        terminal_stable_at.get_or_insert(now + TERMINAL_FIRST_CLIENT_STABILITY);
+        Ok(())
+    } else {
+        report_first_client_ready(readiness, pending, deadline)
+    }
+}
+
+fn report_stable_terminal_ready(
+    readiness: &mut ReadinessReporter,
+    pending: &mut bool,
+    deadline: &mut Option<Instant>,
+    terminal_stable_at: &mut Option<Instant>,
+    now: Instant,
+) -> io::Result<()> {
+    if !terminal_stable_at.is_some_and(|stable_at| now >= stable_at) {
+        return Ok(());
+    }
+    *terminal_stable_at = None;
+    report_first_client_ready(readiness, pending, deadline)
 }
 
 fn accept_loop(
@@ -677,6 +712,7 @@ fn accept_loop(
     let mut listener_backoff_until: Option<Instant> = None;
     let mut first_client_pending = true;
     let mut first_client_deadline = first_client_timeout.map(|timeout| Instant::now() + timeout);
+    let mut terminal_stable_at: Option<Instant> = None;
     while state.is_not_destroyed() {
         if first_client_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let _ = readiness.failed(
@@ -693,6 +729,12 @@ fn accept_loop(
         if let Some(child) = terminal_child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    if first_client_pending {
+                        let _ = readiness.failed(
+                            ProxyReadinessStage::FirstClient,
+                            ProxyReadinessFailure::ClientRejected,
+                        );
+                    }
                     state.destroy();
                     diag.borrow_mut().flush_suppressed();
                     return child_exit_code(status);
@@ -703,6 +745,22 @@ fn accept_loop(
                     break;
                 }
             }
+        }
+        if report_stable_terminal_ready(
+            &mut readiness,
+            &mut first_client_pending,
+            &mut first_client_deadline,
+            &mut terminal_stable_at,
+            Instant::now(),
+        )
+        .is_err()
+        {
+            if let Some(child) = terminal_child.as_mut() {
+                child.terminate();
+            }
+            state.destroy();
+            diag.borrow_mut().flush_suppressed();
+            return 70;
         }
         let (listener_ready, _state_ready, bridge_ready) = {
             let now = Instant::now();
@@ -720,6 +778,9 @@ fn accept_loop(
                 terminal_child.is_some(),
             );
             let timeout = first_client_deadline
+                .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
+                .unwrap_or(timeout);
+            let timeout = terminal_stable_at
                 .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
                 .unwrap_or(timeout);
             let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
@@ -790,10 +851,13 @@ fn accept_loop(
                             clipboard.clone(),
                             decoration.clone(),
                         );
-                        if report_first_client_ready(
+                        if observe_first_client(
                             &mut readiness,
                             &mut first_client_pending,
                             &mut first_client_deadline,
+                            &mut terminal_stable_at,
+                            terminal_child.is_some(),
+                            Instant::now(),
                         )
                         .is_err()
                         {
@@ -1139,6 +1203,62 @@ mod tests {
 
         assert!(!pending);
         assert!(deadline.is_none());
+    }
+
+    #[test]
+    fn terminal_first_client_waits_for_child_stability() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "local-vm",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+        let mut readiness = ReadinessReporter::disabled(identity);
+        let mut pending = true;
+        let start = Instant::now();
+        let mut deadline = Some(start + Duration::from_secs(10));
+        let mut stable_at = None;
+
+        observe_first_client(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            true,
+            start,
+        )
+        .unwrap();
+        assert!(pending);
+        assert_eq!(stable_at, Some(start + TERMINAL_FIRST_CLIENT_STABILITY));
+
+        report_stable_terminal_ready(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            start + TERMINAL_FIRST_CLIENT_STABILITY - Duration::from_millis(1),
+        )
+        .unwrap();
+        assert!(pending);
+
+        report_stable_terminal_ready(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            start + TERMINAL_FIRST_CLIENT_STABILITY,
+        )
+        .unwrap();
+        assert!(!pending);
+        assert!(deadline.is_none());
+        assert!(stable_at.is_none());
     }
 
     #[test]

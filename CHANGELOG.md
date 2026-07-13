@@ -20,6 +20,10 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Delayed host-terminal first-client readiness until the terminal child remains
+  alive through a bounded stabilization window, preventing desktop launchers
+  from reporting success when WezTerm immediately rejects its configured
+  domain.
 - Removed stale per-VM observability relay sockets before broker spawn so a
   normal VM down/up cycle cannot fail with the relay address still in use.
 - Kept persistent-shell integration scratch paths within Linux UNIX-socket
