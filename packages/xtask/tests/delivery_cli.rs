@@ -2,6 +2,19 @@
 
 use std::process::Command;
 
+use xtask::delivery::DeliveryManifest;
+
+#[test]
+fn checked_in_delivery_manifest_is_valid() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repository root");
+    let bytes = std::fs::read(root.join("delivery/manifest.json")).expect("delivery manifest");
+    let manifest: DeliveryManifest = serde_json::from_slice(&bytes).expect("manifest JSON");
+    manifest.validate().expect("valid delivery manifest");
+}
+
 #[test]
 fn wave_help_lists_the_end_to_end_machine_readable_workflow() {
     let binary = env!("CARGO_BIN_EXE_xtask");
