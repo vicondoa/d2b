@@ -1,1065 +1,635 @@
-# ADR 0045: Provider and transport framework
+# ADR 0045: d2b 2.0 provider and transport framework
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-10
+- Target release: 2.0.0
 - Refines: [ADR 0035](0035-efficiency-and-simplification-roadmap.md)
-  (provider naming and workspace simplification), [ADR 0043](0043-realm-native-control-plane.md)
-  (realm-native control plane), [ADR 0044](0044-unsafe-local-runtime-provider.md)
-  (unsafe-local runtime provider)
-- Related: [ADR 0010](0010-wire-protocol-and-typed-errors.md)
-  (wire protocol and typed errors), [ADR 0028](0028-guest-control-plane-over-vsock.md)
-  (guest control plane over virtio-vsock),
-  [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md)
-  (storage lifecycle, restart adoption, and synchronization),
-  [ADR 0037](0037-local-hypervisor-runtime-seam.md)
+  (provider naming and workspace simplification)
+- Supersedes for d2b 2.0: [ADR 0010](0010-wire-protocol-and-typed-errors.md),
+  [ADR 0015](0015-daemon-only-clean-break.md),
+  [ADR 0028](0028-guest-control-plane-over-vsock.md),
+  [ADR 0032](0032-d2b-v2-constellation-control-plane.md),
+  [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md),
+  [ADR 0042](0042-d2b-clipboard-authority-and-picker-split.md),
+  [ADR 0043](0043-realm-native-control-plane.md), and
+  [ADR 0044](0044-unsafe-local-runtime-provider.md), as specified in
+  [Normative precedence](#normative-precedence)
+- Related: [ADR 0037](0037-local-hypervisor-runtime-seam.md)
   (local hypervisor runtime seam)
 
 ## Context
 
-ADR 0043 gives every realm one controller generation and allows that controller
-to run on the host, in a gateway VM, on a cloud full host, or in a constrained
-provider environment. Its current placement vocabulary describes where the
-controller runs, but it does not fully model the controller as a workload
-managed by another realm.
+D2b 1.x has several individually reasonable control-plane designs that no
+longer compose into one security or ownership model:
 
-That leaves several ambiguities:
+- the public daemon, broker, realm peers, guest control, unsafe-local helper,
+  shell supervisor, clipboard components, desktop helpers, and security-key
+  frontend use different framing, authentication, version, limit, error, and
+  file-descriptor rules;
+- the nominal provider traits are separate from the production lifecycle paths
+  in `d2bd`, the broker, gateway crates, user helpers, and component-specific
+  controllers;
+- the live filesystem is largely host-global and VM-name keyed, with repair
+  authority split among activation, tmpfiles, daemons, and the broker;
+- ADR 0043 requires separate realm controller and broker boundaries, while the
+  shipped three-unit model still assumes one host-global daemon and broker;
+- guest control uses a long-lived shared token and HMAC instead of an enrolled
+  workload identity;
+- the client toolkit duplicates public wire contracts, and there is no
+  canonical provider SDK distribution;
+- interactive user secrets, unattended service credentials, and host-local
+  realm identities do not have one explicit lifecycle.
 
-- a gateway VM looks like a special realm object even though it is a VM with a
-  controller role;
-- the controller VM can appear to be owned by the realm it must bring into
-  existence, creating a lifecycle cycle;
-- `provider` can mean a workload runtime, infrastructure provisioner, realm
-  controller host, transport, protocol codec, node client, or daemon-access
-  adapter;
-- the existing `d2b.realms.<realm>.providers` records do not distinguish those
-  responsibilities;
-- `d2b-realm-provider` exports provider authorities beside
-  `TransportProvider`, `ProtocolCodec`, `StreamMux`, daemon-access, and node
-  client traits even though those seams have different ownership;
-- Azure Relay already implements the generic `TransportProvider`, while the
-  narrower `RelayProvider` has no production implementation;
-- realm relay configuration says how a realm is reachable, but not how Unix
-  streams, vsock, direct TLS/QUIC, and Relay share one transport contract;
-- public daemon, realm-peer, and guest-control protocols independently
-  implement framing, version negotiation, authentication, capability exchange,
-  typed errors, deadlines, and request correlation;
-- ADR 0043 authorizes direct transport shortcuts only over native underlay
-  reachability, even when every participant already uses one shared relay
-  fabric.
+An incremental transition would require every new authority boundary to retain
+old parsers, state readers, aliases, protocol negotiation, and migration
+branches. That would make the new design depend permanently on the behavior it
+is intended to remove.
 
-The concrete motivating case is a work realm backed by Azure:
+This ADR therefore defines d2b 2.0 as a destructive architectural replacement,
+not as an upgrade layer over d2b 1.x.
 
-1. Azure Resource Manager and Azure Relay authentication require Microsoft
-   Entra credentials acquired inside an Entra-joined, Intune-managed local
-   Cloud Hypervisor VM.
-2. Interactive authentication requires a physical YubiKey.
-3. The same YubiKey is also used for browser authentication in a work desktop
-   VM and for delegated developer authentication in another work VM.
-4. A remote Azure VM may run the full work realm controller.
-5. Code running locally or remotely needs access to Azure resources without
-   receiving the controller's ARM or Relay token cache.
-6. Nested realms may all use the same Azure Relay fabric. Relaying every byte
-   through each intermediate controller would add latency and failure domains
-   without adding policy value.
+## Decision summary
 
-The existing security invariants remain binding:
+D2b 2.0 has the following fixed decisions:
 
-- host `d2bd` and `d2b-priv-broker` hold no realm provider, Relay, or Entra
-  credentials;
-- relay authentication establishes reachability only and never maps to local
-  `Admin`, broker authority, or realm identity;
-- one remote, work, or provider realm has one credential boundary by default;
-- a realm controller cannot own or repair the infrastructure on which that
-  controller itself runs;
-- parent and ancestor policy must constrain every cross-realm operation even
-  when bytes do not traverse those controllers;
-- the same physical authenticator may serve multiple isolated VMs, but token
-  caches, refresh tokens, and managed identities are never shared between
-  them.
+1. The host is factory-reset for all d2b state from a persistently selected,
+   dedicated v2 reset boot generation. Before selecting that generation, every
+   configured user completes a mandatory live-session preparation in which
+   `d2b-userd` deletes d2b-owned Secret Service items, revokes scoped TPM
+   exports, and emits a root-verifiable receipt bound to the reset intent.
+   Reset mode never accesses or unlocks Secret Service and refuses without the
+   exact receipt set. No d2b 1.x backup is retained, and a reset interruption
+   boots back into reset mode rather than v1.
+2. There is no d2b 1.x parser, importer, alias, tombstone, re-export, protocol
+   negotiation path, compatibility feature, or fallback in production code.
+3. Every d2b-owned live IPC boundary uses one authenticated
+   `ComponentSession` contract, including local Unix seqpacket boundaries and
+   `SCM_RIGHTS` attachment transfer. Local NN identity evidence is directional;
+   absolute expiry is distinct from relative ttrpc timeout; request-ID
+   cancellation, readiness-correct nonblocking I/O, and aggregate FD credits
+   with close-once truncation cleanup are mandatory.
+4. `snow` supplies fixed Noise profiles. `ttrpc-rust` with `rust-protobuf`
+   supplies typed control RPC inside the session. The d2b named-stream mux
+   supplies bounded data channels.
+5. Guest bootstrap uses a one-time operation-bound PSK only. Normal guest
+   sessions use a guest-generated static Noise key sealed to that workload's
+   vTPM. File-backed swtpm state is explicitly cloneable by host root and is not
+   accepted as anti-cloning evidence or as a realm-controller host posture.
+6. Eleven typed provider authorities replace catch-all and synthetic provider
+   facades: runtime, infrastructure, transport, substrate, credential, display,
+   network, storage, device, audio, and observability. Provider IDs are globally
+   unique, factories are unique by type/implementation pair, and Azure VM
+   infrastructure and runtime authority do not overlap.
+7. ADR 0043's per-realm `d2bd`, broker, identity, state, audit, cgroup, and
+   resource partition is implemented literally. The local-root broker retains
+   host-global authority and is the only broker socket-activated by PID1. Its
+   allocator pre-binds child listeners and parent-spawns each child controller
+   and broker as separate pidfd-supervised processes through typed operations,
+   passing only their listener, namespace, cgroup, resource, and lease FDs.
+   Child processes are not PID1 units.
+8. Dynamic paths use deterministic 96-bit, domain-separated SHA-256 IDs over a
+   canonical printable-ASCII length-prefixed grammar that Nix passes directly
+   to `builtins.hashString "sha256"`. IDs are rendered as 20 lowercase unpadded
+   RFC 4648 base32 characters. Human names never become runtime path components.
+9. Brokers are the only creators and repair owners of dynamic paths below fixed
+   filesystem anchors. PID1 creates only the closed local-root endpoint set;
+   the owning user manager creates the closed per-user set, and the local-root
+   allocator creates child-realm listeners. Authoritative state remains
+   bounded, versioned, atomic JSON.
+10. GNOME Keyring is the interactive Secret Service. `d2b-userd` uses `oo7`.
+    TTY unlock directly invokes the stdin-only keyring backend without a
+    shell. Unattended services receive only explicitly exported TPM2-sealed
+    credentials materialized by systemd under `$CREDENTIALS_DIRECTORY`; TPM
+    sealing does not cryptographically identify the receiving unit.
+11. All host and guest Rust crates use one Cargo workspace, one lockfile, and
+    workspace version `2.0.0`. Canonical client and provider toolkit crates live
+    in this repository.
+12. Delivery uses `gh-stack`, Rust `xtask`, immutable tree snapshots, concurrent
+    validation and panel lanes, and a tree-bound mechanical seal. W0 bootstraps
+    equivalent evidence before `xtask` exists and requires one panel on the
+    Proposed tree plus a second full panel on the Accepted/index candidate.
 
-## Decision
+These are requirements, not options deferred to implementation. In particular,
+retaining d2b 1.x compatibility is not a reviewable alternative. Review may and
+must find destructive-safety, completeness, authorization, cryptographic,
+resource-bound, and operational defects. A recommendation whose requested
+remedy is to restore a d2b 1.x compatibility surface is out of scope.
 
-### Providers and workload roles are separate concepts
+## Normative precedence
 
-D2b will use the following vocabulary:
+Historical ADRs remain useful records. For d2b 2.0, this ADR controls whenever
+one of the following decisions conflicts with it:
 
-| Concept | Responsibility |
+| ADR | d2b 2.0 precedence |
 | --- | --- |
-| Workload runtime provider | Starts, stops, inspects, and executes one workload. |
-| Infrastructure provider | Provisions or adopts infrastructure on which workloads, including controller workloads, run. |
-| Transport provider | Produces connected bidirectional byte sessions over Unix streams, vsock, direct network transports, or relay fabrics. |
-| Component session | Adds fixed framing, protocol negotiation, authentication, encryption, peer identity, limits, and liveness above a byte transport. |
-| Service protocol | Defines typed daemon, realm, guest, or provider APIs above an authenticated component session. |
-| Workload role | Declares an authority-bearing function performed by a workload, such as running a realm controller. |
-
-The unqualified term `realm provider` is too ambiguous for a public schema and
-must not name a new catch-all interface. An adapter may implement more than one
-provider trait, but each binding names the trait being used. For example:
-
-- `azure-vm` can provision a remote VM as an infrastructure provider and can
-  supervise that VM as a workload runtime provider;
-- `azure-relay` is a transport-provider implementation;
-- a VM created by `azure-vm` may carry the `realmController` workload role;
-- Cloud Hypervisor, QEMU, Bubblewrap, and Minijail are workload runtime
-  providers, not realm controllers by themselves.
-
-Provider identifiers describe adapters, not security claims. Isolation,
-execution identity, environment source, display routing, networking, device
-access, and persistence remain typed execution-posture fields.
-
-### Provider crates use a type-first sortable namespace
-
-Every provider implementation crate uses this grammar:
-
-```text
-d2b-provider-<provider-type>-<implementation>
-```
-
-The provider type immediately follows `d2b-provider-` so workspace listings,
-dependency graphs, generated inventories, and code search group all
-implementations of the same authority together.
-
-The selected provider crate namespaces are:
-
-| Crate prefix | Standard interface | Responsibility |
-| --- | --- | --- |
-| `d2b-contracts` | Contract crate | Canonical serialized provider descriptors, operation contexts, capability DTOs, plans, observed-state envelopes, stable errors, and generated schemas. |
-| `d2b-provider` | Interface crate | In-process async Rust provider traits, typed registries, and runtime error wrappers over `d2b-contracts` types. Contains no duplicate contract DTO, provider SDK, or implementation. |
-| `d2b-provider-runtime-<implementation>` | `RuntimeProvider` | Plans, starts, stops, adopts, and inspects workloads. |
-| `d2b-provider-infrastructure-<implementation>` | `InfrastructureProvider` | Provisions, adopts, inspects, and deletes infrastructure that hosts workloads or realm controllers. |
-| `d2b-provider-transport-<implementation>` | `TransportProvider` | Connects or accepts bounded bidirectional byte sessions and advertises purpose, rendezvous, reconnect, and revocation capabilities. |
-| `d2b-provider-substrate-<implementation>` | `SubstrateProvider` | Checks and prepares a full-host OS substrate such as NixOS or generic Linux. |
-| `d2b-provider-credential-<implementation>` | `CredentialProvider` | Acquires or reports credentials inside the configured credential-owning workload without exporting them to the host. |
-| `d2b-provider-display-<implementation>` | `DisplayProvider` | Implements a reusable display/session adapter independent of one runtime backend. |
-| `d2b-provider-testkit` | Conformance harness | Provider mocks, deterministic fixtures, and reusable conformance suites. It is not linked into production binaries. |
-
-The words after the provider type name the canonical implementation, not a
-configured instance. The provider type is not repeated in that segment:
-
-- `d2b-provider-runtime-cloud-hypervisor`;
-- `d2b-provider-runtime-qemu-media`;
-- `d2b-provider-runtime-systemd-user`;
-- `d2b-provider-runtime-bubblewrap`;
-- `d2b-provider-runtime-azure-container-apps`;
-- `d2b-provider-infrastructure-azure-vm`;
-- `d2b-provider-transport-azure-relay`;
-- `d2b-provider-transport-unix-stream`;
-- `d2b-provider-transport-cloud-hypervisor-vsock`;
-- `d2b-provider-credential-entra`;
-- `d2b-provider-substrate-nixos`;
-- `d2b-provider-display-wayland`.
-
-For example, `d2b-provider-transport-azure-relay` has
-`ProviderType::Transport` and implementation id `azure-relay`; its public
-provider kind remains `azure-relay`. A configured deployment may then assign
-instance ids such as `work-transport` or `payments-transport` without
-changing the crate or implementation id.
-
-Abbreviated or axis-free crate names such as `d2b-provider-aca`,
-`d2b-provider-relay`, `d2b-provider-azure`, and
-`d2b-host-providers` are forbidden after the cutover. A vendor with multiple
-provider types gets one crate per authority boundary. For example, ordinary
-Azure VM workload lifecycle and Azure VM infrastructure provisioning sort
-separately:
-
-```text
-d2b-provider-runtime-azure-vm
-d2b-provider-infrastructure-azure-vm
-```
-
-Vendor SDK plumbing shared by those implementations stays in a private module
-of one implementation until two real consumers justify a narrow shared crate.
-If a shared crate is required, its name must describe the specific SDK
-capability; `common`, `util`, `manager`, and an axis-free
-`d2b-provider-azure` remain disallowed.
-
-This type-first grammar supersedes ADR 0035's examples
-`d2b-provider-hypervisor-<name>`, `d2b-provider-<name>`, and
-`d2b-constellation-transport-<name>`. Hypervisors are runtime providers and
-relay, Unix-stream, and vsock transports sort under the common transport axis.
-
-### Every provider implements a standard base interface
-
-Existing `d2b-contracts` remains the canonical owner of provider data that is
-serialized, persisted, generated from Nix, sent over a wire, or shared by
-independently compiled components. Provider contracts live under a focused
-module such as `d2b_contracts::provider`.
-
-That module owns at least:
-
-- `ProviderDescriptor`, `ProviderType`, and `ProviderHealth`;
-- the serializable `ProviderOperationContext`;
-- primary and optional capability descriptors;
-- provider plans, opaque handles, and observed-state envelopes that cross a
-  crate, process, persistence, or wire boundary;
-- stable provider error kinds, retry hints, and redacted error envelopes;
-- schema versions and generated JSON/protobuf schemas where applicable.
-
-Provider implementations must import these canonical types. They must not
-declare provider-local copies with the same semantic fields.
-
-The interface crate is named `d2b-provider`, not `d2b-provider-api`. This
-matches the repository convention: `d2b-contracts` owns serialized contracts,
-`*-core` crates own pure models, and a bare domain crate names the trait and
-composition boundary. The project does not otherwise use an `-api` crate suffix
-for this kind of in-process interface.
-
-`d2b-provider` replaces only the trait, registry, and in-process runtime
-portion of `d2b-realm-provider`. It depends inward on `d2b-contracts` plus the
-minimum async/I/O traits needed by the interfaces. It may define non-serialized
-trait-object adapters, `ProviderResult`, and a runtime `ProviderError` wrapper,
-but that wrapper exposes the stable error envelope from `d2b-contracts`.
-
-`d2b-provider` must not depend on:
-
-- `d2bd`, the privileged broker, or host mutation implementations;
-- a cloud SDK, HTTP client, TLS implementation, or concrete transport;
-- a protocol codec;
-- a provider implementation crate;
-- test mocks or live-provider fixtures.
-
-`d2b-contracts` must not depend on `d2b-provider` or any provider
-implementation. If the current monolithic contract crate would otherwise force
-unrelated guest protobuf or codec dependencies into every provider build, those
-dependencies must be feature-gated or split behind contract-only modules rather
-than copying provider DTOs into the interface crate.
-
-Every registered provider implements the common base interface:
-
-```rust
-#[async_trait]
-pub trait Provider: Send + Sync {
-    fn descriptor(&self) -> ProviderDescriptor;
-    async fn health(&self) -> ProviderResult<ProviderHealth>;
-}
-```
-
-The base and specialized provider traits remain `#[async_trait]`, `Send`, and
-`Sync` and are deliberately object-safe for `Arc<dyn ProviderTrait>` registries.
-They do not expose generic methods, return `Self`, or require implementation
-associated types at the registry boundary. Native async traits/RPITIT are not
-used for these dynamic registries until Rust supports the required dyn
-semantics without provider-specific wrappers.
-
-The canonical `d2b_contracts::provider::ProviderDescriptor` is bounded,
-non-secret data containing:
-
-- the configured `ProviderId`;
-- one closed `ProviderType`;
-- the canonical implementation id;
-- the provider API version;
-- positive capability assertions;
-- the implementation's configuration-schema fingerprint.
-
-It never contains credentials, token subjects, endpoints, resource ids, command
-arguments, host paths, or provider response bodies.
-
-The closed primary provider types are:
-
-```rust
-pub enum ProviderType {
-    Runtime,
-    Infrastructure,
-    Transport,
-    Substrate,
-    Credential,
-    Display,
-}
-```
-
-Each configured provider instance has exactly one primary provider type and is
-registered in the matching typed registry. Implementations may additionally
-implement optional capability interfaces such as persistent shell, durable
-execution, console, audio, guest-control endpoint, or observability export.
-Those capabilities do not change the provider's primary authority type.
-
-Optional capability dispatch uses parallel capability-specific registries keyed
-by the same `ProviderId`. Rust trait-object downcasting or peer-trait casting is
-not part of the design. Registry construction verifies both directions:
-
-- every advertised optional capability has an implementation registered in the
-  matching capability registry;
-- every registered capability implementation is advertised by the provider
-  descriptor.
-
-A mismatch fails provider registration before the provider can receive an
-operation.
-
-The specialized interfaces extend `Provider`:
-
-| Interface | Required semantic surface |
-| --- | --- |
-| `RuntimeProvider` | Capability description; plan; idempotent ensure/start; stop; inspect/adopt; destroy when the runtime owns durable workload state. |
-| `InfrastructureProvider` | Capability description; plan; apply; adopt; inspect; bootstrap binding; destroy. |
-| `TransportProvider` | Capability description; connect/listen; return a bounded byte session; issue and revoke a binding when supported; inspect transport health. |
-| `SubstrateProvider` | Capability description; check; plan remediation; apply only through the authorized substrate owner. |
-| `CredentialProvider` | Non-secret status; interaction requirement; acquire or refresh only for a co-located typed consumer; revoke. |
-| `DisplayProvider` | Capability description; open and close an already-authorized display session. |
-
-`TransportProvider` is the common byte-carriage authority. Its capability
-descriptor states:
-
-- accepted purposes (`realm-peer`, `workload-peer`, `daemon-access`,
-  `guest-control`, or `bootstrap`);
-- whether it can connect, listen, or provide rendezvous;
-- reconnect and liveness behavior;
-- whether established sessions support active revocation;
-- maximum session lifetime;
-- whether kernel peer evidence is available.
-
-Unix-stream, native-vsock, Cloud-Hypervisor-vsock, direct-TLS/QUIC, loopback,
-and Azure Relay implementations all return the same `TransportSession`. Relay
-authentication and rendezvous remain Azure-Relay implementation details; they
-never become d2b principal authentication.
-
-`d2b-provider` owns the live, non-serializable `ByteStream`,
-`TransportSession`, and `TransportListener` runtime types because
-`TransportProvider` returns them. `d2b-session` depends inward on
-`d2b-provider` and consumes `TransportSession`; `d2b-provider` never depends on
-`d2b-session`. Only serializable target, binding, descriptor, capability, and
-status DTOs live in `d2b-contracts`.
-
-The existing local-only `RuntimeProvider` and provider-managed
-`WorkloadProvider` split is retired. Local VMMs, host-user runtimes, container
-sandboxes, provider-managed sandboxes, and remote VM runtimes implement one
-`RuntimeProvider` lifecycle contract. Exec, persistent shell, display, console,
-audio, and guest-control remain optional capability interfaces rather than
-being folded into runtime lifecycle.
-
-### Provider and non-provider seams are explicit
-
-The current `d2b-realm-provider` surface mixes provider authorities with
-protocol machinery. The cutover classifies them as follows:
-
-| Current interface | Selected treatment |
-| --- | --- |
-| `HostSubstrateProvider` | Rename to primary `SubstrateProvider`. |
-| `RuntimeProvider` | Primary runtime provider. |
-| `WorkloadProvider` | Fold into `RuntimeProvider`; exec becomes an optional capability. |
-| `InfrastructureProvider` | Primary infrastructure provider. |
-| `CredentialProvider` | Primary credential provider. |
-| `DisplayProvider` | Primary display provider. |
-| `TransportProvider` / `TransportListener` | Primary transport provider plus supporting listener type. |
-| `RelayProvider` | Remove; relay rendezvous is a transport capability. |
-| `DurableExecutionProvider` | Optional runtime capability. |
-| `PersistentShellProvider` | Optional runtime capability. |
-| `GuestControlEndpointProvider` | Rename to optional `GuestControlEndpointResolver`; it discovers an endpoint and is not a primary provider. |
-| `ObservabilitySinkProvider` | Rename to `ObservabilitySink` until an independently configured external sink justifies a primary provider type. |
-| `NodeProvider` | Rename to `NodeClient` or `NodeInventory`; node registration and workload listing are realm services, not provider authority. |
-| `ProtocolCodec` | Move to the component-session/codec layer. |
-| `StreamMux` | Move to the component-session/realm-router layer. |
-| `DaemonAccessTransport` | Replace with daemon-access composition over `TransportProvider`. |
-| `DaemonAccessApi` | Keep as a semantic daemon service contract. |
-
-Internal dependency-injection seams such as `NodeRunner`, `ShellBackend`,
-`TerminalBackend`, `HostAudioController`, `ExecRuntime`, `LogStore`,
-`TokenSource`, `CapabilitiesProvider`, `ShellEventSink`, `CgroupBackend`,
-`NetlinkBackend`, and `ModprobeBackend` do not implement `Provider` and do not
-appear in provider registries. They are local strategies owned by a daemon,
-guest, broker, or test harness.
-
-Serialized runtime locality and driver values are descriptor dimensions, not
-provider types. `local`, `cloud-hypervisor`, `crosvm`, and `qemu` become
-`RuntimeLocality` and `RuntimeImplementationKind` fields rather than a second
-Rust type also named `RuntimeProvider`.
-
-`d2b-contracts` defines a bounded, serializable `ProviderOperationContext`
-containing:
-
-- the stable operation id and idempotency key;
-- the already-authorized realm and workload/controller identity;
-- the required capability;
-- the wall-clock expiry used across process or wire boundaries;
-- an opaque, non-secret trace id suitable for W3C-compatible correlation.
-
-`d2b-provider` defines a non-serializable `ProviderCallContext` that wraps the
-contract DTO with the local monotonic deadline and cancellation signal. Tokio
-tokens, channels, `Instant`, file descriptors, and other runtime state never
-enter `d2b-contracts`.
-
-The provider does not reinterpret local users, authorize a principal, or choose
-another realm. The realm controller performs authorization before dispatch.
-The provider verifies that the call context matches its configured scope,
-then performs only its typed action.
-
-All provider interfaces share these semantics:
-
-1. Unsupported behavior returns a typed capability denial. It never falls back
-   to SSH, a shell command, generic TCP, ambient developer credentials, or
-   another provider.
-2. Mutations are idempotent by operation id and return typed observed state.
-3. Plans and handles contain opaque provider refs, not raw credentials or
-   unbounded provider responses.
-4. `Debug`, tracing, audit, and metrics redact credentials, endpoints, resource
-   ids, user identities, and provider payloads.
-5. Timeouts, cancellation, retry classification, and degraded state are part of
-   the interface contract.
-6. Restart adoption verifies provider identity and operation binding before
-   accepting observed state.
-7. A provider implementation cannot call the broker directly. Host mutations
-   are re-originated by the owning daemon through typed broker operations.
-
-### Conformance is mandatory
-
-`d2b-provider-testkit` owns reusable conformance suites for every primary
-provider interface. An implementation crate is not registered or advertised as
-supported until it passes the suite for its primary type and every optional
-capability it advertises.
-
-The suites prove at minimum:
-
-- descriptor type and implementation id match the crate axis;
-- capability advertisement is positive and unsupported operations fail closed;
-- operation ids make retries idempotent;
-- cancellation and deadlines are bounded;
-- inspect/adopt rejects identity or generation mismatch;
-- no secret-shaped value appears in debug, error, audit, or metric output;
-- handles and plans survive their documented serialization boundary;
-- provider-specific errors map to stable `ProviderError` kinds and retry hints;
-- a provider cannot widen the authorized realm, workload, operation, or
-  capability from `ProviderCallContext`;
-- optional capability registry entries and descriptor claims match exactly.
-
-Cloud implementation crates keep live tests explicitly opt-in. Hermetic
-conformance uses fake SDK clients and transports supplied by the implementation
-crate, while shared mocks and assertions remain in `d2b-provider-testkit`.
-
-### Transport is a byte-stream boundary only
-
-`TransportProvider` returns a connected, reliable, ordered, bidirectional byte
-session. It does not:
-
-- authenticate a d2b principal;
-- negotiate a d2b service or schema;
-- authorize an operation or stream;
-- interpret API payloads;
-- map Relay, TLS, vsock, or Unix identity to a daemon role;
-- bridge one transport to another.
-
-`TransportTarget` becomes a typed provider reference, opaque endpoint reference,
-and closed purpose rather than an unbounded endpoint string. Accepted sessions
-carry:
-
-- transport provider id and implementation kind;
-- opaque binding/session id;
-- closed transport purpose;
-- bounded local transport evidence when available;
-- active-revocation handle when advertised;
-- the connected byte stream.
-
-Transport evidence is not authorization. Unix `SO_PEERCRED`, a VMM process uid,
-vsock CID, TLS certificate, managed identity, Relay SAS, and rendezvous id have
-different meanings and are consumed only by the authenticator selected for the
-session purpose.
-
-The generic transport boundary includes:
-
-- Unix streams used for direct daemon or realm-peer connections;
-- native AF_VSOCK;
-- Cloud Hypervisor's host-to-guest vsock adapter after its `CONNECT`/`OK`
-  handshake;
-- loopback/local TCP conformance transports;
-- direct TLS/QUIC/WebSocket transports;
-- Azure Relay WebSocket rendezvous.
-
-The public daemon Unix listener, privileged broker socket, and unsafe-local
-helper remain specialized IPC endpoints where seqpacket boundaries,
-`SO_PEERCRED`, socket activation, `SCM_RIGHTS`, exact FD validation, or helper
-generation semantics are load-bearing. Their local framing helpers may be
-shared, but they do not implement `TransportProvider`.
-
-### One component-session protocol sits above transport
-
-D2b will add a standard component-session layer:
-
-```text
-TransportSession
-  -> ComponentSession
-       fixed preface and framing
-       protocol/service negotiation
-       Noise or local mechanism authentication
-       encryption and replay protection
-       peer identity and channel binding
-       capabilities and effective limits
-       keepalive, deadline, and close semantics
-    -> typed service protocol
-```
-
-Serialized session contracts live in `d2b-contracts::session`. The in-process
-state machine, authenticator traits, framing, and runtime contexts live in a
-bare `d2b-session` crate. `d2b-session` depends inward on contracts and crypto
-primitives; semantic daemon, realm, guest, and provider services depend on it.
-
-The bootstrap preface and handshake use one fixed canonical encoding. A peer
-does not encode the handshake through the codec it is attempting to negotiate.
-After authentication, the selected service may use protobuf or another
-explicitly negotiated codec.
-
-Noise handshake and transport records use fixed 16-bit length framing and stay
-within Noise's 65,535-byte message limit. ComponentSession fragments larger
-ttrpc or named-stream frames into bounded encrypted records and reassembles
-them only up to the negotiated d2b hard frame limit. Record sequence, fragment
-count, and total plaintext length are authenticated; truncation, duplication,
-reordering, or over-limit reassembly closes the session.
-
-The handshake exchanges and binds:
-
-- component-session protocol version;
-- session purpose and endpoint roles;
-- supported and selected service protocols;
-- supported and selected authentication mechanism;
-- codec id and schema fingerprint;
-- hard frame and stream limits;
-- positive capabilities;
-- both nonces;
-- transport channel-binding evidence;
-- expected realm, node, workload, or daemon identity where applicable.
-
-All offered and selected values are covered by the authentication transcript so
-an intermediary cannot downgrade authentication, codec, schema, limits, or
-capabilities. No semantic API request, event, or stream is exposed before the
-session reaches `Accepted`.
-
-### Noise is the standard non-local peer authenticator
-
-Non-local realm, controller, node, workload-agent, and provider-agent sessions
-use the [Noise Protocol Framework](https://noiseprotocol.org/) above the
-transport byte stream.
-
-The initial mechanism set is:
-
-| Mechanism | Purpose |
-| --- | --- |
-| `local-peercred` | Direct local Unix daemon access; kernel credentials are mapped by local daemon policy. |
-| `noise-realm` | Enrolled realm/controller/node/workload peers using realm-bound static keys and ephemeral session keys. |
-| `noise-guest-psk` | Guest-control sessions using the existing per-VM secret plus boot/CID/direction/purpose transcript claims. |
-| `noise-bootstrap` | One-time controller or child-realm enrollment bound to parent trust, operation id, expected resource, expiry, and replay nonce. |
-| `mutual-tls` | Optional direct daemon-access interoperability when a configured certificate authority owns the identity mapping. |
-
-The initial Noise profiles are:
-
-```text
-noise-realm     = Noise_KK_25519_ChaChaPoly_SHA256
-noise-bootstrap = Noise_IK_25519_ChaChaPoly_SHA256
-noise-guest-psk = Noise_NNpsk0_25519_ChaChaPoly_SHA256
-```
-
-Changing a pattern or primitive suite is a component-session protocol-version
-change, not an implementation-local preference.
-
-Enrolled realm peers know each other's bound static transport keys and use
-`KK`. A bootstrapping child knows the parent's seed-provided static key and uses
-`IK`; the parent binds the newly presented child static key only after the
-operation/resource/enrollment checks succeed.
-
-Production endpoints never accept `none` or silently retry a weaker mechanism.
-The endpoint purpose fixes the minimum acceptable mechanism. Relay, managed
-identity, or TLS transport authentication may be included as channel-binding
-evidence, but never substitutes for the selected d2b peer authenticator.
-
-Noise static keys are not themselves realm identities. Enrollment binds each
-Noise public key to the canonical realm/node/workload identity and controller
-generation. The Noise handshake hash becomes the component-session channel
-binding used by service authorization and audit.
-
-### ttrpc/protobuf is the common control-RPC protocol
-
-Authenticated component sessions use
-[ttrpc](https://github.com/containerd/ttrpc/blob/main/PROTOCOL.md) framing and
-protobuf service definitions for bounded control RPCs. This reuses the existing
-guest-control dependency and supplies:
-
-- service and method dispatch;
-- request/response correlation;
-- unary and streaming frame forms;
-- protobuf schemas and generated Rust bindings;
-- explicit stream closure.
-
-The d2b hard frame cap remains 1 MiB even though ttrpc permits larger frames.
-Declared lengths above the negotiated d2b cap are rejected before allocation.
-
-Ttrpc is not the transport or security layer. Its specification intentionally
-omits authentication, unreliable-network recovery, ping/reset behavior, and
-flow control. ComponentSession therefore owns authentication, keepalive,
-connection generation, reconnect, hard limits, and session teardown.
-
-The initial services are:
-
-```text
-d2b.daemon.v1
-d2b.realm.v1
-d2b.guest.v1
-d2b.provider.v1
-```
-
-Every request envelope carries a bounded request id, correlation/trace context,
-service and method id, absolute deadline, and idempotency key when mutating.
-The authenticated principal is session state, not a caller-controlled request
-field. Required capability is derived from trusted service/method metadata.
-Responses use the shared typed error envelope.
-
-High-volume or reconnectable PTY, display, clipboard, file-copy, logs, audio,
-and port-forward data continues to use d2b's named stream mux. The mux binds
-each stream to an already-authorized operation, enforces credit/backpressure,
-and supplies resume/close semantics that ttrpc intentionally does not provide.
-Ttrpc is the control plane for opening and managing those streams, not a second
-unbounded data tunnel.
-
-Exactly one ComponentSession driver reads and writes the encrypted transport.
-Its post-auth record header distinguishes:
-
-```text
-session-control
-ttrpc-control
-named-stream
-```
-
-Ttrpc runs over one bounded virtual control channel and multiplexes RPC calls
-inside that channel. The d2b mux owns named data channels. Ttrpc and a named
-stream handler never read the underlying transport concurrently, and a blocked
-data stream cannot consume the reserved control credit required for
-cancellation, revocation, keepalive, or close.
-
-The session driver exposes cooperative virtual `AsyncRead + AsyncWrite`
-endpoints:
-
-- one ttrpc control endpoint with reserved ingress/egress capacity;
-- one endpoint per admitted named stream with independent bounded queues and
-  credit;
-- an internal session-control queue that preempts ordinary data for close,
-  revocation, keepalive, and fatal errors.
-
-One read task authenticates/decrypts records and wakes only the destination
-channel's reader. One write task schedules session-control first, then ttrpc
-control, then named-stream data with bounded round-robin fairness. No queue lock
-is held across an await. Per-channel and aggregate queue caps fail closed with
-typed backpressure; a stalled named stream cannot starve control traffic or
-another stream.
-
-### Existing component protocols migrate behind the session layer
-
-- `PeerSession` version/codec/capability negotiation and
-  `SecurePeerSession` authentication/encryption merge into
-  `ComponentSession`.
-- Guest-control keeps its protobuf service semantics, while its nonce/HMAC
-  transcript becomes the `noise-guest-psk` authenticator and its vsock path
-  becomes a transport implementation.
-- `DaemonAccessTransport` implementations become daemon-access clients composed
-  over a selected `TransportProvider` and `ComponentSession`.
-- The local public Unix socket keeps direct `SO_PEERCRED` admission and its
-  compatibility wire until an explicit migration moves it to
-  `d2b.daemon.v1`.
-- `ProtocolCodec` moves to the session/codec boundary; semantic services do not
-  depend on concrete codec implementations.
-- `StreamMux` moves to `d2b-session` or `d2b-realm-router` and remains above
-  authenticated sessions.
-- Broker and unsafe-local helper protocols retain specialized seqpacket and FD
-  semantics. They may reuse shared IDs/errors but are not component-session
-  byte transports.
-
-### Existing provider crates migrate explicitly
-
-The implementation cutover uses this map:
-
-| Current crate | Selected replacement |
-| --- | --- |
-| `d2b-realm-provider` | Split serialized DTOs/capabilities/stable errors into `d2b-contracts::provider`, provider traits/registries into `d2b-provider`, session/codec/mux traits into `d2b-session` or realm-router, and mocks/conformance into `d2b-provider-testkit`. |
-| `d2b-host-providers` | Split into `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`, `d2b-provider-substrate-nixos`, `d2b-provider-substrate-linux`, and `d2b-provider-display-wayland`. |
-| `d2b-provider-aca` | `d2b-provider-runtime-azure-container-apps` |
-| `d2b-provider-relay` | `d2b-provider-transport-azure-relay` |
-| Provider conformance code in production crates | `d2b-provider-testkit` |
-| Loopback transport implementation used only by tests | `d2b-provider-testkit` |
-| Implementations in `d2b-realm-transport` | Move to matching `d2b-provider-transport-<implementation>` crates; move common session runtime to `d2b-session`; keep semantic route DTOs in realm-core. |
-| `d2b-realm-router::{PeerSession,SecurePeerSession}` | Merge into `d2b-session::ComponentSession`; keep realm route policy and operation-bound mux orchestration in realm-router. |
-| `d2b-daemon-access` transport implementations | Compose daemon-access service clients over typed transport providers and component sessions; keep local Unix compatibility admission until migrated. |
-| `d2b-gateway` | Move generic authorization, ledger, and session state into the realm controller/router crates; move provider-specific behavior into typed provider implementations; delete the gateway-named crate. |
-| `d2b-gateway-runtime` | Delete after the realm controller composes typed provider registries directly. |
-
-Protocol-neutral realm routing and stream DTOs stay in realm-core crates.
-Serialized provider DTOs and schemas move to `d2b-contracts`; in-process
-interfaces move to `d2b-provider`. Concrete provider dependencies stay in
-their type-first implementation crates. A provider implementation depends
-inward on the interface and contract crates; contract, interface, and realm
-crates never depend outward on implementations.
-
-The rename is one coordinated workspace cutover. No compatibility wrapper crates
-or re-export-only packages preserve the old names. Cargo manifests, lockfiles,
-Nix package construction, source policy, docs, tests, and dependency-direction
-gates move together.
-
-The generic error code `relay-unavailable` becomes `transport-unavailable`.
-Azure Relay authentication, rendezvous, or provider-specific failures retain
-typed Azure-Relay diagnostic classes beneath that transport-level result.
-
-ADR 0044's no-isolation warning remains mandatory, but this ADR separates that
-warning from the runtime-provider identifier:
-
-- `systemd-user` identifies direct host-user execution in verified transient
-  user scopes;
-- `unsafe-local` remains the closed isolation posture and required user-facing
-  warning;
-- `systemd-user-service`, `bubblewrap`, and `minijail` are distinct provider
-  identifiers whose actual posture is derived from the selected profile;
-- no provider name alone is sufficient evidence for an `isolated` posture.
-
-The current `providerKind = "unsafe-local"` wire and bundle value remains code
-canon until a coordinated schema and bundle-version cutover implements this
-split. That cutover must not add an implicit alias or fallback.
-
-### Canonical provider identifier catalogue
-
-The provider registry remains extensible. The following identifiers are
-reserved as canonical spellings when those adapters are implemented. Listing an
-identifier here does not claim current support.
-
-| Family | Canonical provider identifiers |
-| --- | --- |
-| Host process | `systemd-user`, `systemd-user-service`, `bubblewrap`, `minijail` |
-| Local container | `podman`, `docker`, `systemd-nspawn`, `lxc`, `kata-containers`, `gvisor` |
-| Hypervisor or VMM | `cloud-hypervisor`, `qemu-kvm`, `qemu-media`, `firecracker`, `crosvm`, `libkrun`, `xen`, `bhyve`, `hyper-v`, `vmware-vsphere`, `virtualbox`, `apple-virtualization`, `nutanix-ahv` |
-| Virtualization control plane | `libvirt`, `proxmox`, `kubevirt` |
-| Cloud VM | `aws-ec2`, `azure-vm`, `gcp-compute-engine`, `openstack-nova`, `oracle-compute`, `alibaba-ecs`, `ibm-vpc`, `digitalocean-droplet`, `hetzner-cloud`, `akamai-linode`, `vultr`, `scaleway-instance` |
-| Managed cloud sandbox | `aws-fargate`, `azure-container-apps`, `azure-container-apps-sessions`, `gcp-cloud-run`, `fly-machines`, `e2b`, `modal`, `daytona`, `codesandbox`, `github-codespaces` |
-| Generic scheduler | `kubernetes-pod`, `nomad-allocation` |
-| Transport | `unix-stream`, `native-vsock`, `cloud-hypervisor-vsock`, `direct-tls`, `quic`, `azure-relay` |
-
-Adapters that do not support d2b's semantic operation or stream contracts
-advertise only the capabilities they actually implement. Brand or product
-recognition never implies persistent shell, display, device, networking, or
-full-controller support.
-
-### Runtime providers declare kernel and adoption posture
-
-Every `RuntimeProvider` descriptor includes closed posture fields for:
-
-- process and restart-adoption authority;
-- network namespace ownership;
-- user namespace construction;
-- persistent identity protection;
-- cgroup ownership;
-- device mediation.
-
-`systemd-user` and `systemd-user-service` workloads are owned by the
-authenticated user's systemd manager. Their processes live under user-manager
-scopes, not `/sys/fs/cgroup/d2b.slice`. Restart adoption therefore uses the
-verified systemd `InvocationID`, exact scope control-group identity, and the
-same-UID helper generation selected by ADR 0044. They are not swept or adopted
-through the VM runner cgroup algorithm from ADR 0034. The provider ledger is
-diagnostic; a live verified systemd scope remains the adoption authority.
-
-This provider-specific adoption rule is allowed only because the runtime
-descriptor names it and conformance verifies it. It does not relax the
-`d2b.slice` rule for broker-spawned VM and sidecar runners.
-
-Host-process runtimes also declare one of these network postures:
-
-| Posture | Meaning |
-| --- | --- |
-| `host-shared` | Shares the host network namespace and is explicitly reported as non-isolated. It cannot satisfy realm network isolation. |
-| `none` | Has no network namespace interfaces beyond loopback. |
-| `isolated-namespace` | Uses a dedicated network namespace with broker-owned veth/TAP attachment and realm firewall policy. |
-
-Bubblewrap or Minijail naming does not imply `isolated-namespace`; the selected
-profile must request and prove it. A runtime that uses `host-shared` networking
-cannot host a realm controller or satisfy an isolated workload policy.
-
-User namespace construction is also explicit:
-
-- `broker-preestablished` uses a typed broker operation to create mappings and
-  any privileged mount setup before the provider process executes;
-- `unprivileged-self-managed` is permitted only when the host allows
-  unprivileged `CLONE_NEWUSER`, the mapping uses no privileged ids or
-  capabilities, and conformance proves no broker-owned surface is bypassed;
-- `none` creates no user namespace.
-
-The virtiofsd-specific namespace path from ADR 0021 is not silently reused for
-Bubblewrap or Minijail. A new privileged mapping or mount requirement needs a
-typed broker contract.
-
-Finally, a runtime may advertise `realm-controller-host-v1` only when it
-provides persistent identity storage with an explicit tamper-resistance
-posture. Initially this requires a hypervisor/VMM workload with a persistent
-TPM-backed identity. `systemd-user`, `systemd-user-service`, Bubblewrap, and
-Minijail do not qualify merely because they can start a process.
-
-### A gateway VM is a workload with a realm-controller role
-
-A local gateway is not a separate workload kind. It is a generic workload whose
-parent-owned declaration carries a typed controller role:
+| [ADR 0010](0010-wire-protocol-and-typed-errors.md) | Supersedes the 4-byte-length JSON public/broker wire, semver range hello, feature intersection, and permissive unknown-feature rule. Retains strict bounded decoding, stable typed errors, redaction, and mediated audit access, now under `ComponentSession` and `.v2` services. |
+| [ADR 0015](0015-daemon-only-clean-break.md) | Supersedes the one-host-daemon, one-host-broker, and exactly-three-root-visible-units invariant. Retains daemon-owned lifecycle DAGs, no per-workload systemd templates, broker-mediated privileged mutation, no Bash fallback, and acceptor-side `SO_PEERCRED` local admission. Initiators authenticate responders through trusted endpoint provenance as defined here. Those invariants now apply independently at each host-local realm boundary. |
+| [ADR 0028](0028-guest-control-plane-over-vsock.md) | Supersedes the guest HMAC challenge, long-lived guest-control token, protocol-6/schema-v2 wire, chunked unary compatibility assumptions, SSH mixed-generation window, and old-generation state preservation. Retains guestd, workload-user execution, bounded RPC, typed errors, and Cloud Hypervisor vsock as a transport beneath `d2b.guest.v2`. |
+| [ADR 0032](0032-d2b-v2-constellation-control-plane.md) | ADR 0043 already superseded its host-centric entrypoint. This ADR also supersedes its old target, protocol, provider, state, and migration generations. It retains strict realm-tree policy, semantic operations and streams, relay-as-reachability-only, capability denial, idempotency, and the prohibition on host-held realm provider credentials. |
+| [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md) | Supersedes flat VM-name paths, preservation of d2b 1.x persistent state, rollback migration, and old storage IDs. Retains broker-resolved opaque storage/sync IDs, anchored path resolution, OFD locks, explicit FD transfer, restart adoption before cleanup, quarantine, and durable atomic JSON after the reset. |
+| [ADR 0042](0042-d2b-clipboard-authority-and-picker-split.md) | Supersedes newline-delimited JSON picker/bridge wires, protocol-v1 hello, raw VM path components, and any specialized IPC exception. Retains d2b-owned clipboard authority, an untrusted UI-only picker, metadata-only audit, policy recheck, exact FD validation, and no direct guest clipboard authority. Clipboard control and transfer now use `d2b.clipboard.v2` and `d2b.clipboard.picker.v2` sessions. |
+| [ADR 0043](0043-realm-native-control-plane.md) | Retains and makes literal one controller/broker boundary per host-local realm, strict parent/child policy, provider-neutral operations, and relay non-authority. Supersedes bare aliases, node-qualified compatibility targets, migration/import parsers, option tombstones, additive old-schema transition, and preservation of old local VM/controller state. The narrow independently-running-controller exception is defined below. |
+| [ADR 0044](0044-unsafe-local-runtime-provider.md) | Retains exact-user execution, verified user scopes, no root launch, no isolation claim, no proxy bypass, and no ambient fallback. Supersedes `unsafe-local` as a runtime implementation ID, its specialized helper protocols, additive host-launcher migration, and compatibility fallback. The implementation ID is `systemd-user`; `unsafe-local` remains only the required no-isolation posture and warning. |
+
+This table is normative. Text in an older ADR that promises preservation,
+import, compatibility diagnostics, side-by-side mixed generations, aliases, or
+specialized local wires does not apply to d2b 2.0.
+
+## Destructive cutover
+
+### No compatibility surface
+
+D2b 2.0 removes, rather than deprecates:
+
+- d2b 1.x configuration readers and removed-option modules;
+- d2b 1.x state, bundle, manifest, ledger, and audit readers;
+- d2b 1.x public, broker, guest, realm, provider, helper, clipboard, picker,
+  notify, and security-key protocol decoders;
+- old crate re-exports, package aliases, Nix aliases, share-path aliases, and
+  compatibility wrapper binaries;
+- old CLI verbs, target resolvers, bare-name aliases, feature strings, and
+  fallback behavior.
+
+Unknown old configuration reaches the normal unknown-option path. Unknown old
+CLI syntax reaches the normal unknown-command or invalid-target path. Old bytes
+fail the fixed v2 preface before semantic dispatch. Production code does not
+recognize an input as "v1", recommend an old-to-new translation, or import any
+old state. Release and migration documentation may explain that the cutover is
+destructive; the executable does not carry a legacy diagnosis engine.
+
+There are no compatibility symlinks, tombstones, state markers, parsers, aliases,
+or protocol feature flags. There is no mixed authenticated d2b 1.x/d2b 2.0
+topology and no side-by-side drain mode inside d2b.
+
+`lib.mkRemovedOptionModule` is explicitly forbidden. It registers an old option
+path and a tailored compatibility diagnostic, so it is an option tombstone even
+when it returns only an error. Old option paths remain undeclared and therefore
+produce Nix's generic unknown-option error. The release notes and migration guide,
+not an executable parser or module tombstone, explain the replacement surface.
+
+### Mandatory destructive-cutover acknowledgement
+
+Every d2b 2.0 host configuration must set:
 
 ```nix
-d2b.realms.local-root.workloads.work-controller = {
-  kind = "local-vm";
-
-  localVm = {
-    autostart = true;
-    tpm.enable = true;
-    graphics.enable = true;
-    usb.securityKey.enable = true;
-  };
-};
-
-d2b.realms.work = {
-  parent = "local-root";
-  controller.workload = "work-controller.local-root.d2b";
-};
+d2b.acceptDestructiveV2Cutover = true;
 ```
 
-The child realm's forward pointer is the selected public shape. The normalized
-workload index derives the controller role for the referenced generic workload.
-No realm scans parent workloads to discover a `forRealm` back-reference.
-Implementation may add typed controller sub-options, but it must not replace
-the pointer with an arbitrary command, free-form service definition, or
-provider-specific controller option.
+This is a new v2-only Boolean option with a default of `false`. Importing or
+enabling the v2 framework while it is omitted or false fails module evaluation
+before a bundle, operational unit, or reset closure is emitted. Reset-generation
+construction also requires the evaluated true value and records it in the
+generated v2 reset policy consumed by the reset binary. The acknowledgement
+means that the operator accepts destruction of all d2b 1.x state, workload disks,
+TPM state, keys, credentials, audits, and sessions with no rollback.
 
-The declaration has these invariants:
+The acknowledgement is necessary but cannot cause deletion. The persistent reset
+boot, dry-run, digest confirmation, lock, inhibitor, quiescence, and final-boot
+rules below remain mandatory. It does not declare an old option, parse old
+configuration, select a compatibility mode, or recognize old state. A
+configuration that also contains an old option still fails through the generic
+unknown-option path.
 
-1. `controller.workload` names a workload owned by the direct parent realm.
-2. A workload cannot control its owning realm, an ancestor, a sibling, or an
-   unrelated realm.
-3. `controller.workload` is one scalar canonical workload target. Lists are
-   rejected, so one realm cannot select multiple controller credential domains.
-4. At runtime, at most one authenticated controller generation is authoritative.
-   If competing, partitioned, or otherwise ambiguous generations are observed,
-   no new route is published and the realm is reported degraded until
-   parent-authorized reconciliation selects a generation.
-5. The workload runtime provider must advertise full realm-controller support.
-   The provider must also advertise `realm-controller-host-v1` and its
-   persistent identity protection. Host-user and host-process sandbox providers
-   cannot carry credential-bearing realm-controller authority without a future
-   accepted identity-protection design.
-6. The target realm's controller placement is derived from the workload's
-   provider and location. `gateway-vm` remains a placement class for status and
-   telemetry; it is not a separate lifecycle object.
-7. The controller never manages the substrate on which it runs. Its parent
-   realm and the parent's infrastructure provider retain create, adopt,
-   power, replace, and delete authority for that workload.
+### Factory reset trigger
 
-The parent materializes the role by:
+The host-tree reset does not run as a live switch from a v1 generation. W11
+builds two closures before touching state:
 
-- installing the realm-scoped controller implementation in the guest;
-- injecting the parent realm public trust anchor and one-time enrollment
-  material;
-- providing non-secret provider and transport configuration references;
-- preparing the child realm's bootstrap network attachment;
-- starting the controller workload before publishing the child route;
-- authenticating the controller generation over the standard realm protocol;
-- draining the child realm and withdrawing its route before stopping or
-  replacing the controller workload.
+1. the complete final v2 boot generation; and
+2. a dedicated v2 reset boot generation whose default target is
+   `d2b-reset.target`.
 
-Parent ownership does not make the controller dual-homed. A local controller VM
-has one data-plane NIC on the child realm network; parent control uses the
-authenticated vsock bootstrap/control channel. It is not attached to the
-parent's L2 bridge. If a future provider requires more than one interface, the
-runtime must set `net.ipv4.ip_forward = 0`,
-`net.ipv6.conf.all.forwarding = 0`, and per-interface
-`net.ipv6.conf.<if>.accept_ra = 0`; disable proxy ARP and proxy NDP; install
-default-deny cross-interface firewall policy; and prove that no bridge, route,
-or network namespace joins the parent and child realm networks.
-
-Controller enrollment material must be available before authenticated guestd
-or realm protocol traffic can begin. For local Cloud Hypervisor controllers,
-the parent creates a dedicated one-shot controller seed in parent-owned runtime
-state, exposes it through a read-only boot-time seed share, and withdraws that
-share after the controller acknowledges consumption. The seed contains the
-parent public trust anchor, expected controller identity coordinates, operation
-binding, expiry, and replay nonce. It is not a Nix-store artifact, persistent
-virtiofs share, command-line secret, or general guest-control channel.
-After consuming the seed, parent and controller establish a
-Cloud-Hypervisor-vsock transport and complete `noise-bootstrap`; ordinary realm
-or guest service traffic is unavailable until that ComponentSession succeeds.
-
-The child realm identity private key is generated inside the controller
-workload. It is never rendered into Nix, the host bundle, cloud-init plaintext,
-or a parent-readable state ledger. Persistent controller identity, provider
-state, token caches, and realm audit remain inside the controller workload's
-storage and TPM boundary.
-
-### Remote controller workloads use the same role
-
-A controller workload may be remote from its parent. Its runtime and
-infrastructure provider change; its role and realm protocol do not:
-
-```nix
-d2b.realms.local-root.workloads.work-connector = {
-  kind = "local-vm";
-
-  localVm = {
-    autostart = true;
-    tpm.enable = true;
-    graphics.enable = true;
-    usb.securityKey.enable = true;
-  };
-};
-
-d2b.realms.local-root.infrastructureProviders.azure = {
-  kind = "azure-vm";
-  executor.workload = "work-connector.local-root.d2b";
-  credentialRef = "entra-azure-control";
-};
-
-d2b.realms.local-root.runtimeProviders.azure-controller = {
-  kind = "azure-vm";
-  infrastructureProvider = "azure";
-};
-
-d2b.realms.local-root.workloads.work-controller = {
-  kind = "provider-managed";
-  provider = "azure-controller";
-};
-
-d2b.realms.work.controller.workload = "work-controller.local-root.d2b";
-```
-
-`provider-managed` is the selected generic workload configuration variant for a
-workload whose runtime comes from `runtimeProviders`; `azure-vm` is the runtime
-or infrastructure provider implementation id, not another workload `kind`.
-This replaces the current schema-only `provider-placeholder` variant when live
-provider dispatch lands.
-
-The exact typed runtime and infrastructure provider options are new schema
-introduced by this decision. Existing inert
-`d2b.realms.<realm>.providers` records must be split or migrated into those
-bindings when this decision is implemented.
-
-The parent-owned infrastructure provider:
-
-1. authorizes the create operation under parent policy;
-2. acquires provider credentials only in its configured executor workload;
-3. creates or adopts the remote controller VM;
-4. injects the parent public key and one-time enrollment material;
-5. records only opaque provider resource references and bounded lifecycle
-   state;
-6. verifies that the enrolling controller matches the expected operation and
-   resource binding;
-7. retains lifecycle authority after enrollment.
-
-The executor workload must itself be startable by the parent without the child
-controller. An ordinary workload already owned by `work` cannot provision the
-`work` controller because that would recreate the bootstrap cycle. If an
-existing interactive VM such as `work-aad` is selected as the executor, its
-controller-facing role and lifecycle must be parent-owned; otherwise a
-dedicated `work-connector` workload is required.
-
-The remote VM generates its realm identity, starts the full controller, and
-enrolls with the parent. A cloud managed identity may authenticate that VM to
-provider APIs or Relay, but managed identity evidence is bootstrap or transport
-evidence only. The d2b realm key remains the peer identity used for operations
-and policy.
-
-Remote enrollment uses a temporary, operation-bound rendezvous on the
-configured relay fabric. The parent connector opens the enrollment listener
-before infrastructure creation. The infrastructure provider injects only the
-parent public key, rendezvous reference, expiry, replay nonce, and expected
-resource binding through the provider's approved bootstrap mechanism. The new
-VM authenticates to Relay with its managed identity, proves the expected cloud
-resource binding, generates its realm key, and completes the d2b enrollment
-through the `noise-bootstrap` ComponentSession mechanism. The rendezvous is
-revoked before the normal realm route is published. No inbound route to the
-local parent and no pre-existing child route is required.
-
-### Provider-agent and transport-connector placement is derived
-
-Three responsibilities may be co-located but are not the same role:
-
-| Responsibility | Authority |
-| --- | --- |
-| Realm controller | Realm policy, registry, audit, routing, and semantic operations. |
-| Infrastructure provider executor | Provider API calls and lifecycle of provider-hosted workloads. |
-| Transport connector | Provider-specific transport authentication and outbound session establishment. |
-
-Controller, infrastructure-executor, and transport-connector roles are derived
-from forward references into one recursion-safe normalized index:
+Before that reset generation is selected, W11 performs a mandatory pre-reset
+user phase in the ordinary multi-user generation while every configured
+owning user has an authenticated login session and an already-unlocked
+keyring. The phase uses the final v2 `d2b-userd` reset-preparation path; it does
+not require a v1 parser or preserve any v1 state. The root coordinator first
+constructs a canonical reset intent containing the reset and final closure
+fingerprints, a fresh 256-bit nonce, the exact UID set from final-v2
+configuration, fixed d2b Secret Service ownership selectors, scoped-export
+inventory digests, the generated deletion-anchor classes, and the private
+outlier-manifest digest when one exists. The non-mutating command:
 
 ```text
-d2b._index.workloadRoles.<canonical-workload-target>
-  controllerFor
-  infrastructureExecutorFor
-  transportConnectorFor
+d2b host reset --factory --prepare-users
 ```
 
-`index.nix` computes this table once from raw realm/provider/transport option
-values. Guest composition consumes only its own precomputed row; it never scans
-`config.d2b.realms.*`, parent workloads, or provider attrsets. Provider and
-transport declarations cannot depend on guest config derived from the role
-index. This one-way dependency prevents Nix evaluation cycles and avoids two
-independently configurable declarations claiming the same authority.
-
-For a local controller, all three responsibilities may live in one dedicated,
-Entra-managed controller VM. For a remote controller, a local Entra-managed VM
-may remain the provider executor and Azure Relay transport connector while the
-remote VM owns the realm controller:
+emits the ordered intent and its digest. The only mutating pre-reset command
+is:
 
 ```text
-local parent realm
-  -> dedicated work connector (local Cloud Hypervisor)
-       -> Entra token acquisition
-       -> Azure infrastructure-provider executor
-       -> Azure Relay connector
-            -> remote Azure VM
-                 -> work realm controller
+d2b host reset --factory --prepare-users --apply --confirm <reset-intent-digest>
 ```
 
-Combining these functions with an interactive desktop VM is permitted only
-when that VM is parent-owned and policy explicitly accepts the availability
-and blast-radius tradeoff. A dedicated Entra/Intune-managed connector or
-controller workload is preferred.
+After confirmation and before deleting an item, the coordinator quiesces every
+operational d2b writer that can create a Secret Service item or scoped export
+while leaving the owning desktop/login sessions and keyrings available. It
+admits only itself and one bounded final-v2 user preparation at a time. This is
+not a mixed v1/v2 control topology: no v1 session or parser participates.
 
-### Realm transport configuration is the connectivity source of truth
+For each configured UID, the coordinator parent-starts exactly that user's
+final-v2 `d2b-userd` reset-preparation invocation through the owning user
+manager with a fresh inherited `d2b.user.v2` endpoint. `d2b-userd`:
 
-Connectivity is configured from `d2b.realms.<realm>.transport`; a separate
-gateway or realm-entrypoint object is not introduced.
+1. requires the owning login session and unlocked Secret Service to be
+   available; it never prompts for or attempts a keyring unlock;
+2. selects only items carrying the fixed d2b ownership attributes, deletes
+   them through `oo7` without reading secret values, and re-queries the fixed
+   selector to prove absence;
+3. revokes every configured scoped TPM export for that UID through the typed
+   reset-preparation operation, waits for removal of its root-owned
+   materialization and authorization record, and proves the expected export
+   inventory absent; and
+4. emits a bounded completion-receipt payload over the reset-intent digest and
+   nonce, UID, selector version and result digest, expected export-inventory
+   digest and revocation-result digest, and its executable/configuration
+   generation.
 
-`transport.provider` is a reference to a typed `transportProviders` instance,
-not an inline provider kind:
+The root coordinator verifies the `d2b-userd` peer UID, launch binding,
+ComponentSession transcript, result digests, and export-removal evidence. It
+then MACs the payload with a one-use reset-receipt key and stores the resulting
+root-verifiable `d2b-userd` completion receipt as a root-owned `0600` file
+outside every deletion anchor. The key and receipt set are carried into reset
+mode as root-only reset evidence; they authorize no operation other than
+receipt verification. A receipt is valid only for its exact reset-intent
+digest, nonce, UID, inventories, and closure fingerprints.
 
-```nix
-d2b.realms.work.transportProviders.azure-work = {
-  kind = "azure-relay";
+After the exact configured-UID receipt set exists, the coordinator closes a
+root-owned pre-reset barrier: new d2b Secret Service writes and scoped exports
+are denied, all prepared login sessions/user managers/keyring daemons are
+terminated, no process or user bus remains for a configured UID, every d2b user
+process is stopped, and all operational d2b user units are masked for the reset
+boot. The root coordinator survives operator-session loss and owns the
+remaining transition. If any user/session/keyring is absent during its phase,
+an item or export cannot be removed, a receipt is missing/duplicate/stale, or
+the barrier cannot close, the reset generation is not selected. Aborting the
+phase invalidates all receipts and requires a new nonce and complete rerun;
+there is no partial-receipt resume.
 
-  connector = {
-    workload = "work-connector.local-root.d2b";
-    credentialRef = "entra-work-relay";
-    underlayAuthentication = "entra-user";
-  };
+The reset generation contains the v2 reset binary and its audited data, but no
+startable v1 or v2 d2b daemon, broker, socket, provider, helper, user-agent, or
+runner service. Every operational d2b system/user service and socket unit known
+to that private closure is absent or masked; the reset target itself is the only
+d2b-named unit permitted to be active, and it starts no d2b service. The reset
+entry is installed, marked bootable, and selected as the persistent bootloader
+default before reboot. It is not a one-shot entry and boot counting may not fall
+back to an older generation. The prebuilt final v2 generation is present but is
+not selected. A power loss, kernel panic, reset-tool crash, failed apply, or
+ordinary reboot therefore returns to reset mode, never to v1.
 
-  controllerUnderlayAuthentication = "managed-identity";
-};
+The two host-tree reset commands run only after that reboot. The dry-run
+command is:
 
-d2b.realms.work.transport = {
-  enable = true;
-  provider = "azure-work";
-  fabricRef = "work-relay";
-  descendantAccess = "delegated";
-  peerShortcuts.enable = true;
-};
-
-d2b.realms.payments.transport.inheritFrom = "work";
+```text
+d2b host reset --factory
 ```
 
-The two `*UnderlayAuthentication` fields authenticate endpoints to Azure
-Relay only. The d2b peers still complete `noise-realm` ComponentSession
-authentication before semantic traffic.
+It emits a bounded deletion plan and a digest over the ordered, canonical plan.
+That plan includes the reset-intent digest and the ordered digest of the
+verified per-user receipt set. The only reset-mode command shape that may
+mutate the remaining host trees is exactly:
 
-`fabricRef`, endpoint references, and credential references are opaque,
-non-secret identifiers. The connector resolves its credential reference inside
-the selected workload. The host and parent bundle never resolve or copy the
-credential.
+```text
+d2b host reset --factory --apply --confirm <plan-digest>
+```
 
-Nested realms may inherit the same transport provider and fabric from an
-ancestor, but they receive distinct peer identities and scoped transport
-credentials. Inheritance does not share controller token caches, realm private
-keys, or a single authorization identity.
+The apply command:
 
-If both peers have direct authenticated connectivity, they may use a direct
-transport without a connector workload. If Relay authentication or work
-credentials are required, the configured connector owns that side of the
-transport. There is no root, `sudo`, host-token, or direct-network fallback.
+1. verifies the running generation and target fingerprint for the preselected
+   reset closure, effective uid 0, and the absence or mask state of every d2b
+   operational system/user service and socket unit; it never mutates through a
+   broker;
+2. validates the root ownership and mode of the reset evidence, authenticates
+   every receipt, and requires exactly one receipt for every configured UID
+   with the current intent digest, nonce, inventories, and closure
+   fingerprints; it does not start a user process, connect to D-Bus, access
+   Secret Service, or attempt a keyring unlock;
+3. acquires the exclusive host reset OFD lock at
+   `/run/d2b-reset/host.lock`, then acquires a systemd-logind block inhibitor
+   for shutdown, reboot, sleep, and idle for the complete mutation and
+   verification interval;
+4. under that lock, proves that every declared d2b cgroup is unpopulated and the
+   exact fingerprinted reset process is the only d2b process; no
+   ComponentSession, provider/helper/user session, runner, lease, or delegated
+   namespace remains; no process has an fd, cwd, root, executable, map, or
+   mount-namespace reference into a deletion root; and no mount exists at or
+   below a deletion root;
+5. reopens and holds every generated parent/root from its immutable anchor with
+   `openat2`, `O_DIRECTORY | O_CLOEXEC`, `RESOLVE_BENEATH`,
+   `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`;
+   records and compares inode, device, and `statx` mount ID, canonicalizes the
+   complete ordered plan, recomputes its digest while the reset lock and
+   inhibitor are held, and requires exact equality with `--confirm`;
+6. accepts the authenticated receipts as the proof that Secret Service items
+   were deleted, directly proves root-owned scoped-export material absent, then
+   deletes all remaining declared d2b runtime, persistent, cache, generated
+   configuration, user-helper, key, token, disk, TPM, store-view, audit,
+   ledger, socket, and lock state as opaque trees;
+7. recursively walks only through those held dirfds: it opens directory entries
+   with the same `openat2` resolve flags, enumerates only through the opened
+   directory FD with `getdents64`, removes non-directory leaves (including
+   symlinks themselves) with `unlinkat(parent_fd, name, 0)`, and removes an
+   emptied directory with `unlinkat(parent_fd, name, AT_REMOVEDIR)` after closing
+   its child dirfd. `unlinkat` never follows a final symlink. Inode, device, and
+   mount-ID observations are revalidated as alarms, not treated as atomic unlink
+   identity authority. A mount point or mount crossing, including `EXDEV` from
+   `RESOLVE_NO_XDEV`, is reported as a fatal `EBUSY` and is never traversed.
+   `ENOTEMPTY` permits at most two complete re-enumerations of that directory; a
+   third `ENOTEMPTY` fails the reset;
+8. never decodes a v1 record and never touches `/etc/nixos`, unrelated Secret
+   Service items, unrelated user files, unrelated systemd credentials, or a
+   non-d2b mount;
+9. creates no archive, snapshot, copied tree, rollback generation, or recovery
+   token;
+10. fsyncs every affected directory, re-runs the receipt, quiescence, and
+    absence proofs, and writes bounded reset-complete evidence outside the
+    deleted anchors;
+11. only after all prior steps succeed, atomically selects the already-built
+    final v2 generation as the persistent boot default and reboots into it. It
+    does not live-switch services from reset mode.
 
-### Shared-transport peer shortcuts separate control and data paths
+The exclusive reset lock, the quiescence proof, non-writable anchors, and held
+directory FDs are the deletion synchronization contract and remain in force for
+the complete traversal. No `fstatat`-then-`unlinkat` sequence is treated as an
+atomic identity check. A `/proc/self/mountinfo` snapshot and
+`STATX_MNT_ID_UNIQUE`, when the running kernel supplies it, are additional
+pre/post traversal alarms for an unexpected topology change only; neither
+authorizes deletion nor proves the identity of the object removed by a later
+`unlinkat`.
 
-Strict tree routing remains the authorization model. Shared-transport shortcuts
-optimize only the data path:
+The shutdown inhibitor is released only after the final boot selection is
+durable or after a failure has left reset mode selected. If clean shutdown
+cannot be inhibited, reset refuses before deletion. SIGTERM, cancellation, or
+an operator disconnect before final selection leaves the reset entry selected.
+
+The plan includes d2b-owned user state, but Secret Service deletion and scoped
+export revocation are completed only in the mandatory pre-reset user phase.
+Reset mode treats the authenticated receipts as required evidence and the
+corresponding item/export absence as a precondition; it never opens a user bus,
+forks a user child, invokes `oo7`, accesses a keyring, or attempts an unlock.
+No d2b process other than the exact reset process may remain live.
+
+The released reset implementation knows only generated current-v2 d2b anchor
+classes. Literal names for legacy outlier roots are not permitted in final v2
+production code, configuration, schemas, tests, or binaries; historical ADR
+prose may record them as history. If the physical host has an outlier outside
+those anchors, W11 may place its literal path in exactly one audited, data-only
+reset manifest embedded only in the private reset closure. The manifest is a
+closed list of anchored deletion roots; it contains no record shape, migration
+rule, decoder choice, rename, or import action and is never a v1 parser or
+importer. The private manifest, its closure GC roots, and every outlier literal
+are deleted before the W11 final seal and may not enter W12 or a release
+artifact.
+
+Workload disks, swtpm/vTPM state, SSH and Noise keys, store views, audit history,
+provider caches, and detached or persistent shell state are intentionally lost.
+Realms and workloads are recreated from v2-only configuration with new
+identities.
+
+### Repair forward
+
+There is no rollback archive and no d2b 1.x repair path. Before reset, W11 builds
+the reset and final v2 closures, verifies the reset plan in isolated
+validation, and completes the mandatory user receipt phase. A failed user phase
+invalidates its partial receipts and is rerun with a fresh nonce; deleted d2b
+items or revoked exports are not restored from v1. During reset, failure returns
+to the persistently selected reset generation. After final-v2 selection, any
+physical-host failure is repaired forward on the private integrated v2 branch.
+Neither path boots a d2b 1.x generation.
+
+## Realm process and authority model
+
+### Per-realm control planes
+
+Every host-local realm has all of the following:
+
+- one `d2bd` controller process and public socket;
+- one separate broker process and broker socket, with privilege confined
+  according to the local-root/child split below;
+- a distinct system user/group and local access policy;
+- a distinct Noise identity;
+- a distinct persistent state root and runtime root;
+- a distinct append-only audit domain;
+- a distinct delegated cgroup subtree;
+- a distinct network namespace and resource partition when it claims network
+  isolation;
+- typed provider registries owned by that controller.
+
+The physical-host topology begins as:
+
+```text
+local-root d2bd (PID1 service)
+  local-root broker (the only PID1 socket-activated broker)
+    host-global allocator
+    parent-spawn of child processes
+  resolver and realm-tree policy
+  pidfd supervision/adoption of child controllers and brokers
+
+home d2bd process + separate home broker process
+dev d2bd process + separate dev broker process
+work d2bd process + separate work broker process
+
+per-user d2b-userd
+per-user d2b-provider-runtime-systemd-user-agent
+```
+
+The migrated realm tree is:
+
+```text
+local-root
+  home
+  dev
+    personal-dev
+  work
+    interactive work desktop and provider executor
+```
+
+The local-root instance keeps the unsuffixed units:
+
+```text
+d2bd.socket
+d2bd.service
+d2b-priv-broker.socket
+d2b-priv-broker.service
+```
+
+`d2b-priv-broker.socket` is the only PID1 broker socket activation.
+`d2bd.socket` remains the fixed local-root public endpoint; it does not activate
+or supervise a child realm.
+
+A child host-local realm has no `.socket` or `.service` unit. It uses its
+derived ID in process identities and broker-owned listeners:
+
+```text
+controller uid: d2bd-r-<realm-id>
+broker uid:     d2bbr-r-<realm-id>
+public socket:  /run/d2b/r/<realm-id>/public.sock
+broker socket:  /run/d2b/r/<realm-id>/broker.sock
+```
+
+The child controller system user is `d2bd-r-<realm-id>`, its child-broker system
+user is `d2bbr-r-<realm-id>`, and its local public access group is
+`d2b-r-<realm-id>`. The controller and broker UIDs are distinct. A separate
+internal `d2bcg-r-<realm-id>` group contains only those two identities and
+owns the narrow cgroup delegation described below; the public access group is
+never a cgroup owner. The local-root identities remain `d2bd` and `d2b`.
+
+The local-root allocator creates this cgroup layout before either child
+process executes:
+
+```text
+/sys/fs/cgroup/d2b.slice/r-<realm-id>/
+  controller/
+  broker/
+  workloads/
+    w-<workload-id>/
+      <role-id>/
+```
+
+The realm root, `workloads/`, and every `w-<workload-id>/` are process-free.
+The controller is born directly in `controller/`, the broker is born directly
+in `broker/`, and workload processes appear only in role leaves. There is no
+controller or broker process in a sibling cgroup outside the delegated realm
+root.
+
+The allocator grants `d2bcg-r-<realm-id>` write access to the cgroup-v2
+delegation files at the realm common ancestor and throughout
+`workloads/` only. Ancestors grant only the execute/search permission needed
+to reach that root, never write permission on `/sys/fs/cgroup/d2b.slice`, the
+cgroup root, or another realm.
+Controller and broker user-namespace maps include that one internal GID. New
+runners use `clone3(CLONE_INTO_CGROUP)` with an already-validated role-leaf FD
+so their first instruction executes in the destination leaf. An equivalent
+privileged spawn may be used only if the child is blocked before its first
+instruction and the local-root broker places it directly in the destination.
+After initial controller/broker placement, any `cgroup.procs` move is confined
+to source and destination leaves beneath the same
+`r-<realm-id>/` root; moving a process through `d2b.slice`, the cgroup root, or
+a peer realm is forbidden.
+
+A child controller, public group, broker socket, state root, delegated cgroup,
+and internal cgroup group may not be shared with another realm even when both
+realms have the same allowed users.
+
+The user manager similarly owns fixed `d2b-userd.socket`,
+`d2b-runtime-systemd-user.socket`, `d2b-clipd-control.socket`,
+`d2b-clipd-picker.socket`, and `d2b-clipd-bridge.socket`. Unit provenance is
+part of the generated endpoint row; a service cannot substitute a self-bound
+listener.
+
+No per-workload systemd service is introduced. A realm controller supervises
+its workload DAGs. Its broker performs that realm's privileged effects. Unit
+count does not scale by host-local realm or workload; child process count and
+pidfd state scale by realm, and workload runner count scales by workload.
+
+### Local-root allocator
+
+The host-global allocator is a subsystem of the local-root privileged broker,
+not a separate daemon and not a shared child-realm broker. The local-root broker
+is the only broker that retains all d2b-required initial-namespace/global
+capabilities and global host path/device access. It owns global claims such as:
+
+- cgroup subtree delegation;
+- bridge, veth, TAP, interface, subnet, and namespace allocation;
+- shared nftables and host-file serialization;
+- global device and scarce-resource partitions;
+- cross-realm collision checks.
+
+For each child realm generation, the local-root controller requests closed
+typed allocator operations. The local-root broker:
+
+1. creates the realm roots and cgroup layout, opens the exact namespace,
+   cgroup, storage, device, and lease FDs, and pre-binds both the child public
+   listener and child broker listener from generated endpoint rows;
+2. creates dedicated user, mount, network, IPC, PID, and cgroup namespaces with
+   only that realm's generated UID/GID maps and resource views;
+3. invokes the typed child-controller and child-broker spawn operations as
+   separate `clone3` children, places them directly in `controller/` and
+   `broker/`, and passes each process only its declared listener, namespace,
+   cgroup, resource, and bootstrap-session FDs;
+4. returns distinct pidfds and launch records to the local-root `d2bd`, which
+   supervises both processes, adopts them after its own restart only after
+   cgroup/executable/generation verification, and requests a typed respawn on
+   failure.
+
+The controller and broker are separate children with separate UIDs, FD tables,
+listeners, ComponentSessions, state roots, and audit roots. Neither is a PID1
+unit, neither receives `SD_LISTEN_FDS`, and neither self-binds or repairs its
+listener. PID1 cannot independently restart one behind the allocator's
+namespace or cgroup setup.
+
+Child brokers run under distinct dedicated unprivileged host UIDs. Before any
+child-broker code executes, the local-root launch path has installed the
+dedicated namespaces and mapped only that realm's generated UID/GID ranges.
+The child starts with an empty initial-namespace permitted, effective,
+inheritable, ambient, and bounding capability set. Any capabilities granted
+inside its user namespace are a closed generated namespace-scoped set and
+confer no authority in the initial user, mount, network, IPC, PID, or cgroup
+namespace.
+
+A child mount namespace exposes its immutable executable closure and minimal
+pseudo-filesystems, but no traversable global host root or ambient `/dev`.
+Allocator-approved namespace, storage, cgroup-leaf, and device authority arrives
+only as validated `O_CLOEXEC` dirfds/FDs plus typed, revocable lease IDs over
+`d2b.broker.v2`. The child may perform only the namespace-local operation named
+by a live lease. It cannot reopen a delegated object by global path, call
+`setns` into an initial namespace, create a broader ID mapping, retain an
+initial-namespace capability, or discover another realm's resources.
+
+Host-global mutation remains a local-root broker operation. This includes
+creating/delegating cgroup subtrees and namespaces, opening global devices,
+loading modules, changing host sysctls or host files, allocating bridge/veth/TAP
+and nftables state, and serializing a shared host surface. A child submits a
+typed bounded request; local-root validates policy and either returns a narrow
+lease/FD or performs the global mutation and returns a non-authoritative
+observation. It never gives a child a global path or an initial-namespace
+capability.
+
+A lease identifies a generated resource ID, owning realm generation,
+capability, limits, and expiry/revocation policy. It does not contain a raw path,
+free-form command, credential, or unbounded kernel object name. Child brokers
+may mutate only resources in live leases delegated to their realm. Two claims
+for one exclusive resource fail before side effects.
+
+This is a distinct child-broker security boundary rather than a realm tag in a
+root process: each child has a separate uid, user/mount/network namespace,
+socket, state and audit root, capability set, FD table, and allocator lease set,
+and the kernel denies access outside those objects. Local-root allocation does
+not make local-root the peer realm's semantic authorization proxy. Clients
+connect directly to a host-local realm public socket after resolution,
+preserving that realm's local admission, OS DAC, attachment, state, and audit
+boundary.
+
+### Controller workload ownership and the narrow exception
+
+The default acyclic rule remains:
+
+- a controller workload is provisioned and recovered by its direct parent;
+- a controller cannot provision, replace, or recover its own substrate;
+- one authenticated controller generation is authoritative for a realm;
+- ambiguity publishes no route and reports a typed degraded state.
+
+A realm-owned provider executor is permitted only when that realm controller
+starts independently on already-provisioned substrate. This permits the `work`
+realm's interactive desktop to own Entra, Azure Container Apps, Azure Relay, and
+future Azure VM provider execution after the host-local `work` controller and
+broker are already running.
+
+The exception does not permit that executor to create, adopt as authority,
+replace, repair, stop, or recover:
+
+- the controller that authorizes the provider operation;
+- the controller's parent-spawn launch record (or local-root host service),
+  identity credential, state root, broker, or delegated resource partition;
+- any parent substrate required to start that controller.
+
+Those responsibilities remain with local-root or the direct parent. Registry
+construction rejects a dependency cycle before startup.
+
+### Realm transport shortcuts
+
+Strict parent/child policy remains the authorization path. A shared transport
+may optimize only an already-authorized data path:
 
 ```text
 control:
@@ -1069,661 +639,2896 @@ data after authorization:
   source peer -> shared transport fabric -> target peer
 ```
 
-Every applicable source, ancestor, and target policy is evaluated before a
-shortcut is issued. The nearest common ancestor issues a short-lived signed
-`PeerShortcutGrant` only after the normal tree route is authorized.
+The nearest common ancestor issues a short-lived, operation-bound grant that
+binds source and target identities, operation/capability, policy epochs,
+controller generations, route digest, expiry, and replay nonce. Endpoints bind
+the grant digest into their end-to-end ComponentSession. Relay, TLS, managed
+identity, and rendezvous evidence establish reachability only.
 
-The grant is scoped to:
+A grant contains no credential, token cache, raw endpoint, provider resource
+ID, command payload, stream data, or user label. Each endpoint returns a signed
+close report binding shortcut ID, endpoint role, generation, bounded terminal
+reason, byte-count class, and local close time. Byte-count class is untrusted
+diagnostic data and drives no policy, billing, or compliance decision. Missing
+reports close as `endpoint-unconfirmed` at expiry or revocation rather than
+being recorded as success.
 
-- source realm and authenticated source principal;
-- target realm and authenticated target principal;
-- operation or stream kind;
-- required capability;
-- digest of the authorized tree path;
-- controller generations and policy epochs used for the decision;
-- bounded correlation and shortcut identifiers;
-- issue and expiry times;
-- a replay nonce.
+A shortcut creates no realm edge, generic TCP tunnel, VPN, port forward, or
+provider-native authorization. Revocation or expiry closes the named stream.
+An implementation that advertises `active-shortcut-revoke-v2` must close its
+transport binding on revocation. Without active revocation, a shared-fabric
+grant has a hard maximum lifetime of 60 seconds and requires a new
+policy-authorized grant to continue.
+Failure uses an already-authorized parent path or returns a typed transport
+error; it never probes SSH, a direct network, ambient credentials, or an
+unconfigured provider path.
 
-The grant contains no token cache, transport credential, raw endpoint, provider
-resource id, command payload, stream data, or user-supplied label.
+## Provider framework
 
-Source and target bind the grant digest into their end-to-end peer-session
-handshake. The transport provider supplies an opaque, one-time binding below
-the policy DTO. ComponentSession authenticates and encrypts the stream end to
-end; provider-specific transport authentication establishes reachability only.
+### Eleven primary provider types
 
-An established shortcut:
+Each configured provider instance has exactly one closed primary type:
 
-- does not create a new realm edge, alternate parent, or DAG route;
-- is valid only for the authorized operation or stream;
-- cannot be reused for generic IP forwarding, port forwarding, VPN traffic, or
-  an unrelated d2b operation;
-- expires with the grant, route advertisement, controller generation, or
-  policy epoch, whichever expires first;
-- is torn down on policy revocation, route revocation, peer disconnect,
-  transport failure, or operation completion;
-- produces bounded establishment and teardown audit records at the authorizing
-  ancestor and participating peers even though stream bytes bypass
-  intermediate controllers.
-
-Each endpoint sends a signed `PeerShortcutClosed` control message to the
-authorizing ancestor when it observes normal completion, peer disconnect, local
-cancellation, or transport failure. The message binds the shortcut id, endpoint
-role, controller/workload generation, terminal reason, byte-count class, and
-local close time; it contains no payload or provider endpoint. The authorizing
-ancestor records endpoint reports independently and emits the final teardown
-record when both arrive.
-
-If one or both reports never arrive, the ancestor closes its authorization
-lease at grant expiry or route/policy revocation and records an
-`endpoint-unconfirmed` terminal class. Absence of a peer report is never
-converted into a successful completion. Participating peers always retain their
-own local establishment and teardown records.
-
-The endpoint-reported byte-count class is diagnostic and untrusted. It cannot
-prove how much data crossed the transport and must not drive security policy,
-billing, exfiltration detection, or compliance conclusions. A transport provider
-may expose separate provider-attested counters when available, but those are a
-distinct typed observation with an explicit trust posture.
-
-### Existing direct-shortcut contracts are generalized
-
-The route engine already contains `DirectShortcutAuthorizationMetadata`,
-`DirectShortcutState`, and typed teardown reasons. Implementation of this ADR
-generalizes that foundation to peer transport shortcuts:
-
-```text
-PeerShortcutTransport
-  = native-direct
-  | shared-fabric
+```rust
+pub enum ProviderType {
+    Runtime,
+    Infrastructure,
+    Transport,
+    Substrate,
+    Credential,
+    Display,
+    Network,
+    Storage,
+    Device,
+    Audio,
+    Observability,
+}
 ```
 
-Authorization metadata remains transport-address-free. Provider-specific
-rendezvous data belongs in a separate bounded transport binding keyed by the
-shortcut id.
+The authority boundaries are:
 
-This decision refines ADR 0043's restriction that direct shortcuts use only
-native underlay reachability. Native direct transport still must not add
-STUN/ICE, NAT traversal, a VPN, or an overlay. A `shared-fabric` shortcut is
-allowed only when both peers already participate in the same configured
-transport fabric and the transport provider advertises shortcut support. It
-does not discover or construct a new network path.
-
-Policy or route revocation applies to established streams, not only future
-rendezvous. A transport provider advertising `active-shortcut-revoke-v1` must
-close the established binding when the authorizing ancestor revokes it, while
-both peer muxes close the named stream. Providers without active revocation may
-support shared-fabric shortcuts only with a maximum 60-second session grant and
-policy-authorized renewal; expiration closes the stream before renewal.
-Provider credential or listener revocation that affects only future
-connections is insufficient by itself.
-
-If a shortcut cannot be established, the operation follows an explicitly
-authorized parent transport path or fails with a typed transport error. There is no
-silent direct-network, provider-native, SSH, or generic tunnel fallback.
-
-### Workloads may participate directly in a shared transport
-
-Eliminating controller hops requires the source and target workload agents, not
-only their controllers, to participate in the transport fabric.
-
-A workload may advertise `transport-client-v1` only when its runtime supplies a
-guestd-compatible or d2b peer agent. The controller delegates a short-lived,
-workload-scoped transport access grant or the workload authenticates the
-transport independently through a provider-supported identity such as Azure
-Managed Identity.
-
-The workload never receives:
-
-- the controller's transport credential;
-- an Entra refresh token from another VM;
-- a realm identity private key;
-- authority to advertise descendants;
-- a grant broader than its workload identity and negotiated operations.
-
-If the transport provider cannot issue or validate a workload-scoped transport
-identity, that workload cannot use a direct shared-fabric shortcut. Its traffic
-continues through the authorized controller/connector path.
-
-### Entra, YubiKey, browser, and developer authentication
-
-The physical YubiKey is shared at the CTAP ceremony layer, not at the token
-cache layer.
-
-D2b's security-key proxy may expose persistent virtual FIDO devices to the
-controller or connector VM, a work browser VM, and a work development VM. The
-host broker serializes ceremonies so only one transaction uses the physical key
-at a time. Each VM performs its own Entra authentication and stores its own
-tokens.
-
-Physical touch alone is not sufficient intent when multiple VMs can queue a
-ceremony. Before forwarding a CTAP operation that requires user presence or
-verification, the proxy requires explicit approval through a trusted d2b
-surface showing the source realm, workload, operation class, and RP id when the
-RP id can be safely parsed. A background VM cannot consume a touch intended for
-the foreground VM. Approval is single-ceremony, expires with the queue entry,
-and defaults to deny. Window focus may improve presentation but is never the
-authorization signal.
-
-The CTAP proxy uses a closed command policy. The default browser/provider
-profile permits discovery, credential creation, assertion, assertion
-continuation, PIN/user-verification exchange, and other explicitly enumerated
-non-destructive commands required by supported WebAuthn clients. It denies
-authenticator reset, credential deletion/management, biometric enrollment,
-authenticator configuration, vendor commands, and unknown CTAP commands. A
-future administrative authenticator-management flow requires a separate
-exclusive operation, explicit trusted confirmation, and its own audit event.
-
-Ceremony and queue leases remain bounded. The current 120-second active
-ceremony timeout and 15-second contention wait remain finite defaults. The
-schema defines hard upper bounds; operators may reduce them but cannot disable
-timeouts or configure an unbounded lock. Disconnect, denial, or timeout sends
-cancellation where the device protocol supports it and releases the
-physical-key lease.
-
-The expected credential split is:
-
-| Workload | Credential use |
+| Type | Exclusive authority |
 | --- | --- |
-| Controller or provider-executor VM | ARM and Relay tokens obtained inside that VM. |
-| Work browser VM | Browser session tokens obtained by its own WebAuthn ceremony. |
-| Local work development VM | Its own delegated `az`/SDK login when direct Azure data-plane access is required. |
-| Remote Azure VM | Azure Managed Identity for Key Vault, storage, database, and other Azure resource access where supported. |
+| `Runtime` | Plan, ensure, start, stop, execute within, inspect, adopt, and destroy a workload execution instance. It does not create, delete, or power the infrastructure beneath that instance. |
+| `Infrastructure` | Plan, create/apply, power, inspect, adopt, bootstrap-bind, and destroy external infrastructure that may host workloads or controllers. It does not deploy or execute the workload inside an already-bound resource. |
+| `Transport` | Connect, listen, rendezvous, inspect, and revoke bounded carriage sessions. It does not authenticate a d2b principal or authorize a semantic operation. |
+| `Substrate` | Check and prepare an authorized full-host OS substrate. It cannot widen the owning realm or bypass the substrate repair owner. |
+| `Credential` | Interact with a credential source and issue only co-located opaque leases. Co-located in-process credential and consumer modules may exchange secret material only through the private non-serializable interface below; secret material never crosses a process, session, persistence, or telemetry boundary. |
+| `Display` | Open, inspect, adopt, and close an already-authorized display session. It does not infer authorization from focus, app ID, title, or compositor identity. |
+| `Network` | Plan, ensure, inspect, adopt, and release realm-scoped network resources and policy. Global claims require local-root allocator leases. |
+| `Storage` | Plan, ensure, inspect, adopt, snapshot when advertised, and destroy generated storage resources. It cannot treat a diagnostic ledger as repair authority. |
+| `Device` | Plan, attach, inspect, adopt, and detach typed mediated devices. It cannot grant a broader device or operation than the request. |
+| `Audio` | Open, route, mutate bounded state, inspect, adopt, and close an authorized audio session. It does not expose ambient host audio endpoints. |
+| `Observability` | Report bounded health/status, query or stream allowed observations, and perform policy-authorized export. It never becomes audit ownership, repair authority, or a fallback path to raw state. |
 
-Infrastructure control from a development workload should use typed d2b
-operations routed to the infrastructure-provider executor. The executor's ARM
-token is never returned to that workload. Code running in Azure should prefer
-Managed Identity. Code requiring delegated user access authenticates in its own
-workload and does not mount or import another VM's token cache.
+Workload roles, runtime locality, execution posture, and optional capabilities
+are not provider types. `realmController`, provider executor, transport
+connector, persistent shell, durable exec, console, and guest-control endpoint
+are roles or capabilities bound to one primary provider.
 
-When controller or connector authentication requires user interaction, provider
-status reports `interaction-required`. D2b never opens an authentication window
-merely because status changed. The operator explicitly starts the flow with
-`d2b realm provider authenticate <realm-path> <provider-id>` or an equivalent
-deliberate desktop action. Only then may d2b open a provider-owned
-authentication window through the Wayland proxy. It must not steal focus,
-retry indefinitely, or expose a direct host compositor fallback.
+For the `azure-vm` implementation pair, the authority split is exact even while
+the initial implementations remain unadvertised scaffolds. Infrastructure
+`azure-vm` exclusively owns Azure VM resource create, power-state change, adopt,
+bootstrap binding, inspect, and delete. Runtime `azure-vm` accepts only an
+already-bound opaque infrastructure handle and owns workload deployment, exec,
+workload start/stop, and workload inspection inside that VM. Runtime
+`azure-vm` cannot create, delete, adopt as infrastructure authority, or power
+the VM; its `destroy` removes only its workload deployment.
 
-`interaction-required`, `interaction-started`, `interaction-completed`, and
-`interaction-failed` are bounded status/event classes exported to CLI status,
-desktop notifications, tracing, and metrics. Human and machine-readable status
-include the bounded configured `ProviderId`, realm path, and exact remediation
-command so the operator can invoke the correct provider. Metric labels remain
-limited to provider type, realm class, and result class; they never include the
-provider id, user identity, token subject, RP id, or provider endpoint.
+### Contract and trait ownership
 
-The CTAP proxy covers FIDO/WebAuthn only. PIV, CCID, OTP, and OpenPGP interfaces
-still require exclusive USB ownership. A single physical key cannot
-simultaneously use CTAP proxying and USBIP for those interfaces; use explicit
-handoff or a second key.
+`d2b-contracts` is the only owner of serialized provider DTOs:
 
-## Authorization and security invariants
+- `ProviderDescriptor`, `ProviderType`, `ProviderHealth`, and capability claims;
+- `ProviderOperationContext`;
+- typed requests, plans, opaque handles, observations, and results;
+- stable error kinds, retry classes, and redacted error envelopes;
+- registry generation and configuration fingerprint;
+- JSON and protobuf schemas.
 
-Implementation must preserve all of the following:
+`ProviderDescriptor` contains exactly the globally unique `ProviderId`, one
+primary type, canonical implementation ID, provider API version, positive capability
+claims, configuration-schema fingerprint, configured scope digest, and registry
+generation. It contains no credential, token subject, endpoint, cloud resource
+ID, command argument, host path, provider response, or user-provided label.
 
-1. A controller role is parent-authorized configuration, not a capability a
-   guest can self-assert.
-2. Controller, provider-executor, and transport-connector peer identities are
-   authenticated before any state lookup, token resolution, provisioning, or
-   route publication.
-3. Provider and transport tokens stay in the configured credential-owning workload.
-4. Entra, managed identity, TLS, Relay, vsock, and Unix transport identities
-   are never mapped to local daemon roles or broker authorization.
-5. The remote controller re-originates privileged local effects through its own
-   broker; no remote peer receives the broker wire protocol.
-6. A parent may stop or replace the controller workload but cannot use its
-   storage ledger as authority to repair child realm state.
-7. Transport reachability does not expose semantic traffic before
-   ComponentSession authentication and does not merge realm policy, identity,
-   audit, or credential domains.
-8. Shortcut authorization follows the same parent/child policy chain as the
-   non-shortcut route.
-9. Raw transport endpoints, provider resource ids, token subjects, user ids,
-   device ids, command data, and stream payloads are forbidden as metric labels.
-10. Ambiguous controller identity, route generation, shortcut state, or
-    infrastructure ownership is preserved and reported degraded rather than
-    guessed, killed by PID, or broadly cleaned up.
-11. Noise static private keys stay inside their realm/workload identity
-    boundary. Ephemeral keys, transport cipher state, record nonces, sockets,
-    and session keys are never persisted or adopted across reconnect.
-12. The selected authentication mechanism, service protocol, codec, schema,
-    limits, and transport channel binding are covered by the authenticated
-    session transcript; downgrade or mismatch fails before API dispatch.
-13. API requests inherit the authenticated session principal. A payload cannot
-    replace or widen that identity, and method-required capabilities are
-    derived from trusted service metadata.
+Provider implementation crates must not copy these types. `d2b-provider` owns
+only object-safe in-process traits, typed registries, runtime-only contexts, RPC
+proxies, and runtime error wrappers. It has no cloud SDK, broker, daemon,
+concrete transport, implementation, or test-mock dependency.
 
-## Session and transport observability
+Every primary provider implements:
 
-ComponentSession and transport implementations export bounded metrics for:
+```rust
+#[async_trait]
+pub trait Provider: Send + Sync {
+    fn descriptor(&self) -> ProviderDescriptor;
 
-| Metric family | Required dimensions |
+    async fn health(
+        &self,
+        ctx: &ProviderCallContext,
+    ) -> ProviderResult<ProviderHealth>;
+}
+```
+
+The traits remain object-safe for `Arc<dyn ...>`. They have no generic methods,
+`Self` return values, or implementation-specific associated types at the
+registry boundary.
+
+`ProviderHealth` is a typed, bounded observation rather than a free-form status
+string. Its state is exactly `healthy`, `degraded`, `unavailable`, or `failed`;
+it carries the observed registry generation, observation time, one closed reason,
+and one closed remediation. Initial reasons are `none`, `provider-degraded`,
+`health-timeout`, `health-stale`, `session-disconnected`, `queue-pressure`,
+`handshake-timeout`, `authentication-failed`, `identity-mismatch`,
+`configuration-mismatch`, `generation-mismatch`, and `capability-mismatch`.
+Initial remediations are `none`, `retry-bounded`, `inspect-provider`,
+`restart-agent`, `re-enroll-peer`, `repair-configuration`,
+`replace-generation`, and `operator-interaction`. The DTO carries no provider
+response, endpoint, path, credential subject, user label, or unbounded
+diagnostic. The exact transition thresholds are defined in
+[Operational health objectives](#operational-health-objectives).
+
+### Exact specialized method families
+
+Generated provider-agent RPC methods use the same semantic names and canonical
+request/result DTOs as the in-process traits:
+
+| Trait | Required methods |
 | --- | --- |
-| session/transport active count | transport kind, session purpose |
-| per-channel and aggregate queue depth/capacity ratio | channel class |
-| dropped/rejected record count | channel class, bounded reason class |
-| channel waker/scheduling delay | channel class |
-| control-credit exhaustion | session purpose |
-| transport connect/reconnect attempt | transport kind, purpose, result class |
-| reconnect backoff state | transport kind, bounded backoff class |
-| Noise/component-session handshake | mechanism class, purpose, result class |
-| terminal session close | purpose, terminal reason class |
+| `RuntimeProvider` | `capabilities`, `plan`, `ensure`, `start`, `stop`, `inspect`, `adopt`, `destroy` |
+| `InfrastructureProvider` | `capabilities`, `plan`, `apply`, `set_power_state`, `inspect`, `adopt`, `bootstrap_binding`, `destroy` |
+| `TransportProvider` | `capabilities`, `connect`, `listen`, `issue_binding`, `revoke_binding`, `inspect` |
+| `SubstrateProvider` | `capabilities`, `check`, `plan_remediation`, `apply` |
+| `CredentialProvider` | `status`, `acquire_lease`, `refresh_lease`, `revoke_lease` |
+| `DisplayProvider` | `capabilities`, `open`, `inspect`, `adopt`, `close` |
+| `NetworkProvider` | `capabilities`, `plan`, `ensure`, `inspect`, `adopt`, `release` |
+| `StorageProvider` | `capabilities`, `plan`, `ensure`, `inspect`, `adopt`, `snapshot`, `destroy` |
+| `DeviceProvider` | `capabilities`, `plan_attach`, `attach`, `inspect`, `adopt`, `detach` |
+| `AudioProvider` | `capabilities`, `open`, `set_state`, `inspect`, `adopt`, `close` |
+| `ObservabilityProvider` | `capabilities`, `status`, `query`, `subscribe`, `export` |
 
-`channel class` is one of `session-control`, `ttrpc-control`, or
-`named-stream`; it is never a stream id. Queue metrics are aggregated by class
-and may expose bounded max/sum observations, not one metric series per session
-or stream.
+An implementation may return a typed capability denial for an optional method
+such as `snapshot`, `listen`, `issue_binding`, or `subscribe`, but it may not
+advertise that capability. Required lifecycle methods may return a typed
+not-applicable result only where the contract explicitly defines a
+non-owning/no-op state; they never silently invoke another provider.
 
-Reconnect loops emit a counter for every attempt while audit and log events are
-deduplicated. The first transition into reconnecting, each bounded backoff-class
-change, authentication-result-class change, recovery, and terminal failure are
-recorded. Repeated identical failures within the suppression window increment a
-suppressed-event count that is included in the next emitted summary. Raw error
-text, endpoint, credential, or peer-provided label never becomes an audit field
-or metric label.
+Optional interfaces such as durable execution, persistent shell, console,
+file transfer, guest endpoint resolution, or transport active revocation use
+parallel capability registries keyed by the same `ProviderId`. Trait-object
+downcasting is forbidden.
 
-Tracing and audit may retain bounded non-secret correlation identifiers that
-would be too cardinal for metrics:
+### Runtime and controller-host posture
 
-- configured `provider_id`;
-- `operation_id`, `correlation_id`, and trace id;
-- `shortcut_id`;
-- controller/workload generation;
-- bounded session generation.
+Every runtime descriptor uses closed fields for:
 
-These identifiers are permitted as trace span attributes and structured audit
-fields, but not metric labels. Raw transport endpoints, provider resource ids,
-token subjects, user/device ids, key fingerprints, proof material, and payload
-metadata remain excluded from metrics, traces, and audit.
+- process and restart-adoption authority;
+- cgroup ownership;
+- network namespace ownership;
+- user namespace construction;
+- persistent identity protection;
+- device mediation.
 
-## Audit retention and export
+The network posture is exactly one of:
 
-Every realm controller owns an append-only local audit log with bounded
-rotation and retention. `d2b.realms.<realm>.audit.retentionDays` inherits
-`d2b.site.audit.retentionDays` and therefore defaults to 14 days unless the
-realm selects a stricter policy. Disabling retention or silently discarding
-records is not a supported remote-controller posture.
+| Posture | Meaning |
+| --- | --- |
+| `host-shared` | Shares the host network namespace, is reported as non-isolated, and cannot satisfy realm network isolation. |
+| `none` | Has no network interfaces beyond loopback. |
+| `isolated-namespace` | Uses a dedicated namespace and only allocator/broker-delegated attachment under realm firewall policy. |
 
-Remote and replaceable controller workloads must advertise
-`realm-audit-export-v1`. This is a semantic, authenticated export operation to
-the observer or archive sink selected by realm policy; it is not generic file
-access and does not make raw realm audit readable by the physical host or an
-ancestor by default. Exported batches are signed, sequence-bounded, encrypted
-to the selected sink, and acknowledged by checkpoint digest.
+The user-namespace posture is exactly one of:
 
-Before a planned controller replacement, the parent requires a signed audit
-checkpoint and drains the old controller. The parent records only the
-checkpoint digest, sequence range, controller generation, and result class. If
-forced loss makes export impossible, replacement may proceed only through an
-explicit recovery operation that emits an `audit-gap` event and reports the
-realm degraded until acknowledged. Shortcut grants, peer close reports, policy
-decisions, credential interaction boundaries, and provider lifecycle
-operations are included in the retained/exported audit sequence. Component
-session establishment, selected mechanism/service classes, rejection class,
-replay, downgrade refusal, and terminal reason are audited with bounded
-identities; keys, proofs, nonces, raw endpoints, and payloads are excluded.
+| Posture | Meaning |
+| --- | --- |
+| `broker-preestablished` | A typed broker operation creates mappings and privileged mount setup before provider code executes. |
+| `unprivileged-self-managed` | Permitted only when the host allows it, no privileged ID/capability is mapped, and conformance proves no broker surface is bypassed. |
+| `none` | Creates no user namespace. |
 
-## Failure and continuation behavior
+`systemd-user` processes and shells are owned by the exact user's systemd
+manager. They live in verified transient user scopes, not in the realm's
+`d2b.slice` subtree. Adoption verifies uid, user-manager identity,
+`InvocationID`, exact scope control group, executable/configuration
+fingerprint, and provider generation. Teardown targets only that verified
+scope. It never sweeps arbitrary same-uid processes.
 
-- If an infrastructure-provider executor is unavailable, existing remote
-  controllers continue running, but create, power, replace, and delete
-  operations fail visibly.
-- If a local transport connector is unavailable, the remote realm may continue
-  operating, but local reachability through that connector is unavailable.
-- If the remote controller is unavailable, the realm is unavailable even when
-  its infrastructure and Relay endpoint still exist.
-- If the selected transport is unavailable, no provider-native, SSH, or
-  alternate-network fallback is attempted unless a separately configured and
-  authorized transport binding exists.
-- Daemon, connector, and controller restarts are continuation events.
-  Reconnection uses realm identity, controller generation, operation ids, route
-  generations, and shortcut ids rather than persisted sockets or pidfds.
-- Every reconnect performs a fresh Noise or local-auth handshake. In-flight
-  ttrpc calls fail or retry through operation idempotency; named streams resume
-  only through their explicit generation/cursor contract.
-- Expired or superseded shortcut grants are not adopted.
-- Losing or replacing persistent controller identity is an explicit
-  re-enrollment event, not an automatic repair.
+An implementation may advertise `realm-controller-host-v2` only when it
+provides persistent identity storage with an accepted non-copyable hardware or
+cloud-attested posture. A VMM workload using file-backed swtpm is not eligible:
+host root or a whole-state copy can clone its disk and TPM state. A future
+hardware-backed vTPM, confidential-computing, or cloud-attestation design must
+be separately accepted before it can advertise this capability.
+`systemd-user`, Bubblewrap, Minijail, file-backed swtpm, and a name alone do not
+qualify. `unsafe-local` is the closed no-isolation posture and warning, never a
+provider implementation ID or a controller-host capability.
 
-## Public and private contract changes
+### Operation context and method semantics
 
-Implementation requires coordinated changes across:
+The serializable `ProviderOperationContext` contains only bounded, canonical
+fields:
 
-- the canonical `d2b-contracts::provider` DTO and schema module;
-- the canonical `d2b-contracts::session` handshake, authentication, envelope,
-  limits, and typed-error module;
-- the `d2b-provider` base and specialized provider interfaces;
-- the `d2b-session` component-session runtime and authenticator interfaces;
-- ttrpc/protobuf daemon, realm, guest, and provider service contracts;
-- type-first provider implementation crates and typed registries;
-- `d2b-provider-testkit` conformance suites and provider naming policy;
-- `d2b.realms.<realm>.controller.workload` and the normalized
-  `d2b._index.workloadRoles` table;
-- typed runtime and infrastructure provider bindings replacing the ambiguous
-  inert provider record;
-- `d2b.realms.<realm>.transport` provider, fabric inheritance, connector, and
-  shortcut policy;
-- workload, controller, provider-executor, and transport-client capability
-  advertisements;
-- controller-workload bootstrap and generation DTOs;
-- peer shortcut authorization and transport-binding DTOs;
-- realm-controller, workload, session, and transport status output;
-- bundle artifacts, generated schemas, reference documentation, and migration
-  guidance.
+- operation ID and idempotency key;
+- already-authorized realm, workload or controller, and opaque principal
+  reference;
+- selected provider ID, provider type, provider generation, capability, and
+  method;
+- policy epoch and authorization decision digest;
+- authenticated issue time and absolute wall-clock expiry;
+- bounded correlation and W3C-compatible trace identifiers.
 
-Security-sensitive schema changes require the normal bundle/schema version
-bumps. Existing `unsafe-local` provider-kind values and old inert provider
-records receive explicit migration errors after the selected cutover; no
-success-shaped compatibility fallback is added. Every migration error names
-the obsolete option or value, its exact replacement, and the provider/realm
-migration guide.
+The non-serializable `ProviderCallContext` adds:
 
-The same clean cutover applies to transport and session contracts:
+- a local monotonic deadline derived from the authenticated request;
+- cancellation;
+- the authenticated ComponentSession peer and endpoint role;
+- local tracing state.
 
-- `relayProviders` and `d2b.realms.<realm>.relay` fail with migration errors
-  naming `transportProviders` and `d2b.realms.<realm>.transport`;
-- `ProviderType::Relay`, `RelayProvider`, and `relay-unavailable` are rejected
-  rather than aliased to their transport replacements;
-- pre-ComponentSession realm-peer or guest-control wire generations fail with
-  typed version/migration errors and cannot negotiate a weaker legacy session;
-- a controller that lacks the required ComponentSession transport/auth/service
-  capabilities is not admitted and publishes no route;
-- old and new realm/session generations may be drained side-by-side as separate
-  deployments, but they never form a mixed authenticated topology.
+Tokio channels, `Instant`, file descriptors, paths, sockets, credentials, and
+provider SDK objects never enter `d2b-contracts`.
 
-The local public Unix compatibility wire remains a local daemon-access surface
-only until its explicit migration. It is never accepted as a remote realm,
-controller, guest, or provider session fallback.
+A provider:
 
-## Validation requirements
+1. cannot choose or widen the realm, workload, controller, principal,
+   capability, method, or provider instance;
+2. cannot authorize the caller;
+3. cannot call a privileged broker directly;
+4. cannot return secret bytes, raw provider responses, or unbounded endpoint
+   data;
+5. makes every mutation idempotent by operation ID;
+6. returns bounded observed state and one closed retry class;
+7. verifies provider ID, configuration fingerprint, resource identity,
+   operation binding, and generation during adoption;
+8. fails closed on cancellation or deadline expiry;
+9. advertises only methods present in the matching typed registry.
 
-Implementation is incomplete without:
+The closed retry classes are:
 
-- source-policy tests proving provider crate names use a recognized type-first
-  axis and the implementation id matches the descriptor;
-- dependency-direction tests proving `d2b-contracts` does not depend on
-  `d2b-provider` or an implementation, and `d2b-provider` does not
-  depend on an implementation, cloud SDK, daemon, broker, codec, or concrete
-  transport;
-- dependency-direction tests proving live `ByteStream`, `TransportSession`, and
-  `TransportListener` types live only in `d2b-provider`; `d2b-session` depends
-  inward on `d2b-provider`, never the reverse;
-- dependency-direction tests proving every
-  `d2b-provider-<type>-<implementation>` crate is a leaf adapter that does not
-  depend on `d2bd`, `d2b-priv-broker`, or another provider implementation;
-- dependency-direction tests proving `d2b-session` depends only on contracts,
-  provider interfaces, codec-neutral service DTOs, and approved crypto/runtime
-  primitives, never daemon, guest, broker, or concrete transport code;
-- policy tests proving provider implementations reuse
-  `d2b-contracts::provider` DTOs rather than declaring shadow serialized types;
-- conformance tests for every registered provider's primary interface and
-  advertised optional capabilities;
-- registry tests proving optional capability descriptor claims and
-  capability-specific trait registrations match exactly without trait-object
-  downcasting;
-- compile-time object-safety tests constructing `Arc<dyn ProviderTrait>` for
-  every primary and optional provider interface;
-- contract tests proving `ProviderOperationContext` remains serializable and
-  runtime cancellation/deadline state exists only in `ProviderCallContext`;
-- transport conformance tests for Unix-stream, native-vsock,
-  Cloud-Hypervisor-vsock, loopback, direct-network, and Azure-Relay adapters,
-  including purpose gating, bounded endpoints, liveness, reconnect, and active
-  revocation claims;
-- component-session tests for fixed bootstrap framing, Noise transcript
-  binding, downgrade rejection, channel binding, replay, hard limits,
-  keepalive, close, record fragmentation/reassembly, and forbidden pre-auth
-  semantic traffic;
-- deterministic demux scheduler tests proving reserved session/ttrpc control
-  credit, channel-specific waker delivery, bounded queues, cancellation
-  preemption, round-robin data fairness, no lock held across await, and queue
-  depth/drop/waker-delay metrics without per-session or per-stream labels;
-- fixed Noise profile test vectors plus fuzz/property tests for handshake and
-  encrypted-record parsers, including truncation, duplicate/reordered
-  fragments, oversized ttrpc frames, nonce exhaustion, and reconnect;
-- authenticator tests for local peer credentials, realm Noise keys, guest PSKs,
-  one-time bootstrap, and optional mTLS, including rejection of `none` and
-  cross-purpose credential reuse;
-- ttrpc/protobuf contract tests for all four service ids, method-derived
-  capabilities, deadlines, idempotency, typed errors, and operation-bound named
-  stream opens, with the d2b 1 MiB cap enforced before allocation;
-- source-policy tests proving public daemon, broker, and unsafe-local helper
-  seqpacket/SCM_RIGHTS endpoints are not silently registered as generic byte
-  transports;
-- Nix evaluation tests for one-controller-per-realm, direct-parent ownership,
-  cycle rejection, scalar-only controller target, recursion-free role-index
-  construction, provider capability gating, typed transport-provider
-  references, ancestor-only transport inheritance, and derived placement;
-- runtime route tests proving competing, partitioned, or otherwise ambiguous
-  controller generations publish no route, report the realm degraded, and
-  reject superseded generation grants until parent-authorized reconciliation;
-- Nix evaluation tests proving obsolete `unsafe-local` provider-kind values,
-  inert provider records, old gateway declarations, and compatibility aliases
-  fail with the documented actionable migration errors;
-- versioned cutover tests proving legacy `relayProviders`/`realm.relay`,
-  `ProviderType::Relay`, `RelayProvider`, and `relay-unavailable` inputs fail
-  with exact transport migration guidance;
-- wire-skew tests proving pre-ComponentSession handshakes, unmigrated
-  controllers, and mixed old/new realm generations cannot publish routes or
-  fall back to legacy auth/protocol paths;
-- tests proving a controller cannot control its own substrate;
-- bootstrap tests proving the local pre-guestd seed share and remote temporary
-  relay rendezvous carry only bounded operation-bound enrollment material, are
-  replay protected, and are withdrawn before route publication;
-- network tests proving parent-owned controller VMs are not parent/child
-  dual-homed; IPv4/IPv6 forwarding, IPv6 RA acceptance, proxy ARP, and proxy NDP
-  are disabled; and any explicit multi-interface provider installs
-  default-deny cross-interface policy;
-- sandbox runtime tests covering `host-shared`, `none`, and
-  `isolated-namespace` networking plus broker-preestablished and unprivileged
-  self-managed user namespace modes;
-- provider-executor tests proving credentials are resolved only inside the
-  selected workload;
-- transport inheritance tests proving nested realms receive distinct identities
-  and no copied credential references;
-- route-engine tests for shared-fabric shortcut authorization, replay,
-  expiration, policy epoch changes, route revocation, signed endpoint-close
-  reports, untrusted endpoint byte counts, missing-report expiry, active
-  shortcut revocation, maximum-lifetime fallback, and teardown;
-- end-to-end tests proving shortcut bytes bypass intermediate controllers while
-  every policy boundary records the decision;
-- negative end-to-end tests proving shortcut failure either uses the already
-  authorized parent transport route or returns a typed transport error without
-  probing direct networks, SSH, provider-native APIs, generic TCP, or tunnels;
-- negative tests proving a transport-authenticated peer is not local `Admin`;
-- negative tests proving no remote realm, workload, transport, or provider peer
-  can receive or invoke the local privileged broker wire protocol;
-- YubiKey tests proving controller, browser, and developer ceremonies require
-  trusted per-ceremony intent, serialize without token-cache sharing, reject
-  destructive/unknown CTAP commands, cancel on disconnect, and release leases
-  at the bounded ceremony and queue timeouts;
-- restart/adoption tests for local and remote controller workloads, including
-  systemd-user scope adoption outside `d2b.slice`, rejection of expired or
-  superseded shortcut grants, and mandatory re-enrollment after controller
-  identity loss;
-- audit tests covering retention/rotation, signed export checkpoints, planned
-  replacement drain, forced-loss `audit-gap`, and shortcut audit completeness;
-- reconnect-flap tests proving every attempt increments bounded metrics while
-  repeated audit/log events are suppressed and summarized by backoff/result
-  class without losing recovery or terminal transitions;
-- status/telemetry tests proving `interaction-required` is visible without
-  leaking user, token, RP, or endpoint identity; status includes the bounded
-  provider id/remediation while metric labels omit the provider id;
-- telemetry classification tests proving bounded provider/operation/shortcut
-  ids remain available in traces/audit but never metric labels, while endpoints,
-  Entra identities, Azure resource ids, credentials, proofs, and payload
-  metadata are absent from every telemetry surface.
+```text
+never
+same-operation
+after-observation
+after-interaction
+```
+
+`same-operation` requires the identical operation ID and request digest.
+`after-observation` requires a fresh `inspect` before retry.
+`after-interaction` requires a new explicit operator interaction and never
+opens UI merely because status changed. A caller does not invent a new
+operation ID to bypass an ambiguous mutation.
+
+Host mutations returned by a provider plan are re-originated by the owning
+realm daemon as typed broker operations. An agent never receives the broker
+wire protocol. A method-specific FD may reach an agent only as a declared,
+validated ComponentSession attachment after broker and daemon authorization.
+
+### Registry construction, duplicates, and shutdown
+
+The complete host bundle validates provider identity globally, then each realm
+constructs eleven typed registries as one transaction:
+
+- every configured `ProviderId` is globally unique across the complete accepted
+  constellation configuration, every realm, and every primary registry;
+- each instance appears in exactly one primary registry;
+- descriptor type, implementation ID, API version, configuration fingerprint,
+  and configured scope must match the bundle;
+- an implementation factory is unique only by the pair
+  (`ProviderType`, `ImplementationId`); registering two factories for that pair
+  is fatal;
+- any number of configured instances may use the same factory pair when each
+  has a distinct globally unique `ProviderId`, scope, configuration
+  fingerprint, and generation;
+- every advertised optional capability has exactly one capability-registry
+  implementation;
+- every capability-registry implementation is advertised;
+- a duplicate provider ID, factory pair, per-instance capability claim, or
+  generation aborts the entire host registry generation before any provider
+  receives a call;
+- there is no "last registration wins" behavior.
+
+Every generated factory-registration, capability-registration,
+configured-instance construction, and generation-finalization API is fallible
+and returns `Result<_, RegistryBuildError>`. Duplicate keys, malformed
+configuration, descriptor mismatch, missing capabilities, and factory
+construction failures return typed, redacted errors and abort the transaction;
+they never use `panic!`, `assert!`, `unwrap`, or `expect` for configuration
+handling. The factory key is exactly
+(`ProviderType`, `ImplementationId`). Registration creates one factory for that
+key; constructing multiple configured instances from it is a separate fallible
+operation and is required to work for distinct globally unique `ProviderId`
+values.
+
+A registry generation is immutable. Reconfiguration builds and validates a new
+generation, stops admission to the old generation, drains bounded in-flight
+operations, and atomically publishes the new generation. Calls retain the
+generation they entered. Mutations that cannot be proven complete are observed
+or quarantined; they are not replayed under a new generation by guesswork.
+
+Shutdown is registry-owned:
+
+1. reject new calls;
+2. signal cancellation;
+3. wait the configured bounded drain deadline;
+4. revoke registry-owned transport bindings and credential lease handles;
+5. close provider-owned sessions;
+6. stop an agent only through its declared restart/ownership contract;
+7. record typed unresolved observations for anything that cannot be proven
+   closed.
+
+Agent disconnect marks that provider generation unavailable. It never selects
+another implementation, ambient SDK credential, shell command, SSH path, or
+direct broker call.
+
+### In-process and provider-agent implementations
+
+The registry is hybrid:
+
+- audited, trusted, first-party host implementations may run in-process in the
+  owning realm daemon;
+- same-user, workload-resident, cloud-credential, and third-party
+  implementations run as provider agents over `d2b.provider.v2`;
+- no dynamic library loading or untrusted in-process plug-in mechanism exists;
+- an RPC proxy implements the same Rust trait as an in-process provider;
+- conformance is identical on both sides of the proxy.
+
+Initial placement is:
+
+| Type | Implementation ID | Placement |
+| --- | --- | --- |
+| Runtime | `cloud-hypervisor` | Trusted in-process adapter in the owning realm daemon; all host effects use its confined broker. |
+| Runtime | `qemu-media` | Trusted in-process adapter in the owning realm daemon; QMP remains an external protocol. |
+| Runtime | `systemd-user` | Per-user provider agent under the exact user's systemd manager. |
+| Runtime | `azure-container-apps` | Provider agent in the configured credential-owning workload, co-located with its credential module. |
+| Runtime | `azure-vm` | Compile-tested fake-SDK agent/test scaffold only; never in a production registry. |
+| Infrastructure | `azure-vm` | Compile-tested fake-SDK agent/test scaffold only; never in a production registry. |
+| Transport | `unix-stream` | Trusted in-process adapter in the connecting/listening realm component. |
+| Transport | `unix-seqpacket` | Trusted in-process adapter in the connecting/listening realm component, using `d2b-unix-session`. |
+| Transport | `native-vsock` | Trusted in-process adapter in the owning realm daemon or guest component. |
+| Transport | `cloud-hypervisor-vsock` | Trusted in-process adapter in the owning realm daemon; the CH `CONNECT` prelude remains external. |
+| Transport | `azure-relay` | Provider agent in the configured credential-owning workload, co-located with its credential module. |
+| Transport | `loopback` | In-process testkit implementation only. |
+| Transport | `direct-tls` | Unadvertised compile/conformance scaffold in test code only. |
+| Transport | `quic` | Unadvertised compile/conformance scaffold in test code only. |
+| Substrate | `nixos` | Trusted in-process adapter in local-root d2bd; authorized host mutation remains a local-root broker operation. |
+| Substrate | `linux` | Trusted in-process adapter in local-root d2bd; authorized host mutation remains a local-root broker operation. |
+| Credential | `secret-service` | `d2b-userd` credential agent using `oo7` after keyring unlock. |
+| Credential | `entra` | Private module in the configured credential-owning provider agent/workload. |
+| Credential | `managed-identity` | Private module in the configured credential-owning provider agent/workload. |
+| Display | `wayland` | Trusted in-process adapter in the owning realm daemon; the separately sandboxed proxy speaks external Wayland. |
+| Network | `local-realm` | Trusted in-process adapter in the owning realm daemon; namespace-local effects use the child broker and global effects use local-root. |
+| Storage | `local` | Trusted in-process adapter in the owning realm daemon; mutation uses generated broker storage IDs. |
+| Device | `host-mediated` | Trusted in-process adapter in the owning realm daemon; only allocator/broker-issued device FDs cross the boundary. |
+| Audio | `pipewire-vhost-user` | Trusted in-process adapter in the owning realm daemon; PipeWire and vhost-user remain external protocols. |
+| Observability | `local` | Trusted in-process bounded adapter in the owning realm daemon. |
+
+No initial implementation is implicitly placed. Adding an implementation ID
+requires adding its exact placement, executable owner, broker relationship, and
+credential posture to the generated provider contract before registration.
+
+### Credential-opaque lease rule
+
+`CredentialProvider` has no `get_secret`, byte-stream, file, environment, or FD
+return path. `CredentialLease` contains only:
+
+- an opaque random lease ID meaningful inside the owning agent;
+- provider and consumer adapter IDs;
+- allowed SDK operation classes;
+- expiry, generation, source version, and rotation metadata;
+- revocation state.
+
+The credential provider and the SDK-consuming provider adapter must be
+co-located in the same process and agent/workload. Their Rust modules may live
+in separate crates and may exchange secret material through one sealed private
+interface whose values are non-serializable, non-`Debug`, non-`Clone`, and
+zeroized on release. This narrow in-process crate boundary is permitted; a
+claim that secret bytes can never cross any crate boundary would be
+unenforceable. The interface cannot be implemented by an RPC proxy, persisted,
+attached as an FD, or exposed to an unrelated module.
+
+A controller may coordinate the opaque lease handle but cannot redeem it,
+serialize its secret, or forward it to another agent. Secret material never
+crosses a process, ComponentSession, persistence, crash-report, log, trace,
+metric, or audit boundary.
+
+An Entra token, Relay credential, managed identity token, Secret Service value,
+or cloud SDK credential therefore remains in its credential-owning boundary.
+`d2bd`, all brokers, and unrelated providers never read those bytes.
+
+The credential posture by primary provider type is:
+
+| Provider type | Credential posture |
+| --- | --- |
+| Runtime | Local runtimes hold no provider credential. A cloud runtime may consume only a co-located opaque lease inside its provider agent. |
+| Infrastructure | A cloud infrastructure adapter may consume only a co-located opaque lease inside its provider agent. Plans, handles, and observations remain non-secret. |
+| Transport | Unix and vsock transports hold none. A Relay/direct transport connector may consume only its own co-located lease; transport authentication is not d2b authorization. |
+| Substrate | Holds no user or cloud credential. Privileged apply is re-originated through the owning daemon and broker. |
+| Credential | Owns interaction with the source and the local lease table. Only its co-located private consumer interface may expose material to the exact SDK adapter authorized by a lease. |
+| Display | Holds no user or provider credential. Compositor/display handles are typed capabilities, not credentials. |
+| Network | Local network providers hold none. A future cloud network adapter follows the same co-located lease rule as infrastructure. |
+| Storage | Local storage providers hold none. A future cloud storage adapter follows the same co-located lease rule and returns opaque resource handles. |
+| Device | Holds device/session authority only. CTAPHID traffic, touch, or a device FD never authorizes extraction of authenticator credentials. |
+| Audio | Holds no user or provider credential. PipeWire handles remain scoped session capabilities. |
+| Observability | Local observation holds none. An external exporter may consume only an explicitly scoped co-located lease and cannot read unrelated audit/state. |
+
+### Type-first provider names
+
+Implementation crates use:
+
+```text
+d2b-provider-<provider-type>-<implementation>
+```
+
+Examples include:
+
+```text
+d2b-provider-runtime-cloud-hypervisor
+d2b-provider-runtime-qemu-media
+d2b-provider-runtime-systemd-user
+d2b-provider-runtime-azure-container-apps
+d2b-provider-infrastructure-azure-vm
+d2b-provider-transport-unix-stream
+d2b-provider-transport-unix-seqpacket
+d2b-provider-transport-cloud-hypervisor-vsock
+d2b-provider-transport-azure-relay
+d2b-provider-substrate-nixos
+d2b-provider-credential-entra
+d2b-provider-display-wayland
+d2b-provider-network-local-realm
+d2b-provider-storage-local
+d2b-provider-device-host-mediated
+d2b-provider-audio-pipewire-vhost-user
+d2b-provider-observability-local
+```
+
+Axis-free names such as `d2b-provider-aca`, `d2b-provider-relay`,
+`d2b-provider-azure`, and `d2b-host-providers` are deleted.
+
+### Required provider parity
+
+The following IDs and production postures are frozen for the initial v2
+cutover:
+
+| Type | Implementation IDs | Required v2 parity and posture |
+| --- | --- | --- |
+| Runtime | `cloud-hypervisor`, `qemu-media`, `systemd-user`, `azure-container-apps`; scaffold `azure-vm` | Wrap the real VM DAG, graceful stop, pidfd/cgroup adoption, qemu-media QMP path, same-user scopes and persistent shells, and live ACA lifecycle. Runtime `azure-vm` is an unadvertised workload-deploy/exec/inspect scaffold over an already-bound infrastructure handle and has no VM create/delete/power authority. |
+| Infrastructure | scaffold `azure-vm` | Typed VM create/power/adopt/bootstrap/delete requests, plans, observations, fake SDK, and conformance only. Infrastructure exclusively owns the Azure VM resource, but has no workload deployment/exec authority. No production registration or provisioning claim. |
+| Transport | `unix-stream`, `unix-seqpacket`, `native-vsock`, `cloud-hypervisor-vsock`, `azure-relay` | Preserve local stream/packet/FD, native and CH-vsock, and live Relay behavior. `loopback` exists only in testkit. `direct-tls` and `quic` remain unadvertised scaffolds unless required by existing live behavior. |
+| Substrate | `nixos`, `linux` | Real checks, plans, and authorized apply for the currently supported full-host substrate paths. |
+| Credential | `secret-service`, `entra`, `managed-identity` | Secret Service through `d2b-userd`; Entra and managed identity only inside the owning workload/agent; opaque leases only. |
+| Display | `wayland` | Real Wayland, Waypipe/cross-domain, proxy, authorization, readiness, and lifecycle behavior; no synthetic facade. |
+| Network | `local-realm` | Existing bridge, TAP, net VM, NAT, DHCP, nftables, netlink, external attachment, and realm-isolation behavior behind realm-scoped contracts. |
+| Storage | `local` | Existing local state, disk image, Nix store-view, closure sync, media, and persistent-state operations behind generated storage contracts. |
+| Device | `host-mediated` | Existing TPM, USBIP, CTAPHID/UHID security key, GPU, video, and mediated-device behavior with typed capabilities. |
+| Audio | `pipewire-vhost-user` | Existing PipeWire and vhost-user-sound lifecycle, routing, status, mute, volume, and policy. |
+| Observability | `local` | Existing bounded metrics, tracing, audit export, status, and projections without taking audit ownership or reading raw repair state. |
+
+The working CTAPHID/UHID implementation is code canon. It is refactored behind
+the device and ComponentSession contracts, not replaced with a new FIDO stack.
+Each ceremony requires trusted, source-specific intent. A small bounded CBOR
+parser may classify command and RP. Reset, credential deletion/management,
+biometric enrollment, authenticator configuration, vendor, and unknown
+destructive commands remain denied by a closed policy.
+
+The physical authenticator is shared only at the bounded ceremony layer.
+Controller/provider-executor, browser, and developer workloads acquire and keep
+their own independent Entra sessions and token caches. The host serializes
+ceremonies and releases the lease on completion, denial, disconnect, or
+timeout. PIV, CCID, OTP, and OpenPGP continue to require exclusive USB
+ownership; they do not run concurrently with CTAPHID proxying through an
+implicit fallback.
+
+Every production lifecycle and component call graph must enter the matching
+typed registry. A provider-shaped facade that production bypasses does not
+satisfy this ADR.
+
+### Azure VM is scaffold only
+
+`azure-vm` runtime and infrastructure contracts include typed configuration,
+requests, plans, observed state, fake SDK clients, and conformance fixtures.
+The infrastructure contract exclusively models VM resource create, power,
+adopt, bootstrap, inspect, and delete. The runtime contract requires an opaque
+bound infrastructure handle and models only workload deploy, exec,
+workload-local start/stop, and inspect. Tests must prove that neither contract
+can deserialize or dispatch the other contract's authority.
+
+They do not:
+
+- register in a production provider registry;
+- advertise any live Azure capability or `realm-controller-host-v2`;
+- make CLI or status claim that Azure VM support is available;
+- execute a live Azure SDK call.
+
+Production Azure VM provisioning and remote-controller execution are post-v2
+work requiring a later accepted decision. Capability checks must return a typed
+unavailable result before any credential acquisition or network call.
+
+## Universal ComponentSession
+
+### Scope
+
+Every live IPC protocol owned by d2b uses `ComponentSession`, whether it runs
+over:
+
+- Unix stream;
+- Unix seqpacket;
+- an inherited Unix socketpair;
+- native AF_VSOCK;
+- the Cloud Hypervisor vsock adapter;
+- a provider transport such as Azure Relay;
+- a future explicitly configured direct transport.
+
+There is no specialized broker, helper, public-daemon, picker, clipboard,
+activation, TTY, or FD-bearing protocol exception. Durable JSON records,
+generated bundle files, audit JSONL, and presentation projections are state,
+not live IPC, and do not become sessions.
+
+External protocols remain external:
+
+- Wayland;
+- PipeWire;
+- vhost-user;
+- QMP;
+- Cloud Hypervisor HTTP and its vsock `CONNECT` prelude;
+- CTAPHID;
+- D-Bus and Secret Service;
+- Niri IPC;
+- Azure and other cloud APIs;
+- Relay WebSocket rendezvous;
+- shpool internals;
+- ttrpc framing itself.
+
+Ttrpc frames are carried as authenticated ComponentSession control payloads;
+d2b does not redefine ttrpc. A d2b-owned adapter that controls any external
+protocol still uses ComponentSession on its d2b side.
+
+### Selected dependencies and layers
+
+The fixed layering is:
+
+```text
+TransportProvider or direct local endpoint
+  -> TransportSession
+       reliable byte stream, or
+       Unix packet transport with attachment capability
+  -> ComponentSession v2
+       fixed preface
+       endpoint purpose and role validation
+       Noise handshake and channel binding
+       bounded encrypted records
+       replay and sequence protection
+       keepalive, close, and reconnect generation
+       packet-atomic attachment descriptors when negotiated
+       reserved ttrpc control channel
+       bounded named-stream channels
+  -> generated ttrpc/protobuf .v2 service
+```
+
+Dependencies are:
+
+- Noise: `snow`;
+- control RPC: the exact runtime pins `ttrpc = "=0.9.0"` from
+  `ttrpc-rust` and `protobuf = "=3.7.2"` from `rust-protobuf`, with
+  `ttrpc-codegen = "=0.6.0"` and `protobuf-codegen = "=3.7.2"` for the
+  generated bindings;
+- data: the d2b named-stream mux with independent bounded credit;
+- Unix packet and FD substrate: established `rustix` or `nix` calls, wrapped by
+  Tokio `AsyncFd` in one small audited `d2b-unix-session` abstraction.
+
+There is no hand-authored protobuf codec, alternate realm record layer, local
+plaintext mechanism, or second mux.
+
+W2 begins with a dependency/API-fit spike against those exact versions. The
+spike generates a minimal asynchronous server and client, carries unary calls
+through the ComponentSession transport adapter, and proves on both Tokio
+current-thread and multi-thread runtimes that client, accept, read, write, and
+handler waits yield to an independent progress task. It also compile-proves the
+generated service traits, cancellation path, and owned/borrowed handler
+lifetimes used below. This gate runs before any `.v2` service schema is frozen.
+An incompatible API, blocking generated path, or required sync adapter fails W2
+and requires a reviewed dependency decision; it is not worked around after
+schemas are generated.
+
+### Fixed preface and service selection
+
+Every connection starts with this 16-byte network-order preface:
+
+```text
+offset  size  value
+0       8     44 32 42 43 53 32 0d 0a (ASCII "D2BCS2" then CR LF)
+8       2     component-session major, exactly 2
+10      2     component-session minor, exactly 0
+12      4     canonical handshake-offer byte length
+```
+
+The offer is a bounded canonical binary contract, not JSON and not the codec
+being selected. Its maximum is 16 KiB. It carries exactly one endpoint-policy
+allowed purpose, initiator role, responder role, service package, schema
+fingerprint, Noise profile, limit profile, and attachment policy. An endpoint
+may support several services on separate purposes, but one connection does not
+negotiate down a preference list. Any mismatch fails before semantic dispatch.
+
+There is no semver range, v1/v2 choice, ignored feature flag, codec fallback,
+authentication fallback, or lower limit selected after failure.
+
+The service package names are:
+
+```text
+d2b.daemon.v2
+d2b.realm.v2
+d2b.guest.v2
+d2b.provider.v2
+d2b.broker.v2
+d2b.user.v2
+d2b.runtime.systemd-user.v2
+d2b.shell.v2
+d2b.clipboard.v2
+d2b.clipboard.picker.v2
+d2b.notify.v2
+d2b.security-key.v2
+d2b.wayland.v2
+d2b.activation.v2
+d2b.tty.v2
+```
+
+Any additional internal service uses a `.v2` package and requires an updated
+closed inventory in this ADR's generated successor contract. No `.v1` service
+package is registered in v2.
+
+Every ttrpc request carries a bounded request ID, correlation/trace context,
+authenticated wall-clock issue and absolute-expiry fields, and an idempotency
+key for a mutating method. Service and method IDs come from generated metadata.
+The authenticated principal comes only from session state, and the required
+capability comes only from trusted service/method metadata. A request payload
+cannot provide either value.
+
+### Deadline and request cancellation
+
+The ComponentSession request envelope carries `issued_at_unix_ms` and
+`expires_at_unix_ms` as authenticated fields separate from the ttrpc context.
+The fixed global maximum request lifetime is 15 minutes and the maximum
+permitted wall-clock skew is 30 seconds; a generated service policy may lower
+either value. Admission rejects an expiry before issue time, a declared
+lifetime above the cap, an issue time more than the allowed skew in the future,
+or a request already expired by the receiver's wall clock. Long-running
+provider work returns an operation handle and is observed by later bounded
+calls rather than extending one RPC beyond the cap.
+
+Each remote/session endpoint must have clock-health evidence within that
+30-second bound; loss of clock health rejects new cross-host calls until
+restored. Skew is an acceptance bound, not extra lifetime: it is never added to
+the remaining duration.
+
+At the first authenticated ingress, the receiver computes:
+
+```text
+wall_remaining = expires_at_unix_ms - local_wall_clock
+monotonic_deadline = Instant::now() + min(wall_remaining, service_max_lifetime)
+```
+
+It preserves the authenticated absolute expiry unchanged. At every ingress,
+forwarding hop, scheduler enqueue/dequeue, provider queue, and final dispatch,
+the component recomputes wall-clock remaining time and intersects it with the
+remaining local monotonic budget and the service cap. Non-positive remaining
+time rejects or cancels the call before semantic dispatch. A backward wall-clock
+jump cannot lengthen the monotonic budget; a forward jump expires the call.
+
+Only the resulting capped relative duration is mapped to ttrpc
+`timeout_nano`, after clamping to the field's representable range. Epoch time is
+never encoded in `timeout_nano`, and a peer-supplied ttrpc timeout can only
+shorten, never replace or extend, the authenticated absolute expiry. A
+forwarder generates a fresh relative ttrpc timeout from the current remaining
+budget at that hop.
+
+Request IDs are unique within one ComponentSession generation. The reserved
+session-control channel carries a transcript-bound `CancelRequest` naming the
+session generation and request ID. Acceptance creates one cancellation token
+shared by queues, ttrpc dispatch, provider proxy, attachment owner, and named
+streams. Cancellation, deadline expiry, or session loss removes queued work
+before dispatch or signals the running handler, closes and accounts every
+unconsumed attachment/stream, revokes partial ephemeral leases, and runs the
+method's bounded cleanup. An ambiguous durable mutation is observed or
+quarantined under its original operation ID, never replayed as cancellation
+cleanup. The endpoint returns one bounded terminal cancellation acknowledgement
+when the control channel remains available.
+
+### Generated dispatch ownership
+
+Generated ttrpc handlers dispatch in the session-owned request task. That task
+may borrow the registered trait object and `ProviderCallContext`, call an
+`async_trait` method through `&self`, and await the returned borrowed future to
+completion because the request task owns the borrow lifetime.
+
+No code may pass or spawn a future borrowing `&self`, a registry entry, request
+stack data, or a session-local context into `tokio::spawn` or any other
+`'static` executor. Work that intentionally outlives the request task is
+converted before detachment into either:
+
+- an owned `Arc<dyn Provider...>` plus an owned or `Arc`-backed call context; or
+- an explicit owned operation object containing only the bounded authority,
+  cancellation, deadline, generation, and resource handles it needs.
+
+The detached task owns every captured value. It does not retain a reference to
+the generated handler, registry generation stack frame, ttrpc request, or
+session task. Compile tests cover both the borrowed in-task path and every
+allowed owned detached path.
+
+### Authentication profiles
+
+The fixed profiles are:
+
+| Session | Noise profile and identity |
+| --- | --- |
+| Local Unix client/controller/broker/helper/userd/component | Ephemeral `Noise_NN_25519_ChaChaPoly_SHA256`. Identity evidence is directional: an acceptor authenticates the connecting initiator from kernel-observed `SO_PEERCRED`; an initiator authenticates the responder from trusted fixed-socket or allocator-issued listener provenance, inode, launch/unit owner, and endpoint policy. Inherited/socketpair endpoints add first-packet `SCM_CREDENTIALS` and a parent launch binding. Noise supplies confidentiality and transcript integrity but no static peer identity. |
+| Enrolled realm/controller/provider/workload peers | `Noise_KK_25519_ChaChaPoly_SHA256` using enrolled static public keys and fresh ephemeral session state. |
+| One-time realm or guest bootstrap | `Noise_IKpsk2_25519_ChaChaPoly_SHA256` using the expected parent static key and a single-use, operation-bound 256-bit-or-stronger PSK. |
+| Normal enrolled guest control | `Noise_KK_25519_ChaChaPoly_SHA256` using the parent realm key and guest vTPM-backed static key. |
+| Explicit external interoperability | Mutual TLS may be transport evidence only when an explicit identity mapper is configured. It is never a fallback and does not replace the ComponentSession Noise profile. |
+
+`snow` is the only production Noise implementation. W2 commits deterministic
+vector fixtures for all three profiles and every purpose class. Each fixture
+fixes protocol name, prologue bytes, role, static and ephemeral private-key test
+inputs, PSK where applicable, handshake payloads, transcript hash, transport
+keys, first protected records, and rejection mutations. W3 verifies the same
+fixtures through `snow`; generated bindings and implementations may not update
+expected vectors implicitly.
+
+The canonical fixture IDs and required coverage are:
+
+| Fixture ID | Profile | Required purposes |
+| --- | --- | --- |
+| `component-session-v2-local-nn` | `Noise_NN_25519_ChaChaPoly_SHA256` | Every local Unix purpose, including an attachment-enabled seqpacket case |
+| `component-session-v2-enrolled-kk` | `Noise_KK_25519_ChaChaPoly_SHA256` | Realm peer, normal guest, and enrolled provider/workload peer |
+| `component-session-v2-bootstrap-ikpsk2` | `Noise_IKpsk2_25519_ChaChaPoly_SHA256` | Realm bootstrap and guest bootstrap, including wrong operation, expired PSK, and replay rejection |
+
+The vectors live in one canonical committed artifact owned by
+`d2b-contracts::session`; copies in another crate or sibling repository are
+forbidden.
+
+An endpoint accepts no `none`, local plaintext, old HMAC, long-lived guest PSK,
+or weaker retry. Noise ephemeral keys, cipher state, nonces, sockets, and
+session keys are never persisted or adopted across reconnect.
+
+### Local peer credentials
+
+Local identity evidence is explicitly directional. D2b does not claim that both
+sides of every Unix connection observe a meaningful service identity through
+`SO_PEERCRED`.
+
+For a pathname listener, the accepting responder reads kernel-observed
+`SO_PEERCRED` from the accepted socket before the preface and maps the
+initiator's pid/uid/gid to one closed endpoint role. The connecting initiator
+does not treat the listener-side `SO_PEERCRED` value as responder identity,
+because a socket-activated listener may have been created before the service
+process. Instead it authenticates the responder endpoint by all of:
+
+1. an expected fixed or broker-generated path from the integrity-checked
+   endpoint contract;
+2. anchored parent ownership and mode;
+3. matching pre-connect and post-connect path device/inode/type observations
+   under the non-writable anchored parent;
+4. the expected system or user socket unit and activation owner for a fixed
+   local-root/user endpoint, or the allocator/broker-issued listener identity
+   and launch record for a child-realm or other dynamic endpoint;
+5. the endpoint policy's exact purpose, responder role, service, schema, limits,
+   and attachment policy.
+
+A local-root or user service receives a socket-activated listener only from the
+declared system/user manager unit. A child controller or broker receives its
+already-bound listener only from the local-root allocator as part of its typed
+parent spawn. Another dynamic owner receives an already-bound listener FD only
+from the broker named in the generated row. No receiver unlinks and recreates
+the path.
+
+For an inherited or socketpair endpoint, the creating parent enables
+`SO_PASSCRED` on both socket ends immediately after creation and verifies both
+ends with `getsockopt` before any fork, clone, exec, endpoint handoff, or packet
+send. This is a launch precondition, not receiver initialization. Each receiver
+verifies that the inherited option is still enabled before its first read and
+must not attempt to repair a disabled option after handoff. The peer's first
+preface packet must carry exactly one `SCM_CREDENTIALS`, even when it sends at
+its first schedulable instruction. The creating parent also mints a single-use
+launch binding over purpose, endpoint roles, executable/configuration digest,
+expected cgroup, pidfd identity, and expiry. The receiver verifies that the
+kernel credential PID is the live process referenced by the pidfd and that its
+executable and cgroup still match the launch binding before accepting Noise
+bytes. Missing, extra, stale, or inconsistent evidence closes the endpoint.
+
+The normalized directional evidence and its verifier role enter the Noise
+prologue with purpose, endpoint identity, service, schema, limits, and
+attachment policy. Semantic requests inherit only the principal established by
+that endpoint policy. A payload cannot supply or replace uid, gid, pid, realm
+role, or broker authority.
+
+An established ComponentSession endpoint is never transferable by
+`SCM_RIGHTS`, pidfd duplication, inheritance, or broker handoff. Only an
+unaccepted listener or a fresh pre-handshake transport endpoint may be handed
+to its declared owner. Once the first preface packet is sent or received, the
+socket is bound to that process, session generation, directional evidence, and
+Noise transcript until close.
+
+Relay, TLS, vsock CID, and managed identity are likewise not mapped to a local
+role.
+
+### Guest bootstrap and static identity
+
+A guest's one-time bootstrap lifecycle is:
+
+1. the parent launches or adopts one exact runtime instance and records its
+   opaque provider handle, executable/configuration identity, cgroup/pidfd
+   identity where local, and the exact transport endpoint assigned to that
+   instance;
+2. the parent creates a fresh boot nonce and random operation-bound PSK bound to
+   realm, workload ID, controller and workload generation, runtime-instance
+   handle digest, transport endpoint digest, purpose, expiry, and replay nonce;
+3. local guests receive the boot nonce and PSK through a one-shot read-only boot
+   seed attached only to that launched instance; remote guests receive the
+   corresponding approved material only through the bound infrastructure
+   bootstrap handle;
+4. guestd generates its static Noise private key inside the guest and seals it
+   to that workload's vTPM and guest persistent state;
+5. parent and guest complete `Noise_IKpsk2_25519_ChaChaPoly_SHA256`, binding the
+   boot nonce, runtime instance, transport endpoint, and both generations into
+   the transcript;
+6. the parent stores only the enrolled public key, authoritative generation,
+   runtime/transport binding digests, bounded attestation/enrollment result,
+   active per-boot nonce digest, and revocation state;
+7. both sides erase the PSK and withdraw the seed or rendezvous before normal
+   service or route publication;
+8. all normal guest sessions use static mutual `KK`, but admission also requires
+   the connection to arrive on the currently bound parent-launched runtime and
+   transport endpoint and to prove the active nonce that was freshly generated
+   for that runtime boot and one authoritative workload/controller generation.
+
+Only one runtime/guest identity generation may be authoritative for a workload.
+An ambiguous duplicate, copied state, endpoint mismatch, stale boot nonce, or
+old controller/workload generation publishes no route and requires explicit
+parent-authorized re-enrollment or recreation.
+
+No long-lived host/guest token file remains, and the host does not store the
+guest private key. File-backed swtpm is nevertheless cloneable by host root or
+by anyone able to copy the whole guest disk plus TPM state. Sealing a guest key
+to that vTPM protects against ordinary guest-disk leakage without the TPM state;
+it does not protect against malicious host root or a whole-state clone. The
+parent runtime, endpoint, generation, and fresh-boot binding above makes the
+sealed key alone insufficient and rejects a copy outside the currently selected
+runtime under the ordinary non-malicious-host model. It does not prevent
+malicious host root from cloning or substituting the complete runtime evidence
+and is not non-copyable hardware attestation.
+
+Consequently `realm-controller-host-v2` is denied for file-backed swtpm. A
+future non-copyable hardware-backed vTPM or accepted cloud/confidential
+attestation design requires a separate decision and conformance contract before
+controller-host registration. Loss or replacement of a guest vTPM/private key
+requires explicit re-enrollment with a new generation; there is no automatic
+key repair.
+
+### Record and queue rules
+
+Noise handshake messages and protected records use a 16-bit big-endian wire
+length. Protected ciphertext is at most 65,535 bytes and plaintext is at most
+65,519 bytes after the 16-byte authentication tag. Larger logical frames are
+fragmented only by ComponentSession.
+
+Every admission, fragmentation, queue-credit, and pre-allocation calculation
+uses checked arithmetic and includes all applicable wire overhead: the fixed
+preface and canonical offer, the selected Noise pattern's handshake fields and
+handshake AEAD tags as reported by `snow`, the two-byte record length, the
+16-byte transport AEAD tag, ComponentSession record/fragment headers, and the
+ttrpc/protobuf envelope. A buffer is reserved from the checked ciphertext bound,
+never from a peer length plus unchecked overhead. Underflow, overflow, an
+impossible `snow` output bound, or a value above the selected profile limit is a
+typed pre-allocation rejection; it never reaches indexing, allocation, or a
+panic.
+
+Initial hard ceilings are:
+
+| Resource | Hard ceiling |
+| --- | ---: |
+| Canonical handshake offer | 16 KiB |
+| Logical ttrpc request or response | 1 MiB |
+| Logical named-stream message | 1 MiB |
+| Active named streams per session | 128 |
+| Unix attachments in one packet | 32 |
+| Accepted attachments for one request | 64 |
+| Outstanding attachments for one operation | 128 |
+| Outstanding attachments for one session | 256 |
+| Process-global transferable attachment credits | 2,048, further bounded by `RLIMIT_NOFILE` |
+| Host-wide outstanding transferable attachments | 8,192 |
+| Reserved non-attachment control FD headroom | 64 |
+| Queued plaintext per named stream, each direction | 256 KiB |
+| Aggregate queued named-stream plaintext, each direction | 4 MiB |
+| Reserved ttrpc-control queue, each direction | 2 MiB |
+| Reserved session/attachment-control queue, each direction | 64 KiB |
+
+Service profiles may set lower values, never higher ones. Declared lengths,
+stream counts, and attachment counts are checked before allocation. Fragment
+sequence, count, total plaintext length, channel, and reconnect generation are
+authenticated. Truncation, duplication, reordering, overlap, nonce exhaustion,
+or over-limit reassembly closes the session.
+
+Unix transports are nonblocking, and their Tokio readiness contract is
+explicit. After obtaining an `AsyncFd` read-ready guard, the sole read driver
+repeats `recvmsg` through that guard until `EAGAIN` or `EWOULDBLOCK`; successful
+packets do not clear readiness. The sole write driver likewise repeats
+`sendmsg` while queued output remains until the queue is empty or the syscall
+returns `EAGAIN` or `EWOULDBLOCK`. `try_io` clears readiness only for the
+would-block result. If a bounded fairness budget stops either loop before
+would-block while work remains, the driver retains the guard for immediate
+continuation or leaves cached readiness uncleared and explicitly reschedules
+itself. It never consumes one packet, drops readiness, and waits for a kernel
+wakeup that may not recur. A seqpacket send succeeds only as one complete
+packet; a stream short write retains the unsent suffix.
+
+Exactly one driver reads and one driver writes the protected transport. Write
+priority is:
+
+1. fatal close, revocation, and session control;
+2. ttrpc control and cancellation;
+3. attachment acknowledgement;
+4. named-stream data with bounded round-robin fairness.
+
+No lock is held across `await`. A stalled data stream cannot consume reserved
+control credit. Backpressure is typed and bounded. Reconnect always performs a
+new handshake and increments the session generation. Calls retry only under the
+provider/operation idempotency contract; streams resume only through an
+explicit generation and cursor contract.
+
+Every process has one global FD-credit allocator shared by accepts, sessions,
+requests, operations, and provider dispatch. At startup and after any
+`RLIMIT_NOFILE` reduction, its transferable pool is:
+
+```text
+min(2048, rlimit_nofile_soft - observed_nontransferable_open_fds - 64)
+```
+
+The final term reserves 64 descriptor slots exclusively for listeners,
+session-control, cancellation, error reporting, and deterministic cleanup; it
+is never lent to an attachment. Startup fails closed if the observed baseline
+and reserve do not fit below the soft limit. The local-root allocator also
+enforces the 8,192 host-wide aggregate ceiling across realm processes; a
+generated host policy may lower it. That ceiling may lower process grants but
+cannot raise any process above its own computed pool.
+
+The sender reserves packet, request, operation, session, process-global, and
+host-global credit before transfer. The receiver independently accounts the
+actual ancillary FDs before semantic dispatch. An over-credit packet is drained
+with bounded `recvmsg`, every received FD is closed, the request is rejected,
+and no partial subset is delivered. Credits are owned by RAII objects and are
+released exactly once on acknowledgement/ownership transfer, rejection,
+cancellation, deadline, disconnect, handler failure, or process teardown.
+Closing order is attachment children, request, operation, session; rejection
+and cleanup are deterministic under every race.
+
+### Unix seqpacket attachments
+
+A Unix packet transport carries one encrypted ComponentSession record and its
+ancillary data in one `sendmsg`. Before `recvmsg`, the receiver sizes its
+payload buffer to the negotiated protected-packet ceiling. It computes
+ancillary capacity from the negotiated per-packet attachment maximum, which
+cannot exceed the hard maximum of 32: the worst case reserves one checked
+`CMSG_SPACE(sizeof(RawFd))` slot per attachment plus a checked
+`CMSG_SPACE(sizeof(ucred))` slot when credentials are allowed. Overflow or an
+unrepresentable capacity fails before the syscall. The authenticated record
+declares:
+
+- attachment count;
+- ordered index and closed attachment kind;
+- service, method, request, operation, packet sequence, and purpose binding;
+- required kernel object type and access policy;
+- whether duplicate kernel objects are permitted.
+
+The receiver uses `MSG_CMSG_CLOEXEC`. Immediately after every successful
+`recvmsg`, its raw ancillary collector walks the returned control area before
+examining payload validity or fatal message flags. It takes exactly-once RAII
+ownership of every complete descriptor value exposed by every
+`SOL_SOCKET`/`SCM_RIGHTS` header, including a partial list, extra rights header,
+or rights attached to an unknown record or attachment kind. Every descriptor
+actually installed and left open in the receiving process is represented by
+one of those complete returned values. On Linux, descriptors omitted because
+the supplied control area was exhausted are closed by the kernel; every
+descriptor exposed in the returned control area is owned and closed by this
+collector and is never left to that kernel rule.
+
+Only after collection does the receiver reject `MSG_TRUNC`, `MSG_CTRUNC`,
+malformed or partial control data, missing or extra control messages, missing
+or extra FDs, unknown kinds, duplicate objects unless explicitly allowed,
+non-`CLOEXEC` descriptors, wrong access mode, wrong socket family/type, wrong
+filesystem/object class, and any operation-policy mismatch. It validates
+pidfds, sockets, pipes, memfds, device FDs, TAP/KVM/vhost/fuse/hidraw handles,
+and other kinds through exact method-specific policy. The collector immediately
+charges the actual count to packet, session, process-global, and host-global
+receive credit. Once the authenticated envelope identifies a request and
+operation, their aggregate credits must also be acquired before semantic
+dispatch. Failure at either stage drops the one ownership vector and releases
+its credit exactly once; success moves each accepted descriptor once into its
+typed attachment owner. No error path also closes a moved or already-dropped
+numeric FD.
+
+On any failure cleanup completes before the receiver returns the bounded fatal
+error and closes the session. The sender retains its authority until a
+transcript-bound attachment acknowledgement or explicit transfer rule says
+otherwise. There is no split "JSON packet then later FD" path and no
+post-receive `fcntl` race for `CLOEXEC`.
+
+### Session observability
+
+ComponentSession emits bounded metrics for active sessions, handshake result,
+connect/reconnect attempts, close reason, control-credit exhaustion, aggregate
+queue depth/capacity, scheduling delay, and rejected records. Metric dimensions
+are limited to transport kind, purpose, channel class, Noise mechanism class,
+and closed result/reason class. `channel class` is only
+`session-control`, `ttrpc-control`, `attachment-control`, or `named-stream`;
+there is no metric series per session, request, stream, realm, workload, or
+provider instance.
+
+Reconnect attempts increment counters, while repeated identical logs/audit
+events are suppressed and summarized by bounded backoff/result class. Traces
+and authorized audit may carry bounded operation, correlation, provider, and
+generation IDs. No telemetry surface carries raw endpoint, resource ID, user
+identity, key fingerprint, proof, credential, command, path, or payload.
+
+### Operational health objectives
+
+The following are initial v2 operational defaults and hard failure
+classifications. They are implementation health objectives, not latency or
+availability promises to an external customer. A generated service profile may
+tighten them but may not loosen a hard deadline or failure threshold without a
+versioned contract change. Percentiles use one-minute buckets over a rolling
+five-minute window and exclude policy denials, caller cancellation, and requests
+that arrived already expired.
+
+| Dimension | Default objective | Typed degraded threshold | Hard failure classification |
+| --- | --- | --- | --- |
+| Scheduling | p99 enqueue-to-dispatch is at most 10 ms for session/ttrpc control and 50 ms for attachment/named-stream work. | The objective is exceeded for three consecutive one-minute buckets, or one otherwise-runnable item waits 1 second while it still has deadline budget: `degraded/scheduling-delay`, remediation `inspect-provider`. | Runnable work makes no dequeue progress for 10 seconds, or session control waits 5 seconds: close with `scheduler-stalled`, mark the endpoint `unavailable`, and use `restart-agent` for an agent or `replace-generation` for an in-process owner. |
+| Queues | Each queue remains below 75% of its hard ceiling and backpressure rejects less than 1% of attempts over five minutes. | A queue remains at or above 75% for 30 seconds, or rejects reach 1% with at least 100 attempts (or 10 rejects with fewer attempts): `degraded/queue-pressure`, remediation `retry-bounded`. | Reserved session/ttrpc control credit is exhausted, or a full queue makes no dequeue progress for 5 seconds: close with `control-resource-exhausted` and mark the endpoint `unavailable`. An isolated named-stream ceiling rejects only that stream unless the no-progress rule also fires. |
+| Handshake | Local handshakes have p99 at most 1 second; provider/remote handshakes have p99 at most 5 seconds. | The matching objective is exceeded for three consecutive buckets, or three consecutive transient transport/timeout failures occur: `degraded/handshake-timeout`, remediation `retry-bounded`. | Local and provider/remote handshake deadlines are 5 and 15 seconds respectively. Deadline expiry rejects that connection; three consecutive deadline expiries mark the endpoint `unavailable`. Authentication, transcript, purpose, role, schema, identity, or configuration mismatch rejects immediately and marks the configured endpoint `failed`, with no automatic retry. |
+| Reconnect | A recoverable local endpoint re-establishes within 5 seconds and a provider/remote endpoint within 30 seconds, normally within three attempts. | The objective elapses or three consecutive attempts fail: `degraded/session-disconnected`, remediation `retry-bounded`. | Ten failed attempts or 5 minutes disconnected, whichever occurs first, marks the endpoint `unavailable`. An authentication/identity/configuration mismatch instead marks it `failed` immediately and requires `re-enroll-peer` or `repair-configuration`. |
+| Provider health | Poll every 10 seconds; a local health call completes within 2 seconds, an agent/remote call within 10 seconds, and a successful observation is never more than 30 seconds old. | A provider reports degraded, three consecutive health calls fail, or the last success is older than 30 seconds: the matching `ProviderHealth` degraded reason and `inspect-provider`. | Agent disconnect is immediately `unavailable`. Ten consecutive health failures or a last success at least 5 minutes old is `unavailable`. Identity, configuration, generation, or capability mismatch is immediately `failed`; no operation is admitted and `repair-configuration` or `replace-generation` is required. |
+
+An endpoint starts as `starting` and becomes `healthy` only after its first
+successful handshake and, where applicable, provider-health observation.
+`degraded` preserves safe admission with typed backpressure and visible
+remediation. `unavailable` stops new calls, removes queued work, preserves or
+quarantines ambiguous durable operations under their original operation IDs, and
+continues only the bounded reconnect/health probe. `failed` performs no automatic
+retry. Recovery from `unavailable` requires a fresh authenticated session and
+health success. Recovery from `degraded` requires three consecutive successful
+evaluation intervals, at least 30 seconds below 50% queue utilization, and no
+remaining breached objective. Recovery from `failed` requires explicit
+re-enrollment, configuration repair, or publication of a validated replacement
+generation.
+
+Status exposes state, closed reason, transition time, affected closed component
+class, and closed remediation; it does not expose raw peer/provider output.
+Metrics add only `locality`, `provider_type`, `health_state`, and closed
+`result`/`reason` to the already allowed low-cardinality dimensions. Realm,
+workload, provider ID, session, request, stream, operation, endpoint, and user
+never become metric labels.
+
+### Complete internal IPC migration matrix
+
+| Current boundary | v2 purpose and service | Transport/attachment contract | Migration |
+| --- | --- | --- | --- |
+| CLI and duplicated toolkit public JSON to host daemon | `daemon-local` or `daemon-remote`; `d2b.daemon.v2` | Unix stream/seqpacket locally, provider transport remotely; named streams for exec, PTY, logs, console, audit export, and files | Delete public JSON, semver hello, feature intersection, shadow DTOs, and duplicate framing. |
+| `PeerSession`, `SecurePeerSession`, gateway realm routing | `realm-peer` or `realm-bootstrap`; `d2b.realm.v2` | `KK` or one-time `IKpsk2`; named display, clipboard, log, file, and shortcut streams | Delete custom HMAC/AEAD record layer, hand codec, and second mux. |
+| d2bd to guestd HMAC/ttrpc | `guest-control` or `guest-bootstrap`; `d2b.guest.v2` | Native/CH vsock transport; `KK` after one-time bootstrap; PTY/log/file/security-key streams | Delete guest protocol 6, auth transcript v1, long-lived token, and old bindings. |
+| Controller to workload/third-party provider | `provider-agent`; `d2b.provider.v2` | Stream transport; provider-defined bounded streams; no credential bytes | Replace gateway and provider-specific control wires with generated provider service and trait proxy. |
+| Daemon to privileged broker protocol 3 | `privileged-broker`; `d2b.broker.v2` | Unix seqpacket with transcript-bound typed FD attachments | Delete one-request JSON protocol, bootstrap feature, fallback bind, and old capability list. |
+| CLI/session to per-user interaction helper | `user-agent`; `d2b.user.v2` | Local Unix session; prompt/session handles only | Replace helper-specific framing; password bytes stay inside the prompt/Secret Service path. |
+| Daemon to unsafe-local helper | `runtime-systemd-user`; `d2b.runtime.systemd-user.v2` | Local Unix session with exact terminal/Wayland FDs and named streams | Rename provider and agent; delete helper protocol 3 and generation hello. |
+| Runtime agent to shell supervisor | `shell-supervisor`; `d2b.shell.v2` | Inherited or named local session with PTY attachment | Delete unsafe-local shell v1, terminal protocol 1, supervisor protocol 1, and heartbeat framing. |
+| d2b-owned clipd management and UI picker | `clipboard-control` and `clipboard-picker`; `d2b.clipboard.v2` and `d2b.clipboard.picker.v2` | Local session; picker receives metadata streams and no transfer FD | Delete newline JSON and picker protocol v1 while preserving UI-only trust. |
+| Wayland proxy to clipd bridge/readiness | `clipboard-bridge`; `d2b.clipboard.v2`, and proxy control; `d2b.wayland.v2` | Unix packet session; exactly one validated transfer FD for an accepted transfer | Delete unversioned/readiness framing and raw VM-name socket construction. |
+| Desktop observer, notification, and action callbacks | `desktop-observer`; `d2b.notify.v2` | Bounded event stream with authenticated actions | Delete callback tokens and old notify framing; state files remain projections only. |
+| Guest FIDO frontend and host security-key controller | `security-key`; `d2b.security-key.v2` | Fixed bounded CTAPHID report stream; CTAPHID remains an external payload | Delete old protocol version/unversioned frames; preserve ceremony approval and closed command policy. |
+| Activation helper and retained one-shot process helpers | Purpose-specific inherited socketpair; `d2b.activation.v2` or matching `.v2` service | Local `NN` session with exact inherited attachments | Fold into broker/provider methods where possible; otherwise delete bespoke hello/error framing. |
+| TTY/raw-mode helper | `tty-helper`; `d2b.tty.v2` | Inherited local session with exact terminal FD | Delete bespoke framing and generation handling. |
+| ACA, Relay, and display gateway helpers | `provider-agent`, `realm-peer`, or `daemon-remote`; matching `.v2` service | Provider transport plus ComponentSession and bounded named streams | Fold into typed provider agents and realm services; delete gateway-specialized wires. |
+
+Discovery of another d2b-owned live IPC during implementation blocks the owning
+wave until it is added to this matrix and either migrated or deleted. It cannot
+be grandfathered as a specialized exception.
+
+Durable exec specifications, records, and status files remain versioned
+persistence records, not ComponentSessions. Waybar stdout JSON and other
+desktop files may remain bounded presentation projections; no projection is an
+authorization, repair, or live control channel.
+
+## Filesystem identity, state, and audit
+
+### Exact short-ID derivation
+
+Human realm, workload, provider, and role names remain in canonical targets and
+metadata. Runtime identities use the first 96 bits of SHA-256 output and the
+lowercase unpadded RFC 4648 base32 alphabet:
+
+```text
+abcdefghijklmnopqrstuvwxyz234567
+```
+
+For each ID, construct one canonical printable-ASCII string with this grammar:
+
+```text
+encoded = "d2b-id-v2;" decimal ":" domain ";" decimal ";"
+          *(decimal ":" part ";")
+decimal = "0" / (nonzero-digit *digit)
+```
+
+The first decimal is the ASCII byte length of `domain`; the second is the exact
+part count; each following decimal is the ASCII byte length of the immediately
+following part. There are exactly that many part fields and no trailing bytes
+after the final `;`. Zero is spelled only `0`; every positive value has no
+leading zero. Domains and parts are non-empty in the four ID contracts below.
+The prefix, delimiters, decimal lengths, domains, and canonical parts use only
+printable ASCII bytes. There is no NUL, control-byte construction, binary
+integer, locale conversion, escaping, or implicit concatenation. For example,
+the part lists `["ab", "c"]` and `["a", "bc"]` serialize respectively with
+suffixes `2;2:ab;1:c;` and `2;1:a;2:bc;`.
+
+Nix constructs the string with interpolation and `builtins.stringLength`, then
+passes it directly to `builtins.hashString "sha256"`. Rust emits the same ASCII
+grammar into a byte vector and hashes it with SHA-256. Both take digest bytes 0
+through 11 and encode them as exactly 20 lowercase unpadded base32 characters:
+
+```text
+realm-id:
+  domain = "d2b-v2:realm"
+  parts  = [canonical-realm-path]
+
+workload-id:
+  domain = "d2b-v2:workload"
+  parts  = [realm-id, canonical-workload-name]
+
+provider-id:
+  domain = "d2b-v2:provider"
+  parts  = [realm-id, provider-type, configured-provider-id]
+
+role-id:
+  domain = "d2b-v2:role"
+  parts  = [realm-id, workload-id, canonical-role]
+```
+
+The canonical inputs are frozen:
+
+- `canonical-realm-path` is exactly `local-root` for the root. A child appends
+  its schema-validated lowercase ASCII kebab-case label before its parent's
+  path, separated by one literal `.`, so the order is leaf to root:
+  `personal-dev.dev.local-root`. Empty labels, repeated separators, a trailing
+  separator, and the public target suffix `.d2b` are forbidden.
+- `canonical-workload-name` and `configured-provider-id` are their exact
+  schema-validated lowercase ASCII kebab-case spellings.
+- `provider-type` is exactly one closed wire spelling: `runtime`,
+  `infrastructure`, `transport`, `substrate`, `credential`, `display`,
+  `network`, `storage`, `device`, `audio`, or `observability`.
+- `canonical-role` is exactly one initial `RoleKind` wire spelling:
+  `store-virtiofs-preflight`, `swtpm-pre-start-flush`, `swtpm`, `virtiofsd`,
+  `video`, `gpu`, `gpu-render-node`, `audio`, `cloud-hypervisor`,
+  `qemu-media`, `vsock-relay`, `guest-control-health`, `usbip`,
+  `security-key-frontend`, or `wayland-proxy`. It is not a display label,
+  provider implementation ID, or Rust variant spelling. A new role requires a
+  versioned schema change, a new canonical vector, and regenerated endpoint
+  proof before it may acquire a role ID.
+
+No Unicode normalization, locale case folding, alternate root-to-leaf order,
+`.d2b` suffix, separator substitution, or enum display spelling is accepted.
+
+Renaming a realm, workload, provider instance, or role creates a new identity
+and resource. It is not an in-place path rename.
+
+Nix evaluation detects every collision in the complete generated configuration.
+Runtime bundle loading independently recomputes every ID and rejects collisions
+and duplicate globally scoped `ProviderId` values before opening a mutable
+resource. Nix and Rust implement the derivation independently and compare
+committed vectors; neither consumes IDs generated by the other. Collision
+detection, not probability, is the correctness boundary.
+
+The pure-Nix hexadecimal-to-base32 helper is specified by this implementation.
+It intentionally uses arithmetic over individual bytes rather than constructing
+binary strings or relying on a Nix-specific base32 alphabet:
+
+```nix
+let
+  alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  field = value:
+    "${builtins.toString (builtins.stringLength value)}:${value};";
+  encode = domain: parts:
+    "d2b-id-v2;${field domain}${builtins.toString (builtins.length parts)};"
+    + builtins.concatStringsSep "" (builtins.map field parts);
+  mod = dividend: divisor:
+    dividend - (builtins.div dividend divisor) * divisor;
+  hexNibble = {
+    "0" = 0; "1" = 1; "2" = 2; "3" = 3;
+    "4" = 4; "5" = 5; "6" = 6; "7" = 7;
+    "8" = 8; "9" = 9; "a" = 10; "b" = 11;
+    "c" = 12; "d" = 13; "e" = 14; "f" = 15;
+  };
+  powersOfTwo = [ 1 2 4 8 16 32 64 128 ];
+  nibbleAt = hex: offset:
+    let c = builtins.substring offset 1 hex;
+    in if builtins.hasAttr c hexNibble
+       then builtins.getAttr c hexNibble
+       else throw "short-id digest is not lowercase hexadecimal";
+  byteAt = hex: index:
+    16 * nibbleAt hex (2 * index) + nibbleAt hex (2 * index + 1);
+  bitAt = hex: bit:
+    let
+      byte = byteAt hex (builtins.div bit 8);
+      divisor = builtins.elemAt powersOfTwo
+        (7 - mod bit 8);
+    in mod (builtins.div byte divisor) 2;
+  symbolAt = hex: index:
+    let
+      firstBit = index * 5;
+      value = builtins.foldl'
+        (acc: offset:
+          acc * 2
+          + (if firstBit + offset < 96
+             then bitAt hex (firstBit + offset)
+             else 0))
+        0
+        (builtins.genList (offset: offset) 5);
+    in builtins.substring value 1 alphabet;
+  base32First96 = hex:
+    assert builtins.stringLength hex == 64;
+    builtins.concatStringsSep ""
+      (builtins.genList (index: symbolAt hex index) 20);
+  shortId = domain: parts:
+    base32First96
+      (builtins.hashString "sha256" (encode domain parts));
+in
+  { inherit encode base32First96 shortId; }
+```
+
+`base32First96` accepts only the 64-character lowercase hexadecimal result from
+`builtins.hashString "sha256"`. Bits are consumed most-significant first in RFC
+4648 order; the last symbol contains the final digest bit followed by four zero
+padding bits. It never converts the 96-bit prefix into one Nix integer. The Rust
+implementation independently serializes the grammar, hashes it with the `sha2`
+crate, and applies RFC 4648 base32 without padding; it does not call generated
+Nix or consume Nix-produced IDs.
+
+The following vectors are canonical. Each implementation verifies the encoded
+ASCII string, its byte-for-byte hexadecimal form, full SHA-256 digest, and
+20-character ID:
+
+```text
+realm
+  parts   = ["dev.local-root"]
+  encoded = "d2b-id-v2;12:d2b-v2:realm;1;14:dev.local-root;"
+  bytes   = 6432622d69642d76323b31323a6432622d76323a7265616c6d3b313b31343a6465762e6c6f63616c2d726f6f743b
+  sha256  = c2f477b152ecc7d1a89277a11d7465a8704f8ecfcb9282d3644e2b25ee46e04e
+  id      = yl2hpmks5td5dkeso6qq
+
+workload
+  parts   = ["yl2hpmks5td5dkeso6qq", "personal-dev"]
+  encoded = "d2b-id-v2;15:d2b-v2:workload;2;20:yl2hpmks5td5dkeso6qq;12:personal-dev;"
+  bytes   = 6432622d69642d76323b31353a6432622d76323a776f726b6c6f61643b323b32303a796c3268706d6b7335746435646b65736f3671713b31323a706572736f6e616c2d6465763b
+  sha256  = 874ff4ce132119f5501c996a6bf57b23f504bcb892928fe2c20198f4ce0cba90
+  id      = q5h7jtqteem7kua4tfva
+
+provider
+  parts   = ["yl2hpmks5td5dkeso6qq", "runtime", "primary"]
+  encoded = "d2b-id-v2;15:d2b-v2:provider;3;20:yl2hpmks5td5dkeso6qq;7:runtime;7:primary;"
+  bytes   = 6432622d69642d76323b31353a6432622d76323a70726f76696465723b333b32303a796c3268706d6b7335746435646b65736f3671713b373a72756e74696d653b373a7072696d6172793b
+  sha256  = 2ff3b5749b058cde6c0b4cf41c4dc286919a7cd46d5737d2692021c268182a41
+  id      = f7z3k5e3awgn43aljt2a
+
+role
+  parts   = ["yl2hpmks5td5dkeso6qq", "q5h7jtqteem7kua4tfva", "cloud-hypervisor"]
+  encoded = "d2b-id-v2;11:d2b-v2:role;3;20:yl2hpmks5td5dkeso6qq;20:q5h7jtqteem7kua4tfva;16:cloud-hypervisor;"
+  bytes   = 6432622d69642d76323b31313a6432622d76323a726f6c653b333b32303a796c3268706d6b7335746435646b65736f3671713b32303a713568376a74717465656d376b756134746676613b31363a636c6f75642d68797065727669736f723b
+  sha256  = fde214b9b2247677a3e78393063b638b5d3fe8d47e6f7333d1f1edc269553caa
+  id      = 7xrbjonser3hpi7hqojq
+```
+
+For one million IDs in one domain, the 96-bit birthday bound is less than
+`6.4e-18`:
+
+```text
+p <= n * (n - 1) / 2^97
+```
+
+Domain separation prevents a realm/workload/provider/role cross-type collision
+from becoming the same typed identity even if rendered text matches.
+
+W2 adds the ID evaluation measurement to the existing
+`tests/unit/gates/performance-budgets.sh` gate; it does not add a new top-level
+gate. With `D2B_PERF_STABLE=1` on the pinned x86_64-linux self-hosted runner, the
+fixture derives 4,096 IDs (1,024 complete realm/workload/provider/role chains),
+checks collisions, and expands every applicable socket-template row. After one
+unmeasured warm-up, the median of three single `nix eval` runs has a 5,000 ms
+budget (6,000 ms including the gate's declared 20% enforcement margin), and each
+run has a 512 MiB peak-RSS ceiling. Correctness vectors, grammar rejection, and
+the complete socket proof remain ordinary Layer-1 coverage on every PR even when
+the stable-runner performance lane is unavailable.
+
+### Unix socket-length proof
+
+Linux pathname Unix sockets provide 108 bytes in `sockaddr_un.sun_path`,
+including the terminating NUL, so pathname bytes must be at most 107.
+
+The generated `socket-endpoints-v2` contract is a closed table. Every row names
+one template ID, literal path template and leaf, endpoint purpose, protocol
+owner, creator, accepting owner, mode/group, substitution types, maximum
+substituted byte count, and repair owner. There is no unconstrained
+`<socket-leaf>` field. The initial complete expanded template set is:
+
+| Template ID | Exact template | Maximum pathname bytes |
+| --- | --- | ---: |
+| `local-root-public` | `/run/d2b/root.sock` | 18 |
+| `local-root-broker` | `/run/d2b/broker.sock` | 20 |
+| `child-realm-public` | `/run/d2b/r/<realm-id>/public.sock` | 43 |
+| `child-realm-broker` | `/run/d2b/r/<realm-id>/broker.sock` | 43 |
+| `provider-agent` | `/run/d2b/r/<realm-id>/p/<provider-id>/agent.sock` | 65 |
+| `role-control` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/control.sock` | 94 |
+| `role-api` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/api.sock` | 90 |
+| `role-qmp` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/qmp.sock` | 90 |
+| `role-virtiofs` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/virtiofs.sock` | 95 |
+| `role-tpm` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/tpm.sock` | 90 |
+| `role-audio` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/audio.sock` | 92 |
+| `role-video` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/video.sock` | 92 |
+| `role-wayland` | `/run/d2b/r/<realm-id>/w/<workload-id>/roles/<role-id>/wayland.sock` | 94 |
+| `workload-guest` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/guest.sock` | 73 |
+| `workload-display` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/display.sock` | 75 |
+| `workload-security-key` | `/run/d2b/r/<realm-id>/w/<workload-id>/sockets/security-key.sock` | 80 |
+| `user-agent` | `/run/d2b/u/<uid-decimal>/userd.sock` | 32 |
+| `user-runtime-agent` | `/run/d2b/u/<uid-decimal>/runtime-agent.sock` | 40 |
+| `clipd-control` | `/run/d2b/u/<uid-decimal>/clipd/control.sock` | 40 |
+| `clipd-picker` | `/run/d2b/u/<uid-decimal>/clipd/picker.sock` | 39 |
+| `clipd-bridge` | `/run/d2b/u/<uid-decimal>/clipd/bridge.sock` | 39 |
+| `one-shot-inherited` | no pathname; one fresh socketpair from the declared parent | not applicable |
+
+W2 owns one versioned machine-readable endpoint descriptor and generates from it
+the Rust `SocketTemplateId`/descriptor table, the Nix table, the reference
+schema, and a complete proof artifact. The proof expands every leaf separately
+and records literal segments, substitution maxima, the longest rendered path,
+its exact ASCII byte count, and remaining bytes before the terminating NUL. It
+also proves both directions: every rendered system/user socket unit, bundle
+endpoint, broker-created listener, and d2b-owned pathname bind references
+exactly one template ID, and every generated template row is referenced or is
+the explicit inherited-socketpair row.
+
+Production pathname-listener APIs accept a `SocketTemplateId` plus typed
+substitutions, never a free-form path or leaf. A Layer-1 source policy rejects a
+d2b-owned pathname `bind` or socket-unit declaration outside that generated
+surface. A contract test compares the complete rendered endpoint multiset with
+the generated proof, so a new socket cannot be omitted by updating only one
+consumer.
+
+The proof substitutes 20 bytes for each derived ID and at most 10 ASCII digits
+for a Linux `uid_t`. The longest row is `role-virtiofs` at 95 bytes, leaving 12
+pathname bytes before the required NUL. Any new socket or leaf first extends the
+generated closed table and its checked proof. Nix evaluates every instantiated
+row and Rust independently recomputes every exact byte length before binding;
+either rejects a path above 107 before side effects. The runtime socket root is
+fixed at `/run/d2b`; abstract Unix sockets, user-configured roots, and
+path-shortening symlinks are not used.
+
+### Layout
+
+The v2 layout is:
+
+```text
+/etc/d2b/
+  host/
+  r/<realm-id>/
+    controller.json
+    providers.json
+    storage.json
+    sync.json
+    w/<workload-id>/
+
+/var/lib/d2b/
+  host/
+    allocator/
+    broker/
+    audit/
+  r/<realm-id>/
+    controller/
+    broker/
+    audit/
+    providers/<provider-id>/
+    w/<workload-id>/
+      state/
+      disks/
+      store-view/{live,meta,state,gcroots}/
+      tpm/
+      media/
+      audio/
+      keys/
+
+/var/cache/d2b/
+  host/
+  r/<realm-id>/
+
+/run/d2b/
+  root.sock
+  broker.sock
+  r/<realm-id>/
+    public.sock
+    broker.sock
+    locks/
+    p/<provider-id>/
+    w/<workload-id>/
+      roles/<role-id>/
+      sockets/
+      leases/
+  u/<uid>/
+    userd.sock
+    runtime-agent.sock
+    clipd/
+```
+
+No raw canonical target, old VM name, configured provider label, endpoint,
+device ID, bus ID, command value, or user-supplied string participates in path
+construction. There are no compatibility symlinks from old roots or names.
+
+### Single repair owner
+
+Endpoint creation and ownership is complete and closed:
+
+| Endpoint/path class | Path creator/binder | Connection owner | Unlink/repair owner |
+| --- | --- | --- | --- |
+| Fixed local-root public socket | PID1 from the generated `d2bd.socket` unit | Local-root `d2bd` receives only the activated listener FD | PID1/system unit lifecycle |
+| Fixed local-root broker socket | PID1 from the generated `d2b-priv-broker.socket` unit | Local-root broker receives only the activated listener FD | PID1/system unit lifecycle |
+| Child-realm public and broker sockets | Local-root allocator, using generated endpoint rows before parent spawn | Matching child controller and separate child broker receive their respective already-bound listener FDs | Local-root allocator |
+| Fixed `userd.sock` and `runtime-agent.sock` | Exact user's systemd manager from generated user socket units | Matching `d2b-userd` or `systemd-user` runtime agent | Owning user manager/user unit lifecycle |
+| Fixed clipd `control.sock`, `picker.sock`, and `bridge.sock` | Exact user's systemd manager from generated user socket units | The matching clipd component selected by endpoint policy | Owning user manager/user unit lifecycle |
+| Dynamic provider `agent.sock` listener | Owning realm broker, using its delegated parent dirfd and generated endpoint row | Broker passes the already-bound listener FD to exactly one provider agent | Owning realm broker |
+| Dynamic workload `guest.sock`, `display.sock`, and `security-key.sock` listeners | Owning realm broker, using delegated dirfds and generated endpoint rows | Broker passes each already-bound listener FD to the declared workload component | Owning realm broker |
+| Dynamic role `control.sock` and external-protocol role sockets | Owning realm broker, using delegated dirfds and generated endpoint rows | Broker passes each already-bound listener FD to the declared runner/proxy | Owning realm broker |
+| One-shot inherited/socketpair endpoint | Declared launching parent through the typed launch operation | The two declared endpoints only | Creating parent until handoff; then kernel close, with no path |
+
+Systemd/tmpfiles creates only the fixed top-level directory anchors and the
+per-user anchor needed for user-manager activation. Fixed local-root and user
+socket nodes are the narrow exception to broker creation below an anchor:
+socket activation binds them before the service starts, and their exact set is
+enumerated in the generated endpoint contract. Of broker endpoints, only the
+local-root broker is socket-activated by PID1. Child-realm public and broker
+listeners are allocator-owned dynamic paths, pre-bound before parent spawn, and
+are never adopted as PID1-owned paths.
+
+All other paths below an anchor are created and repaired only by the owning
+broker from generated storage, sync, and endpoint IDs. A daemon, controller,
+provider agent, runner, proxy, user helper, or diagnostic command never binds,
+unlinks, renames, chmods, chowns, or recreates a broker-owned socket path. It
+receives a listener FD, validates the endpoint row, and accepts connections.
+The local-root broker owns host-global allocator state; a child broker operates
+only through its delegated dirfds and leases.
+
+Daemons send opaque IDs, never raw paths, modes, owners, ACLs, or free-form
+repair instructions. Broker path walking is anchored and fd-relative, using
+`openat2` with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`,
+`RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV` unless a generated storage row
+explicitly permits the crossing. Leaf operations use `O_NOFOLLOW`.
+
+Activation, a user helper, a provider agent, and a diagnostic command cannot
+repair broker-owned state. A diagnostic ledger is evidence, never authority.
+
+### Atomic JSON state
+
+V2 uses no embedded state database. A shared `d2b-state` crate owns all
+authoritative JSON persistence and enforces:
+
+- closed schema and version headers;
+- `deny_unknown_fields`;
+- bounded reads and decode allocation;
+- writer identity and monotonic generation;
+- exact owner, group, and mode checks;
+- same-directory temporary creation;
+- complete write and file fsync;
+- atomic rename;
+- parent-directory fsync;
+- checksum where corruption detection is required;
+- typed quarantine for corrupt or ambiguous state;
+- no success-shaped default on missing or invalid authority.
+
+This is an ordered durability protocol, not a list of optional best practices.
+The writer must fsync the complete temporary file before rename, atomically
+rename it, open and fsync the parent directory after the rename, and return
+success only after that directory fsync succeeds. A file fsync without the
+post-rename parent-directory fsync is not a successful authoritative write.
+
+Each authority writes only its declared records. State adoption verifies the
+live kernel/provider identity and generation. Pidfds, sockets, locks, session
+keys, and Noise cipher state are never serialized.
+
+After the one-time factory reset, ordinary daemon restart is again a
+continuation event. An owner discovers and verifies adoptable resources before
+cleanup. Ambiguity quarantines the narrow scope and provides repair-forward
+remediation; it does not broad-sweep `/run/d2b`.
+
+### Synchronization
+
+Generated sync rows define every OFD lock, in-process lock, kernel object, and
+FD-backed lease. Framework file locks use `F_OFD_SETLK`, open with
+`O_CLOEXEC`, follow one generated total order, and cross a process boundary
+only through an explicit ComponentSession attachment rule. Fork inheritance is
+not ownership transfer.
+
+### Audit segmentation
+
+Audit is separate from state snapshots:
+
+- local-root allocator/broker audit is under `/var/lib/d2b/host/audit`;
+- each realm audit is under `/var/lib/d2b/r/<realm-id>/audit`;
+- segments are append-only, versioned JSONL with sequence numbers and an
+  internal hash chain;
+- sealed segment summaries bind first/last sequence, previous segment digest,
+  segment digest, realm/controller generation, creation, and prune metadata;
+- retention and rotation are bounded; the default is 14 days and a realm may
+  select a stricter policy but may not disable retention;
+- signed realm checkpoints are used where a replaceable controller exports
+  audit;
+- an unavailable segment or forced loss creates an explicit gap record, never
+  a fabricated successful continuation.
+
+Cross-realm operations produce bounded correlated records in every authority
+that made a decision. Raw payloads, commands, endpoints, credentials, keys,
+proofs, paths, and user-provided labels are excluded. Audit checkpoints do not
+give a parent repair authority over child state.
+
+## User secrets and realm keys
+
+### Interactive Secret Service
+
+GNOME Keyring is an explicit NixOS dependency and the interactive Secret
+Service source of truth. SDDM/PAM unlocks the login keyring for the Niri
+session. The design does not rely on an incidental dependency pulled in by a
+desktop module.
+
+`d2b-userd` is the per-user interaction and secret broker. It:
+
+- runs under the user's systemd manager;
+- uses the Rust `oo7` client;
+- accepts only `d2b.user.v2` ComponentSessions;
+- owns trusted graphical prompts and interaction handles;
+- returns secret status or opaque export/lease handles, not secret bytes, to
+  d2bd;
+- in the explicit pre-reset preparation mode, requires an existing unlocked
+  owning session, deletes only fixed-attribute d2b items, revokes that user's
+  scoped exports, proves both inventories absent, and emits the digest-bound
+  completion-receipt payload consumed by the root receipt coordinator;
+- never forwards Secret Service or the whole keyring into a guest.
+
+`d2b secret unlock` accepts either:
+
+- a no-echo TTY prompt: the CLI transfers only the already-open terminal handle
+  to `d2b-userd`; after reading the password from that terminal, `d2b-userd`
+  directly `execve`s the configured `gnome-keyring-daemon --unlock` backend
+  with an inherited pipe as stdin, writes the password only to that pipe, and
+  closes it; or
+- a trusted graphical flow owned by `d2b-userd`, which may use the Secret
+  Service prompt API.
+
+The TTY backend uses no shell. Its argv contains only the fixed executable and
+`--unlock`; the password is absent from argv and environment, and backend
+stdout/stderr is not logged or returned. `oo7` is the Secret Service client
+after unlock, not a claimed TTY-unlock API. W6 begins with an implementation
+spike against the pinned GNOME Keyring version to prove stdin consumption,
+login-collection unlock, process lifetime, and exit semantics. If those
+semantics differ, implementation stops for a reviewed backend decision and
+fails closed; it does not pass the password through ComponentSession or invent
+a shell/argv/environment fallback.
+
+Passwords never enter argv, environment, Nix, bundle JSON, logs, traces,
+metrics, audit, or an ordinary ComponentSession payload.
+
+An unlocked Secret Service is ambient to processes with the same uid under the
+desktop's normal security model. `d2b-userd` does not claim to isolate secrets
+from a malicious same-uid process. This is why the systemd-user runtime agent
+is separate and has no keyring or credential authority.
+
+### Scoped unattended export
+
+An unattended agent receives only a secret explicitly exported for one
+host/user/service tuple. Export produces a TPM2-sealed encrypted systemd
+credential with:
+
+- source item version;
+- export generation;
+- owning user and target service identity;
+- allowed purpose;
+- rotation and expiry metadata.
+
+Cryptographic sealing is bound to TPM, host, user, and credential name and is
+intentionally not bound to generation-sensitive PCR values that would break
+every NixOS switch. It is not cryptographically bound to a systemd unit or
+service identity. PID1 enforces unit/service isolation through the generated
+credential assignment, unit identity, DAC, private mount namespace, and service
+sandbox configuration.
+
+At service start, systemd decrypts the credential and materializes it at a
+manager-owned read-only `$CREDENTIALS_DIRECTORY/<credential-name>` path assigned
+only to the target unit. The service reads that path; the plaintext is not an
+environment variable, command argument, Nix value, or host bundle field. A host
+or TPM replacement requires interactive re-export. Rotation creates a new
+generation, restarts or reloads only the target service under explicit policy,
+and revokes the old export after bounded handoff. Exporting one item never
+unlocks or copies the whole keyring.
+
+Factory reset does not treat TPM export deletion as a root-mode substitute for
+user revocation. The owning `d2b-userd` revokes the export while its user
+authority is live, and the root side removes the materialization through the
+typed reset-preparation operation. Reset mode accepts only the authenticated
+absence receipt; it has no Secret Service or export-unseal authority.
+
+### Host-local realm Noise keys
+
+Each host-local realm has a separate static Noise identity:
+
+1. generate the private key in the owning controller process for that realm
+   only;
+2. for local-root, seal it as a TPM2-backed systemd credential and have PID1
+   assign it only to local-root `d2bd`, with DAC, mount-namespace, and service
+   sandbox isolation;
+3. for a parent-spawned child controller, pass only its generated key-state
+   dirfd and allocator-approved TPM resource-manager FD; the controller creates
+   or unseals its realm-specific TPM object after entering its namespaces and
+   cgroup leaf, while the allocator and brokers never receive a plaintext key
+   buffer or credential file;
+4. enroll only the public key and generation with parent/children;
+5. rotate through an authenticated parent-authorized generation transition;
+6. revoke the prior generation and close its live sessions.
+
+Private realm keys never enter Nix, `/etc/d2b`, bundle JSON, provider state,
+audit, logs, or another realm controller. Brokers do not read them. Loss of a
+realm key requires explicit re-enrollment or realm recreation; there is no
+ledger-based repair.
+
+Host-local realm keys are distinct from user secrets and cloud/provider
+credentials. D2bd and brokers never read user secret bytes.
+
+## Public v2 surface
+
+The public configuration is realm/workload/provider based. It has no productive
+or removed-option compatibility declarations for:
+
+- `d2b.vms`;
+- user-facing `d2b.envs`;
+- gateway objects;
+- relay/provider-placeholder records;
+- old local VM kinds or provider-kind aliases.
+
+The v2 CLI begins with:
+
+```text
+d2b realm ...
+d2b workload ...
+d2b provider ...
+d2b auth ...
+d2b secret ...
+d2b host ...
+```
+
+`d2b vm`, `d2b env`, bare VM aliases, node-qualified aliases, and legacy target
+forms do not exist. Canonical workload targets are always fully qualified:
+
+```text
+personal-dev.dev.local-root.d2b
+```
+
+The normalized index computes realm ownership, workload roles, provider
+bindings, transport connectors, generated storage IDs, and capability
+requirements once. Guest modules consume only their own precomputed row and do
+not recursively scan realm/provider configuration.
+
+## Cargo workspace and toolkit ownership
+
+### One workspace
+
+All host and guest crates use the repository root Cargo workspace and one
+`Cargo.lock`. The broker and guest helpers are not separate workspaces, and no
+nested workspace or second lockfile is permitted.
+
+The root sets:
+
+```toml
+[workspace]
+resolver = "2"
+
+[workspace.package]
+version = "2.0.0"
+```
+
+Every publishable and internal crate uses `version.workspace = true`. Common
+edition, license, rust-version, lints, and dependency versions are inherited
+where Cargo supports it.
+
+The portable shared crates `d2b-core`, `d2b-realm-core`, `d2b-contracts`,
+`d2b-provider`, `d2b-provider-toolkit`, `d2b-session`, `d2b-state`, and
+`d2b-client` each declare `[features] default = []`. Every consumer sets
+`default-features = false` and names the exact features it needs. Host-only Nix
+integration, host Unix/socket/SCM_RIGHTS integration, and cloud SDK integration
+are optional dependency families classified respectively as `host-nix`,
+`host-socket`, and `cloud-sdk`; none is enabled by a portable crate default.
+Here `host-socket` does not include the guest's explicitly selected native
+vsock transport.
+
+`d2b-contracts` remains one canonical crate with no default features:
+
+```text
+session
+daemon
+realm
+guest
+provider
+broker
+bundle
+```
+
+Consumers use `default-features = false` and select only required families.
+Feature combinations are compile-tested. No feature re-exports a d2b 1.x type.
+
+The framework guest-artifact inventory initially contains `d2b-guestd` and
+`d2b-exec-runner`. `d2b-guestd` exposes exactly one package feature,
+`guest-control`, which selects only `d2b-contracts/session` and
+`d2b-contracts/guest`; `d2b-exec-runner` has an empty feature set. Root tooling
+runs these isolated commands, never `--workspace` or `--all-features`:
+
+```text
+cargo check --locked -p d2b-guestd --no-default-features --features guest-control
+cargo build --locked -p d2b-guestd --no-default-features --features guest-control
+cargo check --locked -p d2b-exec-runner --no-default-features
+cargo build --locked -p d2b-exec-runner --no-default-features
+```
+
+An `xtask` feature-graph test resolves those exact roots and feature sets with
+Cargo metadata and fails if `host-nix`, `host-socket`, `cloud-sdk`, or any
+dependency reachable only through one of those families enters either guest
+artifact. A new framework guest artifact cannot land until its exact isolated
+check/build rows and forbidden-feature proof are added.
+
+This guest inventory does not reclassify a configured cloud provider agent as
+guest framework code. The `azure-container-apps` and `azure-relay` agents remain
+separate, explicitly selected package closures in their configured
+credential-owning workload, co-located with their private credential module as
+required by the placement table. Their explicit cloud SDK features never enter
+`d2b-guestd` or `d2b-exec-runner`.
+
+Focused canonical crates include:
+
+```text
+d2b-core
+d2b-realm-core
+d2b-contracts
+d2b-provider
+d2b-provider-toolkit
+d2b-session
+d2b-unix-session
+d2b-state
+d2b-client
+d2b-realm-router
+d2b-realm-controller
+type-first provider implementations
+composition binaries: d2bd, broker, guestd, userd, CLI, clipd,
+  notify, Wayland proxy, security-key frontend, runtime agent
+```
+
+The canonical `d2b-client` and `d2b-provider-toolkit` crates live in this
+repository and are the only implementations of their respective v2 contracts.
+
+### Distribution repositories
+
+The existing sibling repository `vicondoa/d2b-toolkit` is renamed to
+`vicondoa/d2b-client-toolkit`. All of its crates, package names, flake outputs,
+and Nix share paths use `d2b-client-toolkit`. It consumes and re-exports the
+exact canonical `d2b-client` source artifact from a d2b release. It contains no
+duplicate DTO, framing, handshake, or resolver.
+The current `d2b-wayland-proxy` package-name collision between repositories is
+removed in this rename; one canonical package/binary owner remains.
+
+A new sibling distribution repository,
+`vicondoa/d2b-provider-toolkit`, packages the exact canonical in-tree
+`d2b-provider-toolkit` source artifact plus:
+
+- provider-agent templates;
+- fake SDK examples;
+- conformance entrypoints;
+- provider author documentation;
+- Nix packaging and integration.
+
+Neither toolkit family publishes crates to crates.io. They ship through GitHub
+release source artifacts and flake/path dependencies with exact source
+fingerprints.
+
+This GitHub/flake-only distribution is fixed. The canonical SDK closure,
+including `d2b-client`, `d2b-provider-toolkit`, `d2b-contracts`,
+`d2b-provider`, and `d2b-session`, sets `publish = false`; crates.io publishing
+is not a supported fallback. Path dependencies into the fingerprinted release
+source are expected and version-only registry dependencies are rejected.
+`xtask` validates every canonical SDK manifest, rejects a release plan or
+automation command containing `cargo publish`, and fails if any SDK crate
+becomes publishable.
+
+The v2 cutover atomically migrates:
+
+- `d2b-client-toolkit`;
+- `d2b-provider-toolkit`;
+- `d2b-wlterm`;
+- `d2b-wlcontrol`;
+- the WeezTerm integration seam.
+
+No old repository name, crate, package, share path, public framing
+implementation, target alias, or protocol adapter remains in any sibling.
+
+## Checked deletion inventory
+
+Every box is a W10 or W11 seal requirement. Source deletion boxes require
+source-policy or behavior evidence on the immutable W10 tree; physical
+reset/private-manifest boxes close only on the final manifest-free W11 tree.
+
+- [ ] Delete public JSON framing, little-endian length wire, semver hello,
+      feature intersection, old public request parser, shadow client DTOs, and
+      duplicate toolkit framing.
+- [ ] Delete `configured-launch-v1`, `unsafe-local-provider-v1`,
+      `unsafe-local-shell-v1`, and every other legacy feature string.
+- [ ] Delete `PeerSession`, `SecurePeerSession`, custom realm HMAC/AEAD records,
+      gateway-display HMAC, guest HMAC challenge, notification callback tokens,
+      helper generation hellos, and the duplicate mux/codec.
+- [ ] Delete guest protocol 6, schema v2, auth transcript v1, long-lived guest
+      token files, old generated guest bindings, and SSH/old-generation
+      compatibility branches.
+- [ ] Delete broker protocol 3, bootstrap feature negotiation, fallback
+      self-bind path, old capability list, and one-request JSON dispatcher.
+- [ ] Delete unsafe-local helper protocol 3, terminal protocol 1, shell
+      supervisor protocol 1, and specialized heartbeat/generation framing.
+- [ ] Delete picker, readiness, notify, Wayland bridge, activation, TTY, and
+      security-key old versions or unversioned frames.
+- [ ] Delete `TargetName`, node alias fields, `legacy_vm_name`, fast paths,
+      flat VM lookup, old target routing, bare aliases, and manifest 0.4
+      compatibility.
+- [ ] Delete duplicated provider DTOs, errors, traits, registries, synthetic
+      facades, and every dead provider interface without a selected v2 owner.
+- [ ] Delete or replace `d2b-realm-provider`, `d2b-realm-transport`,
+      `d2b-realm-codec-protobuf`, `d2b-host-providers`, `d2b-provider-aca`,
+      `d2b-provider-relay`, `d2b-gateway`, `d2b-gateway-runtime`,
+      `d2b-daemon-access`, `d2b-unsafe-local-helper`, and compile-only
+      `d2b-wlproxy-spike` after its useful invariants move.
+- [ ] Delete every old provider/gateway crate and Nix package reference,
+      including axis-free aliases and re-export-only wrapper crates.
+- [ ] Delete `d2b.vms`, user-facing `d2b.envs`, gateway, relay,
+      provider-placeholder, old workload-kind, and provider-kind option
+      declarations, examples, tombstones, and aliases.
+- [ ] Delete `d2b vm`, `d2b env`, old launch/target verbs, bare aliases, and all
+      old client routing.
+- [ ] Delete `/var/lib/d2b/vms`, `/run/d2b/vms`, `/run/d2b-gpu`,
+      `/run/d2b-video`, `/run/d2b-wlproxy`, flat guest-control/key/TPM-marker/
+      media/migration/gateway/lock/audit/daemon-report roots, user-global
+      unsafe-local ledgers, activation ACL repair, per-VM path construction,
+      legacy socket names, and compatibility symlinks.
+- [ ] Delete old workload disks, TPM state, keys, tokens, caches, ledgers,
+      audits, user-helper state, sockets, locks, and generated runtime material
+      on the physical host through the digest-confirmed factory reset.
+- [ ] Boot the physical host through the persistently selected dedicated reset
+      generation, prove all d2b units/sockets and live references absent, and
+      complete the locked/inhibited fd-relative reset before final-v2 boot.
+- [ ] Before selecting reset mode, complete the confirmed live-session
+      `d2b-userd` phase for every configured UID, revoke scoped exports, close
+      the write barrier, and carry the exact authenticated receipt set into
+      reset mode; no reset-mode Secret Service or unlock path may exist.
+- [ ] Keep released reset code limited to generic generated current-anchor
+      deletion. If W11 needs a literal outlier-root manifest, keep exactly one
+      audited data-only copy in the private reset closure and remove the
+      manifest, its closure roots, and every literal before the W11 final seal.
+- [ ] Delete obsolete activation and group-migration helpers after their
+      operations move to broker/provider contracts.
+- [ ] Delete v1 golden outputs, fixtures, schema directories, state-migration
+      tests, compatibility tests, and policy exceptions after v2 replacements
+      are pinned.
+- [ ] Delete stale shipped documentation describing old protocol, provider,
+      daemon, filesystem, CLI, toolkit, or compatibility behavior.
+- [ ] Rename the sibling client toolkit and delete every old crate, share path,
+      flake output, release artifact, and consumer reference.
+- [ ] Run pinned `cargo-udeps` and remove unused dependencies/features; deny dead
+      production code except narrow generated-binding allowances.
+- [ ] Prove no production parser, config, service registry, state reader,
+      package, CLI, or test can recognize or successfully consume d2b 1.x.
+
+Historical ADRs and released changelogs may describe v1 as history. Shipped v2
+source comments, reference/how-to/explanation docs, CLI output, examples, and
+schemas describe only v2.
+
+## Delivery plan
+
+### Dependency graph
+
+```text
+W0 ADR 0045 decision closure, Proposed panel, and Accepted/index panel
+  -> W1 delivery/test/panel/stack tooling
+      -> W2 v2 workspace, IDs, contracts, schemas, service definitions
+          -> W3 session/provider/state/client foundations
+              -> W4 first-party providers and Azure VM scaffolding
+              -> W5 core control-plane service migration
+              -> W6 user/desktop/device protocol migration
+          -> W7 realm-native Nix, process, allocator, storage and networking
+          -> W9 toolkit and sibling-client cutover
+W4 + W5 + W6 + W7
+  -> W8 integrated realm/provider behavior and current-feature parity
+W8 + W9
+  -> W10 v1 purge and destructive reset tooling
+      -> W11 private integrated physical-host cutover and hardening
+          -> W12 merge train, v2.0 release, toolkit releases, final host pin
+```
+
+W4, W5, W6, W7, and W9 may overlap speculatively after their exact contract
+dependencies exist. A speculative branch that rebases onto a changed contract
+tree loses its prior seal.
+
+### Exact wave tasks
+
+#### W0 - ADR decision closure
+
+- Expand ADR 0045 to this implementation-ready decision.
+- Keep ADR 0045 status `Proposed`; leave the eight historical ADR status headers
+  and `docs/adr/README.md` unchanged for every Proposed candidate.
+- Create evidence with the exact
+  [external W0 bootstrap template](#external-evidence-storage-and-w0-bootstrap-template)
+  and run the full ten-role panel against that exact Proposed content tree.
+- Address safety and completeness findings without reopening the no-v1 decision.
+- After the Proposed tree has 10/10 signoff, prepare a second immutable
+  candidate that changes ADR 0045 to `Accepted`; changes the `Status` headers of
+  ADRs 0010, 0015, 0028, 0032, 0034, 0042, 0043, and 0044 to
+  `Superseded by ADR 0045`; updates all eight rows plus ADR 0045 in
+  `docs/adr/README.md`; and includes the final generated/index artifacts. These
+  prospective supersession edits do not land on a Proposed tree.
+- Run a second full ten-role panel against that exact Accepted/index candidate.
+  Its panel records and seal stay external to the candidate. The unmerged status
+  headers become authoritative only after this second panel is also 10/10 and
+  the candidate lands.
+- If either panel finds a content defect, make the correction on a Proposed
+  candidate and repeat both panel lanes. Dispatch no v2 code before the final
+  Accepted/index candidate has both required signoffs.
+
+#### W1 - Delivery, test, panel, and stack tooling
+
+Implement Rust `xtask` commands for:
+
+- Layer-1 manifest validation, parallel local execution, and workflow rendering;
+- official `gh-stack` graph validation and integration;
+- immutable wave snapshots;
+- test evidence import and command/result hashing;
+- panel JSON validation;
+- wave sealing;
+- retarget/rebase preflight;
+- fail-closed merge-train status and merge eligibility.
+
+Retire replaced Python/Bash orchestration. Update AGENTS process rules, the old
+three-unit invariant, tests/AGENTS reviewer/validator rules, Make targets,
+Layer-1 manifests/workflows, stacked-PR base triggering, PR dependency/evidence
+fields without AI attribution, and Nix dev tooling for `gh-stack`, pinned
+nightly `cargo-udeps`, and `cargo-semver-checks`.
+
+AGENTS must require the integrator to open or update the wave PR immediately
+after the immutable candidate is committed and focused preflight passes, before
+starting the final long local/host validation and full panel. GitHub CI, final
+local validation, and panel inspection then run concurrently against the same
+tree hash. A PR may show those lanes as pending; it cannot merge until every
+required CI/local/host result and the 10/10 panel are present in the seal.
+
+#### W2 - Workspace and canonical contracts
+
+W2 first runs the blocking dependency/API-fit spike for exact
+`ttrpc = "=0.9.0"`, `protobuf = "=3.7.2"`,
+`ttrpc-codegen = "=0.6.0"`, and `protobuf-codegen = "=3.7.2"`. It must prove
+generated asynchronous server/client compatibility and nonblocking Tokio
+behavior before service schemas freeze. W2 fails closed if the spike does not
+pass; no contract slice starts around an incompatible or blocking binding.
+
+Parallel contract slices:
+
+1. unify every host and guest crate under one workspace/lockfile and 2.0.0
+   metadata;
+2. add typed human names, exact SHA-256 IDs, cross-language vectors, collision
+   checks, generated endpoint rows, and path proofs;
+3. refactor `d2b-contracts` into no-default feature families;
+4. define ComponentSession preface, Noise profiles/vectors, errors, records,
+   attachment descriptors, limits, purposes, roles, and capabilities;
+5. define every `.v2` protobuf service and generated client/server binding;
+6. define provider descriptors, contexts, plans, handles, observations, health,
+   registries, and all eleven types;
+7. define complete storage, sync, state, and audit contracts;
+8. bump all contract generations and regenerate schema/reference artifacts.
+
+W2 owns the v2 reference and schema documentation for IDs, roles, endpoints,
+ComponentSession, services, providers, storage, synchronization, state, and
+audit. It commits generated JSON/Markdown and drift coverage together with each
+contract change, including the cross-language ID vectors, socket proof, and
+evaluation budget. No old type is re-exported.
+
+#### W3 - Session, provider, state, and client foundations
+
+- `d2b-unix-session`: stream/seqpacket, drain-correct `AsyncFd` readiness,
+  directional local identity with parent-prearmed `SO_PASSCRED`, ancillary
+  capacity derived from negotiated hard maxima, packet atomicity, truncation
+  scavenging, and exact bounded FD validation and credit cleanup.
+- `d2b-session`: `snow`, vectors, record protection, fragmentation, replay,
+  keepalive, close, authenticated absolute expiry, per-hop relative ttrpc
+  timeout, request-ID cancellation, named streams, scheduler, and metrics.
+- `d2b-provider`: traits, typed registries, optional capabilities, operation
+  context, RPC proxy, generation lifecycle, and shutdown.
+- `d2b-provider-toolkit`: agent server, registration, redaction, fixtures, and
+  conformance.
+- `d2b-state`: atomic JSON, quarantine, path-safe I/O, generations, locks, and
+  audit segment helpers.
+- `d2b-client`: resolver, transport/session setup, generated clients, typed
+  errors, idempotency, attachments, and named streams.
+
+#### W4 - First-party providers
+
+Use one independently reviewable slice per provider axis or implementation.
+Wrap real behavior, run common conformance, and advertise only live capability:
+
+- Cloud Hypervisor, qemu-media, systemd-user, and ACA runtime providers;
+- Unix/vsock/CH-vsock/Relay transport providers;
+- NixOS/Linux substrate providers;
+- Secret Service/Entra/managed-identity credential adapters in correct owners;
+- real Wayland display provider;
+- local-realm network provider;
+- local storage provider;
+- host-mediated TPM/USBIP/FIDO/GPU/video device provider;
+- PipeWire/vhost-user audio provider;
+- bounded local observability provider;
+- Azure VM runtime/infrastructure fake-SDK scaffold with the infrastructure
+  create/power/adopt/bootstrap/delete and runtime workload-deploy/exec/inspect
+  authority split compile-checked and production capability denied.
+
+#### W5 - Core control-plane service migration
+
+Parallel slices:
+
+- local/remote daemon service and CLI;
+- realm controller/router/bootstrap/shortcut service;
+- guest bootstrap, vTPM identity, exec, shell, file, and stream service;
+- provider-agent service;
+- privileged broker service and typed FD attachments;
+- local-root allocator and child-broker lease service, including dedicated
+  child UIDs/namespaces, pre-bound child public/broker listeners, direct
+  controller/broker cgroup-leaf placement, typed parent spawn, pidfd handoff,
+  zero initial-namespace capabilities, and FD-only delegation.
+
+W5 owns reference documentation for the daemon, realm, guest, provider-agent,
+broker, allocator, and client service APIs plus operator how-to changes needed
+by those service migrations. No slice keeps an old handshake or fallback.
+
+#### W6 - User, desktop, device, and helper migration
+
+Parallel slices:
+
+- `d2b-userd`, direct no-shell `gnome-keyring-daemon --unlock` TTY spike,
+  post-unlock `oo7` Secret Service interaction, TPM2/systemd export, and the
+  no-unlock pre-reset deletion/revocation completion statement;
+- renamed systemd-user runtime agent and shell supervisor;
+- clipboard control, picker, bridge, and readiness;
+- notify/wlcontrol event and action flow with bounded projections;
+- Wayland proxy control and FD paths;
+- security-key report streams, trusted intent, cancellation, and command policy;
+- activation, TTY, and retained one-shot helper channels;
+- any additional d2b-owned IPC found by the W0 inventory rule.
+
+W6 owns the user-secret, unattended-credential, systemd-user, shell, clipboard,
+desktop, Wayland, FIDO/security-key, activation, and TTY reference and how-to
+documentation. Each migrated boundary updates or removes its old instructions
+in the same slice.
+
+#### W7 - Realm-native host configuration and resources
+
+Implement:
+
+- realm/workload/provider options only;
+- the local-root PID1 units plus generated home/dev/work child process and
+  ordering records, with no child realm `.service` or `.socket` units;
+- per-realm users, internal cgroup groups, generated socket ownership rows,
+  confined child brokers, identities, namespaces, state, and audits;
+- local-root allocator listener creation, typed child controller/broker spawn,
+  pidfd supervision/adoption, and leases;
+- process-free per-realm cgroup roots with `controller/`, `broker/`, and
+  `workloads/` children, direct `CLONE_INTO_CGROUP` placement, and write
+  delegation that ends at the realm root;
+- recursion-safe normalized role/provider/storage index;
+- short-ID paths and complete bundle artifacts;
+- broker-only directory/ACL repair;
+- realm-scoped network, storage, device, and audio resources;
+- canonical-target-only desktop metadata;
+- deletion of `d2b.vms`, `d2b.envs`, gateway, relay, and placeholder wiring.
+
+W7 owns the v2 Nix option reference, generated option/schema artifacts,
+filesystem and endpoint layout, realm/process/allocator/storage/network
+reference, and realm configuration how-tos. Option examples must include the
+mandatory destructive-cutover acknowledgement and no old option path.
+
+#### W8 - Integrated behavior and current-feature parity
+
+Wire providers and services through real lifecycle flows:
+
+- local VM and qemu-media lifecycle/adoption;
+- systemd-user exec and persistent shell;
+- realm routing and policy;
+- ACA and Azure Relay behavior formerly in gateway crates;
+- work realm interactive provider executor;
+- shared-fabric shortcut authorization, revocation, and audit;
+- display, clipboard, audio, storage, network, USBIP, FIDO, GPU, and video;
+- daemon/controller/broker restart continuation;
+- bounded status, remediation, observability, and audit export.
+
+#### W9 - Toolkit and sibling cutover
+
+Across private sibling branches:
+
+- rename and migrate `d2b-client-toolkit`;
+- create the `d2b-provider-toolkit` distribution;
+- migrate `d2b-wlterm`;
+- migrate `d2b-wlcontrol`;
+- migrate the WeezTerm seam;
+- update flake follows, exact source rewrites, package names, share paths,
+  generated artifacts, and release automation;
+- run `cargo-semver-checks` against the intentional 2.0 major-break baseline.
+
+W9 owns in-tree client/provider toolkit reference material and the corresponding
+README, API, release, and migration documentation in every sibling repository.
+Toolkit docs consume the generated v2 contracts and contain no copied wire
+definition.
+
+#### W10 - V1 purge and reset tooling
+
+- Complete every checked deletion item.
+- Run pinned `cargo-udeps`.
+- Enable production dead-code denial with generated-code-only exceptions.
+- Implement the exact reset-mode-only digest-confirmed factory reset command and
+  dedicated no-d2b-service boot target.
+- Implement the pre-reset user intent, confirmation command, root-owned receipt
+  authentication, exact configured-user receipt gate, export-revocation
+  operation, and post-receipt barrier. Reset mode has no Secret Service client
+  or unlock path.
+- Keep the released reset implementation generic: it may delete only generated
+  current d2b anchor classes and may not contain a literal legacy outlier name.
+- Add source policy proving old identifiers, paths, crates, services, options,
+  protocols, and branches do not remain.
+- Complete a Diataxis-wide rewrite/removal audit of `README.md`, examples, and
+  every current `docs/reference`, `docs/how-to`, and `docs/explanation` page.
+  Rewrite live v2 guidance, delete stale pages rather than preserving migration
+  stubs, and retain v1 text only in historical ADRs and released changelogs.
+- Validate persistent reset boot selection, crash-to-reset behavior, unit/socket
+  absence, lock/inhibitor handling, cgroup/process/session/fd/mount quiescence,
+  under-lock digest recomputation, held-dirfd recursive deletion, symlink and
+  mount-crossing refusal, fatal mount-point `EBUSY`, bounded `ENOTEMPTY`
+  re-enumeration, optional topology-change alarms, fsync, and final-v2 boot
+  selection without parsing old state.
+
+#### W11 - Private physical-host cutover and hardening
+
+Before implementation PRs merge:
+
+1. build the complete integrated private branch, final v2 boot generation, and
+   dedicated v2 reset boot generation;
+2. update a private `/etc/nixos` branch to v2 realm-only configuration without
+   selecting final v2 yet;
+3. if required, embed exactly one audited data-only outlier-root manifest in the
+   private reset closure; no other source or artifact may contain those names;
+4. while every configured owning session and keyring is available, generate
+   the reset intent, run the confirmed `d2b-userd` preparation for every UID,
+   delete d2b-owned keyring items, revoke scoped TPM exports, verify the exact
+   authenticated receipt set, terminate the prepared user sessions/keyrings,
+   and close the post-receipt barrier;
+5. install, mark successful, and persistently select the reset generation as
+   the boot default only after step 4, then reboot into `d2b-reset.target`;
+6. prove every v1/v2 operational d2b system/user service and socket unit absent
+   or masked (with only the inert reset target active), acquire the reset
+   lock/inhibitor, verify every receipt without accessing or unlocking Secret
+   Service, prove cgroup/process/session/fd/mount quiescence, dry-run, and apply
+   the recomputed digest-confirmed reset through the bounded fd-relative
+   traversal with no backup;
+7. allow the reset binary to select final v2 and reboot only after deletion,
+   receipt revalidation, fsync, and absence proofs succeed; any interruption
+   reboots to reset mode;
+8. initialize and verify GNOME Keyring login unlock, `d2b-userd`, and scoped
+   TPM2 exports;
+9. start the local-root units and verify that its allocator pre-binds and
+   parent-spawns separate home, dev, and work controller/broker processes into
+   their declared cgroup leaves with pidfd supervision and no child PID1 units;
+10. recreate `personal-dev` in `dev` and the interactive work provider executor
+   in `work`;
+11. validate complete local desktop parity and available cloud parity;
+12. remove the private outlier manifest, its closure/GC roots, and every literal
+   legacy outlier name from production artifacts, then prove the final
+   integrated production code/configuration/schema/test set and release closure
+   contain only generic current-anchor reset logic;
+13. repair forward on the private stack until validation and a final full panel
+   seal the manifest-free integrated tree.
+
+#### W12 - Merge, release, and final host pin
+
+- Merge sealed PR stacks through GitHub, root to leaf.
+- Retarget/restack and rerun required CI after each merge.
+- Reject a merge whose resulting tree differs from its sealed tree.
+- Reject any production source/configuration/schema/test tree or release
+  closure containing the private W11 reset manifest or a literal legacy outlier
+  root; historical ADR prose is not executable reset inventory.
+- Release d2b 2.0.0.
+- Release both toolkit distributions and sibling migrations in dependency
+  order.
+- Before any release is published, own and complete the 2.0 release notes and
+  destructive migration guide. They name
+  `d2b.acceptDestructiveV2Cutover = true`, the no-backup reset procedure, generic
+  unknown-option behavior, absence of `mkRemovedOptionModule` tombstones, and
+  repair-forward posture.
+- Move `/etc/nixos` from the private branch to final merged tags/releases.
+- Switch once more without resetting state and rerun focused host smoke.
+- Commit the host lock/config update separately.
+
+### Worktrees, stacks, and immutable evidence
+
+All implementation uses dedicated worktrees and private feature branches.
+Official `gh-stack` owns stack creation, restacking, and retargeting. Changes
+merge through GitHub only, root to leaf; no implementation branch pushes or
+merges directly to `main`.
+
+Seal, panel, and test/validation evidence is never part of the Git content tree
+being reviewed. It lives only in external session state, GitHub artifacts, and
+GitHub checks, keyed by the exact integrated Git tree hash and carrying SHA-256
+digests for each evidence payload. It is never copied into a branch, generated
+repository artifact, release source archive, or commit merely to make the seal
+self-describing. A PR may link to external evidence; it may not embed that
+evidence as reviewed-tree content.
+
+#### External evidence storage and W0 bootstrap template
+
+W0 precedes `xtask wave snapshot`, so it uses a checked bootstrap evidence
+procedure rather than pretending the tool already exists. The exact local
+storage template is:
+
+```text
+$HOME/.copilot/session-state/<session-id>/evidence/w0/<git-tree-hash>/
+  candidate.json
+  candidate.sha256
+  validation/<validation-id>.json
+  validation/<validation-id>.sha256
+  panel/<role>.json
+  panel/<role>.sha256
+  seal.json
+  seal.sha256
+```
+
+The directory name is the full output of `git rev-parse <head>^{tree}`. An
+optional GitHub mirror uses artifact name
+`d2b-w0-<proposed|accepted-index>-<git-tree-hash>` and checks that report the
+same tree hash and payload SHA-256. Neither location is inside a repository
+worktree.
+
+For each Proposed and Accepted/index candidate, `candidate.json` records:
+
+- repository identity, base commit, head commit, and `git rev-parse
+  <head>^{tree}` content-tree hash;
+- the complete repository set, which is exactly the d2b repository for W0;
+- the name and digest of every changed/generated artifact;
+- the exact dependency-file diff and contract/index diff, including an explicit
+  empty result;
+- each validation ID, exact command digest, exit status, output-artifact digest,
+  and external locator already produced for that tree.
+
+`candidate.sha256` contains the digest of `candidate.json`; the candidate does
+not contain its own digest and does not list panel records that do not yet exist.
+Each panel record binds the tree hash and `candidate.sha256`. Once all ten panel
+records exist, `seal.json` lists the candidate digest and the sorted validation
+and panel record digests; `seal.sha256` hashes the seal. The seal does not contain
+its own digest. This one-way construction has no self-inclusion cycle.
+
+The integrator independently checks that the worktree is clean at the recorded
+head, re-derives the tree and artifact digests, and supplies those values to
+every reviewer. Reviewers inspect but do not run validation. The Proposed
+candidate, panel records, and seal are retained externally when constructing the
+Accepted/index candidate; they are evidence for the first required panel, not a
+seal for the second tree. The Accepted/index candidate has a different tree-hash
+directory and a fresh candidate, panel set, and seal. Its status/index/header
+edits are already in that immutable candidate, while the resulting panel and
+seal remain external. Thus the second panel can approve the exact prospective
+Accepted tree without requiring evidence to be committed into the tree it
+approves. Any correction creates a new tree-hash directory and invalidates the
+old candidate rather than mutating or reusing it.
+
+For each wave, `xtask wave snapshot` records:
+
+- base commit;
+- ordered repository/PR/branch dependency graph;
+- each head commit;
+- integrated tree hash;
+- required validation matrix;
+- repository set for cross-repository waves.
+
+The W1 tool writes those records and the later validation/panel/seal payloads to
+the same class of external tree-hash-addressed storage or to GitHub artifacts and
+checks; its output is not a commit candidate.
+
+After focused preflight passes, the integrator opens or updates the PR for the
+exact snapshot before starting the final lanes. Three activities then proceed
+concurrently against that exact immutable tree:
+
+1. GitHub runs the PR's required CI shards;
+2. validators run the required local/host tests and import hash-bound
+   command/results;
+3. the full panel inspects the tree, plan, and live evidence status but runs no
+   tests.
+
+Every wave uses all ten roles:
+
+```text
+software
+test
+nixos
+networking
+security
+rust
+product
+docs
+observability
+kernel
+```
+
+Every role uses Gemini 3.1 Pro and returns `signoff: true` with an empty
+recommendation list. `xtask wave seal` succeeds only with all required
+validation evidence plus 10/10 panel signoff bound to the same tree hash,
+heads, base, dependency graph, generated artifacts, dependency diff and
+contract fingerprints, and repository set.
+
+Any content change, including source, documentation, generated output,
+dependency metadata, contract/index content, or repository-set membership,
+invalidates both validation and panel lanes. Reviewers do not run tests.
+Validators do not substitute for review. A later speculative wave may continue
+while an earlier wave is under review.
+
+A history-only rebase or PR retarget may reuse panel evidence only after W1
+`xtask` proves that the integrated content tree, every generated artifact,
+dependency diff and contract fingerprint, and complete repository set are
+byte-identical to the sealed candidate. Commit IDs and graph edges may differ;
+content may not. Required CI is rerun on the new Git history. Before that proof
+tool exists, including during W0, a rebase or retarget reruns the applicable
+panel. Any content difference, however small, invalidates both lanes and is not
+eligible for this exception.
+
+## Validation and acceptance
+
+All coverage follows `tests/AGENTS.md`: Rust unit/integration/contract/policy
+tests and nix-unit cases first, then container, host, hardware, and live tests
+where the behavior requires them. No ad hoc top-level shell gate is added.
+
+### Required test-tier mapping
+
+Layer-1 proofs remain mandatory even when a higher tier covers the integrated
+behavior: type 1 nix-unit cases own option values/eval rejection (including the
+destructive acknowledgement), types 2-3 own pure state machines, framing,
+scheduling, reset planning, and hermetic binary/session behavior, type 4 owns
+rendered Nix/Rust contract parity, type 5 owns complete-inventory and no-v1
+source policy, and type 6 owns realized example/flake evaluation. Generated
+artifacts use the existing drift gate; performance uses the existing
+`performance-budgets.sh` gate. No higher tier substitutes for these proofs.
+
+The behavior that genuinely needs a booted or physical system maps exactly as
+follows:
+
+| `tests/AGENTS.md` tier | Mandatory d2b 2.0 coverage |
+| --- | --- |
+| Type 10, runNixOSTest (`tests/host-integration/*.nix`, `make test-host-integration`) | Disposable reset-generation boot and reboot/crash-to-reset simulations; final-v2 selection only after success; systemd unit/socket absence and persistent boot selection; systemd credential materialization and keyring/unlock process lifecycle; local-root plus per-realm controller/broker boot; child-broker user/mount/network namespaces, UID/GID maps, capability sets, FD delegation, and cgroup placement. Reset tests delete only disposable VM disks and synthetic d2b anchors. |
+| Type 11, live host (`tests/integration/live/*.sh`, `D2B_LIVE=1`, manual only) | The actual destructive physical-host cutover, real reset reboot/lock/inhibitor/quiescence/deletion/final-boot flow, real desktop login/keyring continuity, and credentialed ACA/Azure Relay or other cloud flow. These checks never run in CI and require the private-host procedure and explicit operator control. |
+| Type 12, hardware (`tests/host-integration/hardware/*.sh`, manual only) | Physical TPM sealing/unsealing and reset behavior, YubiKey/USBIP/FIDO mediation, and real GPU/video/device passthrough. Software swtpm and synthetic device-policy cases stay in lower tiers; only actual hardware claims close here. |
+
+Type 9 containers are used only for a provider/helper that must prove foreign
+non-Nix userland behavior; they are not a shortcut around type 10 boot/systemd
+coverage. Every Layer-2 test records why Layer 1 cannot prove the same kernel,
+boot, cloud, or device property.
+
+### Contracts and workspace
+
+- reproducible protobuf/schema generation;
+- exact `.v2` service IDs and schema fingerprints;
+- exact authenticated-expiry/cancellation metadata and no epoch-valued
+  `timeout_nano`;
+- exact ttrpc/rust-protobuf runtime and codegen pins, plus the pre-schema
+  async-generated API-fit/nonblocking Tokio spike;
+- resolver 2 feature-family dependency direction, no-default portable builds,
+  exact isolated guest check/build feature sets, and feature-graph exclusion of
+  host Nix/socket and cloud SDK families from framework guest artifacts;
+- one workspace, one lockfile, and version 2.0.0 inheritance, with no nested
+  guest or broker workspace;
+- independent Nix/Rust printable-ASCII grammar, pure-Nix lowercase RFC 4648
+  base32 helper, exact encoded/digest/ID vectors, malformed/non-canonical grammar
+  rejection, global `ProviderId` uniqueness, and the pinned 4,096-ID evaluation
+  time/RSS budget;
+- generated socket contract bidirectional completeness and byte-length/NUL
+  headroom proof for every separately expanded row and literal leaf;
+- `cargo-udeps` clean;
+- source policy rejects old crates, types, versions, and service IDs.
+
+### ComponentSession
+
+- fixed `snow` vectors for NN, KK, and IKpsk2;
+- transcript downgrade, cross-purpose, role, schema, limit, and channel-binding
+  rejection;
+- pathname acceptor `SO_PEERCRED`, responder socket/unit/inode provenance,
+  parent-prearmed two-ended `SO_PASSCRED` before fork/handoff, immediate-child
+  first-packet `SCM_CREDENTIALS`, launch-binding/pidfd/cgroup/executable
+  mismatch, and established-session transfer rejection;
+- replay, truncation, duplicate/reordered fragment, nonce exhaustion, malformed
+  preface, and over-limit rejection;
+- checked Noise handshake, handshake-tag, record-tag, fragment, and envelope
+  overhead at every allocation boundary, including adversarial boundary
+  property tests that prove rejection without panic;
+- 30-second skew and 15-minute lifetime boundaries, wall-clock jumps,
+  ingress/queue/dispatch expiry, per-hop capped relative ttrpc timeout, and
+  request-ID cancellation before and during dispatch;
+- generated handlers awaiting borrowed `async_trait` futures only in the
+  session-owned request task, with compile coverage that every detached path
+  captures an owned `Arc` provider/context or explicit owned operation object;
+- deterministic scheduler coverage for priority, fairness, backpressure,
+  cancellation, and no lock across await;
+- paused-time boundary tests at one unit below, exactly at, and one unit above
+  every scheduling, queue, handshake, reconnect, stale-health, and recovery
+  threshold; status transition/hysteresis and closed remediation tests;
+- low-cardinality metric-schema tests proving that only transport, purpose,
+  channel class, Noise class, locality, provider type, health state, and closed
+  result/reason labels exist and that IDs never become labels;
+- Unix readiness burst tests prove read and write drivers drain through
+  `EAGAIN`/`EWOULDBLOCK` or preserve the guard/cached readiness and explicitly
+  continue, with no one-packet-per-wakeup stall;
+- Unix packet tests derive ancillary capacity at every negotiated boundary and
+  cover `MSG_TRUNC`, `MSG_CTRUNC`, partial descriptor delivery, malformed or
+  unknown control/attachment data, missing/extra FD, duplicate object, wrong
+  type/access/purpose, absent `CLOEXEC`, and disconnect. Stable before/after
+  process-FD counts prove zero leaks and close-once ownership on every fatal
+  path;
+- exact packet/request/operation/session/process/host FD-credit boundaries,
+  `RLIMIT_NOFILE` reduction, 64-FD emergency reserve, rejection, and close-once
+  cleanup under cancel/disconnect races;
+- fuzz/property tests for preface, handshake, record, fragment, attachment, and
+  ttrpc-boundary parsers.
+
+### Providers
+
+- base descriptor and health;
+- exact `healthy`/`degraded`/`unavailable`/`failed` provider-health transitions,
+  poll/deadline/staleness thresholds, agent-disconnect behavior, recovery
+  requirements, and no automatic retry from an invariant failure;
+- object-safe trait construction for every primary and optional interface;
+- global provider-ID collision, duplicate
+  (`ProviderType`, `ImplementationId`) factory rejection, and multiple
+  configured-instance acceptance;
+- fallible `Result`-returning factory/capability/instance registration,
+  typed duplicate and configuration errors, transaction abort, and no
+  configuration-triggered panic;
+- descriptor/registry claim parity and per-instance duplicate rejection;
+- generated placement coverage for every initial implementation ID;
+- operation-scope widening rejection;
+- idempotency, deadline, cancellation, and retry classes;
+- adoption identity/configuration/generation mismatch;
+- secret-canary flow only through the co-located private non-serializable
+  interface and absence from process/session/persistence, Debug, errors, logs,
+  traces, audit, metrics, and state boundaries;
+- real conformance for every advertised implementation/capability;
+- call-graph proof that production enters the registry;
+- Azure VM infrastructure-only create/power/adopt/bootstrap/delete and
+  runtime-only bound-handle workload deploy/exec/inspect negative authority
+  tests;
+- Azure VM scaffold never registers or advertises live support.
+
+### Realm, Nix, storage, and audit
+
+- controller ownership and cycle rules, including only the narrow
+  independently-running-controller exception;
+- local-root allocator lease isolation, pre-bound child public/broker listener
+  provenance, typed parent spawn, pidfd supervision, and restart adoption;
+- local-root broker as the only PID1 socket-activated broker, with no child
+  realm `.socket`/`.service` units or `SD_LISTEN_FDS` path;
+- child-broker dedicated uid/user/mount/network namespace setup, zero
+  initial-namespace capability sets, closed UID/GID mappings, FD-only delegated
+  access, global-path/`setns` denial, and local-root-only host mutation;
+- child-controller realm-key generation/unseal only after direct placement,
+  using its key-state dirfd and TPM resource-manager FD with no plaintext key
+  buffer/file in the allocator or either broker;
+- process-free realm/workload cgroup interiors, direct controller/broker and
+  runner leaf placement, controller/broker-group write only at the realm common
+  ancestor and workload subtree, same-realm-only moves, and `EACCES` outside
+  that delegated root;
+- per-realm user, socket, broker, key, state, audit, cgroup, and network
+  separation;
+- omission/false rejection and true acceptance for
+  `d2b.acceptDestructiveV2Cutover`, with no reset artifact generated on
+  rejection and no old-option tombstone;
+- independent Nix/Rust SHA-256 vectors, collision rejection, and the generated
+  complete per-endpoint Unix socket-length proof;
+- no path built from a raw human/provider/device value;
+- complete storage/sync/endpoint inventory, fixed local-root/user
+  socket-activation exception, allocator-owned child listeners, broker-only
+  other dynamic creation, and no daemon unlink/rebind path;
+- restart adoption before cleanup and typed quarantine;
+- atomic JSON crash and simulated power-loss consistency at every write phase,
+  proving that success is impossible before the post-rename parent-directory
+  fsync and that recovery observes exactly the prior or complete new document;
+- segment chain, checkpoint, retention, and gap behavior;
+- no old options, aliases, tombstones, or three-unit invariant.
+
+### Service integration
+
+- client to local and remote daemon;
+- realm bootstrap, enrollment, routing, and shortcut;
+- guest one-time bootstrap followed by static-key reconnect bound to the
+  parent-launched runtime, exact transport endpoint, controller/workload
+  generation, and fresh boot nonce;
+- copied file-backed swtpm/guest state rejection and
+  `realm-controller-host-v2` denial without accepted non-copyable attestation;
+- broker typed FD operations;
+- provider-agent proxy parity;
+- direct no-shell `gnome-keyring-daemon --unlock` TTY behavior, graphical Secret
+  Service prompt, post-unlock `oo7`, and fail-closed backend-spike mismatch;
+- pre-reset `d2b-userd` fixed-attribute deletion and export revocation through
+  an authenticated owning session, with no secret-value read and no unlock
+  attempt;
+- systemd credential materialization under read-only
+  `$CREDENTIALS_DIRECTORY`, TPM/host/user/credential-name binding, and
+  PID1/DAC/namespace assignment isolation;
+- systemd-user runtime and shell;
+- clipboard control, picker, bridge, and transfer FD;
+- notify/wlcontrol and Wayland control;
+- FIDO report stream, approval, cancellation, queue/lease bounds, and
+  destructive-command denial;
+- activation/TTY one-shot channels;
+- mixed old bytes fail the v2 preface before semantic dispatch, without a v1
+  parser or diagnosis branch.
+
+### Release and sibling consumers
+
+- `cargo-semver-checks` records the intentional 2.0 API break;
+- toolkit and sibling flakes build from exact released source artifacts;
+- every canonical SDK crate remains `publish = false`, `xtask` rejects
+  `cargo publish`, and fingerprinted GitHub/flake path dependencies work
+  without a crates.io publication path;
+- no old repository, crate, package, share, or protocol path remains;
+- final production source/configuration/schema/test set and release closure
+  contain no private W11 reset manifest or literal legacy outlier root, and
+  reset code deletes only generic current anchors;
+- generated docs and examples use only canonical realm targets.
+
+### Reset and seal safety
+
+- reset and final v2 closures are built before cutover;
+- module and reset-generation evaluation require the explicit v2 destructive
+  acknowledgement, while setting it alone performs no mutation;
+- before reset selection, the canonical intent and confirmed per-user
+  preparation delete d2b-owned Secret Service items, revoke scoped exports,
+  authenticate exactly one digest/nonce/inventory-bound receipt per configured
+  UID, terminate the prepared login/user-manager/keyring processes, and close
+  the no-new-write barrier;
+- unavailable/locked user sessions, missing/duplicate/stale receipts, failed
+  export removal, or a barrier failure prevent reset selection, and retry uses
+  a fresh nonce and complete receipt set;
+- reset generation is the persistent boot default, not a one-shot, and every
+  interruption/reboot before completion returns to reset mode rather than v1;
+- all operational d2b system/user service and socket units are absent or masked
+  in reset mode, with only the inert reset target active;
+- reset mode verifies root-owned receipts but has no D-Bus, `oo7`, user-child,
+  Secret Service access, or keyring-unlock path;
+- reset lock and shutdown inhibitor fail closed;
+- cgroup, process, ComponentSession, open-fd, cwd/root/executable/map, lease, and
+  mount quiescence checks cover every declared root;
+- plan digest is recomputed under lock after anchored root dirfds are opened and
+  held;
+- deletion is recursive and fd-relative; directory descent uses the required
+  `openat2` resolve flags, `unlinkat` never follows a final symlink, a mount
+  point fails `EBUSY`, and a third `ENOTEMPTY` after two complete
+  re-enumerations fails closed;
+- `/proc/self/mountinfo` and `STATX_MNT_ID_UNIQUE`, when available, are tested
+  only as defense-in-depth topology alarms and never as an atomic
+  `fstatat`-then-unlink identity proof;
+- final v2 is selected and booted only after fsync and absence proofs;
+- W0 has a 10/10 Proposed-tree panel and a separate 10/10 Accepted/index-tree
+  panel using the external tree-hash-addressed bootstrap evidence template;
+- history-only reuse requires `xtask` proof of identical integrated tree,
+  generated artifacts, dependency diff/contracts, and repository set, followed
+  by rerun CI; any content change invalidates both lanes.
+
+### Required gates before merge
+
+- `make check`;
+- `make test-integration`;
+- `make test-host-integration`;
+- `make test-hardware`;
+- applicable live-host tests;
+- sibling repository equivalents;
+- all GitHub CI contexts on stacked and final-main bases;
+- the complete physical-host matrix;
+- a 10/10 immutable-tree panel seal for every wave, plus both full W0 panels.
+
+### Physical-host acceptance matrix
+
+- Niri login unlock and shell/graphical `d2b secret unlock`;
+- direct TTY backend and graphical unlock plus allowlisted systemd credential
+  consumption from `$CREDENTIALS_DIRECTORY` without whole-keyring unlock;
+- pre-reset deletion/revocation with one authenticated receipt per configured
+  UID, fail-closed locked/unavailable-user cases, post-receipt session/keyring
+  termination and write denial, and reset-mode proof that no Secret Service
+  access or unlock is attempted;
+- local-root daemon/broker health and pidfd-supervised home/dev/work
+  controller/broker health, with no child realm PID1 units;
+- child brokers have zero initial-namespace capabilities/global path access and
+  operate only on delegated namespace/dirfd/device leases;
+- controller, broker, and workload processes begin in their declared cgroup
+  leaves; same-realm movement succeeds where authorized, while writes or moves
+  through `d2b.slice`, root, and peer realms fail;
+- `personal-dev` lifecycle, restart, exec, persistent shell, graphics, Wayland,
+  audio, clipboard, storage, network, USBIP, FIDO, and daemon restart adoption;
+- work interactive provider executor;
+- provider/session/realm/workload status and repair-forward remediation;
+- ACA and Azure Relay live flow when credentials are available;
+- security-key per-ceremony intent and closed denial behavior;
+- no old units, sockets, directories, state, CLI verbs, protocol, provider
+  names, toolkit paths, or aliases;
+- reset-generation reboot/crash continuation, final-v2 boot only after reset
+  proof, and ordinary post-reboot continuation;
+- no private reset manifest or literal legacy outlier root in production
+  artifacts/closure, and no file-backed-swtpm controller-host capability;
+- final merged release behaves identically to the sealed private integrated
+  tree.
+
+## Key risks and controls
+
+| Risk | Required control |
+| --- | --- |
+| A byte-only session abstraction loses seqpacket and FD security. | Packet/attachment capability is first-class; broker migration waits for kernel-level truncation, type, flag, policy, and disconnect coverage. |
+| An `AsyncFd` driver consumes one packet per readiness wake and strands queued control or cancellation work. | Drain `recvmsg`/`sendmsg` under the readiness guard through would-block, or preserve cached readiness and explicitly reschedule when a fairness budget yields. |
+| A Unix initiator mistakes socket-activation peer credentials for responder identity. | Keep NN, but use directional evidence: acceptor-observed `SO_PEERCRED`, initiator-verified path/inode/unit provenance, and parent-prearmed two-ended `SO_PASSCRED` plus first-packet credentials and a launch binding for inherited endpoints. Never transfer an established session FD. |
+| An absolute epoch is encoded as a relative ttrpc timeout or expires while queued. | Authenticate issue/expiry separately, enforce 30-second skew and 15-minute lifetime, intersect wall/monotonic remaining time at every queue boundary, set only capped relative `timeout_nano`, and cancel by request ID. |
+| Ancillary truncation or an FD flood exhausts `RLIMIT_NOFILE`, leaks a partially delivered descriptor, or prevents cancellation/cleanup. | Size control space from the negotiated hard maximum, collect every installed descriptor before honoring truncation or parse errors, enforce packet/request/operation/session/process/host credits, keep 64 emergency control slots, and close/release each ownership slot exactly once. |
+| Multiple realm brokers race over global host resources or a child escapes its lease. | Local-root alone retains initial-namespace/global authority; each child has a dedicated uid and user/mount/network namespaces, zero initial-namespace capabilities, and only allocator-issued dirfds/FDs/leases. |
+| Reset mode cannot delete a locked user's Secret Service items and cutover deadlocks. | Delete fixed-attribute items and revoke scoped exports in a mandatory confirmed pre-reset phase while every configured owning session is unlocked; authenticate digest-bound receipts, close the write barrier, and refuse to select reset mode without the exact set. Reset mode never accesses or unlocks Secret Service. |
+| PID1 and the allocator can independently start the same child broker with incompatible namespace/listener ownership. | Socket-activate only the local-root broker. The allocator pre-binds child listeners and parent-spawns separate child controllers/brokers through typed operations; local-root `d2bd` supervises their pidfds, and no child realm PID1 unit exists. |
+| A child controller cannot move a runner from a sibling systemd cgroup or gains write to all of `d2b.slice`. | Create a process-free per-realm root with controller, broker, and workload children; place controller/broker directly with `CLONE_INTO_CGROUP`; delegate the common realm ancestor/workload subtree only; and birth runners in role leaves or move them only within that realm root. |
+| Recursive reset deletion treats a pre-unlink stat or mount ID as an atomic object-identity guarantee. | Hold the exclusive reset lock and quiescence proof, walk held dirfds with `openat2` beneath/no-symlink/no-xdev resolution, unlink only relative to the parent dirfd, fail mount points with `EBUSY`, and bound `ENOTEMPTY` re-enumeration. Mount observations are alarms only. |
+| The no-backup reset crashes after deletion and boots v1. | Build both closures first, persistently select a no-d2b-service reset generation, hold a reset lock and shutdown inhibitor through bounded fd-relative deletion, and select final v2 only after fsync/absence proof. Every interruption reboots reset mode. |
+| Legacy outlier names become a permanent compatibility inventory. | Permit one audited data-only manifest only in the private W11 reset closure, never parse records, and remove the manifest, closure roots, and literals before the final seal/release. |
+| File-backed swtpm is treated as non-cloneable identity. | State that host root/whole-state copy can clone it, bind guest admission to the parent runtime/transport/generations/fresh boot nonce, and deny controller-host capability absent accepted non-copyable attestation. |
+| An unlocked Secret Service is ambient to same-uid processes. | Document the same-uid limit, separate `d2b-userd` from the runtime agent, use a direct stdin-only keyring unlock backend, export only scoped systemd credentials, and never forward Secret Service into guests. |
+| TPM sealing is mistaken for cryptographic systemd-unit binding. | Bind TPM/host/user/credential-name only; rely on PID1 assignment, DAC, mount namespace, and service sandbox for unit isolation, and test the actual `$CREDENTIALS_DIRECTORY` path. |
+| Truncated IDs collide or a socket path overflows. | Use the exact domain-separated SHA-256 encoding, independent Nix/Rust vectors and collision rejection, a generated proof for every literal endpoint row, and pre-side-effect bundle validation. |
+| Provider traits become facades while production bypasses them. | Require call-graph evidence and real conformance for every advertised implementation and capability. |
+| Sibling repositories ship a different protocol/client artifact. | Use exact release source fingerprints, no duplicate clients, cross-repository immutable snapshots, and dependency-ordered releases. |
+| Azure VM authority is duplicated or schema is mistaken for working support. | Infrastructure alone owns VM create/power/adopt/bootstrap/delete; runtime is limited to workload actions through a bound handle. Never register/advertise either scaffold and test both negative boundaries. |
+| A rebase preserves prose but changes generated/dependency/repository content. | Reuse review only after `xtask` proves identical integrated tree, generated artifacts, dependency diff/contracts, and repository set; rerun CI, and invalidate both lanes for any content change. |
+
+## Security invariants
+
+1. Realm, workload, provider, guest, and local principal identity is
+   authenticated before state lookup, credential resolution, provisioning, FD
+   acceptance, or semantic dispatch.
+2. Local NN identity evidence is directional: acceptors use kernel
+   `SO_PEERCRED`; initiators use trusted endpoint provenance; inherited
+   endpoints have `SO_PASSCRED` enabled on both ends by the parent before
+   fork/handoff and also use first-packet credentials and parent launch
+   binding. An established session endpoint is not transferable.
+3. Transport evidence establishes reachability only. It never grants local
+   daemon role, broker authority, or realm identity.
+4. Authenticated absolute expiry is independent of ttrpc relative timeout.
+   Remaining time is rechecked at every queue/dispatch boundary, and
+   request-ID cancellation aborts outstanding dispatch and cleanup. Unix
+   readiness handling drains to would-block or preserves readiness for explicit
+   continuation, so control and cancellation never depend on a second edge.
+5. Attachment count, kind, object type, flags, operation binding, and
+   packet/request/operation/session/process/host credits are exact. Emergency
+   control FD headroom cannot be consumed by attachments. Every descriptor
+   installed by a receive is collected before truncation/parser failure returns
+   and is closed or transferred exactly once.
+6. A provider cannot widen an already-authorized operation or invoke the broker
+   directly. `ProviderId` is globally unique; factory uniqueness is only by
+   (`ProviderType`, `ImplementationId`), allowing distinct configured
+   instances.
+7. Cloud/provider secret material remains in its owning co-located process,
+   may cross only the private non-serializable module interface, and crosses no
+   ComponentSession, persistence, or telemetry boundary.
+8. A remote peer never receives a local broker protocol or raw host-mutation
+   capability.
+9. Each host-local realm has a separate controller/broker/state/audit/resource
+   boundary. Child controllers and brokers are separate parent-spawned,
+   pidfd-supervised processes, not PID1 units. Child brokers have no
+   initial-namespace capability or global path access and operate only on
+   allocator-approved namespace/dirfd/device leases.
+10. Local-root alone performs host-global mutation. Allocation of narrow leases
+    does not become peer-realm lifecycle authorization. A child
+    controller/broker group can write only its realm common cgroup ancestor and
+    workload subtree, never `d2b.slice`, root, or a peer realm; processes are
+    born in destination leaves or move only within that realm root.
+11. Fixed local-root/user listeners are created only by their declared
+    system/user socket unit. The local-root allocator creates and pre-binds
+    child public/broker listeners; the owning broker creates other dynamic
+    listeners. Every listener is handed to its declared owner as an FD, and a
+    daemon never recreates an allocator/broker-owned path.
+12. File-backed swtpm is cloneable by host root/whole-state copy. Guest admission
+    additionally binds the parent runtime, transport endpoint, controller and
+    workload generation, fresh boot nonce, and one-authoritative-generation
+    rule; file-backed swtpm cannot host a realm controller.
+13. TPM/systemd credential cryptography binds TPM, host, user, and credential
+    name. PID1 assignment, DAC, mount namespace, and service sandbox, not TPM
+    cryptography, isolate the receiving unit.
+14. The selected service, schema, roles, purpose, Noise profile, limits,
+    transport evidence, and attachment policy are authenticated before API
+    dispatch.
+15. Private keys, PSKs, credentials, proofs, endpoints, paths, commands,
+    payloads, and user-provided labels do not enter telemetry. Metric labels use
+    only closed low-cardinality classes.
+16. A normal v2 daemon restart is a continuation event. Before factory reset,
+    each configured user's live `d2b-userd` deletes fixed-attribute d2b items,
+    revokes scoped exports, and yields an authenticated intent-bound receipt.
+    Factory reset runs only in the persistently selected no-d2b-service reset
+    generation, never accesses or unlocks Secret Service, refuses without the
+    exact receipt set, and selects final v2 only after locked, inhibited,
+    digest-confirmed, quiescent fd-relative deletion that refuses symlink
+    traversal and mount crossing, and absence proof. Mount observations are
+    defense in depth, not unlink identity authority.
+17. Final v2 production code/configuration/schema/test and release artifacts
+    contain no legacy reset inventory. One private W11 data-only outlier
+    manifest is permitted only until the manifest-free final seal; historical
+    ADR prose is not executable inventory.
+18. Module and reset-generation evaluation require the explicit v2 destructive
+    acknowledgement. It cannot trigger deletion by itself and does not register
+    or recognize an old option.
+19. No v1 compatibility recommendation can weaken these invariants.
+
+## Definition of done
+
+The d2b 2.0 program is complete only when:
+
+- ADR 0045 is Accepted only after a 10/10 panel on the Proposed tree and a
+  second 10/10 panel on the final Accepted/index tree using external
+  tree-hash-addressed W0 bootstrap evidence that is never committed into either
+  reviewed tree;
+- every d2b-owned live IPC boundary uses ComponentSession v2 with directional
+  local identity, authenticated absolute expiry, per-hop relative ttrpc
+  timeout, request-ID cancellation, parent-prearmed inherited credentials,
+  readiness-correct I/O, bounded aggregate FD credits, and close-once
+  truncation cleanup;
+- ComponentSession scheduling, queues, handshakes, reconnect, and provider
+  health enforce the typed operational objectives, hard failure thresholds,
+  transitions, remediation, and low-cardinality telemetry defined here;
+- every production lifecycle/component path enters the appropriate typed
+  provider registry;
+- all eleven provider axes wrap current functionality, every initial
+  implementation has explicit placement, globally unique provider instances
+  and pair-scoped factories behave as specified, and all pass conformance;
+- Azure VM remains clearly non-production scaffold with infrastructure-only VM
+  authority and runtime-only bound-handle workload authority;
+- every host-local realm runs a separate controller/broker boundary with
+  local-root resource allocation and pre-bound listeners; every child
+  controller and broker is a separate parent-spawned, pidfd-supervised
+  non-PID1 process born in its declared cgroup leaf, while child brokers have
+  dedicated uid/user/mount/network namespaces, no initial-namespace
+  capabilities, and FD/lease-only delegated access;
+- every dynamic path uses independently derived SHA-256 short
+  realm/workload/provider/role IDs over the printable-ASCII grammar with
+  pure-Nix/Rust vector parity and the evaluation budget; every expanded socket
+  row has a bidirectionally complete generated length/ownership proof; and only
+  the declared manager/broker creates it;
+- d2b-userd, GNOME Keyring, TPM2 scoped exports, and host-local realm key
+  lifecycle work from Niri, direct TTY backend, graphical prompt, and
+  unattended `$CREDENTIALS_DIRECTORY` delivery with the documented
+  cryptographic, local-root PID1, and parent-spawned child isolation split, and
+  pre-reset preparation produces one authenticated absence/revocation receipt
+  for every configured UID without reset-mode Secret Service access;
+- guest identity rejects copied/stale runtime state through exact
+  runtime/transport/generation/boot-nonce binding, and file-backed swtpm never
+  advertises controller-host capability;
+- every v2 host configuration explicitly sets
+  `d2b.acceptDestructiveV2Cutover = true`, omission/false fails before reset
+  generation, and no `mkRemovedOptionModule` or other old-option tombstone
+  exists;
+- all d2b 1.x code, options, protocols, crates, state, paths, tests, aliases,
+  tombstones, wrappers, and current shipped docs are gone, except historical
+  ADR and released-changelog records that cannot act as input;
+- `d2b-client-toolkit`, `d2b-provider-toolkit`, `d2b-wlterm`,
+  `d2b-wlcontrol`, and the WeezTerm seam are v2-only;
+- W2/W5/W6/W7/W9 documentation ownership is complete, W10 has closed the full
+  current Diataxis rewrite/removal audit, and W12 has published the destructive
+  release and migration guidance before release;
+- every wave has all required tests and a 10/10 immutable-tree panel seal, and
+  history-only evidence reuse occurs only after identical-content `xtask`
+  proof plus rerun CI; seal, panel, and validation artifacts remain external to
+  the sealed Git tree;
+- the physical host has completed the confirmed live-user deletion/revocation
+  phase and exact receipt gate, booted the persistent reset generation,
+  locked/inhibited/quiescent, mount-refusing, recursively fd-relative reset with
+  no Secret Service access and no backup, booted final v2 only after receipt,
+  fsync, and absence proof, and been validated on the private integrated
+  branch;
+- the final sealed production source/configuration/schema/test set and release
+  closure contain only generic current-anchor reset logic and no private
+  outlier manifest/literals, and the host is pinned to merged d2b 2.0.0
+  releases.
 
 ## Consequences
 
 ### Positive
 
-- Gateway VMs become ordinary workloads with a precise role.
-- Provider crates sort by authority type and expose one recognizable interface
-  and conformance contract.
-- Existing contract ownership is preserved: provider implementations and
-  traits share one serialized DTO/schema source in `d2b-contracts`.
-- Unix, vsock, direct-network, and Azure Relay connectivity share one byte
-  transport contract without sharing authentication semantics.
-- Noise-authenticated ComponentSession and ttrpc/protobuf services replace
-  duplicated framing, hello, authentication, and request-correlation code.
-- Local and remote realm controllers use one configuration and protocol model.
-- Controller hosting lifecycle cannot become self-referential.
-- Provider, transport, session, and controller responsibilities have explicit
-  credential and authority boundaries.
-- Nested realms can share one transport fabric without forcing stream bytes
-  through every controller.
-- The existing route-shortcut policy engine remains useful and gains a
-  provider-neutral transport binding.
-- One physical FIDO key can serve multiple work VMs while each retains an
-  independent Entra session.
+- One session/authentication/limit/attachment model replaces many bespoke
+  protocol stacks.
+- Provider authority becomes explicit and production behavior is testable
+  through common registries and conformance.
+- Realm boundaries become literal process, privilege, identity, state, audit,
+  and resource boundaries.
+- Dynamic paths are short, deterministic, collision-checked, and independent of
+  user-controlled names.
+- User interaction, unattended credentials, provider credentials, guest keys,
+  and realm keys have distinct owners.
+- Client and provider toolkit distributions consume canonical in-tree source
+  instead of duplicating contracts.
 
 ### Negative
 
-- Provider configuration becomes more explicit and requires migration from the
-  current inert `providers` records.
-- The workspace-wide provider rename is intentionally disruptive and must update
-  every manifest, Nix build, policy gate, and documentation reference together.
-- Component-session migration touches public daemon, realm-peer, guest-control,
-  codec, mux, generated protobuf, and error contracts and therefore requires a
-  coordinated versioned cutover.
-- Noise key enrollment and rotation become new persistent identity lifecycle
-  responsibilities.
-- Remote controllers need a parent-owned provider executor even after
-  enrollment.
-- Direct workload shortcuts require transport-capable guest agents and scoped
-  transport identities.
-- Shared-transport revocation and audit are more complex than hop-by-hop byte
-  forwarding.
-- A controller requiring interactive Entra renewal may temporarily block
-  provider operations even while the realm itself remains reachable.
+- Every d2b workload disk, TPM identity, key, token, cache, audit record, and
+  persistent session is destroyed once.
+- There is no rollback to d2b 1.x after the physical-host reset.
+- Cutover cannot select reset mode until every configured user has an available
+  unlocked session and completes the destructive receipt-producing preparation.
+- The first implementation touches nearly every crate, Nix surface, IPC path,
+  sibling repository, and host integration.
+- Multiple host-local realm brokers require a carefully verified local-root
+  allocator, parent-spawn path, pidfd supervisor, and cgroup delegation.
+- Universal encrypted local sessions and exact FD validation add implementation
+  complexity and memory/latency overhead.
+- Provider and toolkit APIs intentionally break at 2.0.
 
-## Alternatives considered
+## Rejected alternatives
 
-### Keep provider crates named by vendor or product only
+### Retain a compatibility release
 
-Rejected. Names such as `d2b-provider-aca`, `d2b-provider-relay`, and
-`d2b-provider-azure` do not reveal whether the crate executes workloads,
-provisions infrastructure, owns credentials, or transports bytes. Type-first
-names make authority visible in workspace listings and dependency review.
+Rejected. A parser, tombstone, alias, state reader, wrapper, or mixed protocol
+would preserve the old authority boundary in production and make deletion
+unverifiable.
 
-### Use one universal provider trait with optional methods
+### Use `mkRemovedOptionModule` for friendlier old-option errors
 
-Rejected. A catch-all interface would allow unsupported methods to accumulate,
-blur authority boundaries, and make capability claims difficult to verify. A
-small common `Provider` base plus mandatory primary-type interfaces preserves
-shared status/error semantics without pretending every provider can perform
-every operation.
+Rejected. `lib.mkRemovedOptionModule` is a tombstone: it keeps the old option
+path executable specifically so it can recognize and diagnose that path. D2b
+2.0 deliberately leaves old paths undeclared, accepts the generic Nix
+unknown-option error, and puts all cutover guidance in release and migration
+documentation.
 
-### Name the interface crate `d2b-provider-api`
+### Preserve disks, TPM state, or keys offline
 
-Rejected. The suffix is not used for equivalent Rust crate boundaries in this
-repository and adds no information beyond the `provider` domain noun. The
-serialized API is already named `d2b-contracts`; `d2b-provider` is the
-in-process provider trait surface.
+Rejected. The old state would remain a rollback dependency and an untested
+import temptation. The accepted recovery posture is build first, reset once,
+and repair forward.
 
-### Put async provider traits directly in `d2b-contracts`
+### Keep broker and helper protocols specialized
 
-Rejected. `d2b-contracts` owns serialized, versioned data shared across process
-and crate boundaries. Async trait objects, typed registries, and runtime error
-wrappers are an in-process Rust plug-in API with different evolution and
-dependency requirements. Keeping those traits in `d2b-provider` prevents
-Tokio/runtime concerns from becoming part of the wire-contract layer while
-still requiring every trait method to consume and return canonical
-`d2b-contracts` types.
+Rejected. Locality and seqpacket FD semantics are transport capabilities, not a
+reason to retain unauthenticated or differently framed d2b protocols.
 
-### Use 9P as the component API
+### Use one host-global broker with realm tags
 
-Rejected as the authoritative control protocol. 9P supplies bounded binary
-messages, version/msize negotiation, concurrent request tags, `Tflush`
-cancellation, and authentication fids, but its semantic model is
-attach/walk/open/read/write/clunk over a file tree. `Tauth` deliberately leaves
-the authentication exchange unspecified, and 9P supplies no encryption,
-realm/node/workload identity, method-derived capability policy, idempotency,
-typed operation errors, or native event/stream semantics.
+Rejected. A realm tag inside one privileged process does not provide the
+process, socket, state, audit, and delegated-resource boundaries selected by
+ADR 0043.
 
-A future read-only or tightly constrained filesystem projection of d2b status,
-logs, or artifacts may use 9P. Such a projection is a client of typed d2b
-services and never becomes repair or authorization authority.
+### Put every provider in-process
 
-### Use gRPC over HTTP/2
+Rejected. Third-party and credential-owning implementations would enter the
+controller TCB and collapse workload credential boundaries.
 
-Rejected for the internal component baseline. gRPC provides mature streaming,
-flow control, deadlines, cancellation, metadata, and mTLS, but requires the
-HTTP/2 protocol stack. Carrying HTTP/2 inside Cloud-Hypervisor-vsock and Azure
-Relay streams would duplicate d2b transport/session/mux concerns and increase
-dependency and parser attack surface. A future external API gateway may expose
-gRPC without changing the internal component session.
+### Put every provider out-of-process
 
-### Use Cap'n Proto RPC
+Rejected. It adds process/session overhead to trusted local adapters without
+creating a useful security boundary. The same trait and conformance contract
+supports both placements.
 
-Rejected for this cutover. Cap'n Proto supports arbitrary streams,
-capability-secure object references, multiplexing, and promise pipelining, but
-adopting its distributed-object model would redesign d2b authorization around
-delegable connection-scoped object capabilities. Its automatic direct
-third-party connectivity also requires constraints beyond the selected strict
-realm tree. The current operation/idempotency/audit model remains canonical.
+### Return credentials through the provider RPC
 
-### Use the full libp2p or SSH stack
+Rejected. Secret-bearing RPC would make controllers, session buffers, logs,
+crash state, and unrelated adapters part of the credential boundary. Only a
+co-located opaque lease is supported.
 
-Rejected. Both provide proven layered transport authentication and stream
-multiplexing, but their product models are broader than d2b's requirements.
-Libp2p brings swarm, peer discovery, multiaddress, and optional NAT-traversal
-concepts that conflict with strict realm-tree routing. SSH brings user-login,
-shell, exec, and generic forwarding semantics that d2b explicitly excludes from
-its control plane. D2b follows the useful transport -> Noise/TLS -> protocol
-negotiation -> mux layering without adopting either runtime.
+### Use an embedded state database
 
-### Use ttrpc without ComponentSession
+Rejected. The state is small, authority-partitioned, and benefits from
+human-inspectable bounded records. One shared atomic JSON library plus segmented
+audit is sufficient and keeps repair ownership explicit.
 
-Rejected. Ttrpc intentionally targets reliable low-latency process connections
-and omits authentication, handshake, ping/reset, network recovery, and flow
-control. It is selected only as the typed control-RPC framing and service layer
-inside an authenticated, bounded ComponentSession.
+### Advertise Azure VM as experimental production support
 
-### Keep gateway VMs as a separate object
-
-Rejected. It duplicates workload lifecycle, runtime-provider, component,
-network, and status configuration. The special behavior is the controller role,
-not the VM kind.
-
-### Declare the controller workload inside the realm it controls
-
-Rejected. The realm controller would be required to start the workload that
-must start the controller. Parent ownership provides an acyclic bootstrap and a
-clear infrastructure repair owner.
-
-### Let a controller manage its own cloud VM
-
-Rejected. Loss or corruption of that controller would also remove the only
-authority able to inspect or replace its substrate. Parent-owned infrastructure
-providers preserve recovery authority.
-
-### Store Entra, provider, or Relay credentials on the physical host
-
-Rejected. This violates the realm credential boundary and ADR 0043's rule that
-the host control plane does not hold work/provider credentials.
-
-### Forward one VM's Entra token cache to other work VMs
-
-Rejected. Token forwarding collapses execution identities and turns the
-controller into a credential vending service. Each workload authenticates
-independently or uses a provider-managed workload identity.
-
-### Send every nested stream through every realm controller
-
-Rejected as the only data path. Controllers remain policy decision points, but
-forcing them into the byte path adds latency, bandwidth cost, and cascading
-failure without strengthening an already-authorized end-to-end stream.
-
-### Treat shared transport membership as authorization
-
-Rejected. Transport credentials establish transport access only. Realm keys,
-controller generations, tree policy, operation capabilities, and scoped
-shortcut grants remain authoritative.
-
-### Add a generic network tunnel for nested realms
-
-Rejected. D2b routes semantic operations and named streams, not arbitrary
-cross-realm IP traffic. Shared-fabric shortcuts are operation-scoped and do not
-create a VPN or alternate realm topology.
+Rejected. Schema and fake-SDK conformance do not prove live provisioning,
+credential, adoption, restart, or remote-controller safety. The initial v2
+capability remains unadvertised.

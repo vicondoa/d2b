@@ -1,6 +1,6 @@
 # 0015. Daemon-only clean break (v1.0)
 
-- Status: Accepted
+- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
 - Date: 2026-05-31
 - Wave: P6
 - Plan slice: §"Phase 6: clean break — daemon-only end-state", docs-4

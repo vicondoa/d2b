@@ -1,6 +1,6 @@
 # ADR 0042: d2b clipboard authority and picker split
 
-- Status: Accepted
+- Status: Superseded by [ADR 0045](0045-provider-and-transport-framework.md)
 - Date: 2026-06-28
 - Related: ADR 0015 (daemon-only clean break), ADR 0023
   (runner-role lifecycle matrix), ADR 0025 (host-jailed Wayland filter

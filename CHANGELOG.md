@@ -10,6 +10,14 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
+  no-backup reset, universal authenticated ComponentSession IPC, eleven typed
+  provider authorities, literal per-realm controller/broker boundaries,
+  short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
+  coordinated toolkit cutover, and immutable-tree delivery seals.
+
 ### Fixed
 
 - Made unsafe-local helper FD cleanup tests track the original kernel object so
