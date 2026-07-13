@@ -44,6 +44,9 @@ pub enum StateContractError {
     EmptyInventory,
     DuplicateResourceId,
     DuplicateLockId,
+    DuplicateIdentityScope,
+    InventoryScopeMismatch,
+    MissingParentScope,
     MissingMandatoryResource,
     DuplicateMandatoryResource,
     ScopeCategoryMismatch,
@@ -59,6 +62,11 @@ pub enum StateContractError {
     LeaseExpired,
     RestartEvidenceIncomplete,
     RestartAmbiguous,
+    DiscoveryTimestampInvalid,
+    DiscoveryFuture,
+    DiscoveryStale,
+    CleanupLockNotHeld,
+    CleanupOwnershipEpochMismatch,
     CleanupWithoutOwnerAbsenceProof,
     InvalidAtomicTransition,
     SuccessBeforeParentFsync,
@@ -86,6 +94,11 @@ impl fmt::Display for StateContractError {
             Self::EmptyInventory => "state inventory is empty",
             Self::DuplicateResourceId => "duplicate storage resource id",
             Self::DuplicateLockId => "duplicate synchronization lock id",
+            Self::DuplicateIdentityScope => "duplicate identity scope",
+            Self::InventoryScopeMismatch => {
+                "inventory scopes differ from trusted configured scopes"
+            }
+            Self::MissingParentScope => "configured identity scope is missing a required parent",
             Self::MissingMandatoryResource => "mandatory storage resource is missing",
             Self::DuplicateMandatoryResource => "mandatory storage resource is duplicated",
             Self::ScopeCategoryMismatch => "storage category and identity scope differ",
@@ -101,6 +114,11 @@ impl fmt::Display for StateContractError {
             Self::LeaseExpired => "lease is expired or revoked",
             Self::RestartEvidenceIncomplete => "restart evidence is incomplete",
             Self::RestartAmbiguous => "restart observation is ambiguous",
+            Self::DiscoveryTimestampInvalid => "restart discovery timestamps are invalid",
+            Self::DiscoveryFuture => "restart discovery is from the future",
+            Self::DiscoveryStale => "restart discovery is stale",
+            Self::CleanupLockNotHeld => "cleanup ownership lock is not held",
+            Self::CleanupOwnershipEpochMismatch => "cleanup ownership epoch differs",
             Self::CleanupWithoutOwnerAbsenceProof => "cleanup lacks exact owner-absence proof",
             Self::InvalidAtomicTransition => "invalid atomic write phase transition",
             Self::SuccessBeforeParentFsync => {
@@ -264,6 +282,29 @@ impl<'de> Deserialize<'de> for Generation {
     {
         let value = u64::deserialize(deserializer)?;
         Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct OwnershipEpoch(Generation);
+
+impl OwnershipEpoch {
+    pub fn new(value: u64) -> Result<Self, StateContractError> {
+        Ok(Self(Generation::new(value)?))
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for OwnershipEpoch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u64::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -712,6 +753,10 @@ pub const MANDATORY_RESOURCE_CATALOG: [MandatoryResourceSpec; 10] = [
 ];
 
 impl StorageInventory {
+    /// Validates only the inventory's self-contained structure.
+    ///
+    /// Completeness is configuration-relative and requires
+    /// [`Self::validate_complete`] with trusted expected scopes.
     pub fn validate(&self) -> Result<(), StateContractError> {
         if self.schema_generation != STATE_SCHEMA_GENERATION {
             return Err(StateContractError::UnsupportedSchemaGeneration);
@@ -722,15 +767,12 @@ impl StorageInventory {
         if self.resources.len() > MAX_INVENTORY_ROWS {
             return Err(StateContractError::BoundExceeded);
         }
-        if self.applicable_scopes.is_empty()
-            || self.applicable_scopes.len() > MAX_INVENTORY_ROWS
-            || !self.applicable_scopes.contains(&IdentityScope::LocalRoot)
-        {
-            return Err(StateContractError::MissingMandatoryResource);
+        if self.applicable_scopes.is_empty() || self.applicable_scopes.len() > MAX_INVENTORY_ROWS {
+            return Err(StateContractError::EmptyInventory);
         }
         let applicable_scopes = self.applicable_scopes.iter().collect::<BTreeSet<_>>();
         if applicable_scopes.len() != self.applicable_scopes.len() {
-            return Err(StateContractError::DuplicateMandatoryResource);
+            return Err(StateContractError::DuplicateIdentityScope);
         }
 
         let mut ids = BTreeSet::new();
@@ -766,12 +808,34 @@ impl StorageInventory {
                 }
             }
         }
-        self.validate_mandatory_catalog()?;
         Ok(())
     }
 
-    fn validate_mandatory_catalog(&self) -> Result<(), StateContractError> {
-        for scope in &self.applicable_scopes {
+    pub fn validate_complete(
+        &self,
+        expected_scopes: &[IdentityScope],
+    ) -> Result<(), StateContractError> {
+        self.validate()?;
+        if expected_scopes.is_empty() || expected_scopes.len() > MAX_INVENTORY_ROWS {
+            return Err(StateContractError::InventoryScopeMismatch);
+        }
+        let expected = expected_scopes.iter().collect::<BTreeSet<_>>();
+        if expected.len() != expected_scopes.len() {
+            return Err(StateContractError::DuplicateIdentityScope);
+        }
+        validate_scope_parents(&expected)?;
+        let declared = self.applicable_scopes.iter().collect::<BTreeSet<_>>();
+        if declared != expected {
+            return Err(StateContractError::InventoryScopeMismatch);
+        }
+        self.validate_mandatory_catalog(expected_scopes)
+    }
+
+    fn validate_mandatory_catalog(
+        &self,
+        expected_scopes: &[IdentityScope],
+    ) -> Result<(), StateContractError> {
+        for scope in expected_scopes {
             let kind = match scope {
                 IdentityScope::LocalRoot => MandatoryScopeKind::LocalRoot,
                 IdentityScope::Realm { .. } => MandatoryScopeKind::Realm,
@@ -801,6 +865,42 @@ impl StorageInventory {
         }
         Ok(())
     }
+}
+
+fn validate_scope_parents(expected: &BTreeSet<&IdentityScope>) -> Result<(), StateContractError> {
+    if !expected.contains(&IdentityScope::LocalRoot) {
+        return Err(StateContractError::MissingParentScope);
+    }
+    for scope in expected {
+        let realm_parent = match scope {
+            IdentityScope::Realm { .. } | IdentityScope::LocalRoot => None,
+            IdentityScope::Workload { realm_id, .. }
+            | IdentityScope::Provider { realm_id, .. }
+            | IdentityScope::Role { realm_id, .. } => Some(IdentityScope::Realm {
+                realm_id: realm_id.clone(),
+            }),
+        };
+        if let Some(realm_parent) = realm_parent
+            && !expected.contains(&realm_parent)
+        {
+            return Err(StateContractError::MissingParentScope);
+        }
+        if let IdentityScope::Role {
+            realm_id,
+            workload_id,
+            ..
+        } = scope
+        {
+            let workload_parent = IdentityScope::Workload {
+                realm_id: realm_id.clone(),
+                workload_id: workload_id.clone(),
+            };
+            if !expected.contains(&workload_parent) {
+                return Err(StateContractError::MissingParentScope);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_category_scope(resource: &StorageResource) -> Result<(), StateContractError> {
@@ -1072,6 +1172,8 @@ pub struct RunnerEvidence {
     pub configuration_fingerprint: Digest,
     pub configuration: EvidenceVerdict,
     pub config_generation: Generation,
+    pub runner_generation: Generation,
+    pub ownership_epoch: OwnershipEpoch,
     pub generation: EvidenceVerdict,
 }
 
@@ -1085,6 +1187,8 @@ impl RunnerEvidence {
             && self.executable_fingerprint == target.executable_fingerprint
             && self.configuration_fingerprint == target.configuration_fingerprint
             && self.config_generation == target.config_generation
+            && self.runner_generation == target.runner_generation
+            && self.ownership_epoch == target.ownership_epoch
             && [
                 self.identity,
                 self.cgroup_membership,
@@ -1096,8 +1200,17 @@ impl RunnerEvidence {
             .all(|verdict| verdict == EvidenceVerdict::Match)
     }
 
-    fn proves_absence(&self) -> bool {
+    fn proves_absence_for(&self, target: &RunnerCleanupTarget) -> bool {
         self.candidate_count == 0
+            && self.realm_id == target.realm_id
+            && self.workload_id == target.workload_id
+            && self.role_id == target.role_id
+            && self.cgroup_identity == target.cgroup_identity
+            && self.executable_fingerprint == target.executable_fingerprint
+            && self.configuration_fingerprint == target.configuration_fingerprint
+            && self.config_generation == target.config_generation
+            && self.runner_generation == target.runner_generation
+            && self.ownership_epoch == target.ownership_epoch
             && [
                 self.identity,
                 self.cgroup_membership,
@@ -1120,6 +1233,8 @@ pub struct RunnerAdoptionTarget {
     pub cgroup_identity: Digest,
     pub executable_fingerprint: Digest,
     pub configuration_fingerprint: Digest,
+    pub runner_generation: Generation,
+    pub ownership_epoch: OwnershipEpoch,
 }
 
 impl RunnerAdoptionTarget {
@@ -1144,8 +1259,12 @@ pub struct RunnerObservation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceEvidence {
+    pub observation_id: ResourceId,
     pub resource_id: ResourceId,
     pub scope: IdentityScope,
+    pub configuration_fingerprint: Digest,
+    pub resource_generation: Generation,
+    pub ownership_epoch: OwnershipEpoch,
     pub presence: EvidenceVerdict,
     pub owner_identity: EvidenceVerdict,
     pub ownership: EvidenceVerdict,
@@ -1168,17 +1287,22 @@ impl ResourceEvidence {
         .all(|verdict| verdict == EvidenceVerdict::Match)
     }
 
-    fn proves_absence(&self) -> bool {
-        [
-            self.presence,
-            self.owner_identity,
-            self.ownership,
-            self.configuration,
-            self.generation,
-            self.lease,
-        ]
-        .into_iter()
-        .all(|verdict| verdict == EvidenceVerdict::Missing)
+    fn proves_absence_for(&self, target: &ResourceCleanupTarget) -> bool {
+        self.resource_id == target.resource_id
+            && self.scope == target.scope
+            && self.configuration_fingerprint == target.configuration_fingerprint
+            && self.resource_generation == target.resource_generation
+            && self.ownership_epoch == target.ownership_epoch
+            && [
+                self.presence,
+                self.owner_identity,
+                self.ownership,
+                self.configuration,
+                self.generation,
+                self.lease,
+            ]
+            .into_iter()
+            .all(|verdict| verdict == EvidenceVerdict::Missing)
     }
 }
 
@@ -1187,6 +1311,7 @@ impl ResourceEvidence {
 pub struct RestartDiscovery {
     pub discovery_id: ResourceId,
     pub config_generation: Generation,
+    pub issued_at_unix_ms: SafeJsonInteger,
     pub completed_at_unix_ms: SafeJsonInteger,
     #[schemars(length(max = 4096))]
     pub runners: Vec<RunnerObservation>,
@@ -1204,48 +1329,108 @@ impl RestartDiscovery {
         Ok(())
     }
 
-    pub fn prove_owner_absence(
+    fn validate_freshness(&self, freshness: DiscoveryFreshness) -> Result<(), StateContractError> {
+        let issued = self.issued_at_unix_ms.get();
+        let completed = self.completed_at_unix_ms.get();
+        let now = freshness.trusted_now_unix_ms.get();
+        let max_age = freshness.max_age_ms.get();
+        if issued == 0 || completed == 0 || max_age == 0 || completed < issued {
+            return Err(StateContractError::DiscoveryTimestampInvalid);
+        }
+        if issued > now || completed > now {
+            return Err(StateContractError::DiscoveryFuture);
+        }
+        if now - issued > max_age {
+            return Err(StateContractError::DiscoveryStale);
+        }
+        Ok(())
+    }
+
+    pub fn prove_owner_absence<G: CleanupLockGuard + ?Sized>(
         &self,
         target: CleanupTarget,
+        freshness: DiscoveryFreshness,
+        guard: &G,
     ) -> Result<OwnerAbsenceProof, StateContractError> {
         self.validate_bounds()?;
-        if self.completed_at_unix_ms.get() == 0 {
-            return Err(StateContractError::RestartEvidenceIncomplete);
-        }
+        self.validate_freshness(freshness)?;
+        validate_cleanup_guard(self, &target, guard)?;
 
-        let mut matched = false;
-        for runner in &self.runners {
-            if target.includes_scope(&runner.scope) {
-                matched = true;
-                if !runner.evidence.proves_absence() {
+        let (observation_id, observation_class) = match &target {
+            CleanupTarget::Runner { runner } => {
+                let scope = runner.scope();
+                let target_class = self
+                    .runners
+                    .iter()
+                    .filter(|observation| observation.scope == scope)
+                    .collect::<Vec<_>>();
+                if target_class.len() > 1 {
+                    return Err(StateContractError::RestartAmbiguous);
+                }
+                if target_class
+                    .iter()
+                    .any(|observation| observation.evidence.candidate_count != 0)
+                {
                     return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
                 }
+                let Some(observation) = target_class
+                    .into_iter()
+                    .find(|observation| observation.evidence.proves_absence_for(runner))
+                else {
+                    return Err(StateContractError::RestartEvidenceIncomplete);
+                };
+                (
+                    observation.observation_id.clone(),
+                    AbsenceObservationClass::Runner,
+                )
             }
-        }
-        for resource in &self.resources {
-            let target_matches = match &target {
-                CleanupTarget::Resource { resource_id } => &resource.resource_id == resource_id,
-                _ => target.includes_scope(&resource.scope),
-            };
-            if target_matches {
-                matched = true;
-                if !resource.proves_absence() {
+            CleanupTarget::Resource { resource } => {
+                let target_class = self
+                    .resources
+                    .iter()
+                    .filter(|observation| observation.resource_id == resource.resource_id)
+                    .collect::<Vec<_>>();
+                if target_class.len() > 1 {
+                    return Err(StateContractError::RestartAmbiguous);
+                }
+                if target_class
+                    .iter()
+                    .any(|observation| observation.presence != EvidenceVerdict::Missing)
+                {
                     return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
                 }
+                let Some(observation) = target_class
+                    .into_iter()
+                    .find(|observation| observation.proves_absence_for(resource))
+                else {
+                    return Err(StateContractError::RestartEvidenceIncomplete);
+                };
+                (
+                    observation.observation_id.clone(),
+                    AbsenceObservationClass::Resource,
+                )
             }
-        }
-        if !matched {
-            return Err(StateContractError::RestartEvidenceIncomplete);
-        }
+        };
 
         Ok(OwnerAbsenceProof {
             discovery_id: self.discovery_id.clone(),
             config_generation: self.config_generation,
+            issued_at_unix_ms: self.issued_at_unix_ms,
             completed_at_unix_ms: self.completed_at_unix_ms,
             target,
+            observation_id,
+            observation_class,
+            lock_id: guard.lock_id().clone(),
+            ownership_epoch: guard.ownership_epoch(),
             evidence: AbsenceEvidence::CompletedDiscovery,
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscoveryFreshness {
+    pub trusted_now_unix_ms: SafeJsonInteger,
+    pub max_age_ms: SafeJsonInteger,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1301,6 +1486,47 @@ pub enum AbsenceEvidence {
     CompletedDiscovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AbsenceObservationClass {
+    Runner,
+    Resource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerCleanupTarget {
+    pub realm_id: RealmId,
+    pub workload_id: WorkloadId,
+    pub role_id: RoleId,
+    pub cgroup_identity: Digest,
+    pub executable_fingerprint: Digest,
+    pub configuration_fingerprint: Digest,
+    pub config_generation: Generation,
+    pub runner_generation: Generation,
+    pub ownership_epoch: OwnershipEpoch,
+}
+
+impl RunnerCleanupTarget {
+    fn scope(&self) -> IdentityScope {
+        IdentityScope::Role {
+            realm_id: self.realm_id.clone(),
+            workload_id: self.workload_id.clone(),
+            role_id: self.role_id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceCleanupTarget {
+    pub resource_id: ResourceId,
+    pub scope: IdentityScope,
+    pub configuration_fingerprint: Digest,
+    pub resource_generation: Generation,
+    pub ownership_epoch: OwnershipEpoch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",
@@ -1309,54 +1535,15 @@ pub enum AbsenceEvidence {
     deny_unknown_fields
 )]
 pub enum CleanupTarget {
-    Resource {
-        resource_id: ResourceId,
-    },
-    Role {
-        realm_id: RealmId,
-        workload_id: WorkloadId,
-        role_id: RoleId,
-    },
-    Workload {
-        realm_id: RealmId,
-        workload_id: WorkloadId,
-    },
+    Resource { resource: ResourceCleanupTarget },
+    Runner { runner: RunnerCleanupTarget },
 }
 
 impl CleanupTarget {
-    fn includes_scope(&self, scope: &IdentityScope) -> bool {
-        match (self, scope) {
-            (Self::Resource { .. }, _) => false,
-            (
-                Self::Role {
-                    realm_id: target_realm,
-                    workload_id: target_workload,
-                    role_id: target_role,
-                },
-                IdentityScope::Role {
-                    realm_id,
-                    workload_id,
-                    role_id,
-                },
-            ) => {
-                target_realm == realm_id && target_workload == workload_id && target_role == role_id
-            }
-            (
-                Self::Workload {
-                    realm_id: target_realm,
-                    workload_id: target_workload,
-                },
-                IdentityScope::Workload {
-                    realm_id,
-                    workload_id,
-                }
-                | IdentityScope::Role {
-                    realm_id,
-                    workload_id,
-                    ..
-                },
-            ) => target_realm == realm_id && target_workload == workload_id,
-            _ => false,
+    pub fn ownership_epoch(&self) -> OwnershipEpoch {
+        match self {
+            Self::Resource { resource } => resource.ownership_epoch,
+            Self::Runner { runner } => runner.ownership_epoch,
         }
     }
 }
@@ -1366,9 +1553,62 @@ impl CleanupTarget {
 pub struct OwnerAbsenceProof {
     pub discovery_id: ResourceId,
     pub config_generation: Generation,
+    pub issued_at_unix_ms: SafeJsonInteger,
     pub completed_at_unix_ms: SafeJsonInteger,
     pub target: CleanupTarget,
+    pub observation_id: ResourceId,
+    pub observation_class: AbsenceObservationClass,
+    pub lock_id: ResourceId,
+    pub ownership_epoch: OwnershipEpoch,
     pub evidence: AbsenceEvidence,
+}
+
+pub trait CleanupLockGuard {
+    fn lock_id(&self) -> &ResourceId;
+    fn target(&self) -> &CleanupTarget;
+    fn ownership_epoch(&self) -> OwnershipEpoch;
+    fn acquired_at_unix_ms(&self) -> SafeJsonInteger;
+    fn is_held(&self) -> bool;
+    fn owner_absent(&self) -> bool;
+}
+
+fn validate_cleanup_guard<G: CleanupLockGuard + ?Sized>(
+    discovery: &RestartDiscovery,
+    target: &CleanupTarget,
+    guard: &G,
+) -> Result<(), StateContractError> {
+    if !guard.is_held() || guard.target() != target {
+        return Err(StateContractError::CleanupLockNotHeld);
+    }
+    if guard.ownership_epoch() != target.ownership_epoch() {
+        return Err(StateContractError::CleanupOwnershipEpochMismatch);
+    }
+    if guard.acquired_at_unix_ms().get() > discovery.issued_at_unix_ms.get() {
+        return Err(StateContractError::CleanupLockNotHeld);
+    }
+    if !guard.owner_absent() {
+        return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
+    }
+    Ok(())
+}
+
+pub struct HeldCleanupAuthorization<'guard, G: CleanupLockGuard + ?Sized> {
+    guard: &'guard G,
+    target: &'guard CleanupTarget,
+}
+
+impl<G: CleanupLockGuard + ?Sized> HeldCleanupAuthorization<'_, G> {
+    pub fn target(&self) -> &CleanupTarget {
+        self.target
+    }
+
+    pub fn ownership_epoch(&self) -> OwnershipEpoch {
+        self.guard.ownership_epoch()
+    }
+
+    pub fn is_held(&self) -> bool {
+        self.guard.is_held()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1387,8 +1627,8 @@ pub enum AdoptionDecision {
         remediation: Remediation,
     },
     Cleanup {
-        target: CleanupTarget,
-        owner_absence_proof: OwnerAbsenceProof,
+        target: Box<CleanupTarget>,
+        owner_absence_proof: Box<OwnerAbsenceProof>,
     },
 }
 
@@ -1431,11 +1671,13 @@ impl RestartDecision {
         Ok(())
     }
 
-    pub fn validate_cleanup(
-        &self,
-        discovery: &RestartDiscovery,
+    pub fn validate_cleanup<'guard, G: CleanupLockGuard + ?Sized>(
+        &'guard self,
+        discovery: &'guard RestartDiscovery,
         expected_generation: Generation,
-    ) -> Result<(), StateContractError> {
+        freshness: DiscoveryFreshness,
+        guard: &'guard G,
+    ) -> Result<HeldCleanupAuthorization<'guard, G>, StateContractError> {
         let AdoptionDecision::Cleanup {
             target,
             owner_absence_proof,
@@ -1443,14 +1685,19 @@ impl RestartDecision {
         else {
             return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
         };
-        let expected = discovery.prove_owner_absence(target.clone())?;
+        let target = target.as_ref();
+        let owner_absence_proof = owner_absence_proof.as_ref();
+        let expected = discovery.prove_owner_absence(target.clone(), freshness, guard)?;
         if owner_absence_proof != &expected
             || owner_absence_proof.target != *target
             || owner_absence_proof.config_generation != expected_generation
+            || owner_absence_proof.ownership_epoch != guard.ownership_epoch()
+            || self.observation_id != owner_absence_proof.observation_id
         {
             return Err(StateContractError::CleanupWithoutOwnerAbsenceProof);
         }
-        Ok(())
+        validate_cleanup_guard(discovery, target, guard)?;
+        Ok(HeldCleanupAuthorization { guard, target })
     }
 }
 
@@ -2519,6 +2766,7 @@ pub struct StateStorageSyncAuditContract {
 }
 
 impl StateStorageSyncAuditContract {
+    /// Validates self-contained structure but does not claim inventory completeness.
     pub fn validate(&self) -> Result<(), StateContractError> {
         if self.schema_version != STATE_SCHEMA_VERSION {
             return Err(StateContractError::UnsupportedSchemaVersion);
@@ -2535,5 +2783,13 @@ impl StateStorageSyncAuditContract {
         self.storage.validate()?;
         self.synchronization.validate()?;
         self.audit.validate()
+    }
+
+    pub fn validate_complete(
+        &self,
+        expected_scopes: &[IdentityScope],
+    ) -> Result<(), StateContractError> {
+        self.validate()?;
+        self.storage.validate_complete(expected_scopes)
     }
 }

@@ -6,6 +6,7 @@ use d2b_contracts::{
 };
 use schemars::schema_for;
 use serde_json::{Value, json};
+use std::cell::Cell;
 
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const ONE_DIGEST: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -48,6 +49,28 @@ fn other_provider_id() -> ProviderId {
 
 fn other_role_id() -> RoleId {
     RoleId::parse("daaaaaaaaaaaaaaaaaaq").unwrap()
+}
+
+fn expected_scopes() -> Vec<IdentityScope> {
+    vec![
+        IdentityScope::LocalRoot,
+        IdentityScope::Realm {
+            realm_id: realm_id(),
+        },
+        IdentityScope::Workload {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+        },
+        IdentityScope::Provider {
+            realm_id: realm_id(),
+            provider_id: provider_id(),
+        },
+        IdentityScope::Role {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+            role_id: role_id(),
+        },
+    ]
 }
 
 fn digest(value: &str) -> Digest {
@@ -212,7 +235,9 @@ fn next_checkpoint(segment: &AuditSegment, previous: &AuditCheckpoint) -> AuditC
 #[test]
 fn fixture_is_complete_and_fingerprint_bound() {
     let contract = fixture();
-    contract.validate().expect("complete fixture validates");
+    contract
+        .validate_complete(&expected_scopes())
+        .expect("complete fixture validates");
     assert_eq!(
         contract.storage.resources.len(),
         MANDATORY_RESOURCE_CATALOG.len()
@@ -330,7 +355,7 @@ fn storage_requires_the_complete_mandatory_identity_multiset() {
         .resources
         .push(contract.storage.resources[0].clone());
     assert_eq!(
-        contract.storage.validate(),
+        contract.storage.validate_complete(&expected_scopes()),
         Err(StateContractError::DuplicateResourceId)
     );
 
@@ -338,7 +363,7 @@ fn storage_requires_the_complete_mandatory_identity_multiset() {
         let mut contract = fixture();
         contract.storage.resources.remove(omitted);
         assert_eq!(
-            contract.storage.validate(),
+            contract.storage.validate_complete(&expected_scopes()),
             Err(StateContractError::MissingMandatoryResource),
             "catalog row {omitted} must be mandatory"
         );
@@ -349,8 +374,77 @@ fn storage_requires_the_complete_mandatory_identity_multiset() {
     duplicate_key.resource_id = ResourceId::parse("different-resource-id").unwrap();
     contract.storage.resources.push(duplicate_key);
     assert_eq!(
-        contract.storage.validate(),
+        contract.storage.validate_complete(&expected_scopes()),
         Err(StateContractError::DuplicateMandatoryResource)
+    );
+}
+
+#[test]
+fn inventory_completeness_is_bound_to_trusted_expected_scopes_and_parents() {
+    let expected = expected_scopes();
+    fixture()
+        .storage
+        .validate_complete(&expected)
+        .expect("exact configured scopes and catalog rows pass");
+
+    let role_scope = expected.last().unwrap().clone();
+    let mut missing_scope = fixture().storage;
+    missing_scope
+        .applicable_scopes
+        .retain(|scope| scope != &role_scope);
+    missing_scope
+        .resources
+        .retain(|resource| resource.scope != role_scope);
+    missing_scope
+        .validate()
+        .expect("structural validation does not claim configured completeness");
+    assert_eq!(
+        missing_scope.validate_complete(&expected),
+        Err(StateContractError::InventoryScopeMismatch)
+    );
+
+    let mut foreign_scope = fixture().storage;
+    foreign_scope.applicable_scopes.push(IdentityScope::Realm {
+        realm_id: other_realm_id(),
+    });
+    foreign_scope
+        .validate()
+        .expect("a structurally valid declaration is not trusted configuration");
+    assert_eq!(
+        foreign_scope.validate_complete(&expected),
+        Err(StateContractError::InventoryScopeMismatch)
+    );
+
+    let realm_scope = IdentityScope::Realm {
+        realm_id: realm_id(),
+    };
+    let mut missing_parent = fixture().storage;
+    missing_parent
+        .applicable_scopes
+        .retain(|scope| scope != &realm_scope);
+    missing_parent
+        .resources
+        .retain(|resource| resource.scope != realm_scope);
+    let expected_without_parent = missing_parent.applicable_scopes.clone();
+    assert_eq!(
+        missing_parent.validate_complete(&expected_without_parent),
+        Err(StateContractError::MissingParentScope)
+    );
+
+    let mut duplicate_declared = fixture().storage;
+    duplicate_declared
+        .applicable_scopes
+        .push(IdentityScope::LocalRoot);
+    assert_eq!(
+        duplicate_declared.validate(),
+        Err(StateContractError::DuplicateIdentityScope)
+    );
+
+    let mut duplicate_expected = expected.clone();
+    duplicate_expected.push(IdentityScope::LocalRoot);
+    assert_eq!(
+        fixture().storage.validate_complete(&duplicate_expected),
+        Err(StateContractError::DuplicateIdentityScope)
     );
 }
 
@@ -583,6 +677,8 @@ fn restart_adoption_requires_exact_role_scoped_target_evidence() {
         cgroup_identity: digest(TWO_DIGEST),
         executable_fingerprint: digest(ZERO_DIGEST),
         configuration_fingerprint: digest(ONE_DIGEST),
+        runner_generation: Generation::new(4).unwrap(),
+        ownership_epoch: OwnershipEpoch::new(5).unwrap(),
     };
     let exact = RunnerObservation {
         observation_id: ResourceId::parse("runner-observation").unwrap(),
@@ -602,6 +698,8 @@ fn restart_adoption_requires_exact_role_scoped_target_evidence() {
             configuration_fingerprint: digest(ONE_DIGEST),
             configuration: EvidenceVerdict::Match,
             config_generation: Generation::new(3).unwrap(),
+            runner_generation: Generation::new(4).unwrap(),
+            ownership_epoch: OwnershipEpoch::new(5).unwrap(),
             generation: EvidenceVerdict::Match,
         },
     };
@@ -635,6 +733,12 @@ fn restart_adoption_requires_exact_role_scoped_target_evidence() {
     mismatches.push(mismatch);
     let mut mismatch = exact.clone();
     mismatch.evidence.config_generation = Generation::new(2).unwrap();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.runner_generation = Generation::new(3).unwrap();
+    mismatches.push(mismatch);
+    let mut mismatch = exact.clone();
+    mismatch.evidence.ownership_epoch = OwnershipEpoch::new(4).unwrap();
     mismatches.push(mismatch);
     let mut mismatch = exact.clone();
     mismatch.evidence.identity = EvidenceVerdict::Ambiguous;
@@ -704,95 +808,281 @@ impl TargetScopeForTest for RunnerAdoptionTarget {
     }
 }
 
-#[test]
-fn cleanup_requires_fresh_target_bound_completed_discovery_absence() {
-    let role_target = CleanupTarget::Role {
-        realm_id: realm_id(),
-        workload_id: workload_id(),
-        role_id: role_id(),
+impl TargetScopeForTest for RunnerCleanupTarget {
+    fn scope_for_test(&self) -> IdentityScope {
+        IdentityScope::Role {
+            realm_id: self.realm_id.clone(),
+            workload_id: self.workload_id.clone(),
+            role_id: self.role_id.clone(),
+        }
+    }
+}
+
+fn runner_cleanup_target() -> CleanupTarget {
+    CleanupTarget::Runner {
+        runner: RunnerCleanupTarget {
+            realm_id: realm_id(),
+            workload_id: workload_id(),
+            role_id: role_id(),
+            cgroup_identity: digest(TWO_DIGEST),
+            executable_fingerprint: digest(ZERO_DIGEST),
+            configuration_fingerprint: digest(ONE_DIGEST),
+            config_generation: Generation::new(3).unwrap(),
+            runner_generation: Generation::new(4).unwrap(),
+            ownership_epoch: OwnershipEpoch::new(5).unwrap(),
+        },
+    }
+}
+
+fn absent_runner(target: &CleanupTarget) -> RunnerObservation {
+    let CleanupTarget::Runner { runner } = target else {
+        unreachable!()
     };
-    let absent = RunnerObservation {
+    RunnerObservation {
         observation_id: ResourceId::parse("runner-observation").unwrap(),
+        scope: runner.scope_for_test(),
+        observed_pid: 0,
+        evidence: RunnerEvidence {
+            realm_id: runner.realm_id.clone(),
+            workload_id: runner.workload_id.clone(),
+            role_id: runner.role_id.clone(),
+            candidate_count: 0,
+            pidfd_persistence: PidfdPersistence::ProcessLocalNonPersistent,
+            identity: EvidenceVerdict::Missing,
+            cgroup_identity: runner.cgroup_identity.clone(),
+            cgroup_membership: EvidenceVerdict::Missing,
+            executable_fingerprint: runner.executable_fingerprint.clone(),
+            executable: EvidenceVerdict::Missing,
+            configuration_fingerprint: runner.configuration_fingerprint.clone(),
+            configuration: EvidenceVerdict::Missing,
+            config_generation: runner.config_generation,
+            runner_generation: runner.runner_generation,
+            ownership_epoch: runner.ownership_epoch,
+            generation: EvidenceVerdict::Missing,
+        },
+    }
+}
+
+fn absent_resource() -> ResourceEvidence {
+    ResourceEvidence {
+        observation_id: ResourceId::parse("resource-observation").unwrap(),
+        resource_id: ResourceId::parse("role-runtime").unwrap(),
         scope: IdentityScope::Role {
             realm_id: realm_id(),
             workload_id: workload_id(),
             role_id: role_id(),
         },
-        observed_pid: 0,
-        evidence: RunnerEvidence {
-            realm_id: realm_id(),
-            workload_id: workload_id(),
-            role_id: role_id(),
-            candidate_count: 0,
-            pidfd_persistence: PidfdPersistence::ProcessLocalNonPersistent,
-            identity: EvidenceVerdict::Missing,
-            cgroup_identity: digest(TWO_DIGEST),
-            cgroup_membership: EvidenceVerdict::Missing,
-            executable_fingerprint: digest(ZERO_DIGEST),
-            executable: EvidenceVerdict::Missing,
-            configuration_fingerprint: digest(ONE_DIGEST),
-            configuration: EvidenceVerdict::Missing,
-            config_generation: Generation::new(3).unwrap(),
-            generation: EvidenceVerdict::Missing,
-        },
-    };
+        configuration_fingerprint: digest(ONE_DIGEST),
+        resource_generation: Generation::new(4).unwrap(),
+        ownership_epoch: OwnershipEpoch::new(5).unwrap(),
+        presence: EvidenceVerdict::Missing,
+        owner_identity: EvidenceVerdict::Missing,
+        ownership: EvidenceVerdict::Missing,
+        configuration: EvidenceVerdict::Missing,
+        generation: EvidenceVerdict::Missing,
+        lease: EvidenceVerdict::Missing,
+    }
+}
+
+fn freshness(now: u64, max_age: u64) -> DiscoveryFreshness {
+    DiscoveryFreshness {
+        trusted_now_unix_ms: SafeJsonInteger::new(now).unwrap(),
+        max_age_ms: SafeJsonInteger::new(max_age).unwrap(),
+    }
+}
+
+struct TestCleanupGuard {
+    lock_id: ResourceId,
+    target: CleanupTarget,
+    ownership_epoch: OwnershipEpoch,
+    acquired_at_unix_ms: SafeJsonInteger,
+    held: Cell<bool>,
+    owner_absent: Cell<bool>,
+}
+
+impl TestCleanupGuard {
+    fn exact(target: CleanupTarget) -> Self {
+        Self {
+            lock_id: ResourceId::parse("cleanup-lock").unwrap(),
+            ownership_epoch: target.ownership_epoch(),
+            target,
+            acquired_at_unix_ms: SafeJsonInteger::new(19_800).unwrap(),
+            held: Cell::new(true),
+            owner_absent: Cell::new(true),
+        }
+    }
+}
+
+impl CleanupLockGuard for TestCleanupGuard {
+    fn lock_id(&self) -> &ResourceId {
+        &self.lock_id
+    }
+
+    fn target(&self) -> &CleanupTarget {
+        &self.target
+    }
+
+    fn ownership_epoch(&self) -> OwnershipEpoch {
+        self.ownership_epoch
+    }
+
+    fn acquired_at_unix_ms(&self) -> SafeJsonInteger {
+        self.acquired_at_unix_ms
+    }
+
+    fn is_held(&self) -> bool {
+        self.held.get()
+    }
+
+    fn owner_absent(&self) -> bool {
+        self.owner_absent.get()
+    }
+}
+
+#[test]
+fn cleanup_requires_exact_locked_fresh_target_specific_absence() {
+    let runner_target = runner_cleanup_target();
+    let absent = absent_runner(&runner_target);
     let discovery = RestartDiscovery {
         discovery_id: ResourceId::parse("discovery-1").unwrap(),
         config_generation: Generation::new(3).unwrap(),
+        issued_at_unix_ms: SafeJsonInteger::new(19_900).unwrap(),
         completed_at_unix_ms: SafeJsonInteger::new(20_000).unwrap(),
         runners: vec![absent.clone()],
         resources: vec![],
     };
-    let proof = discovery.prove_owner_absence(role_target.clone()).unwrap();
+    let guard = TestCleanupGuard::exact(runner_target.clone());
+    let current = freshness(20_050, 200);
+    let proof = discovery
+        .prove_owner_absence(runner_target.clone(), current, &guard)
+        .unwrap();
     let cleanup = RestartDecision {
         observation_id: absent.observation_id.clone(),
         ordering: RecoveryOrdering::RecoverBeforeCleanup,
         decision: AdoptionDecision::Cleanup {
-            target: role_target.clone(),
-            owner_absence_proof: proof.clone(),
+            target: Box::new(runner_target.clone()),
+            owner_absence_proof: Box::new(proof.clone()),
         },
     };
+    let authorization = cleanup
+        .validate_cleanup(&discovery, Generation::new(3).unwrap(), current, &guard)
+        .expect("only exact locked fresh absence authorizes cleanup");
+    assert_eq!(authorization.target(), &runner_target);
     assert_eq!(
-        cleanup.validate_cleanup(&discovery, Generation::new(3).unwrap()),
-        Ok(())
+        authorization.ownership_epoch(),
+        OwnershipEpoch::new(5).unwrap()
+    );
+    assert!(authorization.is_held());
+
+    assert_eq!(
+        cleanup
+            .validate_cleanup(&discovery, Generation::new(2).unwrap(), current, &guard,)
+            .err(),
+        Some(StateContractError::CleanupWithoutOwnerAbsenceProof)
+    );
+
+    assert_eq!(
+        discovery.prove_owner_absence(runner_target.clone(), freshness(20_500, 200), &guard),
+        Err(StateContractError::DiscoveryStale)
     );
     assert_eq!(
-        cleanup.validate_cleanup(&discovery, Generation::new(2).unwrap()),
-        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+        discovery.prove_owner_absence(runner_target.clone(), freshness(19_950, 200), &guard),
+        Err(StateContractError::DiscoveryFuture)
     );
+
     let mut newer_discovery = discovery.clone();
     newer_discovery.discovery_id = ResourceId::parse("discovery-2").unwrap();
     newer_discovery.completed_at_unix_ms = SafeJsonInteger::new(21_000).unwrap();
     assert_eq!(
-        cleanup.validate_cleanup(&newer_discovery, Generation::new(3).unwrap()),
-        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+        cleanup
+            .validate_cleanup(
+                &newer_discovery,
+                Generation::new(3).unwrap(),
+                freshness(21_050, 2_000),
+                &guard,
+            )
+            .err(),
+        Some(StateContractError::CleanupWithoutOwnerAbsenceProof)
     );
 
-    let wrong_target = RestartDecision {
-        observation_id: absent.observation_id.clone(),
-        ordering: RecoveryOrdering::RecoverBeforeCleanup,
-        decision: AdoptionDecision::Cleanup {
-            target: CleanupTarget::Workload {
-                realm_id: realm_id(),
-                workload_id: workload_id(),
-            },
-            owner_absence_proof: proof,
-        },
-    };
+    let mut resource_only = discovery.clone();
+    resource_only.runners.clear();
+    resource_only.resources.push(absent_resource());
     assert_eq!(
-        wrong_target.validate_cleanup(&discovery, Generation::new(3).unwrap()),
-        Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+        resource_only.prove_owner_absence(runner_target.clone(), current, &guard),
+        Err(StateContractError::RestartEvidenceIncomplete)
     );
 
-    for verdict in [EvidenceVerdict::Match, EvidenceVerdict::Ambiguous] {
-        let mut live_or_ambiguous = discovery.clone();
-        live_or_ambiguous.runners[0].evidence.candidate_count = 1;
-        live_or_ambiguous.runners[0].evidence.identity = verdict;
+    let mut missing_class = discovery.clone();
+    missing_class.runners.clear();
+    assert_eq!(
+        missing_class.prove_owner_absence(runner_target.clone(), current, &guard),
+        Err(StateContractError::RestartEvidenceIncomplete)
+    );
+
+    let mut mismatches = Vec::new();
+    let mut mismatch = discovery.clone();
+    mismatch.runners[0].evidence.role_id = other_role_id();
+    mismatches.push(mismatch);
+    let mut mismatch = discovery.clone();
+    mismatch.runners[0].evidence.configuration_fingerprint = digest(TWO_DIGEST);
+    mismatches.push(mismatch);
+    let mut mismatch = discovery.clone();
+    mismatch.runners[0].evidence.config_generation = Generation::new(2).unwrap();
+    mismatches.push(mismatch);
+    let mut mismatch = discovery.clone();
+    mismatch.runners[0].evidence.runner_generation = Generation::new(3).unwrap();
+    mismatches.push(mismatch);
+    let mut mismatch = discovery.clone();
+    mismatch.runners[0].evidence.ownership_epoch = OwnershipEpoch::new(4).unwrap();
+    mismatches.push(mismatch);
+    for mismatch in mismatches {
         assert_eq!(
-            live_or_ambiguous.prove_owner_absence(role_target.clone()),
-            Err(StateContractError::CleanupWithoutOwnerAbsenceProof)
+            mismatch.prove_owner_absence(runner_target.clone(), current, &guard),
+            Err(StateContractError::RestartEvidenceIncomplete)
         );
     }
+
+    let mut wrong_epoch_guard = TestCleanupGuard::exact(runner_target.clone());
+    wrong_epoch_guard.ownership_epoch = OwnershipEpoch::new(4).unwrap();
+    assert_eq!(
+        discovery.prove_owner_absence(runner_target.clone(), current, &wrong_epoch_guard),
+        Err(StateContractError::CleanupOwnershipEpochMismatch)
+    );
+
+    guard.owner_absent.set(false);
+    assert_eq!(
+        cleanup
+            .validate_cleanup(&discovery, Generation::new(3).unwrap(), current, &guard,)
+            .err(),
+        Some(StateContractError::CleanupWithoutOwnerAbsenceProof)
+    );
+    guard.owner_absent.set(true);
+
+    let resource = absent_resource();
+    let resource_target = CleanupTarget::Resource {
+        resource: ResourceCleanupTarget {
+            resource_id: resource.resource_id.clone(),
+            scope: resource.scope.clone(),
+            configuration_fingerprint: resource.configuration_fingerprint.clone(),
+            resource_generation: resource.resource_generation,
+            ownership_epoch: resource.ownership_epoch,
+        },
+    };
+    let resource_guard = TestCleanupGuard::exact(resource_target.clone());
+    assert_eq!(
+        discovery.prove_owner_absence(resource_target.clone(), current, &resource_guard),
+        Err(StateContractError::RestartEvidenceIncomplete),
+        "runner observations cannot cover a resource target"
+    );
+    let resource_discovery = RestartDiscovery {
+        runners: vec![],
+        resources: vec![resource],
+        ..discovery
+    };
+    resource_discovery
+        .prove_owner_absence(resource_target, current, &resource_guard)
+        .expect("exact resource-class observation passes for a resource target");
 }
 
 #[test]

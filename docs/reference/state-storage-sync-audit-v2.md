@@ -61,9 +61,17 @@ one of these mandatory categories:
 | `audit` | local-root or realm audit |
 | `projection` | regenerable status projection |
 
-`applicableScopes` is the closed identity set for one generated inventory. For
-each listed identity, the mandatory catalog requires exactly one matching
-category/location row:
+`applicableScopes` is the inventory's declared identity set, not completeness
+authority. The bundle/config caller supplies the trusted configured identity
+scope set to completeness validation. Both sets must be duplicate-free and
+exactly equal. The trusted set must include `local-root`, every realm parent for
+a workload or provider, and both the realm and workload parents for a role.
+Self-contained structural validation checks bounds, duplicates, resource
+references, policy shape, and authority binding, but does not claim the
+inventory is complete.
+
+For each identity in the trusted configured set, completeness validation
+requires exactly one matching category/location row:
 
 | Applicable scope | Mandatory category/location rows |
 | --- | --- |
@@ -73,13 +81,14 @@ category/location row:
 | provider | `provider` / `provider-state` |
 | role | `runtime` / `runtime-role` |
 
-An omitted row, duplicate category/location/identity key, undeclared scope, or
-duplicate applicable scope fails validation. A row has one opaque resource ID,
-kind, identity scope, logical location, creation/reconcile/repair/delete
-policy and authority, persistence and secret class, exact mode/group policy,
-and restart/adoption policy. There is exactly one inode owner and one repair
-authority, and they must match. A diagnostic projection cannot be a repair
-authority.
+An omitted scope with all of its rows, a foreign scope, a missing parent,
+duplicate scope, omitted row, duplicate category/location/identity key, or
+undeclared resource scope fails completeness validation. A row has one opaque
+resource ID, kind, identity scope, logical location,
+creation/reconcile/repair/delete policy and authority, persistence and secret
+class, exact mode/group policy, and restart/adoption policy. There is exactly
+one inode owner and one repair authority, and they must match. A diagnostic
+projection cannot be a repair authority.
 
 ## Authoritative JSON
 
@@ -111,10 +120,15 @@ quarantined with a closed reason and remediation.
 
 ## Restart and adoption
 
-Restart discovery records bounded runner and resource observations and a
-nonzero completion timestamp. Runner evidence carries the realm, workload, and
-role IDs plus candidate count, cgroup identity, executable fingerprint,
-configuration fingerprint, config generation, and verdicts for every value.
+Restart discovery records bounded, separate runner and resource observation
+classes plus nonzero issue and completion timestamps. A caller supplies a
+trusted current time and maximum age. Issue must not follow completion, neither
+timestamp may be in the future, and age is measured from issue; zero-age
+sentinels, stale snapshots, and future snapshots fail closed.
+
+Runner evidence carries the realm, workload, and role IDs plus candidate count,
+cgroup identity, executable fingerprint, configuration fingerprint, config
+generation, runner generation, ownership epoch, and verdicts for every value.
 Adoption compares all of them with one `RunnerAdoptionTarget`.
 `PidfdPersistence` has exactly one value:
 `process-local-non-persistent`. Pidfds are reopened and never serialized.
@@ -125,13 +139,24 @@ opened pidfd. Any missing, mismatched, or multiple-candidate evidence must be
 quarantined.
 
 Recovery ordering is fixed to `recover-before-cleanup`. There is no completion
-boolean that can authorize deletion. A completed `RestartDiscovery` derives an
-`OwnerAbsenceProof` bound to its discovery ID, completion timestamp, config
-generation, and exact cleanup target. Cleanup replays validation against that
-same discovery and the expected current generation. Any exact live,
-mismatched, or ambiguous matching observation prohibits cleanup; missing
-target observations are incomplete evidence. Cleanup targets only one declared
-resource, role, or workload. There is no realm-wide or runtime-root sweep.
+boolean that can authorize deletion. Runner cleanup targets bind exact
+realm/workload/role identity, cgroup identity, executable and configuration
+fingerprints, config and runner generations, and ownership epoch. Resource
+cleanup targets bind exact resource ID, identity scope, configuration
+fingerprint, resource generation, and ownership epoch. A resource observation
+cannot cover a runner target, a runner observation cannot cover a resource
+target, and a missing required observation class is incomplete evidence.
+
+Discovery begins only while a typed cleanup lock guard for the exact target and
+ownership epoch is already held. A fresh `RestartDiscovery` derives an
+`OwnerAbsenceProof` bound to its discovery ID, both timestamps, config
+generation, exact target, exact observation ID/class, lock ID, and ownership
+epoch. Cleanup replays validation against the same discovery, trusted time,
+expected current generation, and still-held guard. It rechecks owner absence
+and exact epoch, then returns a typed authorization borrowing the guard so the
+protection spans deletion. An owner that appears after discovery, a released
+lock, or an epoch change fails closed. Cleanup targets only one exact runner or
+resource; there is no workload-wide, realm-wide, or runtime-root sweep.
 
 ## Synchronization and leases
 

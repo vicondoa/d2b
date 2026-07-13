@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
   "schemaGeneration": 1,
-  "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contractFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "storage": {
     "schemaGeneration": 1,
-    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "contractFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "applicableScopes": [
       { "kind": "local-root" },
       { "kind": "realm", "realmId": "yl2hpmks5td5dkeso6qq" },
@@ -447,7 +447,7 @@
   },
   "synchronization": {
     "schemaGeneration": 1,
-    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "contractFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "locks": [
       {
         "lockId": "realm-state-lock",
@@ -507,7 +507,7 @@
   },
   "audit": {
     "schemaGeneration": 1,
-    "contractFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "contractFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "streams": [
       {
         "stream": { "kind": "local-root" },
