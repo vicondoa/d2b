@@ -285,7 +285,9 @@ fn controlled_environment(
                 environment.insert(OsString::from(variable), value.clone());
             }
         }
-        for variable in ["HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] {
+    }
+    if kind == CommandEnvironment::Authority && matches!(program, "gh" | "git-town") {
+        for variable in ["HOME", "XDG_CONFIG_HOME"] {
             if let Some(value) = inherited
                 .get(std::ffi::OsStr::new(variable))
                 .filter(|value| safe_absolute_path(value))
@@ -293,6 +295,14 @@ fn controlled_environment(
                 environment.insert(OsString::from(variable), value.clone());
             }
         }
+    }
+    if kind == CommandEnvironment::Authority
+        && program == "gh"
+        && let Some(value) = inherited
+            .get(std::ffi::OsStr::new("GH_CONFIG_DIR"))
+            .filter(|value| safe_absolute_path(value))
+    {
+        environment.insert(OsString::from("GH_CONFIG_DIR"), value.clone());
     }
     environment.extend(
         explicit
@@ -3043,6 +3053,11 @@ mod tests {
                 OsString::from("CARGO_HOME"),
                 OsString::from("/var/lib/toolchain/cargo"),
             ),
+            (OsString::from("HOME"), OsString::from("/home/alice")),
+            (
+                OsString::from("XDG_CONFIG_HOME"),
+                OsString::from("/home/alice/.config"),
+            ),
         ]);
         let explicit = BTreeMap::from([
             (OsString::from("D2B_REQUIRED"), OsString::from("present")),
@@ -3084,12 +3099,27 @@ mod tests {
             "gh",
             &BTreeMap::new(),
             CommandEnvironment::Authority,
-            inherited,
+            inherited.clone(),
         );
         assert_eq!(
             authority.get(std::ffi::OsStr::new("GITHUB_TOKEN")),
             Some(&OsString::from("secret-canary"))
         );
+        let git_town = controlled_environment(
+            "git-town",
+            &BTreeMap::new(),
+            CommandEnvironment::Authority,
+            inherited,
+        );
+        assert_eq!(
+            git_town.get(std::ffi::OsStr::new("HOME")),
+            Some(&OsString::from("/home/alice"))
+        );
+        assert_eq!(
+            git_town.get(std::ffi::OsStr::new("XDG_CONFIG_HOME")),
+            Some(&OsString::from("/home/alice/.config"))
+        );
+        assert!(!git_town.contains_key(std::ffi::OsStr::new("GITHUB_TOKEN")));
 
         let output = ProcessCommandOutput
             .output_with_environment(

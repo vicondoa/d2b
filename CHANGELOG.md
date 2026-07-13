@@ -57,6 +57,8 @@ deprecations ship one minor release before removal.
   shared signal forwarding, and kernel-backed child-output polling.
 - Isolated Cargo state for validation commands and normalized newly created
   private directories before restrictive umasks can prevent fd anchoring.
+- Preserved controlled HOME/XDG configuration only for trusted Git Town
+  authority probes after clearing ambient validation environments.
 - Made delivery state use true open-file-description locks and exact
   post-creation private modes independent of the caller's umask.
 - Preserved Unix signal termination in Layer-1 results and required canonical,
