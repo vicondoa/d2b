@@ -1208,12 +1208,10 @@ mod tests {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
         let file = create_regular_image(&target, 4096, 0o600);
-        drop(file);
-        let spec = test_spec(target.clone(), 4096, true);
         let stderr = format!("permission denied {}", "x".repeat(MKFS_STDERR_LIMIT * 2));
         let tool = failing_mkfs_tool(&scratch, &stderr);
 
-        let err = validate_or_repair_existing_with(&spec, &tool)
+        let err = run_mkfs_ext4_on_fd_with(&file, &target, &tool)
             .expect_err("failing mkfs must surface stderr");
         let rendered = err.to_string();
         assert!(rendered.contains("exit=Some(9)"));
