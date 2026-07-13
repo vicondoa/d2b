@@ -3,9 +3,12 @@ use std::{
     ffi::OsString,
     fs,
     io::Read,
-    os::{fd::AsFd, unix::process::CommandExt},
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::process::CommandExt,
+    },
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -16,6 +19,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use signal_hook::{
+    consts::{SIGINT, SIGTERM},
+    iterator::Signals,
+};
 
 use super::{
     DeliveryError, Result,
@@ -29,6 +36,14 @@ pub const DEFAULT_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_GIT_BLOB_BYTES: usize = 16 * 1024 * 1024;
 const MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const TERMINATION_GRACE: Duration = Duration::from_millis(250);
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(100);
+const EXIT_COMMAND_TIMEOUT: i32 = -1;
+const EXIT_STDOUT_OVERFLOW: i32 = -2;
+const EXIT_STDERR_OVERFLOW: i32 = -3;
+const EXIT_OUTPUT_OVERFLOW: i32 = -4;
+const EXIT_INTERRUPTED: i32 = -5;
+const EXIT_TERMINATED: i32 = -6;
 pub const GH_STACK_VERSION: &str = "0.0.7";
 const GH_STACK_CANNOT_OPERATE: &str = "cannot operate: official gh-stack private preview is \
     unavailable or unverifiable; no fallback stack mutation is permitted";
@@ -63,6 +78,74 @@ pub struct CommandOutput {
     pub exit_code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandFailure {
+    Exit(i32),
+    Signal,
+    Timeout,
+    StdoutOverflow,
+    StderrOverflow,
+    OutputOverflow,
+    Interrupted,
+    Terminated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrivateCommandDiagnostics<'a> {
+    pub stdout: &'a [u8],
+    pub stderr: &'a [u8],
+}
+
+impl CommandOutput {
+    pub fn failure(&self) -> Option<CommandFailure> {
+        if self.success {
+            return None;
+        }
+        match self.exit_code {
+            Some(EXIT_COMMAND_TIMEOUT) => Some(CommandFailure::Timeout),
+            Some(EXIT_STDOUT_OVERFLOW) => Some(CommandFailure::StdoutOverflow),
+            Some(EXIT_STDERR_OVERFLOW) => Some(CommandFailure::StderrOverflow),
+            Some(EXIT_OUTPUT_OVERFLOW) => Some(CommandFailure::OutputOverflow),
+            Some(EXIT_INTERRUPTED) => Some(CommandFailure::Interrupted),
+            Some(EXIT_TERMINATED) => Some(CommandFailure::Terminated),
+            Some(code) => Some(CommandFailure::Exit(code)),
+            None => Some(CommandFailure::Signal),
+        }
+    }
+
+    pub fn private_diagnostics(&self) -> PrivateCommandDiagnostics<'_> {
+        PrivateCommandDiagnostics {
+            stdout: &self.stdout,
+            stderr: &self.stderr,
+        }
+    }
+
+    pub fn safe_failure_summary(&self) -> String {
+        let reason = match self.failure() {
+            None => "command succeeded".to_owned(),
+            Some(CommandFailure::Exit(code)) => format!("command exited with status {code}"),
+            Some(CommandFailure::Signal) => "command exited after a signal".to_owned(),
+            Some(CommandFailure::Timeout) => "command exceeded its deadline".to_owned(),
+            Some(CommandFailure::StdoutOverflow) => {
+                "command exceeded its stdout capture limit".to_owned()
+            }
+            Some(CommandFailure::StderrOverflow) => {
+                "command exceeded its stderr capture limit".to_owned()
+            }
+            Some(CommandFailure::OutputOverflow) => {
+                "command exceeded both output capture limits".to_owned()
+            }
+            Some(CommandFailure::Interrupted) => "command was interrupted by SIGINT".to_owned(),
+            Some(CommandFailure::Terminated) => "command was terminated by SIGTERM".to_owned(),
+        };
+        format!(
+            "{reason}; retained {} stdout bytes and {} stderr bytes for private diagnostics",
+            self.stdout.len(),
+            self.stderr.len()
+        )
+    }
 }
 
 pub trait CommandOutputAdapter {
@@ -136,130 +219,281 @@ impl CommandOutputAdapter for ProcessCommandOutput {
         environment: &BTreeMap<OsString, OsString>,
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
-        if limits.stdout_bytes == 0
-            || limits.stderr_bytes == 0
-            || limits.stdout_bytes > MAX_GIT_BLOB_BYTES
-            || limits.stderr_bytes > MAX_GIT_BLOB_BYTES
-            || limits.timeout.is_zero()
-            || limits.timeout > MAX_COMMAND_TIMEOUT
-        {
-            return Err(DeliveryError::new(
-                "command limits are zero or exceed hard process bounds",
-            ));
-        }
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        command.envs(environment);
-        if let Some(cwd) = cwd {
-            command.current_dir(cwd);
-        }
-        let started = Instant::now();
-        let mut child = command
-            .spawn()
-            .map_err(|error| DeliveryError::new(format!("could not execute {program}: {error}")))?;
-        let process_group = i32::try_from(child.id())
-            .ok()
-            .and_then(rustix::process::Pid::from_raw);
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| DeliveryError::new("child stdout pipe was not available"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| DeliveryError::new("child stderr pipe was not available"))?;
-        let stdout_overflow = Arc::new(AtomicBool::new(false));
-        let stderr_overflow = Arc::new(AtomicBool::new(false));
-        let cancel_readers = Arc::new(AtomicBool::new(false));
-        let (stdout_reader, stdout_rx) = spawn_capped_reader(
-            stdout,
-            limits.stdout_bytes,
-            &stdout_overflow,
-            &cancel_readers,
-        );
-        let (stderr_reader, stderr_rx) = spawn_capped_reader(
-            stderr,
-            limits.stderr_bytes,
-            &stderr_overflow,
-            &cancel_readers,
-        );
+        let mut terminal_signals = TerminalSignals::new()?;
+        run_process(
+            program,
+            args,
+            cwd,
+            environment,
+            limits,
+            &mut terminal_signals,
+        )
+    }
+}
 
-        let mut timed_out = false;
-        let mut terminated = false;
-        let mut status = None;
-        let mut stdout_result = None;
-        let mut stderr_result = None;
-        loop {
-            receive_reader(&stdout_rx, &mut stdout_result)?;
-            receive_reader(&stderr_rx, &mut stderr_result)?;
-            if status.is_none() {
-                status = child.try_wait().map_err(|error| {
-                    DeliveryError::new(format!("could not poll {program}: {error}"))
-                })?;
-            }
-            let deadline_reached = started.elapsed() >= limits.timeout;
-            let overflowed =
-                stdout_overflow.load(Ordering::Acquire) || stderr_overflow.load(Ordering::Acquire);
-            if (deadline_reached || overflowed) && !terminated {
-                timed_out = deadline_reached;
-                terminated = true;
-                cancel_readers.store(true, Ordering::Release);
-                if let Some(process_group) = process_group {
-                    let _ = rustix::process::kill_process_group(
-                        process_group,
-                        rustix::process::Signal::Kill,
-                    );
-                }
-                let _ = child.kill();
-            }
-            if status.is_some() && stdout_result.is_some() && stderr_result.is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-        let status = match status {
-            Some(status) => status,
-            None => child.wait().map_err(|error| {
-                DeliveryError::new(format!("could not reap {program}: {error}"))
-            })?,
-        };
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalSignal {
+    Interrupt,
+    Terminate,
+}
 
-        let stdout = stdout_result.expect("reader completion was checked")?;
-        let stderr = stderr_result.expect("reader completion was checked")?;
-        stdout_reader
-            .join()
-            .map_err(|_| DeliveryError::new("stdout reader panicked"))?;
-        stderr_reader
-            .join()
-            .map_err(|_| DeliveryError::new("stderr reader panicked"))?;
-        if timed_out {
-            return Err(DeliveryError::new(format!(
-                "{program} exceeded its command timeout"
-            )));
-        }
-        if stdout_overflow.load(Ordering::Acquire) {
-            return Err(DeliveryError::new(format!(
-                "{program} stdout exceeds {} bytes",
-                limits.stdout_bytes
-            )));
-        }
-        if stderr_overflow.load(Ordering::Acquire) {
-            return Err(DeliveryError::new(format!(
-                "{program} stderr exceeds {} bytes",
-                limits.stderr_bytes
-            )));
-        }
-        Ok(CommandOutput {
-            success: status.success(),
-            exit_code: status.code(),
-            stdout,
-            stderr,
+trait TerminalSignalSource {
+    fn pending(&mut self) -> Option<TerminalSignal>;
+}
+
+struct TerminalSignals {
+    signals: Signals,
+}
+
+impl TerminalSignals {
+    fn new() -> Result<Self> {
+        Signals::new([SIGINT, SIGTERM])
+            .map(|signals| Self { signals })
+            .map_err(|error| {
+                DeliveryError::new(format!(
+                    "cannot install terminal signal forwarding: {error}"
+                ))
+            })
+    }
+}
+
+impl TerminalSignalSource for TerminalSignals {
+    fn pending(&mut self) -> Option<TerminalSignal> {
+        self.signals.pending().find_map(|signal| match signal {
+            SIGINT => Some(TerminalSignal::Interrupt),
+            SIGTERM => Some(TerminalSignal::Terminate),
+            _ => None,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StopReason {
+    Timeout,
+    StdoutOverflow,
+    StderrOverflow,
+    OutputOverflow,
+    Terminal(TerminalSignal),
+}
+
+fn run_process<S: TerminalSignalSource>(
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    environment: &BTreeMap<OsString, OsString>,
+    limits: CommandLimits,
+    terminal_signals: &mut S,
+) -> Result<CommandOutput> {
+    if limits.stdout_bytes == 0
+        || limits.stderr_bytes == 0
+        || limits.stdout_bytes > MAX_GIT_BLOB_BYTES
+        || limits.stderr_bytes > MAX_GIT_BLOB_BYTES
+        || limits.timeout.is_zero()
+        || limits.timeout > MAX_COMMAND_TIMEOUT
+    {
+        return Err(DeliveryError::new(
+            "command limits are zero or exceed hard process bounds",
+        ));
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    command.envs(environment);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let started = Instant::now();
+    let mut child = command
+        .spawn()
+        .map_err(|error| DeliveryError::new(format!("could not execute {program}: {error}")))?;
+    let process_group = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            DeliveryError::new("child PID cannot identify its process group")
+        })?;
+    let pidfd =
+        match rustix::process::pidfd_open(process_group, rustix::process::PidfdFlags::empty()) {
+            Ok(pidfd) => pidfd,
+            Err(error) => {
+                kill_group_and_reap(&mut child, process_group);
+                return Err(DeliveryError::new(format!(
+                    "cannot obtain race-free child process authority: {error}"
+                )));
+            }
+        };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_group_and_reap(&mut child, process_group);
+            return Err(DeliveryError::new("child stdout pipe was not available"));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            kill_group_and_reap(&mut child, process_group);
+            return Err(DeliveryError::new("child stderr pipe was not available"));
+        }
+    };
+    let stdout_overflow = Arc::new(AtomicBool::new(false));
+    let stderr_overflow = Arc::new(AtomicBool::new(false));
+    let cancel_readers = Arc::new(AtomicBool::new(false));
+    let (stdout_reader, stdout_rx) = spawn_capped_reader(
+        stdout,
+        limits.stdout_bytes,
+        &stdout_overflow,
+        &cancel_readers,
+    );
+    let (stderr_reader, stderr_rx) = spawn_capped_reader(
+        stderr,
+        limits.stderr_bytes,
+        &stderr_overflow,
+        &cancel_readers,
+    );
+
+    let mut stop_reason = None;
+    let mut force_kill_at = None;
+    let mut cancel_readers_at = None;
+    let mut leader_exited = false;
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+    let supervision = loop {
+        if let Err(error) = receive_reader(&stdout_rx, &mut stdout_result) {
+            break Err(error);
+        }
+        if let Err(error) = receive_reader(&stderr_rx, &mut stderr_result) {
+            break Err(error);
+        }
+        if !leader_exited {
+            match observe_child_exit(&pidfd) {
+                Ok(exited) => leader_exited = exited,
+                Err(error) => {
+                    break Err(DeliveryError::new(format!(
+                        "could not observe {program}: {error}"
+                    )));
+                }
+            }
+        }
+
+        let now = Instant::now();
+        if stop_reason.is_none() {
+            let stdout_exceeded = stdout_overflow.load(Ordering::Acquire);
+            let stderr_exceeded = stderr_overflow.load(Ordering::Acquire);
+            let reason = terminal_signals
+                .pending()
+                .map(StopReason::Terminal)
+                .or_else(|| (started.elapsed() >= limits.timeout).then_some(StopReason::Timeout))
+                .or(match (stdout_exceeded, stderr_exceeded) {
+                    (true, true) => Some(StopReason::OutputOverflow),
+                    (true, false) => Some(StopReason::StdoutOverflow),
+                    (false, true) => Some(StopReason::StderrOverflow),
+                    (false, false) => None,
+                });
+            if let Some(reason) = reason {
+                stop_reason = Some(reason);
+                match reason {
+                    StopReason::Terminal(signal) => {
+                        let _ = rustix::process::kill_process_group(
+                            process_group,
+                            rustix_signal(signal),
+                        );
+                        force_kill_at = Some(now + TERMINATION_GRACE);
+                    }
+                    _ => {
+                        let _ = rustix::process::kill_process_group(
+                            process_group,
+                            rustix::process::Signal::Kill,
+                        );
+                        cancel_readers_at = Some(now + OUTPUT_DRAIN_GRACE);
+                    }
+                }
+            }
+        }
+        if force_kill_at.is_some_and(|deadline| now >= deadline) {
+            let _ =
+                rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill);
+            force_kill_at = None;
+            cancel_readers_at = Some(now + OUTPUT_DRAIN_GRACE);
+        }
+        if cancel_readers_at.is_some_and(|deadline| now >= deadline) {
+            cancel_readers.store(true, Ordering::Release);
+            cancel_readers_at = None;
+        }
+
+        if leader_exited && stdout_result.is_some() && stderr_result.is_some() {
+            // A completed leader may have left descendants which closed their
+            // output descriptors. Clean the still-pinned group before reaping.
+            let _ =
+                rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill);
+            break Ok(());
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    if let Err(error) = supervision {
+        cancel_readers.store(true, Ordering::Release);
+        kill_group_and_reap(&mut child, process_group);
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+        return Err(error);
+    }
+
+    // The leader remains an unreaped zombie until here. Its PID, and therefore
+    // the process-group ID, cannot be reused while any group signal is possible.
+    let status = child
+        .wait()
+        .map_err(|error| DeliveryError::new(format!("could not reap {program}: {error}")))?;
+
+    let stdout = stdout_result.expect("reader completion was checked")?;
+    let stderr = stderr_result.expect("reader completion was checked")?;
+    stdout_reader
+        .join()
+        .map_err(|_| DeliveryError::new("stdout reader panicked"))?;
+    stderr_reader
+        .join()
+        .map_err(|_| DeliveryError::new("stderr reader panicked"))?;
+    let exit_code = match stop_reason {
+        Some(StopReason::Timeout) => Some(EXIT_COMMAND_TIMEOUT),
+        Some(StopReason::StdoutOverflow) => Some(EXIT_STDOUT_OVERFLOW),
+        Some(StopReason::StderrOverflow) => Some(EXIT_STDERR_OVERFLOW),
+        Some(StopReason::OutputOverflow) => Some(EXIT_OUTPUT_OVERFLOW),
+        Some(StopReason::Terminal(TerminalSignal::Interrupt)) => Some(EXIT_INTERRUPTED),
+        Some(StopReason::Terminal(TerminalSignal::Terminate)) => Some(EXIT_TERMINATED),
+        None => status.code(),
+    };
+    Ok(CommandOutput {
+        success: stop_reason.is_none() && status.success(),
+        exit_code,
+        stdout,
+        stderr,
+    })
+}
+
+fn observe_child_exit(pidfd: &OwnedFd) -> rustix::io::Result<bool> {
+    rustix::process::waitid(
+        rustix::process::WaitId::PidFd(pidfd.as_fd()),
+        rustix::process::WaitidOptions::EXITED
+            | rustix::process::WaitidOptions::NOHANG
+            | rustix::process::WaitidOptions::NOWAIT,
+    )
+    .map(|status| status.is_some())
+}
+
+fn kill_group_and_reap(child: &mut Child, process_group: rustix::process::Pid) {
+    let _ = rustix::process::kill_process_group(process_group, rustix::process::Signal::Kill);
+    let _ = child.wait();
+}
+
+fn rustix_signal(signal: TerminalSignal) -> rustix::process::Signal {
+    match signal {
+        TerminalSignal::Interrupt => rustix::process::Signal::Int,
+        TerminalSignal::Terminate => rustix::process::Signal::Term,
     }
 }
 
@@ -442,10 +676,10 @@ impl<A: CommandOutputAdapter> GitProbe<A> {
     fn git_stdout(&self, root: &Path, arguments: &[String]) -> Result<String> {
         let output = self.git_output(root, arguments, CommandLimits::default())?;
         if !output.success {
-            return Err(DeliveryError::new(format!(
-                "git {} failed",
-                arguments.join(" ")
-            )));
+            return Err(command_failed(
+                format!("git {} failed", arguments.join(" ")),
+                &output,
+            ));
         }
         let stdout = String::from_utf8(output.stdout)
             .map_err(|_| DeliveryError::new("git output was not UTF-8"))?;
@@ -589,7 +823,10 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
         match output.exit_code {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => Err(DeliveryError::new("git merge-base --is-ancestor failed")),
+            _ => Err(command_failed(
+                "git merge-base --is-ancestor failed",
+                &output,
+            )),
         }
     }
 
@@ -609,9 +846,10 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             CommandLimits::default(),
         )?;
         if !listing.success {
-            return Err(DeliveryError::new(format!(
-                "cannot inspect tracked blob {path_string}"
-            )));
+            return Err(command_failed(
+                format!("cannot inspect tracked blob {path_string}"),
+                &listing,
+            ));
         }
         let entries = listing
             .stdout
@@ -654,9 +892,10 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             },
         )?;
         if !payload.success {
-            return Err(DeliveryError::new(format!(
-                "cannot read tracked Git blob for {path_string}"
-            )));
+            return Err(command_failed(
+                format!("cannot read tracked Git blob for {path_string}"),
+                &payload,
+            ));
         }
         Ok(TrackedBlob {
             oid: fields[2].to_owned(),
@@ -705,8 +944,9 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             },
         )?;
         if !output.success {
-            return Err(DeliveryError::new(
+            return Err(command_failed(
                 "cannot compute canonical base-to-head Git diff",
+                &output,
             ));
         }
         Ok(output.stdout)
@@ -731,8 +971,9 @@ impl<A: CommandOutputAdapter> RepositoryProbe for GitProbe<A> {
             CommandLimits::default(),
         )?;
         if !output.success {
-            return Err(DeliveryError::new(
+            return Err(command_failed(
                 "prospective merge tree has conflicts or could not be computed",
+                &output,
             ));
         }
         let stdout = String::from_utf8(output.stdout)
@@ -772,9 +1013,10 @@ impl<A: CommandOutputAdapter> StackGraphSource for GhStackSource<'_, A> {
             Some(checkout_root),
         )?;
         if !output.success {
-            return Err(DeliveryError::new(format!(
-                "gh stack view --json failed for {repository}"
-            )));
+            return Err(command_failed(
+                format!("gh stack view --json failed for {repository}"),
+                &output,
+            ));
         }
         let graph: GhStackGraph = serde_json::from_slice(&output.stdout)
             .map_err(|error| DeliveryError::new(format!("invalid gh-stack JSON: {error}")))?;
@@ -893,18 +1135,19 @@ impl<A: CommandOutputAdapter> PullRequestStatusSource for GhStatusSource<'_, A> 
             "graphql".to_owned(),
             "-f".to_owned(),
             format!("query={PR_STATUS_QUERY}"),
-            "-F".to_owned(),
+            "-f".to_owned(),
             format!("owner={owner}"),
-            "-F".to_owned(),
+            "-f".to_owned(),
             format!("name={name}"),
             "-F".to_owned(),
             format!("number={pr}"),
         ];
         let output = self.command.output("gh", &args, None)?;
         if !output.success {
-            return Err(DeliveryError::new(format!(
-                "GitHub status query failed for {repository}#{pr}"
-            )));
+            return Err(command_failed(
+                format!("GitHub status query failed for {repository}#{pr}"),
+                &output,
+            ));
         }
         parse_gh_status(repository, pr, &output.stdout)
     }
@@ -1555,34 +1798,138 @@ fn repository_matches(logical: &str, name_with_owner: &str) -> bool {
 }
 
 fn parse_repository_identity(remote: &str) -> Result<String> {
-    let path = if let Some(path) = remote.strip_prefix("https://github.com/") {
-        path
-    } else if let Some(path) = remote.strip_prefix("http://github.com/") {
+    let path = if let Some(rest) = remote
+        .strip_prefix("https://")
+        .or_else(|| remote.strip_prefix("http://"))
+    {
+        let (authority, path) = rest.split_once('/').ok_or_else(remote_identity_error)?;
+        validate_https_github_authority(authority)?;
         path
     } else if let Some(path) = remote.strip_prefix("git@github.com:") {
         path
-    } else if let Some(path) = remote.strip_prefix("ssh://git@github.com/") {
+    } else if let Some(rest) = remote.strip_prefix("ssh://") {
+        let (authority, path) = rest.split_once('/').ok_or_else(remote_identity_error)?;
+        validate_ssh_github_authority(authority)?;
         path
     } else {
-        return Err(DeliveryError::new(
-            "origin remote is not an unambiguous github.com repository identity",
-        ));
+        return Err(remote_identity_error());
     };
-    let path = path.trim_end_matches('/').trim_end_matches(".git");
-    if path.split('/').count() != 2 {
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let parts = path.split('/').collect::<Vec<_>>();
+    if parts.len() != 2
+        || parts.iter().any(|part| matches!(*part, "." | ".."))
+        || remote.bytes().any(|byte| byte.is_ascii_control())
+        || path.contains(['\\', '?', '#', '%'])
+    {
         return Err(DeliveryError::new(
             "origin remote does not contain exact owner/repository identity",
         ));
     }
-    let identity = format!("github.com/{path}");
+    let identity = format!("github.com/{}/{}", parts[0], parts[1]);
     validate_repository_id(&identity)?;
     Ok(identity)
+}
+
+fn validate_https_github_authority(authority: &str) -> Result<()> {
+    let pieces = authority.split('@').collect::<Vec<_>>();
+    match pieces.as_slice() {
+        ["github.com"] => Ok(()),
+        [userinfo, "github.com"] if valid_http_userinfo(userinfo) => Ok(()),
+        _ => Err(remote_identity_error()),
+    }
+}
+
+fn valid_http_userinfo(userinfo: &str) -> bool {
+    if userinfo.is_empty()
+        || userinfo.len() > 256
+        || userinfo.starts_with(':')
+        || userinfo.ends_with(':')
+    {
+        return false;
+    }
+    let bytes = userinfo.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let byte = bytes[offset];
+        if byte == b'%' {
+            if bytes
+                .get(offset + 1..offset + 3)
+                .is_none_or(|digits| !digits.iter().all(u8::is_ascii_hexdigit))
+            {
+                return false;
+            }
+            offset += 3;
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+            ))
+        {
+            return false;
+        }
+        offset += 1;
+    }
+    true
+}
+
+fn validate_ssh_github_authority(authority: &str) -> Result<()> {
+    let authority = authority
+        .strip_prefix("git@github.com")
+        .ok_or_else(remote_identity_error)?;
+    if authority.is_empty() {
+        return Ok(());
+    }
+    let port = authority
+        .strip_prefix(':')
+        .ok_or_else(remote_identity_error)?;
+    if port.is_empty()
+        || port.len() > 5
+        || !port.bytes().all(|byte| byte.is_ascii_digit())
+        || port.starts_with('0')
+        || port
+            .parse::<u16>()
+            .ok()
+            .filter(|value| *value != 0)
+            .is_none()
+    {
+        return Err(remote_identity_error());
+    }
+    Ok(())
+}
+
+fn remote_identity_error() -> DeliveryError {
+    DeliveryError::new("origin remote is not an unambiguous github.com repository identity")
 }
 
 fn path_string(path: &Path) -> Result<String> {
     path.to_str()
         .map(str::to_owned)
         .ok_or_else(|| DeliveryError::new("path is not valid UTF-8"))
+}
+
+fn command_failed(context: impl AsRef<str>, output: &CommandOutput) -> DeliveryError {
+    DeliveryError::new(format!(
+        "{}: {}",
+        context.as_ref(),
+        output.safe_failure_summary()
+    ))
 }
 
 pub fn reject_symlink_components(path: &Path) -> Result<()> {
@@ -1612,8 +1959,10 @@ pub fn reject_symlink_components(path: &Path) -> Result<()> {
                         )));
                     }
                     Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
                     Err(error) => {
+                        if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) {
+                            break;
+                        }
                         return Err(DeliveryError::new(format!(
                             "cannot inspect path component {}: {error}",
                             current.display()
@@ -1645,9 +1994,16 @@ fn validate_repository_slug(repository: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::VecDeque};
+    use std::{
+        cell::RefCell,
+        collections::VecDeque,
+        os::unix::fs::symlink,
+        sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    };
 
     use super::*;
+
+    static NEXT_TEST_PATH: AtomicU64 = AtomicU64::new(1);
 
     type CommandCall = (String, Vec<String>, Option<PathBuf>);
 
@@ -1804,8 +2160,10 @@ mod tests {
                     timeout: Duration::from_secs(1),
                 },
             )
-            .expect_err("stdout overflow");
-        assert!(stdout.to_string().contains("stdout exceeds"));
+            .expect("bounded stdout result");
+        assert_eq!(stdout.failure(), Some(CommandFailure::StdoutOverflow));
+        assert_eq!(stdout.private_diagnostics().stdout, b"1234");
+        assert!(!stdout.safe_failure_summary().contains("1234"));
 
         let stderr = runner
             .output_with_limits(
@@ -1818,43 +2176,38 @@ mod tests {
                     timeout: Duration::from_secs(1),
                 },
             )
-            .expect_err("stderr overflow");
-        assert!(stderr.to_string().contains("stderr exceeds"));
+            .expect("bounded stderr result");
+        assert_eq!(stderr.failure(), Some(CommandFailure::StderrOverflow));
+        assert_eq!(stderr.private_diagnostics().stderr, b"1234");
+        assert!(!stderr.safe_failure_summary().contains("1234"));
 
         let started = Instant::now();
         let timeout = runner
             .output_with_limits(
                 "sh",
-                &["-c".to_owned(), "sleep 5".to_owned()],
-                None,
-                CommandLimits {
-                    stdout_bytes: 4,
-                    stderr_bytes: 4,
-                    timeout: Duration::from_millis(20),
-                },
-            )
-            .expect_err("timeout");
-        assert!(timeout.to_string().contains("timeout"));
-        assert!(started.elapsed() < Duration::from_secs(1));
-
-        let started = Instant::now();
-        let descendant = runner
-            .output_with_limits(
-                "sh",
                 &[
                     "-c".to_owned(),
-                    "(sleep 30) & printf parent-complete".to_owned(),
+                    "printf private-timeout-diagnostic; sleep 5".to_owned(),
                 ],
                 None,
                 CommandLimits {
                     stdout_bytes: 64,
                     stderr_bytes: 64,
-                    timeout: Duration::from_millis(50),
+                    timeout: Duration::from_millis(20),
                 },
             )
-            .expect_err("descendant retained output pipe");
-        assert!(descendant.to_string().contains("timeout"));
-        assert!(started.elapsed() < Duration::from_secs(2));
+            .expect("bounded timeout result");
+        assert_eq!(timeout.failure(), Some(CommandFailure::Timeout));
+        assert_eq!(
+            timeout.private_diagnostics().stdout,
+            b"private-timeout-diagnostic"
+        );
+        assert!(
+            !timeout
+                .safe_failure_summary()
+                .contains("private-timeout-diagnostic")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
 
         let started = Instant::now();
         let escaped_pipe = runner
@@ -1871,9 +2224,186 @@ mod tests {
                     timeout: Duration::from_millis(20),
                 },
             )
-            .expect_err("detached descendant retained output pipe");
-        assert!(escaped_pipe.to_string().contains("timeout"));
+            .expect("detached descendant timeout result");
+        assert_eq!(escaped_pipe.failure(), Some(CommandFailure::Timeout));
+        assert_eq!(
+            escaped_pipe.private_diagnostics().stdout,
+            b"parent-complete"
+        );
         assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn exited_leader_stays_unreaped_until_descendant_group_cleanup() {
+        let started = Instant::now();
+        let output = ProcessCommandOutput
+            .output_with_limits(
+                "sh",
+                &[
+                    "-c".to_owned(),
+                    "sleep 30 & printf parent-complete; exit 0".to_owned(),
+                ],
+                None,
+                CommandLimits {
+                    stdout_bytes: 64,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_millis(50),
+                },
+            )
+            .expect("descendant timeout result");
+        assert_eq!(output.failure(), Some(CommandFailure::Timeout));
+        assert_eq!(output.private_diagnostics().stdout, b"parent-complete");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    struct DelayedTerminalSignal {
+        polls: usize,
+        signal: Option<TerminalSignal>,
+    }
+
+    impl TerminalSignalSource for DelayedTerminalSignal {
+        fn pending(&mut self) -> Option<TerminalSignal> {
+            if self.polls == 0 {
+                return self.signal.take();
+            }
+            self.polls -= 1;
+            None
+        }
+    }
+
+    #[test]
+    fn terminal_signal_forwards_to_and_cleans_exact_process_group() {
+        for (signal, shell_signal, expected) in [
+            (
+                TerminalSignal::Interrupt,
+                "INT",
+                CommandFailure::Interrupted,
+            ),
+            (
+                TerminalSignal::Terminate,
+                "TERM",
+                CommandFailure::Terminated,
+            ),
+        ] {
+            let marker = unique_test_path("signal-orphan-marker");
+            let marker_string = marker.to_string_lossy().into_owned();
+            let script = format!(
+                "trap 'printf leader-signaled >&2; exit 0' {shell_signal}; \
+                 (trap '' {shell_signal}; sleep 0.4; printf orphan > \"$1\") & wait"
+            );
+            let mut signals = DelayedTerminalSignal {
+                polls: 20,
+                signal: Some(signal),
+            };
+            let started = Instant::now();
+            let output = run_process(
+                "sh",
+                &["-c".to_owned(), script, "sh".to_owned(), marker_string],
+                None,
+                &BTreeMap::new(),
+                CommandLimits {
+                    stdout_bytes: 128,
+                    stderr_bytes: 128,
+                    timeout: Duration::from_secs(2),
+                },
+                &mut signals,
+            )
+            .expect("terminal signal result");
+            assert_eq!(output.failure(), Some(expected));
+            assert!(
+                String::from_utf8_lossy(output.private_diagnostics().stderr)
+                    .contains("leader-signaled")
+            );
+            assert!(started.elapsed() < Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(500));
+            let survived = marker.exists();
+            if survived {
+                fs::remove_file(&marker).expect("remove orphan marker");
+            }
+            assert!(!survived, "descendant survived process-group cleanup");
+        }
+    }
+
+    #[test]
+    fn github_status_uses_string_fields_for_numeric_looking_names() {
+        let command = FakeCommand::new(vec![successful_output(Vec::new())]);
+        GhStatusSource::new(&command)
+            .status("github.com/123/456", 42)
+            .expect_err("fixture response is intentionally empty");
+        let args = &command.calls.borrow()[0].1;
+        assert!(args.windows(2).any(|pair| pair == ["-f", "owner=123"]));
+        assert!(args.windows(2).any(|pair| pair == ["-f", "name=456"]));
+        assert!(args.windows(2).any(|pair| pair == ["-F", "number=42"]));
+        assert!(!args.windows(2).any(|pair| pair == ["-F", "owner=123"]));
+        assert!(!args.windows(2).any(|pair| pair == ["-F", "name=456"]));
+    }
+
+    #[test]
+    fn canonical_github_remotes_accept_userinfo_and_ssh_ports() {
+        for remote in [
+            "https://github.com/example/d2b.git",
+            "https://alice@github.com/example/d2b.git",
+            "http://alice:token@github.com/example/d2b/",
+            "https://alice%2Bbot@github.com/example/d2b.git",
+            "git@github.com:example/d2b.git",
+            "ssh://git@github.com/example/d2b.git",
+            "ssh://git@github.com:2222/example/d2b.git",
+        ] {
+            assert_eq!(
+                parse_repository_identity(remote).expect("canonical GitHub remote"),
+                "github.com/example/d2b"
+            );
+        }
+    }
+
+    #[test]
+    fn github_remote_parser_rejects_ambiguous_authorities_and_traversal() {
+        for remote in [
+            "https://github.com.evil/example/d2b.git",
+            "https://github.com:443/example/d2b.git",
+            "https://alice@@github.com/example/d2b.git",
+            "https://:token@github.com/example/d2b.git",
+            "https://alice:@github.com/example/d2b.git",
+            "https://alice%4@github.com/example/d2b.git",
+            "https://github.com/example/../d2b.git",
+            "https://github.com/example/d2b.git?token=secret",
+            "ssh://root@github.com/example/d2b.git",
+            "ssh://git@github.com:0/example/d2b.git",
+            "ssh://git@github.com:65536/example/d2b.git",
+            "ssh://git@github.com:22@example.invalid/example/d2b.git",
+            "git@github.com:example/d2b/extra.git",
+        ] {
+            let error = parse_repository_identity(remote).expect_err("ambiguous remote");
+            assert!(
+                !error.to_string().contains("secret")
+                    && !error.to_string().contains("alice")
+                    && !error.to_string().contains("token")
+            );
+        }
+    }
+
+    #[test]
+    fn dangling_symlink_components_are_rejected() {
+        let root = unique_test_path("dangling-symlink");
+        fs::create_dir(&root).expect("test root");
+        let dangling = root.join("dangling");
+        symlink(root.join("missing-target"), &dangling).expect("dangling symlink");
+        for path in [&dangling, &dangling.join("child")] {
+            let error = reject_symlink_components(path).expect_err("dangling symlink");
+            assert!(error.to_string().contains("symlink component"));
+        }
+        fs::remove_file(&dangling).expect("remove symlink");
+        fs::remove_dir(&root).expect("remove test root");
+    }
+
+    fn unique_test_path(label: &str) -> PathBuf {
+        std::env::current_dir()
+            .expect("current directory")
+            .join(format!(
+                ".d2b-{label}-{}-{}",
+                std::process::id(),
+                NEXT_TEST_PATH.fetch_add(1, AtomicOrdering::Relaxed)
+            ))
     }
 
     #[test]
