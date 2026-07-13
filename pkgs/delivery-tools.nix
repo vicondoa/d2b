@@ -10,7 +10,7 @@ let
 
   stableRust = pkgs.rust-bin.stable.${rustStableVersion}.minimal;
   nightlyRust = pkgs.rust-bin.nightly.${cargoUdepsNightlyDate}.minimal;
-  rustPlatform = pkgs.makeRustPlatform {
+  stableRustPlatform = pkgs.makeRustPlatform {
     cargo = stableRust;
     rustc = stableRust;
   };
@@ -65,7 +65,7 @@ let
     meta = ghUpstream.meta;
   };
 
-  cargoUdepsRaw = rustPlatform.buildRustPackage {
+  cargoUdepsRaw = stableRustPlatform.buildRustPackage {
     pname = "cargo-udeps";
     version = cargoUdepsVersion;
 
@@ -103,13 +103,17 @@ let
   } ''
     mkdir -p "$out/bin"
     makeWrapper ${cargoUdepsRaw}/bin/cargo-udeps "$out/bin/cargo-udeps" \
-      --prefix PATH : ${pkgs.lib.makeBinPath [ nightlyRust ]}
+      --set CARGO ${nightlyRust}/bin/cargo \
+      --set RUSTC ${nightlyRust}/bin/rustc \
+      --prefix PATH : ${pkgs.lib.makeBinPath [ nightlyRust pkgs.sccache ]}
     makeWrapper ${cargoUdepsRaw}/bin/cargo-udeps "$out/bin/cargo-udeps-nightly" \
-      --prefix PATH : ${pkgs.lib.makeBinPath [ nightlyRust ]} \
+      --set CARGO ${nightlyRust}/bin/cargo \
+      --set RUSTC ${nightlyRust}/bin/rustc \
+      --prefix PATH : ${pkgs.lib.makeBinPath [ nightlyRust pkgs.sccache ]} \
       --add-flags udeps
   '';
 
-  cargoSemverChecks = rustPlatform.buildRustPackage {
+  cargoSemverChecks = stableRustPlatform.buildRustPackage {
     pname = "cargo-semver-checks";
     version = cargoSemverChecksVersion;
 
@@ -154,5 +158,7 @@ in
     ghStack
     nightlyRust
     stableRust
+    stableRustPlatform
+    rustStableVersion
     ;
 }

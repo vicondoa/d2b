@@ -12,7 +12,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout candidate head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify candidate checkout
+        id: candidate
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse HEAD)
+          test "$actual_sha" = "$EXPECTED_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
 
       - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
@@ -73,7 +87,7 @@ jobs:
       - name: Summarize checked tree
         if: always()
         env:
-          CHECKED_TREE: ${{ github.event.pull_request.head.sha || github.sha }}
+          CHECKED_TREE: ${{ steps.candidate.outputs.sha }}
           STATIC_OUTCOME: ${{ steps.static_eval.outcome }}
           NIX_OUTCOME: ${{ steps.nix_eval.outcome }}
           RUST_OUTCOME: ${{ steps.rust_eval.outcome }}

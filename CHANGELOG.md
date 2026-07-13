@@ -43,6 +43,10 @@ deprecations ship one minor release before removal.
   bootstrap.
 - Made broker audit tests reserve exclusive process-local scratch directories
   before opening their logs.
+- Hardened the delivery environment with native build tools and `sccache`,
+  built the delivery app with pinned Rust 1.94.1 on both supported systems,
+  kept delivery evidence outside Git metadata, and bound non-generated PR
+  workflow summaries to the exact checked-out candidate commit.
 
 ## [1.4.1] - 2026-07-12
 

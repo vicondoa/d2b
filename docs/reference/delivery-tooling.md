@@ -26,9 +26,11 @@ packages can also be built directly:
 nix build .#gh-stack .#cargo-udeps-nightly .#cargo-semver-checks
 ```
 
-Use `cargo udeps` in the shell. Its wrapper places only the pinned nightly
-toolchain in the subprocess path; ordinary `cargo` remains the project's pinned
-stable toolchain.
+Use `cargo udeps` in the shell. Its wrapper selects the pinned nightly compiler
+and Cargo only for that subprocess and provides `sccache`; ordinary `cargo`
+remains the project's pinned stable toolchain. The shell also provides a C
+toolchain, CMake, `pkg-config`, OpenSSL, Protobuf, and `sccache` for workspace
+crates with native build dependencies.
 
 ## Stack authority and private preview
 
@@ -47,7 +49,8 @@ nix run .#delivery -- stack capability --manifest "$MANIFEST"
 ```
 
 The capability check accepts only official `gh-stack` `0.0.7` and performs a
-read-only query against the preview endpoint. If the preview is disabled, the
+read-only query against GitHub's private-preview endpoint. Private-preview
+availability is mandatory and fail-closed: if the preview is disabled, the
 token cannot access it, the response is malformed, or the tool version differs,
 the result is **cannot operate**. There is no fallback stack mutation. Enable
 the preview or stop the stacked delivery.
@@ -61,10 +64,14 @@ gh stack submit
 
 ## External evidence and check summaries
 
-The Make-independent delivery app exposes the tree-bound `xtask` APIs:
+The Make-independent delivery app exposes these implemented tree-bound `xtask`
+commands. Select a secure external state directory explicitly:
 
 ```console
-nix run .#delivery -- wave snapshot --manifest "$MANIFEST"
+install -d -m 0700 "$XDG_STATE_HOME/d2b/delivery"
+nix run .#delivery -- wave snapshot \
+  --manifest "$MANIFEST" \
+  --state-dir "$XDG_STATE_HOME/d2b/delivery"
 nix run .#delivery -- evidence import \
   --snapshot "$SNAPSHOT" --request "$REQUEST"
 nix run .#delivery -- evidence verify \
@@ -72,13 +79,17 @@ nix run .#delivery -- evidence verify \
 nix run .#delivery -- merge eligibility --seal "$SEAL" --node "$NODE"
 ```
 
-Snapshots, evidence, panel records, and seals stay in external state selected by
-the snapshot command or in Git metadata; never add them to the reviewed tree.
-The app bundles pinned `git`, `gh`, and `gh-stack` executables so status
-inspection does not depend on an ambient command version.
+Use `$XDG_STATE_HOME/d2b/delivery` when `XDG_STATE_HOME` is available. Otherwise,
+pass `--state-dir` an explicitly selected, operator-owned external directory
+with mode `0700`. Snapshots, evidence, panel records, and seals stay outside
+every reviewed checkout and outside every Git directory or common directory.
+Git metadata is never delivery state, and these artifacts must never be added
+to the reviewed tree. The app bundles pinned `git`, `gh`, and `gh-stack`
+executables so status inspection does not depend on an ambient command version.
 
 The non-generated pull-request workflows emit a small GitHub step summary bound
-to the checked head SHA and step outcomes. A summary is status metadata, not
-validation or panel evidence, and cannot satisfy a seal. The merge-eligibility
-command independently reads GitHub's check rollup and fails closed for a
-missing, duplicate, pending, failed, or malformed required check.
+to the exact candidate SHA reported by `git rev-parse HEAD` and to step
+outcomes. A summary is status metadata, not validation or panel evidence, and
+cannot satisfy a seal. The merge-eligibility command independently reads
+GitHub's check rollup and fails closed for a missing, duplicate, pending,
+failed, or malformed required check.
