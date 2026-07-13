@@ -569,6 +569,10 @@ running live guest activation.
 | `DaemonToUnsafeLocalHelper` | enum | [`DaemonToUnsafeLocalHelper`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L975) | `HelloAccepted` — (HelperHelloAccepted); `Heartbeat` — (HelperHeartbeat); `Launch` — (HelperLaunchRequest); `Shell` — (HelperShellRequest) |
 | `UnsafeLocalHelperToDaemon` | enum | [`UnsafeLocalHelperToDaemon`](../../packages/d2b-contracts/src/unsafe_local_wire.rs#L984) | `Hello` — (HelperHello); `Snapshot` — (HelperSnapshot); `Heartbeat` — (HelperHeartbeat); `Operation` — (HelperOperationResult); `TerminalReady` — (HelperTerminalReady); `Shell` — (HelperShellResponse); `Rejected` — (HelperOperationRejected) |
 | `UsbipClaimSource` | enum | [`UsbipClaimSource`](../../packages/d2b-contracts/src/usbip.rs#L99) | `Declared` — struct { `firewall_ref`: `String`; `bind_ref`: `String` }; `Explicit` |
+| `ProviderType` | enum | [`ProviderType`](../../packages/d2b-contracts/src/v2_identity.rs#L206) | `Runtime`; `Infrastructure`; `Transport`; `Substrate`; `Credential`; `Display`; `Network`; `Storage`; `Device`; `Audio`; `Observability` |
+| `RoleKind` | enum | [`RoleKind`](../../packages/d2b-contracts/src/v2_identity.rs#L273) | `StoreVirtiofsPreflight`; `SwtpmPreStartFlush`; `Swtpm`; `Virtiofsd`; `Video`; `Gpu`; `GpuRenderNode`; `Audio`; `CloudHypervisor`; `QemuMedia`; `VsockRelay`; `GuestControlHealth`; `Usbip`; `SecurityKeyFrontend`; `WaylandProxy` |
+| `IdentityDomain` | enum | [`IdentityDomain`](../../packages/d2b-contracts/src/v2_identity.rs#L352) | `Realm`; `Workload`; `Provider`; `Role` |
+| `CanonicalIdentity` | enum | [`CanonicalIdentity`](../../packages/d2b-contracts/src/v2_identity.rs#L729) | `Realm` — (RealmId); `Workload` — (WorkloadId); `Provider` — (ProviderId); `Role` — (RoleId) |
 <!-- END AUTO-GENERATED: enum-variants -->
 
 ## Error envelope
@@ -631,6 +635,7 @@ the failure class, for example `host check`, `audit`, `status`, or
 | `AudioErrorKind` | enum | [`AudioErrorKind`](../../packages/d2b-contracts/src/public_wire.rs#L1875) | `ProviderMisconfigured`; `VmNotFound`; `EnforcementUnavailable`; `AudioNotEnabled`; `InternalError` |
 | `AudioVmError` | struct | [`AudioVmError`](../../packages/d2b-contracts/src/public_wire.rs#L1976) | struct { `vm`: `String`; `kind`: `AudioErrorKind`; `remediation`: `Option<String>` } |
 | `BusIdError` | enum | [`BusIdError`](../../packages/d2b-contracts/src/usbip.rs#L22) | `Empty`; `Invalid`; `TooLong` — struct { `max`: `usize` } |
+| `IdentityError` | enum | [`IdentityError`](../../packages/d2b-contracts/src/v2_identity.rs#L19) | `InvalidRealmLabel`; `InvalidRealmPath`; `InvalidWorkloadName`; `InvalidProviderInstanceId`; `InvalidShortId`; `InvalidEncoding`; `UnknownDomain`; `InvalidDomainParts`; `RecomputedIdMismatch`; `DuplicateProviderId`; `ShortIdCollision`; `UnixPathContainsNul`; `UnixPathTooLong` |
 <!-- END AUTO-GENERATED: error-envelope -->
 
 ## Audit

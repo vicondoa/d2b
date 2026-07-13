@@ -704,6 +704,7 @@
             "readiness-waves.nix"
             "restart-policy.nix"
             "usb-security-key.nix"
+            "v2-identity.nix"
             "vm-eval-overlays.nix"
           ];
           nix-unit-network = [
