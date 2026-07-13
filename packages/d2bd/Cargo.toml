@@ -1,7 +1,9 @@
 [package]
 name = "d2bd"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -10,30 +12,30 @@ workspace = true
 
 [dependencies]
 arc-swap = "1"
-async-trait = "0.1"
+async-trait.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 libc = "0.2"
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "poll"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rustix = { workspace = true }
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-core = { workspace = true }
+d2b-host = { workspace = true }
+d2b-contracts = { workspace = true }
 # v2 constellation contract crates (ADR 0032). The peer-module skeletons in
 # src/realm_stubs.rs wire this trait surface; they are compile-only
 # and NOT called from the running daemon (zero behavior change).
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }
-d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
-d2b-gateway-runtime = { path = "../d2b-gateway-runtime", version = "0.0.0-bootstrap" }
-d2b-provider-aca = { path = "../d2b-provider-aca", version = "0.0.0-bootstrap" }
-d2b-provider-relay = { path = "../d2b-provider-relay", version = "0.0.0-bootstrap" }
-protobuf = "3.7.2"
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+d2b-realm-router = { workspace = true }
+d2b-gateway = { workspace = true }
+d2b-gateway-runtime = { workspace = true }
+d2b-provider-aca = { workspace = true }
+d2b-provider-relay = { workspace = true }
+protobuf.workspace = true
 semver = "1"
 serde.workspace = true
-sha2 = "0.10"
+sha2.workspace = true
 tracing = "0.1"
 # v1.1.1 live-deploy fu9: stderr tracing subscriber for d2bd
 # so RUST_LOG=debug actually surfaces in journalctl. Without this
@@ -44,11 +46,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 subtle = "2.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
-ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+ttrpc = { workspace = true, default-features = false, features = ["async", "sync"] }
 uzers = "0.12"
 
 [dev-dependencies]
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-core = { workspace = true, features = ["test-support"] }
 regex = "1"
 tempfile = "3"

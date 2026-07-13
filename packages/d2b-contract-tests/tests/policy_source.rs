@@ -78,6 +78,67 @@ fn git_listed_files(roots: &[&str]) -> Vec<String> {
     files.into_iter().collect()
 }
 
+#[test]
+fn rust_workspace_is_single_and_versioned() {
+    let root_manifest =
+        read_repo_file_opt("packages/Cargo.toml").expect("packages/Cargo.toml must exist");
+    for required in [
+        "version = \"2.0.0\"",
+        "edition = \"2024\"",
+        "rust-version = \"1.94.1\"",
+        "\"d2b-priv-broker\"",
+        "\"d2b-guest-shell-runner\"",
+        "\"d2b-core/fuzz\"",
+        "\"d2b-ttrpc-api-fit-spike\"",
+    ] {
+        assert!(
+            root_manifest.contains(required),
+            "workspace manifest missing {required}"
+        );
+    }
+
+    let root = repo_root();
+    let files = git_listed_files(&["packages"]);
+    let lockfiles: Vec<_> = files
+        .iter()
+        .filter(|rel| rel.ends_with("Cargo.lock") && root.join(rel).exists())
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        lockfiles,
+        vec!["packages/Cargo.lock"],
+        "packages must have exactly one canonical Cargo.lock"
+    );
+
+    for rel in files
+        .iter()
+        .filter(|rel| rel.ends_with("Cargo.toml") && *rel != "packages/Cargo.toml")
+        .filter(|rel| root.join(rel).exists())
+    {
+        let manifest = read_repo_file_opt(rel).expect("read package manifest");
+        assert!(
+            !manifest.contains("\n[workspace]\n") && !manifest.starts_with("[workspace]\n"),
+            "nested workspace is forbidden: {rel}"
+        );
+        for inherited in [
+            "version.workspace = true",
+            "edition.workspace = true",
+            "rust-version.workspace = true",
+            "repository.workspace = true",
+            "license.workspace = true",
+        ] {
+            assert!(
+                manifest.contains(inherited),
+                "{rel} must inherit {inherited}"
+            );
+        }
+        assert!(
+            !manifest.contains("0.0.0-bootstrap"),
+            "{rel} retains bootstrap version metadata"
+        );
+    }
+}
+
 /// Whether `rel` lives under an excluded directory component, mirroring the
 /// bash gate's `rg -g '!**/target/**' -g '!**/tests/**' -g '!**/.git/**'`
 /// globs. A `**/X/**` glob excludes paths where `X` is a *directory* component

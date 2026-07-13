@@ -5,7 +5,7 @@
 # Every test matched by those substring filters is present in the default
 # `cargo test --workspace` host list and the broker default + layer1-bootstrap
 # lists, all gated by tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
-# tests/tools/assert-pinned-tests.sh (which lists the broker workspace under
+# tests/tools/assert-pinned-tests.sh (which lists the focused broker package under
 # --features layer1-bootstrap; all 3 broker tests are present there).
 # The retired gate's trailing `ch-net-handoff-not-supported` docs-anchor grep
 # is independently guarded by packages/d2b/tests/cli_contract_coverage.rs
@@ -22,7 +22,7 @@ routes::tests::foreign_default_route_fails_closed
 routes::tests::dnsmasq_not_bound_fails_closed
 routes::tests::host_lan_cidr_ambiguous_for_vpn
 #
-# d2b-priv-broker (broker-workspace cargo test --workspace [+ layer1-bootstrap]):
+# d2b-priv-broker (focused broker package cargo test [+ layer1-bootstrap]):
 ops::nm::tests::managed_foreign_conflict_detected
 ops::nm::tests::reload_command_select_by_version
 ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed

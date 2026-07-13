@@ -86,10 +86,6 @@ is_member() {
 }
 
 # External (non-member) crates a pure contract crate must never depend on.
-# d2b-priv-broker lives in a SEPARATE workspace (excluded from
-# packages/Cargo.toml), so it never appears in the member set — name it
-# explicitly, along with any other d2b-* host/daemon crate caught by the
-# glob in check_dep below.
 is_external_forbidden() {
   case "$1" in
     prost | prost-types) return 0 ;;
@@ -100,9 +96,8 @@ is_external_forbidden() {
 # Classify one resolved dependency name against a pure crate's allowlist.
 # Forbidden iff it is NOT whitelisted and is any of: a workspace member
 # (catches d2b, xtask, the sibling contract crates), any `d2b`/
-# `d2b-*` crate (catches the separate-workspace d2b-priv-broker and
-# every host/daemon crate, member or not), or an external forbidden crate
-# (prost).
+# `d2b-*` crate (catches every host/daemon/broker crate), or an external
+# forbidden crate (prost).
 check_dep() {
   local crate="$1" allowed="$2" dep="$3"
   case "$allowed" in *" $dep "*) return 0 ;; esac

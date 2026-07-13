@@ -34,7 +34,7 @@ cli_bin=$(d2b_cli_native_bin)
 daemon_bin=$(d2b_daemon_native_bin)
 broker_bin=$(d2b_cargo_bin_path broker d2b-priv-broker)
 if [ ! -x "$broker_bin" ]; then
-  d2b_cli_toolchain_shell "cd '$ROOT/packages/d2b-priv-broker' && CARGO_TARGET_DIR='$(d2b_cargo_target_dir broker)' cargo build -q --manifest-path '$ROOT/packages/d2b-priv-broker/Cargo.toml' -p d2b-priv-broker"
+  d2b_cli_toolchain_shell "cd '$ROOT/packages' && CARGO_TARGET_DIR='$(d2b_cargo_target_dir workspace)' cargo build --locked -q --manifest-path '$ROOT/packages/Cargo.toml' -p d2b-priv-broker"
 fi
 
 wait_for_socket() {

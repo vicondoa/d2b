@@ -28,6 +28,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Unified all maintained host and guest Rust crates at version 2.0.0 under one
+  workspace, toolchain policy, dependency graph, and canonical lockfile while
+  retaining focused broker feature and static guest validation.
 - Kept sccache enabled throughout generated CI and persisted its local cache
   without exposing cache-service credentials to compiled code.
 - Replaced the unavailable GitHub stack preview dependency with locked Git
@@ -185,6 +188,12 @@ deprecations ship one minor release before removal.
   built the delivery app with pinned Rust 1.94.1 on both supported systems,
   kept delivery evidence outside Git metadata, and bound non-generated PR
   workflow summaries to the exact checked-out candidate commit.
+
+### Removed
+
+- Removed the superseded standalone Wayland-proxy feasibility crate, redundant
+  nested Cargo workspaces and lockfiles, and the stale duplicate
+  activation-helper source.
 
 ## [1.4.1] - 2026-07-12
 

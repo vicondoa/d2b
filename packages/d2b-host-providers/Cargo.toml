@@ -1,7 +1,9 @@
 [package]
 name = "d2b-host-providers"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -18,13 +20,13 @@ workspace = true
 # host adapter); the dependency-direction gate does NOT treat it as a pure
 # contract crate, so the provider TRAIT crates never gain a host edge.
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt"] }
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+d2b-core = { workspace = true }
+d2b-host = { workspace = true }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 serde_json.workspace = true

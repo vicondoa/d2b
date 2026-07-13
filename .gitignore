@@ -99,11 +99,6 @@ packages/*/t/
 # another rustc version cannot poison the pinned gate.
 packages/.d2b-gate-targets/
 
-# Broker feature-pass target dirs (deterministic siblings of the broker target
-# dir, kept stable so sccache cache keys don't churn — see tests/test-rust.sh).
-packages/d2b-priv-broker/target-layer1/
-packages/d2b-priv-broker/target-fakebackends/
-
 # Panel-review output must never be committed — it belongs in the
 # session workspace, not the repo. (Removed a stray panel-w-fu-fu-rollup/
 # that a prior run wrote into the repo when /tmp was unavailable.)

@@ -73,10 +73,9 @@ d2b_flake_ref() {
 
 d2b_cargo_config_path() {
   case "${1:-workspace}" in
-    workspace) printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml" ;;
-    broker) printf '%s\n' "$(d2b_repo_root)/packages/d2b-priv-broker/.cargo/config.toml" ;;
-    guest-shell-runner) printf '%s\n' "$(d2b_repo_root)/packages/d2b-guest-shell-runner/.cargo/config.toml" ;;
-    fuzz) printf '%s\n' "$(d2b_repo_root)/packages/d2b-core/fuzz/.cargo/config.toml" ;;
+    workspace|broker|guest-shell-runner|fuzz)
+      printf '%s\n' "$(d2b_repo_root)/packages/.cargo/config.toml"
+      ;;
     *)
       fail "unknown cargo target scope: ${1:-<empty>}"
       return 1
@@ -98,7 +97,7 @@ d2b_cargo_target_dir() {
     return 1
   fi
   # Honor an explicit [build].target-dir if present; otherwise use the
-  # cargo default ("<workspace-root>/target") for the scope. With the
+  # cargo default ("<workspace-root>/target"). With the
   # Sccache-based dedup design, target-dir is intentionally NOT
   # set, so each worktree gets its own per-worktree target/ and
   # compiled-output dedup happens cross-worktree via sccache.
@@ -108,10 +107,9 @@ d2b_cargo_target_dir() {
     return 0
   fi
   case "$scope" in
-    workspace) base="$(d2b_repo_root)/packages/target" ;;
-    broker) base="$(d2b_repo_root)/packages/d2b-priv-broker/target" ;;
-    guest-shell-runner) base="$(d2b_repo_root)/packages/d2b-guest-shell-runner/target" ;;
-    fuzz) base="$(d2b_repo_root)/packages/d2b-core/fuzz/target" ;;
+    workspace|broker|guest-shell-runner|fuzz)
+      base="$(d2b_repo_root)/packages/target"
+      ;;
     *)
       fail "unknown cargo target scope: $scope"
       return 1

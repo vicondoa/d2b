@@ -1,7 +1,9 @@
 [package]
 name = "d2b-ttrpc-api-fit-spike"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -9,9 +11,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-protobuf = "=3.7.2"
-ttrpc = { version = "=0.9.0", default-features = false, features = ["async"] }
+async-trait.workspace = true
+protobuf.workspace = true
+ttrpc = { workspace = true, default-features = false, features = ["async"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }

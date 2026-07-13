@@ -174,7 +174,7 @@ fn require_match(haystack: &str, pattern: &str, msg: &str) {
 #[test]
 fn group_migration_fresh_install() {
     let activation_rel = "nixos-modules/host-activation.nix";
-    let helper_rel = "nixos-modules/host-activation-helper/src/main.rs";
+    let helper_rel = "packages/d2b-host-activation-helper/src/main.rs";
     assert!(
         repo_path_exists(activation_rel) && repo_path_exists(helper_rel),
         "group-migration-fresh-install: FAIL — migration module/helper missing"

@@ -10,7 +10,7 @@ let
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
   sourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-unsafe-local-helper";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;

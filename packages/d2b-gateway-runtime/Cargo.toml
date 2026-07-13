@@ -1,7 +1,9 @@
 [package]
 name = "d2b-gateway-runtime"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -19,13 +21,13 @@ workspace = true
 # display byte stream. Nothing else depends on it (it is the composition root
 # consumed by the gateway-mode daemon).
 [dependencies]
-d2b-gateway = { path = "../d2b-gateway", version = "0.0.0-bootstrap" }
-d2b-provider-relay = { path = "../d2b-provider-relay", version = "0.0.0-bootstrap" }
-d2b-provider-aca = { path = "../d2b-provider-aca", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+d2b-gateway = { workspace = true }
+d2b-provider-relay = { workspace = true }
+d2b-provider-aca = { workspace = true }
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 getrandom = "0.2"

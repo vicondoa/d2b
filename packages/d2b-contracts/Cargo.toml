@@ -1,7 +1,9 @@
 [package]
 name = "d2b-contracts"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -9,12 +11,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-core = { workspace = true }
+d2b-realm-core = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
-protobuf = "3.7.2"
+protobuf.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

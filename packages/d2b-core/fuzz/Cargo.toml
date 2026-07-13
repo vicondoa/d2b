@@ -1,17 +1,21 @@
-[workspace]
-
 [package]
 name = "d2b-core-fuzz"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
-license = "Apache-2.0"
+license.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 default = ["fuzz"]
 fuzz = []
+test-support = ["d2b-core/test-support"]
 
 [dependencies]
 bolero = "0.10"
-d2b-core = { path = "..", version = "0.0.0-bootstrap" }
-serde_json = "1"
+d2b-core = { workspace = true }
+serde_json.workspace = true

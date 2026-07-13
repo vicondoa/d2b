@@ -1,7 +1,9 @@
 [package]
 name = "d2b-realm-codec-protobuf"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -20,9 +22,9 @@ workspace = true
 # This crate is the ONLY contract crate permitted to link `prost`; the
 # routing/operation layer never depends on it (dependency-direction gate).
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+d2b-contracts = { workspace = true }
 prost = "0.13"
 
 [dev-dependencies]

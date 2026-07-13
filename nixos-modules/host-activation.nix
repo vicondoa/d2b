@@ -58,7 +58,7 @@ let
   };
   activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-activation-helper";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
@@ -82,7 +82,7 @@ EOF
   activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
   groupMigrationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-host-activation-helper";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     cargoBuildFlags = [ "--package" "d2b-host-activation-helper" ];
     inherit cargoLock;

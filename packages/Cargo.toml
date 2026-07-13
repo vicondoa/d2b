@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-exclude = ["d2b-priv-broker", "d2b-guest-shell-runner"]
 members = [
     "d2b-host-activation-helper",
     "d2b-core",
+    "d2b-core/fuzz",
     "d2b-realm-core",
     "d2b-realm-provider",
     "d2b-realm-transport",
@@ -29,11 +29,17 @@ members = [
     "d2b-wayland-proxy",
     "d2b-contract-tests",
     "d2b-ttrpc-api-fit-spike",
+    "d2b-priv-broker",
+    "d2b-guest-shell-runner",
     "xtask",
 ]
 
 [workspace.package]
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.94.1"
 license = "Apache-2.0"
+repository = "https://github.com/vicondoa/d2b"
 
 [workspace.lints.clippy]
 all = "warn"
@@ -51,34 +57,34 @@ unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 
 [workspace.dependencies]
+d2b = { path = "d2b", version = "2.0.0" }
+d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
+d2b-contracts = { path = "d2b-contracts", version = "2.0.0" }
+d2b-core = { path = "d2b-core", version = "2.0.0" }
+d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0" }
+d2b-exec-runner = { path = "d2b-exec-runner", version = "2.0.0" }
+d2b-gateway = { path = "d2b-gateway", version = "2.0.0" }
+d2b-gateway-runtime = { path = "d2b-gateway-runtime", version = "2.0.0" }
+d2b-guestd = { path = "d2b-guestd", version = "2.0.0" }
+d2b-host = { path = "d2b-host", version = "2.0.0" }
+d2b-host-providers = { path = "d2b-host-providers", version = "2.0.0" }
+d2b-provider-aca = { path = "d2b-provider-aca", version = "2.0.0" }
+d2b-provider-relay = { path = "d2b-provider-relay", version = "2.0.0" }
+d2b-realm-codec-protobuf = { path = "d2b-realm-codec-protobuf", version = "2.0.0" }
+d2b-realm-core = { path = "d2b-realm-core", version = "2.0.0" }
+d2b-realm-provider = { path = "d2b-realm-provider", version = "2.0.0" }
+d2b-realm-router = { path = "d2b-realm-router", version = "2.0.0" }
+d2b-realm-transport = { path = "d2b-realm-transport", version = "2.0.0" }
+d2b-wayland-proxy = { path = "d2b-wayland-proxy", version = "2.0.0" }
+async-trait = "0.1"
+protobuf = "=3.7.2"
+protobuf-codegen = "=3.7.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "0.8", features = ["derive"] }
-# W3 host-prepare low-level dependencies. `rustix` lands in the
-# integrator prep so d2b-host stubs can compile and so the supply-
-# chain gate (cargo-deny + cargo-audit through flake.nix's pinned
-# advisory DB) covers it before scope agents consume it.
-#
-# `rtnetlink` and `nftnl` are intentionally NOT declared here: panel
-# review for the W3 prep commit ruled they ship with the scope commit
-# that first consumes them (s2 for rtnetlink, s3 for nftables) so the
-# license / advisory whitelist update lands in the same commit that
-# adds the consumer. See plan.md §"W3 broker variant additions" — the
-# wire contract for routes/nft is fully encoded in d2b-contracts here,
-# so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
-# W3 s2: declared in workspace.dependencies so future scope work (and
-# the eventual production netlink backend in d2b-priv-broker) can
-# opt into rtnetlink via `{ workspace = true }`. Not yet consumed by
-# any workspace member, so the resolved Cargo.lock is unchanged. The
-# trait-based netlink backend in `d2b_host::netlink` lets the L1c
-# canary matrix exercise every fail-closed path through a fake
-# backend without `CAP_NET_ADMIN`.
 rtnetlink = "0.14"
-# W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
-# is byte-stable across builds and consumers. The nftnl native binding
-# is intentionally NOT pulled in — see
-# `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-
-# rationalized fallback (typed NftBatch + `nft -f -` text rendering,
-# verified by the broker's hash readback).
 sha2 = "0.10"
+tokio = { version = "1", default-features = false }
+ttrpc = { version = "=0.9.0", default-features = false }
+ttrpc-codegen = "=0.6.0"

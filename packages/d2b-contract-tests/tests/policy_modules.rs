@@ -135,7 +135,6 @@ fn legacy_group_search() -> Regex {
 fn legacy_group_allowlist() -> Regex {
     let allowlist_patterns = [
         r"nixos-modules/host-activation\.nix:[0-9]+:[[:space:]]*(legacyLauncherGid|legacyLaunchersGid|getent group|for legacy_name in d2b-launcher d2b-launchers; do).*",
-        r"nixos-modules/host-activation-helper/.*",
         r"packages/d2b-host-activation-helper/.*",
         r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
         r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# d2b-launcher\{,s\} → d2b rename\. No module references the[[:space:]]*",

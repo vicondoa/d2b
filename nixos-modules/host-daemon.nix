@@ -15,7 +15,7 @@ let
 
   d2bdSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2bd";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2bd" ];
@@ -47,7 +47,7 @@ EOF
   # `d2b` binary on the host.
   d2bCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2b" ];
@@ -143,7 +143,7 @@ EOF
   # only depends on libc + nix; no IPC; no async runtime.
   d2bActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-activation-helper";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
@@ -167,7 +167,7 @@ EOF
 
   d2bGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-gateway-runtime";
-    version = "0.0.0-bootstrap";
+    version = "2.0.0";
     src = packagesSrc;
     inherit cargoLock;
     cargoBuildFlags = [ "--package" "d2b-gateway-runtime" ];

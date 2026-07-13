@@ -1,7 +1,9 @@
 [package]
 name = "d2b-daemon-access"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -16,14 +18,14 @@ workspace = true
 # public.sock wire (delegates to d2b-contracts public-wire types; no new
 # wire). relay/direct_tls are declared-but-unimplemented slots.
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+d2b-contracts = { workspace = true }
+async-trait.workspace = true
 nix = { version = "0.29", default-features = false, features = ["socket"] }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["io-util", "net", "rt"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -2695,16 +2695,16 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
                         });
                     }
                     Ok(Some((file, meta))) => {
-                        if let Some(expected_uid) = wayland_user_uid {
-                            if meta.uid() != expected_uid {
-                                return Err(LiveHandlerError::SpawnFailed {
-                                    detail: format!(
-                                        "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
-                                             expected owner uid {expected_uid}",
-                                        plan.uid,
-                                    ),
-                                });
-                            }
+                        if let Some(expected_uid) = wayland_user_uid
+                            && meta.uid() != expected_uid
+                        {
+                            return Err(LiveHandlerError::SpawnFailed {
+                                detail: format!(
+                                    "graphical-session-not-active: runtime dir owner mismatch for wayland-proxy uid {}: \
+                                         expected owner uid {expected_uid}",
+                                    plan.uid,
+                                ),
+                            });
                         }
                         file
                     }

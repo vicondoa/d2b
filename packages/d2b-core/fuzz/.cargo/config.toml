@@ -1,6 +1,0 @@
-# Sibling-workspace cargo config for d2b-core/fuzz (bolero).
-# See packages/.cargo/config.toml for the rationale: per-worktree
-# target/, shared compiled-output dedup via sccache.
-
-[build]
-rustc-wrapper = "sccache"
