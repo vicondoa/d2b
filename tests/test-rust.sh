@@ -41,18 +41,16 @@ if [ -z "$pinned_channel" ]; then
 fi
 export pinned_channel
 
-workspace_target_dir=$(d2b_cargo_target_dir workspace)
-# Separate target dirs for the broker's three concurrent feature passes so they
-# don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
-# (not mktemp): sccache hashes the inherited CARGO_* environment, including
-# CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
-# and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
-# hits) while still avoiding lock contention. They are gitignored and reused
-# across runs like the default broker/workspace target dirs.
-broker_target_dir=$(d2b_cargo_target_dir broker)
-broker_layer1_target_dir="${broker_target_dir%/}-layer1"
-broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
-guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
+# Keep the pinned gate isolated from packages/target, where developers may have
+# built with a different rustc. Rust metadata is not cross-version compatible;
+# a shared target can make rustdoc load an rlib produced by the wrong compiler.
+# Stable per-toolchain dirs preserve incremental reuse and sccache hits without
+# allowing an unpinned Cargo invocation to poison the gate.
+workspace_target_dir=$(d2b_cargo_gate_target_dir workspace "$pinned_channel")
+broker_target_dir=$(d2b_cargo_gate_target_dir broker "$pinned_channel")
+broker_layer1_target_dir=$(d2b_cargo_gate_target_dir broker-layer1 "$pinned_channel")
+broker_fakebackends_target_dir=$(d2b_cargo_gate_target_dir broker-fakebackends "$pinned_channel")
+guest_shell_runner_target_dir=$(d2b_cargo_gate_target_dir guest-shell-runner "$pinned_channel")
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full D2B_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.

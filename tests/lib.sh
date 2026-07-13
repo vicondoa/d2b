@@ -114,6 +114,25 @@ d2b_cargo_target_dir() {
   printf '%s\n' "$base"
 }
 
+d2b_cargo_gate_target_dir() {
+  local scope="${1:?d2b_cargo_gate_target_dir: missing scope}"
+  local toolchain="${2:?d2b_cargo_gate_target_dir: missing toolchain}"
+  case "$scope" in
+    workspace|broker|broker-layer1|broker-fakebackends|guest-shell-runner) ;;
+    *)
+      fail "unknown cargo gate target scope: $scope"
+      return 1
+      ;;
+  esac
+  case "$toolchain" in
+    ""|*[!A-Za-z0-9._-]*)
+      fail "unsafe cargo gate toolchain label: $toolchain"
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$(d2b_repo_root)/packages/.d2b-gate-targets/$toolchain/$scope"
+}
+
 d2b_cargo_bin_path() {
   local scope="$1" bin_name="$2" target_dir
   target_dir=$(d2b_cargo_target_dir "$scope") || return 1
