@@ -10,7 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
@@ -21,7 +21,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use signal_hook::{
     consts::{SIGINT, SIGTERM},
-    iterator::Signals,
+    flag,
 };
 
 use super::{
@@ -39,6 +39,7 @@ const MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(100);
+const OUTPUT_POLL_MILLISECONDS: i32 = 20;
 const EXIT_COMMAND_TIMEOUT: i32 = -1;
 const EXIT_STDOUT_OVERFLOW: i32 = -2;
 const EXIT_STDERR_OVERFLOW: i32 = -3;
@@ -201,7 +202,21 @@ impl CommandOutputAdapter for ProcessCommandOutput {
         cwd: Option<&Path>,
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
-        self.output_with_environment(program, args, cwd, &BTreeMap::new(), limits)
+        let environment = controlled_environment(
+            program,
+            &BTreeMap::new(),
+            CommandEnvironment::Authority,
+            std::env::vars_os(),
+        );
+        let mut terminal_signals = TerminalSignals::new()?;
+        run_process(
+            program,
+            args,
+            cwd,
+            &environment,
+            limits,
+            &mut terminal_signals,
+        )
     }
 
     fn output_with_environment(
@@ -212,16 +227,99 @@ impl CommandOutputAdapter for ProcessCommandOutput {
         environment: &BTreeMap<OsString, OsString>,
         limits: CommandLimits,
     ) -> Result<CommandOutput> {
+        let environment = controlled_environment(
+            program,
+            environment,
+            CommandEnvironment::Validation,
+            std::env::vars_os(),
+        );
         let mut terminal_signals = TerminalSignals::new()?;
         run_process(
             program,
             args,
             cwd,
-            environment,
+            &environment,
             limits,
             &mut terminal_signals,
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandEnvironment {
+    Authority,
+    Validation,
+}
+
+fn controlled_environment(
+    program: &str,
+    explicit: &BTreeMap<OsString, OsString>,
+    kind: CommandEnvironment,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> BTreeMap<OsString, OsString> {
+    let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
+    let mut environment = BTreeMap::from([
+        (OsString::from("LANG"), OsString::from("C")),
+        (OsString::from("LC_ALL"), OsString::from("C")),
+        (OsString::from("TZ"), OsString::from("UTC")),
+    ]);
+    let path = inherited
+        .get(std::ffi::OsStr::new("PATH"))
+        .and_then(|value| sanitize_path_list(value))
+        .unwrap_or_else(|| OsString::from("/run/current-system/sw/bin:/usr/bin:/bin"));
+    environment.insert(OsString::from("PATH"), path);
+    for variable in ["CARGO_HOME", "RUSTUP_HOME"] {
+        if let Some(value) = inherited
+            .get(std::ffi::OsStr::new(variable))
+            .filter(|value| safe_absolute_path(value))
+        {
+            environment.insert(OsString::from(variable), value.clone());
+        }
+    }
+    if kind == CommandEnvironment::Authority && program == "gh" {
+        for variable in ["GH_TOKEN", "GITHUB_TOKEN"] {
+            if let Some(value) = inherited
+                .get(std::ffi::OsStr::new(variable))
+                .filter(|value| !value.is_empty())
+            {
+                environment.insert(OsString::from(variable), value.clone());
+            }
+        }
+        for variable in ["HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] {
+            if let Some(value) = inherited
+                .get(std::ffi::OsStr::new(variable))
+                .filter(|value| safe_absolute_path(value))
+            {
+                environment.insert(OsString::from(variable), value.clone());
+            }
+        }
+    }
+    environment.extend(
+        explicit
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    environment
+}
+
+fn sanitize_path_list(value: &std::ffi::OsStr) -> Option<OsString> {
+    let paths = std::env::split_paths(value)
+        .filter(|path| safe_path(path))
+        .collect::<Vec<_>>();
+    (!paths.is_empty())
+        .then(|| std::env::join_paths(paths).ok())
+        .flatten()
+}
+
+fn safe_absolute_path(value: &std::ffi::OsStr) -> bool {
+    safe_path(Path::new(value))
+}
+
+fn safe_path(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,29 +332,93 @@ trait TerminalSignalSource {
     fn pending(&mut self) -> Option<TerminalSignal>;
 }
 
+struct GlobalTerminalSignals {
+    interrupt: Arc<AtomicBool>,
+    terminate: Arc<AtomicBool>,
+    inactive: Arc<AtomicBool>,
+}
+
+static TERMINAL_SIGNAL_FLAGS: OnceLock<std::result::Result<GlobalTerminalSignals, String>> =
+    OnceLock::new();
+static TERMINAL_SIGNAL_OWNER: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+static TERMINAL_SIGNAL_INITIALIZATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 struct TerminalSignals {
-    signals: Signals,
+    flags: &'static GlobalTerminalSignals,
+    _owner: MutexGuard<'static, ()>,
 }
 
 impl TerminalSignals {
     fn new() -> Result<Self> {
-        Signals::new([SIGINT, SIGTERM])
-            .map(|signals| Self { signals })
-            .map_err(|error| {
-                DeliveryError::new(format!(
-                    "cannot install terminal signal forwarding: {error}"
-                ))
+        let flags = TERMINAL_SIGNAL_FLAGS.get_or_init(|| {
+            #[cfg(test)]
+            TERMINAL_SIGNAL_INITIALIZATIONS.fetch_add(1, Ordering::Relaxed);
+            let interrupt = Arc::new(AtomicBool::new(false));
+            let terminate = Arc::new(AtomicBool::new(false));
+            let inactive = Arc::new(AtomicBool::new(true));
+            let mut registrations = Vec::new();
+            let installed = (|| {
+                registrations.push(flag::register_conditional_default(
+                    SIGINT,
+                    Arc::clone(&inactive),
+                )?);
+                registrations.push(flag::register(SIGINT, Arc::clone(&interrupt))?);
+                registrations.push(flag::register_conditional_default(
+                    SIGTERM,
+                    Arc::clone(&inactive),
+                )?);
+                registrations.push(flag::register(SIGTERM, Arc::clone(&terminate))?);
+                std::io::Result::Ok(())
+            })();
+            if let Err(error) = installed {
+                for registration in registrations {
+                    signal_hook::low_level::unregister(registration);
+                }
+                return Err(error.to_string());
+            }
+            Ok(GlobalTerminalSignals {
+                interrupt,
+                terminate,
+                inactive,
             })
+        });
+        let flags = flags.as_ref().map_err(|error| {
+            DeliveryError::new(format!(
+                "cannot install terminal signal forwarding: {error}"
+            ))
+        })?;
+        let owner = TERMINAL_SIGNAL_OWNER
+            .lock()
+            .map_err(|_| DeliveryError::new("terminal signal forwarding owner was poisoned"))?;
+        flags.interrupt.store(false, Ordering::Release);
+        flags.terminate.store(false, Ordering::Release);
+        flags.inactive.store(false, Ordering::Release);
+        Ok(Self {
+            flags,
+            _owner: owner,
+        })
     }
 }
 
 impl TerminalSignalSource for TerminalSignals {
     fn pending(&mut self) -> Option<TerminalSignal> {
-        self.signals.pending().find_map(|signal| match signal {
-            SIGINT => Some(TerminalSignal::Interrupt),
-            SIGTERM => Some(TerminalSignal::Terminate),
-            _ => None,
-        })
+        if self.flags.interrupt.swap(false, Ordering::AcqRel) {
+            Some(TerminalSignal::Interrupt)
+        } else if self.flags.terminate.swap(false, Ordering::AcqRel) {
+            Some(TerminalSignal::Terminate)
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for TerminalSignals {
+    fn drop(&mut self) {
+        self.flags.interrupt.store(false, Ordering::Release);
+        self.flags.terminate.store(false, Ordering::Release);
+        self.flags.inactive.store(true, Ordering::Release);
     }
 }
 
@@ -295,7 +457,7 @@ fn run_process<S: TerminalSignalSource>(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    command.envs(environment);
+    command.env_clear().envs(environment);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -517,10 +679,20 @@ fn spawn_capped_reader<R: Read + AsFd + Send + 'static>(
                 if cancel.load(Ordering::Acquire) {
                     break;
                 }
+                let poll_fd = rustix::event::PollFd::new(&reader, rustix::event::PollFlags::IN);
+                match rustix::event::poll(&mut [poll_fd], OUTPUT_POLL_MILLISECONDS) {
+                    Ok(0) => continue,
+                    Ok(_) => {}
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(error) => {
+                        return Err(DeliveryError::new(format!(
+                            "cannot poll child output: {error}"
+                        )));
+                    }
+                }
                 let read = match reader.read(&mut buffer) {
                     Ok(read) => read,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2));
                         continue;
                     }
                     Err(error) => {
@@ -577,19 +749,18 @@ pub struct StackCapability {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CapabilityGraphQlEnvelope {
     data: CapabilityGraphQlData,
+    #[serde(default)]
+    errors: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CapabilityGraphQlData {
     repository: Option<CapabilityRepository>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CapabilityRepository {
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
@@ -598,13 +769,11 @@ struct CapabilityRepository {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CapabilityPullRequests {
     nodes: Vec<CapabilityPullRequest>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CapabilityPullRequest {
     number: u64,
     state: String,
@@ -721,6 +890,11 @@ pub fn check_git_town_capability<A: CommandOutputAdapter>(
     }
     let response: CapabilityGraphQlEnvelope = serde_json::from_slice(&response.stdout)
         .map_err(|_| DeliveryError::new("GitHub capability response is invalid"))?;
+    if !response.errors.is_empty() {
+        return Err(DeliveryError::new(
+            "GitHub capability response contains partial GraphQL errors",
+        ));
+    }
     let observed = response
         .data
         .repository
@@ -1316,6 +1490,59 @@ impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
             ));
         }
 
+        for index in 0..first_active {
+            let status = &statuses[index];
+            let node = &expected_nodes[index];
+            let historical_base = status.merge_base_oid.as_deref().ok_or_else(|| {
+                DeliveryError::new(format!(
+                    "merged stack node {} has no historical merge base",
+                    node.branch
+                ))
+            })?;
+            if index == 0 {
+                if status.base_ref != trunk || status.base_oid != historical_base {
+                    return Err(DeliveryError::new(
+                        "bottom merged stack node does not record its exact trunk base",
+                    ));
+                }
+                continue;
+            }
+            let previous_node = &expected_nodes[index - 1];
+            let previous_status = &statuses[index - 1];
+            let previous_merge = previous_status.merge_commit_oid.as_deref().ok_or_else(|| {
+                DeliveryError::new("merged stack prefix is missing prior merge commit authority")
+            })?;
+            let historical_branch_base = status.base_ref == previous_node.branch
+                && status.base_oid == previous_status.head_oid
+                && historical_base == previous_status.head_oid;
+            let exact_post_merge_retarget = status.base_ref == trunk
+                && status.base_oid == previous_merge
+                && historical_base == previous_merge;
+            if !historical_branch_base && !exact_post_merge_retarget {
+                return Err(DeliveryError::new(format!(
+                    "merged stack node {} has no exact historical continuity with {}",
+                    node.branch, previous_node.branch
+                )));
+            }
+        }
+        if first_active > 0 {
+            let previous_merge = statuses[first_active - 1]
+                .merge_commit_oid
+                .as_deref()
+                .ok_or_else(|| {
+                    DeliveryError::new(
+                        "merged stack prefix is missing final merge commit authority",
+                    )
+                })?;
+            if statuses[first_active].base_ref != trunk
+                || statuses[first_active].base_oid != previous_merge
+            {
+                return Err(DeliveryError::new(
+                    "first active stack node was not retargeted to exact trunk after the merged prefix",
+                ));
+            }
+        }
+
         let mut expected_live_base = trunk.as_str();
         for (index, status) in statuses.iter().enumerate().skip(first_active) {
             if status.base_ref != expected_live_base {
@@ -1329,6 +1556,7 @@ impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
 
         let mut branches = Vec::with_capacity(expected_nodes.len());
         let mut topology_parent = trunk.as_str();
+        let active_trunk_oid = statuses[first_active].base_oid.clone();
         for (index, (node, status)) in expected_nodes.iter().zip(statuses).enumerate() {
             let is_merged = status.state == PullRequestState::Merged;
             let base = if is_merged {
@@ -1349,6 +1577,18 @@ impl<A: CommandOutputAdapter> StackGraphSource for GitTownStackSource<'_, A> {
                     status.merge_commit_oid.as_deref(),
                     status.merge_commit_tree_oid.as_deref(),
                     &node.branch,
+                )?;
+                self.verify_ancestor_oids(
+                    checkout_root,
+                    status
+                        .merge_commit_oid
+                        .as_deref()
+                        .expect("merged authority was required"),
+                    &active_trunk_oid,
+                    &format!(
+                        "active trunk before {}",
+                        expected_nodes[first_active].branch
+                    ),
                 )?;
             } else {
                 let local_head = self.resolve_local_oid(checkout_root, &node.branch)?;
@@ -1496,6 +1736,29 @@ impl<A: CommandOutputAdapter> GitTownStackSource<'_, A> {
         if observed_tree != tree {
             return Err(DeliveryError::new(format!(
                 "merged Git Town branch {branch} has forged merge commit/tree authority"
+            )));
+        }
+        let observed_parents = self.command_text(
+            "git",
+            &[
+                "show".to_owned(),
+                "-s".to_owned(),
+                "--format=%P".to_owned(),
+                commit.to_owned(),
+            ],
+            checkout_root,
+            "cannot resolve the GitHub merge commit parents",
+        )?;
+        let observed_parents = observed_parents
+            .split_ascii_whitespace()
+            .collect::<Vec<_>>();
+        if observed_parents.is_empty()
+            || observed_parents.len() > 2
+            || observed_parents[0] != base_oid
+            || (observed_parents.len() == 2 && observed_parents[1] != head_oid)
+        {
+            return Err(DeliveryError::new(format!(
+                "merged Git Town branch {branch} has forged merge parent authority"
             )));
         }
         let prospective_tree = self.command_text(
@@ -1700,19 +1963,18 @@ impl<A: CommandOutputAdapter> PullRequestStatusSource for GhStatusSource<'_, A> 
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlEnvelope {
     data: GraphQlData,
+    #[serde(default)]
+    errors: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlData {
     repository: Option<GraphQlRepository>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlRepository {
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
@@ -1721,7 +1983,6 @@ struct GraphQlRepository {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlPullRequest {
     number: u64,
     state: String,
@@ -1749,7 +2010,6 @@ struct GraphQlPullRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlMergeCommit {
     oid: String,
     tree: GraphQlOid,
@@ -1757,7 +2017,6 @@ struct GraphQlMergeCommit {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlParents {
     nodes: Vec<GraphQlOid>,
     #[serde(rename = "pageInfo")]
@@ -1765,7 +2024,6 @@ struct GraphQlParents {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlMergeQueueEntry {
     id: String,
     state: String,
@@ -1776,32 +2034,27 @@ struct GraphQlMergeQueueEntry {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlOid {
     oid: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlName {
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlCommits {
     nodes: Vec<GraphQlCommitNode>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlCommitNode {
     commit: GraphQlCommit,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlCommit {
     oid: String,
     #[serde(rename = "statusCheckRollup")]
@@ -1809,13 +2062,11 @@ struct GraphQlCommit {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlRollup {
     contexts: GraphQlContexts,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlContexts {
     nodes: Vec<serde_json::Value>,
     #[serde(rename = "pageInfo")]
@@ -1823,7 +2074,6 @@ struct GraphQlContexts {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GraphQlPageInfo {
     #[serde(rename = "hasNextPage")]
     has_next_page: bool,
@@ -1837,6 +2087,11 @@ pub(crate) fn parse_gh_status(
     validate_repository_id(repository)?;
     let parsed: GraphQlEnvelope = serde_json::from_slice(bytes)
         .map_err(|error| DeliveryError::new(format!("invalid GitHub status JSON: {error}")))?;
+    if !parsed.errors.is_empty() {
+        return Err(DeliveryError::new(
+            "GitHub status response contains partial GraphQL errors",
+        ));
+    }
     let repo = parsed
         .data
         .repository
@@ -2715,6 +2970,145 @@ mod tests {
     }
 
     #[test]
+    fn external_graphql_extensions_are_ignored_but_authority_remains_required() {
+        let mut extended: serde_json::Value =
+            serde_json::from_slice(&graphql(serde_json::json!([]))).expect("fixture JSON");
+        extended["extensions"] = serde_json::json!({"requestId": "opaque"});
+        extended["data"]["extension"] = serde_json::json!(true);
+        extended["data"]["repository"]["extension"] = serde_json::json!({"new": "field"});
+        extended["data"]["repository"]["pullRequest"]["extension"] = serde_json::json!(["future"]);
+        extended["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["extension"] =
+            serde_json::json!(42);
+        parse_gh_status(
+            "github.com/example/d2b",
+            42,
+            &serde_json::to_vec(&extended).expect("extended JSON"),
+        )
+        .expect("non-breaking extensions");
+
+        extended["errors"] = serde_json::json!([{"message": "partial"}]);
+        let error = parse_gh_status(
+            "github.com/example/d2b",
+            42,
+            &serde_json::to_vec(&extended).expect("partial JSON"),
+        )
+        .expect_err("partial GraphQL response");
+        assert!(error.to_string().contains("partial GraphQL errors"));
+
+        let mut missing: serde_json::Value =
+            serde_json::from_slice(&graphql(serde_json::json!([]))).expect("fixture JSON");
+        missing["data"]["repository"]["pullRequest"]
+            .as_object_mut()
+            .expect("pull request")
+            .remove("baseRefOid");
+        assert!(
+            parse_gh_status(
+                "github.com/example/d2b",
+                42,
+                &serde_json::to_vec(&missing).expect("missing JSON"),
+            )
+            .is_err()
+        );
+        missing["data"]["repository"]["pullRequest"]["baseRefOid"] = serde_json::json!(7);
+        assert!(
+            parse_gh_status(
+                "github.com/example/d2b",
+                42,
+                &serde_json::to_vec(&missing).expect("wrong-type JSON"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validation_children_receive_only_controlled_environment() {
+        let inherited = BTreeMap::from([
+            (
+                OsString::from("PATH"),
+                OsString::from("/bin:relative:/usr/bin"),
+            ),
+            (
+                OsString::from("GITHUB_TOKEN"),
+                OsString::from("secret-canary"),
+            ),
+            (
+                OsString::from("SSH_AUTH_SOCK"),
+                OsString::from("/run/secret-agent"),
+            ),
+            (
+                OsString::from("AWS_ACCESS_KEY_ID"),
+                OsString::from("secret-canary"),
+            ),
+            (
+                OsString::from("CARGO_HOME"),
+                OsString::from("/var/lib/toolchain/cargo"),
+            ),
+        ]);
+        let explicit =
+            BTreeMap::from([(OsString::from("D2B_REQUIRED"), OsString::from("present"))]);
+        let controlled = controlled_environment(
+            "sh",
+            &explicit,
+            CommandEnvironment::Validation,
+            inherited.clone(),
+        );
+        assert_eq!(
+            controlled.get(std::ffi::OsStr::new("D2B_REQUIRED")),
+            Some(&OsString::from("present"))
+        );
+        assert_eq!(
+            controlled.get(std::ffi::OsStr::new("LC_ALL")),
+            Some(&OsString::from("C"))
+        );
+        assert!(controlled.contains_key(std::ffi::OsStr::new("CARGO_HOME")));
+        for secret in ["GITHUB_TOKEN", "SSH_AUTH_SOCK", "AWS_ACCESS_KEY_ID"] {
+            assert!(!controlled.contains_key(std::ffi::OsStr::new(secret)));
+        }
+        assert!(
+            std::env::split_paths(
+                controlled
+                    .get(std::ffi::OsStr::new("PATH"))
+                    .expect("controlled PATH")
+            )
+            .all(|path| path.is_absolute())
+        );
+        let authority = controlled_environment(
+            "gh",
+            &BTreeMap::new(),
+            CommandEnvironment::Authority,
+            inherited,
+        );
+        assert_eq!(
+            authority.get(std::ffi::OsStr::new("GITHUB_TOKEN")),
+            Some(&OsString::from("secret-canary"))
+        );
+
+        let output = ProcessCommandOutput
+            .output_with_environment(
+                "sh",
+                &[
+                    "-c".to_owned(),
+                    "test \"$D2B_REQUIRED\" = present \
+                     && test \"$LC_ALL\" = C \
+                     && test \"$TZ\" = UTC \
+                     && test -n \"$PATH\" \
+                     && test -z \"${GITHUB_TOKEN+x}\" \
+                     && test -z \"${SSH_AUTH_SOCK+x}\""
+                        .to_owned(),
+                ],
+                None,
+                &explicit,
+                CommandLimits {
+                    stdout_bytes: 64,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_secs(1),
+                },
+            )
+            .expect("controlled child");
+        assert!(output.success, "{}", output.safe_failure_summary());
+    }
+
+    #[test]
     fn process_runner_caps_stdout_stderr_and_timeout() {
         let runner = ProcessCommandOutput;
         let stdout = runner
@@ -2802,6 +3196,71 @@ mod tests {
     }
 
     #[test]
+    fn process_runner_poll_handles_silent_child_and_output_burst() {
+        let silent = ProcessCommandOutput
+            .output_with_limits(
+                "sh",
+                &["-c".to_owned(), "sleep 0.1; printf complete".to_owned()],
+                None,
+                CommandLimits {
+                    stdout_bytes: 64,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_secs(1),
+                },
+            )
+            .expect("silent child");
+        assert!(silent.success);
+        assert_eq!(silent.stdout, b"complete");
+
+        let burst = ProcessCommandOutput
+            .output_with_limits(
+                "sh",
+                &[
+                    "-c".to_owned(),
+                    "i=0; while test \"$i\" -lt 4096; do printf x; i=$((i+1)); done".to_owned(),
+                ],
+                None,
+                CommandLimits {
+                    stdout_bytes: 8192,
+                    stderr_bytes: 64,
+                    timeout: Duration::from_secs(1),
+                },
+            )
+            .expect("output burst");
+        assert!(burst.success);
+        assert_eq!(burst.stdout.len(), 4096);
+    }
+
+    #[test]
+    fn terminal_signal_registration_is_global_across_repeated_commands() {
+        for _ in 0..2 {
+            let output = ProcessCommandOutput
+                .output_with_limits(
+                    "sh",
+                    &["-c".to_owned(), "printf ok".to_owned()],
+                    None,
+                    CommandLimits {
+                        stdout_bytes: 16,
+                        stderr_bytes: 16,
+                        timeout: Duration::from_secs(1),
+                    },
+                )
+                .expect("repeated command");
+            assert!(output.success);
+        }
+        assert_eq!(TERMINAL_SIGNAL_INITIALIZATIONS.load(Ordering::Acquire), 1);
+        assert!(
+            TERMINAL_SIGNAL_FLAGS
+                .get()
+                .and_then(|signals| signals.as_ref().ok())
+                .expect("global signal dispatcher")
+                .inactive
+                .load(Ordering::Acquire),
+            "completed commands must deregister active signal ownership"
+        );
+    }
+
+    #[test]
     fn exited_leader_stays_unreaped_until_descendant_group_cleanup() {
         let started = Instant::now();
         let output = ProcessCommandOutput
@@ -2863,12 +3322,18 @@ mod tests {
                 polls: 20,
                 signal: Some(signal),
             };
+            let environment = controlled_environment(
+                "sh",
+                &BTreeMap::new(),
+                CommandEnvironment::Validation,
+                std::env::vars_os(),
+            );
             let started = Instant::now();
             let output = run_process(
                 "sh",
                 &["-c".to_owned(), script, "sh".to_owned(), marker_string],
                 None,
-                &BTreeMap::new(),
+                &environment,
                 CommandLimits {
                     stdout_bytes: 128,
                     stderr_bytes: 128,
@@ -3065,10 +3530,12 @@ mod tests {
         ]
     }
 
-    fn merged_verification(tree: &str) -> Vec<CommandOutput> {
+    fn merged_verification(base: &str, head: &str, tree: &str) -> Vec<CommandOutput> {
         vec![
             successful_output(format!("{tree}\n").into_bytes()),
+            successful_output(format!("{base} {head}\n").into_bytes()),
             successful_output(format!("{tree}\n").into_bytes()),
+            successful_output(Vec::new()),
             successful_output(Vec::new()),
         ]
     }
@@ -3124,7 +3591,7 @@ mod tests {
             41,
             "first",
             "main",
-            &merged,
+            &main,
             &first,
             "MERGED",
             Some(&main),
@@ -3135,7 +3602,7 @@ mod tests {
             42, "second", "main", &merged, &second, "OPEN", None, None, None,
         ));
         outputs.push(successful_output(b"main\n".to_vec()));
-        outputs.extend(merged_verification(&merge_tree));
+        outputs.extend(merged_verification(&main, &first, &merge_tree));
         outputs.extend(active_verification(&second, &merged));
         let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
             .graph(
@@ -3154,7 +3621,7 @@ mod tests {
         );
         assert!(graph.branches[0].is_merged);
         assert_eq!(graph.branches[0].base, main);
-        assert_eq!(graph.branches[0].observed_base, merged);
+        assert_eq!(graph.branches[0].observed_base, main);
         assert_eq!(graph.branches[1].parent, "first");
         assert_eq!(graph.branches[1].base_ref, "main");
         assert!(graph.branches[1].is_current);
@@ -3175,7 +3642,7 @@ mod tests {
             41,
             "first",
             "main",
-            &second_merge,
+            &main,
             &first,
             "MERGED",
             Some(&main),
@@ -3186,7 +3653,7 @@ mod tests {
             42,
             "second",
             "main",
-            &second_merge,
+            &first_merge,
             &second,
             "MERGED",
             Some(&first_merge),
@@ -3205,8 +3672,8 @@ mod tests {
             None,
         ));
         outputs.push(successful_output(b"main\n".to_vec()));
-        outputs.extend(merged_verification(&first_tree));
-        outputs.extend(merged_verification(&second_tree));
+        outputs.extend(merged_verification(&main, &first, &first_tree));
+        outputs.extend(merged_verification(&first_merge, &second, &second_tree));
         outputs.extend(active_verification(&third, &second_merge));
         let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
             .graph(
@@ -3242,7 +3709,11 @@ mod tests {
                 41 + index as u64,
                 ["first", "second", "third"][index],
                 "main",
-                &merges[2],
+                if index == 0 {
+                    &main
+                } else {
+                    &merges[index - 1]
+                },
                 &heads[index],
                 "MERGED",
                 Some(if index == 0 {
@@ -3258,8 +3729,16 @@ mod tests {
             44, "fourth", "main", &merges[2], &heads[3], "OPEN", None, None, None,
         ));
         outputs.push(successful_output(b"main\n".to_vec()));
-        for tree in &trees {
-            outputs.extend(merged_verification(tree));
+        for index in 0..3 {
+            outputs.extend(merged_verification(
+                if index == 0 {
+                    &main
+                } else {
+                    &merges[index - 1]
+                },
+                &heads[index],
+                &trees[index],
+            ));
         }
         outputs.extend(active_verification(&heads[3], &merges[2]));
         let graph = GitTownStackSource::new(&FakeCommand::new(outputs))
@@ -3293,7 +3772,7 @@ mod tests {
             41,
             "first",
             "main",
-            &merged,
+            &main,
             &first,
             "MERGED",
             Some(&main),
@@ -3318,6 +3797,137 @@ mod tests {
     }
 
     #[test]
+    fn git_town_adapter_rejects_unrelated_merged_prefix_and_wrong_historical_parent() {
+        let main = "a".repeat(40);
+        let first = "b".repeat(40);
+        let first_merge = "c".repeat(40);
+        let unrelated_merge = "d".repeat(40);
+        let top = "e".repeat(40);
+        let tree = "f".repeat(40);
+
+        let mut unrelated = stack_source_prefix("top");
+        unrelated.push(stack_status(
+            41,
+            "first",
+            "main",
+            &main,
+            &first,
+            "MERGED",
+            Some(&main),
+            Some(&first_merge),
+            Some(&tree),
+        ));
+        unrelated.push(stack_status(
+            42,
+            "top",
+            "main",
+            &unrelated_merge,
+            &top,
+            "OPEN",
+            None,
+            None,
+            None,
+        ));
+        unrelated.push(successful_output(b"main\n".to_vec()));
+        let error = GitTownStackSource::new(&FakeCommand::new(unrelated))
+            .graph(
+                "github.com/example/d2b",
+                Path::new("/checkout"),
+                &[stack_policy("first", 41), stack_policy("top", 42)],
+            )
+            .expect_err("unrelated merged prefix");
+        assert!(error.to_string().contains("retargeted to exact trunk"));
+
+        let second = "1".repeat(40);
+        let second_merge = "2".repeat(40);
+        let wrong_base = "3".repeat(40);
+        let mut wrong_parent = stack_source_prefix("top");
+        wrong_parent.push(stack_status(
+            41,
+            "first",
+            "main",
+            &main,
+            &first,
+            "MERGED",
+            Some(&main),
+            Some(&first_merge),
+            Some(&tree),
+        ));
+        wrong_parent.push(stack_status(
+            42,
+            "second",
+            "first",
+            &wrong_base,
+            &second,
+            "MERGED",
+            Some(&wrong_base),
+            Some(&second_merge),
+            Some(&"4".repeat(40)),
+        ));
+        wrong_parent.push(stack_status(
+            43,
+            "top",
+            "main",
+            &second_merge,
+            &top,
+            "OPEN",
+            None,
+            None,
+            None,
+        ));
+        wrong_parent.push(successful_output(b"main\n".to_vec()));
+        let error = GitTownStackSource::new(&FakeCommand::new(wrong_parent))
+            .graph(
+                "github.com/example/d2b",
+                Path::new("/checkout"),
+                &[
+                    stack_policy("first", 41),
+                    stack_policy("second", 42),
+                    stack_policy("top", 43),
+                ],
+            )
+            .expect_err("wrong historical parent");
+        assert!(error.to_string().contains("historical continuity"));
+    }
+
+    #[test]
+    fn git_town_adapter_rejects_forged_local_merge_parents() {
+        let main = "a".repeat(40);
+        let first = "b".repeat(40);
+        let merged = "c".repeat(40);
+        let tree = "d".repeat(40);
+        let top = "e".repeat(40);
+        let mut outputs = stack_source_prefix("top");
+        outputs.push(stack_status(
+            41,
+            "first",
+            "main",
+            &main,
+            &first,
+            "MERGED",
+            Some(&main),
+            Some(&merged),
+            Some(&tree),
+        ));
+        outputs.push(stack_status(
+            42, "top", "main", &merged, &top, "OPEN", None, None, None,
+        ));
+        outputs.push(successful_output(b"main\n".to_vec()));
+        outputs.push(successful_output(format!("{tree}\n").into_bytes()));
+        outputs.push(successful_output(
+            format!("{main} {}\n", "f".repeat(40)).into_bytes(),
+        ));
+        let error = GitTownStackSource::new(&FakeCommand::new(outputs))
+            .graph(
+                "github.com/example/d2b",
+                Path::new("/checkout"),
+                &[stack_policy("first", 41), stack_policy("top", 42)],
+            )
+            .expect_err("forged parent");
+        assert!(error.to_string().contains("forged merge parent"));
+    }
+
+    #[test]
     fn git_town_adapter_rejects_reordered_manifest_and_non_prefix_merge() {
         let main = "a".repeat(40);
         let first = "b".repeat(40);
@@ -3338,6 +3948,56 @@ mod tests {
             )
             .expect_err("reordered manifest");
         assert!(error.to_string().contains("active stack top"));
+
+        let first_merge = "e".repeat(40);
+        let second_merge = "f".repeat(40);
+        let mut reordered_prefix = stack_source_prefix("top");
+        reordered_prefix.push(stack_status(
+            42,
+            "second",
+            "first",
+            &first,
+            &second,
+            "MERGED",
+            Some(&first),
+            Some(&second_merge),
+            Some(&"1".repeat(40)),
+        ));
+        reordered_prefix.push(stack_status(
+            41,
+            "first",
+            "main",
+            &main,
+            &first,
+            "MERGED",
+            Some(&main),
+            Some(&first_merge),
+            Some(&"2".repeat(40)),
+        ));
+        reordered_prefix.push(stack_status(
+            43,
+            "top",
+            "main",
+            &second_merge,
+            &"3".repeat(40),
+            "OPEN",
+            None,
+            None,
+            None,
+        ));
+        reordered_prefix.push(successful_output(b"main\n".to_vec()));
+        let error = GitTownStackSource::new(&FakeCommand::new(reordered_prefix))
+            .graph(
+                "github.com/example/d2b",
+                Path::new("/checkout"),
+                &[
+                    stack_policy("second", 42),
+                    stack_policy("first", 41),
+                    stack_policy("top", 43),
+                ],
+            )
+            .expect_err("reordered merged prefix");
+        assert!(error.to_string().contains("exact trunk base"));
 
         let mut non_prefix = stack_source_prefix("second");
         non_prefix.push(stack_status(
@@ -3685,11 +4345,19 @@ mod tests {
 
     #[test]
     fn git_town_capability_checks_supported_major_auth_and_ordinary_pr_api() {
+        let mut response = capability_response("123", "456");
+        let mut extended: serde_json::Value =
+            serde_json::from_slice(&response.stdout).expect("capability JSON");
+        extended["extensions"] = serde_json::json!({"requestId": "opaque"});
+        extended["data"]["repository"]["extension"] = serde_json::json!(true);
+        extended["data"]["repository"]["pullRequests"]["nodes"][0]["extension"] =
+            serde_json::json!("future");
+        response.stdout = serde_json::to_vec(&extended).expect("extended capability JSON");
         let command = FakeCommand::new([
             successful_output(b"Git Town 23.0.1\n".to_vec()),
             successful_output(b"--stack\n--non-interactive\n--no-browser\n".to_vec()),
             successful_output(Vec::new()),
-            capability_response("123", "456"),
+            response,
         ]);
         let capability = check_git_town_capability(&command, "123/456").expect("available");
         assert_eq!(capability.version, GIT_TOWN_LOCKED_VERSION);
@@ -3703,6 +4371,39 @@ mod tests {
         assert!(query.contains("pullRequests(first:1"));
         assert!(query.contains("owner=123"));
         assert!(query.contains("name=456"));
+    }
+
+    #[test]
+    fn git_town_capability_rejects_partial_and_malformed_graphql_authority() {
+        let mut partial = capability_response("example", "d2b");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&partial.stdout).expect("capability JSON");
+        value["errors"] = serde_json::json!([{"message": "partial"}]);
+        partial.stdout = serde_json::to_vec(&value).expect("partial JSON");
+        let command = FakeCommand::new([
+            successful_output(b"Git Town 23.0.1\n".to_vec()),
+            successful_output(b"--stack --non-interactive --no-browser\n".to_vec()),
+            successful_output(Vec::new()),
+            partial,
+        ]);
+        let error = check_git_town_capability(&command, "example/d2b").expect_err("partial errors");
+        assert!(error.to_string().contains("partial GraphQL errors"));
+
+        let mut malformed = capability_response("example", "d2b");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&malformed.stdout).expect("capability JSON");
+        value["data"]["repository"]["pullRequests"]["nodes"][0]["headRefOid"] =
+            serde_json::json!(42);
+        malformed.stdout = serde_json::to_vec(&value).expect("malformed JSON");
+        let command = FakeCommand::new([
+            successful_output(b"Git Town 23.0.1\n".to_vec()),
+            successful_output(b"--stack --non-interactive --no-browser\n".to_vec()),
+            successful_output(Vec::new()),
+            malformed,
+        ]);
+        let error =
+            check_git_town_capability(&command, "example/d2b").expect_err("wrong typed authority");
+        assert!(error.to_string().contains("response is invalid"));
     }
 
     #[test]

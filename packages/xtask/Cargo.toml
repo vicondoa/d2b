@@ -22,5 +22,5 @@ sha2.workspace = true
 ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["event"] }
 signal-hook = "0.4"
