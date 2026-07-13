@@ -87,14 +87,14 @@
       "path": "packages/Cargo.lock"
     },
     {
-      "name": "flake-lock",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "flake.lock"
-    },
-    {
       "name": "delivery-tools",
       "repository": "github.com/vicondoa/d2b",
       "path": "pkgs/delivery-tools.nix"
+    },
+    {
+      "name": "flake-lock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "flake.lock"
     }
   ],
   "contract_fingerprints": [
@@ -134,6 +134,11 @@
       "path": "packages/xtask/src/delivery/panel.rs"
     },
     {
+      "name": "delivery-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "AGENTS.md"
+    },
+    {
       "name": "delivery-seal",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/src/delivery/seal.rs"
@@ -154,6 +159,11 @@
       "path": "packages/xtask/src/layer1/checks.rs"
     },
     {
+      "name": "layer1-manifest",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/layer1-jobs.json"
+    },
+    {
       "name": "layer1-model",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/src/layer1/model.rs"
@@ -172,16 +182,6 @@
       "name": "layer1-workflow",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/src/layer1/workflow.rs"
-    },
-    {
-      "name": "layer1-manifest",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "tests/layer1-jobs.json"
-    },
-    {
-      "name": "delivery-policy",
-      "repository": "github.com/vicondoa/d2b",
-      "path": "AGENTS.md"
     }
   ]
 }

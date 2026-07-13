@@ -1273,7 +1273,14 @@ fn validate_fingerprint_specs(
     repositories: &BTreeSet<&str>,
 ) -> Result<()> {
     ensure_count(fingerprints.len(), 0, MAX_FINGERPRINTS, "fingerprints")?;
-    let mut keys = BTreeSet::new();
+    if fingerprints
+        .windows(2)
+        .any(|pair| fingerprint_spec_key(&pair[0]) >= fingerprint_spec_key(&pair[1]))
+    {
+        return Err(DeliveryError::new(format!(
+            "{label} must be strictly sorted by canonical key and duplicate-free"
+        )));
+    }
     let mut names = BTreeSet::new();
     for fingerprint in fingerprints {
         validate_identifier(&fingerprint.name, "fingerprint name")?;
@@ -1284,12 +1291,7 @@ fn validate_fingerprint_specs(
             )));
         }
         validate_repo_relative_path(Path::new(&fingerprint.path))?;
-        if !keys.insert((
-            fingerprint.name.as_str(),
-            fingerprint.repository.as_str(),
-            fingerprint.path.as_str(),
-        )) || !names.insert(fingerprint.name.as_str())
-        {
+        if !names.insert(fingerprint.name.as_str()) {
             return Err(DeliveryError::new(format!(
                 "duplicate {label} entry {}",
                 fingerprint.name
@@ -1297,6 +1299,14 @@ fn validate_fingerprint_specs(
         }
     }
     Ok(())
+}
+
+fn fingerprint_spec_key(fingerprint: &FingerprintSpec) -> (&str, &str, &str) {
+    (
+        fingerprint.name.as_str(),
+        fingerprint.repository.as_str(),
+        fingerprint.path.as_str(),
+    )
 }
 
 fn validate_fingerprints(
@@ -1493,12 +1503,99 @@ fn ensure_sorted_unique_by<'a, T>(
 mod tests {
     use super::*;
 
+    fn delivery_manifest() -> DeliveryManifest {
+        serde_json::from_str(include_str!("../../../../delivery/manifest.json"))
+            .expect("checked-in delivery manifest")
+    }
+
+    fn fingerprint_category_mut<'a>(
+        manifest: &'a mut DeliveryManifest,
+        category: &str,
+    ) -> &'a mut Vec<FingerprintSpec> {
+        match category {
+            "generated_artifacts" => &mut manifest.generated_artifacts,
+            "dependency_fingerprints" => &mut manifest.dependency_fingerprints,
+            "contract_fingerprints" => &mut manifest.contract_fingerprints,
+            _ => panic!("unknown fingerprint category"),
+        }
+    }
+
+    fn ensure_two_fingerprints(fingerprints: &mut Vec<FingerprintSpec>) {
+        if fingerprints.len() == 1 {
+            fingerprints.push(FingerprintSpec {
+                name: "zz-test-artifact".to_owned(),
+                repository: fingerprints[0].repository.clone(),
+                path: "tests/layer1-jobs.json".to_owned(),
+            });
+        }
+        fingerprints.sort();
+    }
+
     #[test]
     fn canonical_ids_are_domain_separated() {
         let value = serde_json::json!({"a": 1});
         assert_ne!(
             canonical_digest(b"candidate\0", &value).expect("candidate"),
             canonical_digest(b"content\0", &value).expect("content")
+        );
+    }
+
+    #[test]
+    fn checked_in_delivery_manifest_has_canonical_fingerprint_order() {
+        delivery_manifest()
+            .validate()
+            .expect("valid delivery manifest");
+    }
+
+    #[test]
+    fn delivery_manifest_rejects_reordered_fingerprint_declarations() {
+        for category in [
+            "generated_artifacts",
+            "dependency_fingerprints",
+            "contract_fingerprints",
+        ] {
+            let mut manifest = delivery_manifest();
+            let fingerprints = fingerprint_category_mut(&mut manifest, category);
+            ensure_two_fingerprints(fingerprints);
+            fingerprints.swap(0, 1);
+
+            let error = manifest.validate().expect_err("reordered fingerprints");
+            assert!(error.to_string().contains(category));
+            assert!(error.to_string().contains("strictly sorted"));
+        }
+    }
+
+    #[test]
+    fn delivery_manifest_rejects_equal_canonical_fingerprint_keys() {
+        for category in [
+            "generated_artifacts",
+            "dependency_fingerprints",
+            "contract_fingerprints",
+        ] {
+            let mut manifest = delivery_manifest();
+            let fingerprints = fingerprint_category_mut(&mut manifest, category);
+            let duplicate = fingerprints[0].clone();
+            fingerprints.insert(1, duplicate);
+
+            let error = manifest.validate().expect_err("equal canonical keys");
+            assert!(error.to_string().contains(category));
+            assert!(error.to_string().contains("duplicate-free"));
+        }
+    }
+
+    #[test]
+    fn delivery_manifest_rejects_duplicate_names_with_distinct_canonical_keys() {
+        let mut manifest = delivery_manifest();
+        let fingerprints = &mut manifest.contract_fingerprints;
+        let mut duplicate = fingerprints[0].clone();
+        duplicate.path.push_str(".duplicate");
+        fingerprints.insert(1, duplicate);
+
+        let error = manifest.validate().expect_err("duplicate fingerprint name");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate contract_fingerprints entry")
         );
     }
 
