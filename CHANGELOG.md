@@ -22,6 +22,8 @@ deprecations ship one minor release before removal.
 
 - Removed stale per-VM observability relay sockets before broker spawn so a
   normal VM down/up cycle cannot fail with the relay address still in use.
+- Kept persistent-shell integration scratch paths within Linux UNIX-socket
+  limits when tests run from long worktree paths.
 - Rejected local-VM realm workloads that advertise persistent shells while the
   referenced guest has shell support disabled, preventing desktop clients from
   exposing a terminal action that can only fail at runtime.
