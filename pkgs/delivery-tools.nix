@@ -4,6 +4,8 @@ let
   cargoUdepsVersion = "0.1.61";
   cargoUdepsNightlyDate = "2025-12-01";
   cargoSemverChecksVersion = "0.47.0";
+  ghVersion = "2.92.0";
+  gitTownVersion = "23.0.1";
   rustStableVersion = "1.94.1";
 
   stableRust = pkgs.rust-bin.stable.${rustStableVersion}.minimal;
@@ -13,8 +15,124 @@ let
     rustc = stableRust;
   };
 
-  gh = pkgs.gh;
-  gitTown = pkgs.git-town;
+  gh = pkgs.buildGoModule (finalAttrs: {
+    pname = "gh";
+    version = ghVersion;
+
+    src = pkgs.fetchFromGitHub {
+      owner = "cli";
+      repo = "cli";
+      tag = "v${finalAttrs.version}";
+      hash = "sha256-/7EiX4ZZPhSNgY/D5OVOako/c0ujHq05GMj3UB11bqQ=";
+    };
+
+    vendorHash = "sha256-pBLRCIRjN3VoXbTFSq+R9/N3uAUCEjvPtk8LKKKS51s=";
+    nativeBuildInputs = [
+      pkgs.installShellFiles
+      pkgs.makeWrapper
+    ];
+
+    buildPhase = ''
+      runHook preBuild
+      make \
+        GO_LDFLAGS="-s -w -X github.com/cli/cli/v${pkgs.lib.versions.major finalAttrs.version}/internal/build.Date=d2b" \
+        GH_VERSION=${finalAttrs.version} \
+        bin/gh \
+        ${pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) "manpages"}
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      installBin bin/gh
+      wrapProgram "$out/bin/gh" --set-default GH_TELEMETRY false
+    ''
+    + pkgs.lib.optionalString
+      (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform)
+      ''
+        installManPage share/man/*/*.[1-9]
+        installShellCompletion --cmd gh \
+          --bash <("$out/bin/gh" completion -s bash) \
+          --fish <("$out/bin/gh" completion -s fish) \
+          --zsh <("$out/bin/gh" completion -s zsh)
+      ''
+    + ''
+      runHook postInstall
+    '';
+
+    doCheck = false;
+    nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
+    doInstallCheck = true;
+
+    meta = {
+      description = "GitHub CLI tool";
+      homepage = "https://cli.github.com/";
+      changelog = "https://github.com/cli/cli/releases/tag/v${finalAttrs.version}";
+      license = pkgs.lib.licenses.mit;
+      mainProgram = "gh";
+      platforms = pkgs.lib.platforms.linux;
+    };
+  });
+
+  gitTown = pkgs.buildGoModule (finalAttrs: {
+    pname = "git-town";
+    version = gitTownVersion;
+
+    src = pkgs.fetchFromGitHub {
+      owner = "git-town";
+      repo = "git-town";
+      tag = "v${finalAttrs.version}";
+      hash = "sha256-kAAzfb0rg10k9PnUKYEqdSWYWi0JR6jiKDHUv/RSUSs=";
+    };
+
+    # This release commits its vendor tree, which is covered by the source hash.
+    vendorHash = null;
+    nativeBuildInputs = [
+      pkgs.installShellFiles
+      pkgs.makeWrapper
+    ];
+    buildInputs = [ pkgs.git ];
+
+    ldflags = [
+      "-s"
+      "-w"
+      "-X github.com/git-town/git-town/v${pkgs.lib.versions.major finalAttrs.version}/src/cmd.version=v${finalAttrs.version}"
+      "-X github.com/git-town/git-town/v${pkgs.lib.versions.major finalAttrs.version}/src/cmd.buildDate=d2b"
+    ];
+
+    nativeCheckInputs = [
+      pkgs.git
+      pkgs.writableTmpDirAsHomeHook
+    ];
+    preCheck = ''
+      rm main_test.go
+    '';
+    checkFlags = [
+      "-skip=^TestMockingRunner/MockCommand$|^TestMockingRunner/MockCommitMessage$|^TestMockingRunner/QueryWith$|^TestTestCommands/CreateChildFeatureBranch$|^TestTestCommands/CreateChildBranch$|^TestTestCommands/CreateLocalBranchUsingGitTown$|^TestFrontendRunner_RetryOnIndexLock$"
+    ];
+
+    postInstall =
+      pkgs.lib.optionalString
+        (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform)
+        ''
+          installShellCompletion --cmd git-town \
+            --bash <("$out/bin/git-town" completions bash) \
+            --fish <("$out/bin/git-town" completions fish) \
+            --zsh <("$out/bin/git-town" completions zsh)
+        ''
+      + ''
+        wrapProgram "$out/bin/git-town" \
+          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git ]}
+      '';
+
+    meta = {
+      description = "Generic, high-level Git workflow support";
+      homepage = "https://www.git-town.com/";
+      license = pkgs.lib.licenses.mit;
+      mainProgram = "git-town";
+      platforms = pkgs.lib.platforms.linux;
+    };
+  });
 
   cargoUdepsRaw = stableRustPlatform.buildRustPackage {
     pname = "cargo-udeps";

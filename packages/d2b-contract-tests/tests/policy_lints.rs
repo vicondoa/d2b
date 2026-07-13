@@ -6,14 +6,30 @@
 //! from the hermetic Nix sandbox workspace build), so repo-file access is
 //! sound.
 
-use d2b_contract_tests::{read_repo_file, repo_path_exists};
+use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 use regex::Regex;
+use std::path::{Path, PathBuf};
 
 /// Assert `haystack` contains a line matching `pattern` (multi-line, `^`/`$`
 /// anchor lines), with a descriptive failure message.
 fn assert_line_matches(haystack: &str, pattern: &str, ctx: &str) {
     let re = Regex::new(pattern).expect("valid regex");
     assert!(re.is_match(haystack), "{ctx}: no line matched /{pattern}/");
+}
+
+fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let mut entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
+        .map(|entry| entry.expect("valid directory entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            collect_markdown_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            files.push(path);
+        }
+    }
 }
 
 // Migrated from tests/daemon-experimental-warning-eval.sh.
@@ -203,11 +219,20 @@ fn adr_0045_accepted_with_realm_and_delivery_contracts() {
 fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
     let tools = read_repo_file("pkgs/delivery-tools.nix");
     for pin in [
-        "gitTown = pkgs.git-town;",
+        r#"ghVersion = "2.92.0";"#,
+        r#"gitTownVersion = "23.0.1";"#,
         r#"cargoUdepsVersion = "0.1.61";"#,
         r#"cargoUdepsNightlyDate = "2025-12-01";"#,
         r#"cargoSemverChecksVersion = "0.47.0";"#,
         r#"rustStableVersion = "1.94.1";"#,
+        r#"owner = "cli";"#,
+        r#"repo = "cli";"#,
+        r#"hash = "sha256-/7EiX4ZZPhSNgY/D5OVOako/c0ujHq05GMj3UB11bqQ=";"#,
+        r#"vendorHash = "sha256-pBLRCIRjN3VoXbTFSq+R9/N3uAUCEjvPtk8LKKKS51s=";"#,
+        r#"owner = "git-town";"#,
+        r#"repo = "git-town";"#,
+        r#"hash = "sha256-kAAzfb0rg10k9PnUKYEqdSWYWi0JR6jiKDHUv/RSUSs=";"#,
+        "vendorHash = null;",
         r#"hash = "sha256-yT/EJWGGhQapbU1o1Gus1Vk5cAhso5ALTBecB3BH46g=";"#,
         r#"cargoHash = "sha256-DGfAsBucFRFJkjmJkpTpNfQO79jaNa5NezXKf7hYYeM=";"#,
         r#"hash = "sha256-1D6WFsiMOl/bJr0J+mmvLlgnRSKN6rPhDSnDsdLTC9E=";"#,
@@ -227,18 +252,18 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         "delivery tools must not download toolchains or binaries at runtime"
     );
     assert!(
-        !tools.contains("buildGoModule"),
-        "delivery tooling must use locked nixpkgs Git Town without a source-build wrapper"
+        tools.matches("pkgs.buildGoModule").count() == 2
+            && !tools.contains("pkgs.git-town")
+            && !tools.contains("pkgs.gh"),
+        "Git Town and GitHub CLI must be repository-owned source builds, not nixpkgs aliases"
     );
     let flake = read_repo_file("flake.nix");
     assert!(
-        flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
+        flake.contains("gh --version | grep -F 'gh version 2.92.0'")
+            && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
+            && flake.contains("gh = deliveryTools.gh;")
             && flake.contains("git-town = deliveryTools.gitTown;"),
-        "delivery flake checks must pin the locked Git Town package version"
-    );
-    assert!(
-        tools.contains("gh = pkgs.gh;") && !tools.contains("assert pkgs.gh.version"),
-        "GitHub CLI must come from the caller's nixpkgs without an exact-version eval assertion"
+        "delivery packages and checks must expose and verify both exact source-built tools"
     );
 
     let flake = read_repo_file("flake.nix");
@@ -369,10 +394,10 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
     }
 
     let reference = read_repo_file("docs/reference/delivery-tooling.md");
+    let how_to = read_repo_file("docs/how-to/manage-stacked-wave-prs.md");
     assert!(
         reference
             .contains("Git Town is the only stack topology, propose, and synchronization mutator")
-            && reference.contains("git town propose --stack --non-interactive --no-browser")
             && reference.contains("ordinary pull-request API")
             && reference.contains("Use `$XDG_STATE_HOME/d2b/delivery`")
             && reference.contains("Git metadata is never delivery state")
@@ -381,8 +406,26 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
             && reference.contains("cargo xtask delivery wave validation-import")
             && reference.contains("cargo xtask delivery wave verify")
             && reference.contains("cargo xtask delivery wave eligibility")
+            && reference.contains(
+                "[Manage stacked wave pull requests with Git Town](../how-to/manage-stacked-wave-prs.md)"
+            )
+            && reference.matches(r#"--payload "$PAYLOAD""#).count() == 2
             && reference.contains("D2B_FLAKE_CHECK=delivery-tooling make test-flake"),
-        "delivery reference must fail closed and keep evidence external"
+        "delivery reference must describe the contract, align both invocation forms, and link the procedure"
+    );
+    assert!(
+        !reference.contains("git town set-parent")
+            && !reference.contains("git town propose --stack")
+            && how_to.contains("git town set-parent \"$parent\" --non-interactive")
+            && how_to.contains("git town sync --stack --non-interactive --no-auto-resolve")
+            && how_to.contains(
+                "git town propose --stack --non-interactive --no-browser --no-auto-resolve"
+            )
+            && how_to.contains("git town config get-parent \"$branch\"")
+            && how_to.contains("git status --porcelain=v1 --untracked-files=all")
+            && how_to.contains("git show-ref --verify --quiet \"refs/heads/$1\"")
+            && how_to.contains("Retarget a dependent pull request"),
+        "Git Town's fail-closed setup, propose, update, and retarget procedure belongs in the how-to"
     );
     for stale in [
         "evidence import",
@@ -396,6 +439,34 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
             !reference.contains(stale),
             "delivery reference contains stale CLI surface {stale}"
         );
+    }
+
+    let root = repo_root();
+    let mut live_docs = vec![
+        root.join("AGENTS.md"),
+        root.join("README.md"),
+        root.join("tests/AGENTS.md"),
+        root.join("tests/README.md"),
+    ];
+    collect_markdown_files(&root.join("docs"), &mut live_docs);
+    for path in live_docs {
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let lower = content.to_ascii_lowercase();
+        for stale in [
+            "gh stack",
+            "gh-stack",
+            "private preview",
+            "private-preview",
+            "cli_internal",
+            "pulls/stacks",
+        ] {
+            assert!(
+                !lower.contains(stale),
+                "{} contains stale private stack integration claim {stale}",
+                path.display()
+            );
+        }
     }
 }
 

@@ -12,19 +12,20 @@ The shell contains these exact tools:
 
 | Tool | Pin |
 | --- | --- |
-| GitHub CLI | `2.92.0` from the locked nixpkgs input |
-| Git Town | `23.0.1` from the locked nixpkgs input |
+| GitHub CLI | `2.92.0` |
+| Git Town | `23.0.1` |
 | `cargo-udeps` | `0.1.61`, run with nightly `2025-12-01` |
 | `cargo-semver-checks` | `0.47.0` |
 | project Rust toolchain | `1.94.1` |
 
-The Cargo tool source and dependency hashes are fixed in
-`pkgs/delivery-tools.nix`; Git Town and GitHub CLI come from the repository's
-locked nixpkgs input. Nothing downloads a tool when the shell or a command
-starts. The focused packages can also be built directly:
+Every tool source and dependency set is fixed in `pkgs/delivery-tools.nix`.
+GitHub CLI and Git Town are repository-owned source builds rather than aliases
+to the versions in a consumer-followed nixpkgs input. Nothing downloads a tool
+when the shell or a command starts. The focused packages can also be built
+directly:
 
 ```console
-nix build .#git-town .#cargo-udeps-nightly .#cargo-semver-checks
+nix build .#gh .#git-town .#cargo-udeps-nightly .#cargo-semver-checks
 ```
 
 Use `cargo udeps` in the shell. Its wrapper selects the pinned nightly compiler
@@ -45,9 +46,9 @@ advanced local branch ref does not erase merge authority. The checked-in
 manifest remains the expected ordered graph. `xtask` never accepts a
 caller-authored graph, edits PR topology, or rewrites branches.
 
-Before creating or updating a stack, verify the supported Git Town major,
-noninteractive propose flags, GitHub authentication, repository read access,
-and ordinary pull-request API:
+The capability probe verifies the supported Git Town major, noninteractive
+propose flags, GitHub authentication, repository read access, and the
+ordinary pull-request API:
 
 ```console
 nix run .#delivery -- stack capability \
@@ -61,29 +62,22 @@ cargo xtask delivery stack capability \
   --repository github.com/example/d2b
 ```
 
-The capability result is typed JSON. It accepts supported Git Town `23.x`
+The result is typed JSON. It accepts supported Git Town `23.x`
 binaries and fails closed when Git Town, required noninteractive flags, GitHub
 authentication, repository read access, or the ordinary PR API is absent or
 unverifiable. It does not require special GitHub enrollment.
 
-Configure and mutate a stack only with Git Town:
-
-```console
-git config --local git-town.main-branch main
-git town set-parent main --non-interactive
-git town sync --stack --non-interactive
-git town propose --stack --non-interactive --no-browser
-```
-
 The configured Git Town main branch is the perennial root; feature branches
-form one immediate-parent chain above it.
-Run `set-parent` on each branch whose immediate parent changes. A direct
-`git push` is permitted only to publish commits on a branch whose parent is
-already configured and verified by Git Town; it must not create, change,
-restack, or retarget topology. Use `git town propose` for every ordinary PR
-create/update and Git Town for every topology or synchronization change.
-Merging remains the delivery `xtask` exact-base-and-head compare-and-swap path
-or the GitHub merge queue.
+form one immediate-parent chain above it. Git Town must verify every configured
+parent, and dirty worktrees or missing local parent refs are hard failures.
+A direct `git push` may only publish commits on a branch whose parent is already
+configured and verified by Git Town; it cannot create, change, restack, or
+retarget topology. Git Town owns every ordinary PR create/update and every
+topology or synchronization change. Merging remains the delivery `xtask`
+exact-base-and-head compare-and-swap path or the GitHub merge queue.
+
+For the noninteractive setup, propose, update, and retarget procedure, see
+[Manage stacked wave pull requests with Git Town](../how-to/manage-stacked-wave-prs.md).
 
 ## External evidence and check summaries
 
@@ -115,7 +109,7 @@ the Rust workspace instead, run from `packages/` and retain the mandatory
 ```console
 cargo xtask delivery wave validation-import \
   --snapshot "$SNAPSHOT" --artifact "$ARTIFACT" --bundle "$BUNDLE" \
-  --repo "d2b=$CHECKOUT"
+  --payload "$PAYLOAD" --repo "d2b=$CHECKOUT"
 cargo xtask delivery wave verify \
   --seal "$SEAL" --repo "d2b=$CHECKOUT"
 cargo xtask delivery wave eligibility \
@@ -139,11 +133,11 @@ failed, or malformed required check.
 
 ## Validation ownership
 
-When realized, the `delivery-tooling` flake check verifies the locked GitHub
-CLI, Git Town, Rust toolchains, Cargo tools, offline workspace metadata, and
-native OpenSSL build inputs. On x86_64 Linux it is discovered and instantiated
-as its own hosted CI flake-check shard. `make check` performs the same no-build
-instantiation through the bounded local flake shards;
+When realized, the `delivery-tooling` flake check verifies the
+repository-pinned GitHub CLI, Git Town, Rust toolchains, Cargo tools, offline
+workspace metadata, and native OpenSSL build inputs. On x86_64 Linux it is
+discovered and instantiated as its own hosted CI flake-check shard. `make check`
+performs the same no-build instantiation through the bounded local flake shards;
 `D2B_FLAKE_CHECK=delivery-tooling make test-flake` selects it directly. Build
 `.#checks.x86_64-linux.delivery-tooling` to realize the check. The committed
 x86_64 flake-check matrix pin makes additions or removals fail the drift gate
