@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_wakes_for_output_and_eof() {
+    fn wait_wakes_for_output_then_eof() {
         let ring = Arc::new(OutputRing::new(32).unwrap());
         let producer = Arc::clone(&ring);
         let writer = std::thread::spawn(move || {
@@ -182,10 +182,13 @@ mod tests {
             producer.close();
         });
         let read = ring.read(0, 32, true, Duration::from_secs(1));
-        writer.join().unwrap();
         assert_eq!(read.data, b"ready");
-        assert!(read.eof);
         assert!(!read.timed_out);
+        let eof = ring.read(read.next_cursor, 32, true, Duration::from_secs(1));
+        writer.join().unwrap();
+        assert!(eof.data.is_empty());
+        assert!(eof.eof);
+        assert!(!eof.timed_out);
     }
 
     #[test]
