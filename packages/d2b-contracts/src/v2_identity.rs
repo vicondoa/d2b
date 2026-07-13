@@ -349,11 +349,14 @@ impl FromStr for RoleKind {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
-#[serde(rename_all = "kebab-case")]
 pub enum IdentityDomain {
+    #[serde(rename = "d2b-v2:realm")]
     Realm,
+    #[serde(rename = "d2b-v2:workload")]
     Workload,
+    #[serde(rename = "d2b-v2:provider")]
     Provider,
+    #[serde(rename = "d2b-v2:role")]
     Role,
 }
 

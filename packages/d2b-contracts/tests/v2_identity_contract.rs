@@ -130,6 +130,15 @@ fn closed_provider_and_role_sets_are_completely_vectored() {
     assert_eq!(role_values, role_vectors);
     assert!(serde_json::from_str::<ProviderType>("\"unknown\"").is_err());
     assert!(serde_json::from_str::<RoleKind>("\"unknown\"").is_err());
+    assert_eq!(
+        serde_json::to_string(&IdentityDomain::Realm).unwrap(),
+        "\"d2b-v2:realm\""
+    );
+    assert_eq!(
+        serde_json::from_str::<IdentityDomain>("\"d2b-v2:role\"").unwrap(),
+        IdentityDomain::Role
+    );
+    assert!(serde_json::from_str::<IdentityDomain>("\"role\"").is_err());
 }
 
 #[test]
