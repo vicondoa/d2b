@@ -1,15 +1,15 @@
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs,
-    os::unix::fs::PermissionsExt,
+    fs::{self, File},
+    os::{
+        fd::{AsFd, AsRawFd, OwnedFd},
+        unix::fs::PermissionsExt,
+    },
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
@@ -24,12 +24,16 @@ use super::{
     },
     snapshot::{CurrentVerification, SnapshotContext, load_snapshot_context},
     storage::{
-        create_private_directory, ensure_external_path, read_json, read_json_with_digest,
-        read_verified_json, reject_delivery_payload, retain_immutable_file,
-        secure_repository_subdir, sha256_file, validate_payload_locator, verify_immutable_digest,
-        write_immutable_json,
+        MAX_JSON_BYTES, MAX_PAYLOAD_BYTES, create_private_directory, ensure_external_path,
+        read_json, read_json_with_digest, reject_delivery_payload, reject_delivery_payload_content,
+        secure_repository_subdir, sha256_file, validate_payload_locator,
     },
 };
+use rustix::{
+    fs::{Mode, OFlags, fchmod, openat},
+    io::Errno,
+};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -49,7 +53,19 @@ pub struct EvidenceRecord {
     pub captured_at_unix_seconds: u64,
     pub payload_locator: String,
     pub payload_sha256: String,
+    pub output_capture: Option<EvidenceOutputCapture>,
     pub provenance: EvidenceProvenance,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOutputCapture {
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -342,7 +358,20 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
     } else {
         EvidenceResult::Failed
     };
-    let payload_sha256 = discarded_output_digest(&output.stdout, &output.stderr);
+    let payload = retained_output_payload(&output.stdout, &output.stderr)?;
+    let payload_relative =
+        Path::new("validation-output").join(format!("{validation_id}-{run_id}.bin"));
+    let payload_sha256 = context
+        .layout
+        .write_candidate_file(&payload_relative, &payload)?;
+    let output_capture = EvidenceOutputCapture {
+        stdout_bytes: output.stdout.len() as u64,
+        stderr_bytes: output.stderr.len() as u64,
+        stdout_sha256: super::storage::sha256_bytes(&output.stdout),
+        stderr_sha256: super::storage::sha256_bytes(&output.stderr),
+        stdout_truncated: false,
+        stderr_truncated: false,
+    };
     let record = EvidenceRecord {
         artifact_kind: EVIDENCE_ARTIFACT_KIND.to_owned(),
         schema_version: DELIVERY_SCHEMA_VERSION,
@@ -362,8 +391,9 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         result,
         exit_code: output.exit_code,
         captured_at_unix_seconds: now_unix_seconds()?,
-        payload_locator: "discarded://stdout-stderr".to_owned(),
+        payload_locator: format!("private://validation-output/{validation_id}-{run_id}.bin"),
         payload_sha256,
+        output_capture: Some(output_capture),
         provenance: EvidenceProvenance::LocalRunner {
             runner: "xtask-local".to_owned(),
             runner_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -373,7 +403,10 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
     validate_record(&context, &record)?;
     drop(execution);
     let path = evidence_path(&context, validation_id);
-    write_immutable_json(&path, &record)?;
+    context.layout.write_candidate_json(
+        Path::new("validation").join(format!("{validation_id}.json")),
+        &record,
+    )?;
     Ok(path)
 }
 
@@ -428,28 +461,8 @@ fn verify_checkout_identity<A: CommandOutputAdapter>(
 }
 
 fn make_source_read_only(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(DeliveryError::new("validation checkout contains a symlink"));
-    }
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path)? {
-            make_source_read_only(&entry?.path())?;
-        }
-        fs::set_permissions(path, fs::Permissions::from_mode(0o500))?;
-    } else if metadata.is_file() {
-        let mode = if metadata.permissions().mode() & 0o111 == 0 {
-            0o400
-        } else {
-            0o500
-        };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
-    } else {
-        return Err(DeliveryError::new(
-            "validation checkout contains a non-regular filesystem entry",
-        ));
-    }
-    Ok(())
+    let fd = open_tree_root(path)?;
+    chmod_tree_fd(&fd, false)
 }
 
 fn verify_source_read_only(path: &Path) -> Result<()> {
@@ -471,15 +484,91 @@ fn verify_source_read_only(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn make_tree_writable(path: &Path) -> std::io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+fn make_tree_writable(path: &Path) -> Result<()> {
+    let fd = open_tree_root(path)?;
+    chmod_tree_fd(&fd, true)
+}
+
+fn open_tree_root(path: &Path) -> Result<OwnedFd> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| DeliveryError::new("validation tree path has no parent"))?;
+    let parent_fd = rustix::fs::open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| DeliveryError::new(format!("cannot anchor validation tree: {error}")))?;
+    openat(
+        parent_fd.as_fd(),
+        path.file_name()
+            .ok_or_else(|| DeliveryError::new("validation tree path has no filename"))?,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| DeliveryError::new(format!("cannot open validation tree root: {error}")))
+}
+
+fn chmod_tree_fd(fd: &OwnedFd, writable: bool) -> Result<()> {
+    let file = File::from(fd.try_clone()?);
+    let metadata = file.metadata()?;
     if metadata.is_dir() {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-        for entry in fs::read_dir(path)? {
-            make_tree_writable(&entry?.path())?;
+        if writable {
+            fchmod(fd, Mode::from_raw_mode(0o700)).map_err(|error| {
+                DeliveryError::new(format!(
+                    "cannot make validation directory writable: {error}"
+                ))
+            })?;
+        }
+        let proc_path = PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            fd.as_raw_fd()
+        ));
+        let mut names = Vec::new();
+        for entry in fs::read_dir(proc_path)? {
+            names.push(entry?.file_name());
+        }
+        for name in names {
+            let child = openat(
+                fd.as_fd(),
+                &name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| {
+                if error == Errno::LOOP {
+                    DeliveryError::new("validation checkout contains a symlink")
+                } else {
+                    DeliveryError::new(format!(
+                        "cannot open validation checkout entry without following links: {error}"
+                    ))
+                }
+            })?;
+            chmod_tree_fd(&child, writable)?;
+        }
+        if !writable {
+            fchmod(fd, Mode::from_raw_mode(0o500)).map_err(|error| {
+                DeliveryError::new(format!(
+                    "cannot make validation directory read-only: {error}"
+                ))
+            })?;
         }
     } else if metadata.is_file() {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        let mode = if writable {
+            0o600
+        } else if metadata.permissions().mode() & 0o111 == 0 {
+            0o400
+        } else {
+            0o500
+        };
+        fchmod(fd, Mode::from_raw_mode(mode)).map_err(|error| {
+            DeliveryError::new(format!("cannot secure validation file mode: {error}"))
+        })?;
+    } else {
+        return Err(DeliveryError::new(
+            "validation checkout contains a non-regular filesystem entry",
+        ));
     }
     Ok(())
 }
@@ -509,7 +598,29 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
             "CI attestation artifact and bundle must be distinct files",
         ));
     }
-    let asserted_claims: CiAttestationClaims = read_json(artifact_path)?;
+    let staged_artifact =
+        context
+            .layout
+            .stage_external_file(artifact_path, "ci-artifact", MAX_JSON_BYTES)?;
+    let staged_bundle =
+        context
+            .layout
+            .stage_external_file(bundle_path, "ci-bundle", MAX_PAYLOAD_BYTES)?;
+    let staged_payload = if let Some(payload) = payload_path {
+        ensure_external_path(payload, &context.external_exclusions)?;
+        reject_delivery_payload(payload, &context.layout.root)?;
+        Some(
+            context
+                .layout
+                .stage_external_file(payload, "ci-payload", MAX_PAYLOAD_BYTES)?,
+        )
+    } else {
+        None
+    };
+    if let Some(payload) = &staged_payload {
+        reject_delivery_payload_content(payload.path())?;
+    }
+    let asserted_claims: CiAttestationClaims = read_json(staged_artifact.path())?;
     let required = required_validation(&context, &asserted_claims.validation_id)?;
     if required.authority != ValidationAuthority::GithubAttestation {
         return Err(DeliveryError::new(format!(
@@ -532,7 +643,7 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
             .clone()
             .ok_or_else(|| DeliveryError::new("CI signer workflow policy is absent"))?,
     };
-    let verified = verifier.verify(artifact_path, bundle_path, &policy)?;
+    let verified = verifier.verify(staged_artifact.path(), staged_bundle.path(), &policy)?;
     let claims = verified.claims;
     if claims != asserted_claims {
         return Err(DeliveryError::new(
@@ -540,21 +651,21 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
         ));
     }
     validate_ci_claims(&context, required, &claims)?;
-    if let Some(payload) = payload_path {
-        ensure_external_path(payload, &context.external_exclusions)?;
-        reject_delivery_payload(payload, &context.layout.root)?;
-        if sha256_file(payload)? != claims.payload_sha256 {
-            return Err(DeliveryError::new(
-                "retrieved CI payload digest does not match signed attestation",
-            ));
-        }
+    if let Some(payload) = &staged_payload
+        && payload.digest() != claims.payload_sha256
+    {
+        return Err(DeliveryError::new(
+            "retrieved CI payload digest does not match signed attestation",
+        ));
     }
-    let retained_artifact = context
-        .layout
-        .ci_attestation_artifact(&claims.validation_id);
-    let retained_bundle = context.layout.ci_attestation_bundle(&claims.validation_id);
-    let retained_artifact_digest = retain_immutable_file(artifact_path, &retained_artifact)?;
-    let retained_bundle_digest = retain_immutable_file(bundle_path, &retained_bundle)?;
+    let retained_artifact_digest = context.layout.retain_candidate_file(
+        staged_artifact.path(),
+        Path::new("ci-attestations").join(format!("{}.artifact.json", claims.validation_id)),
+    )?;
+    let retained_bundle_digest = context.layout.retain_candidate_file(
+        staged_bundle.path(),
+        Path::new("ci-attestations").join(format!("{}.bundle.jsonl", claims.validation_id)),
+    )?;
     if retained_artifact_digest != verified.artifact_sha256
         || retained_bundle_digest != verified.bundle_sha256
     {
@@ -587,6 +698,7 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
         captured_at_unix_seconds: claims.captured_at_unix_seconds,
         payload_locator: claims.payload_locator,
         payload_sha256: claims.payload_sha256,
+        output_capture: None,
         provenance: EvidenceProvenance::GithubAttestation {
             repository: claims.repository,
             run_id: claims.run_id,
@@ -606,7 +718,10 @@ pub fn import_ci_evidence<P: RepositoryProbe, V: CiAttestationVerifier>(
     };
     validate_record(&context, &record)?;
     let path = evidence_path(&context, &record.id);
-    write_immutable_json(&path, &record)?;
+    context.layout.write_candidate_json(
+        Path::new("validation").join(format!("{}.json", record.id)),
+        &record,
+    )?;
     Ok(path)
 }
 
@@ -632,12 +747,24 @@ pub(crate) fn verify_evidence_in_context(
     verifier: &dyn CiAttestationVerifier,
 ) -> Result<EvidenceRecord> {
     ensure_external_path(path, &context.external_exclusions)?;
-    let (record, _digest): (EvidenceRecord, String) = read_verified_json(path)?;
-    validate_record(context, &record)?;
-    let expected = evidence_path(context, &record.id);
+    let id = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| DeliveryError::new("evidence filename is not UTF-8"))?;
+    validate_identifier(id, "validation id")?;
+    let expected = evidence_path(context, id);
     if super::storage::absolute_path(path)? != super::storage::absolute_path(&expected)? {
         return Err(DeliveryError::new(
             "evidence path is outside its candidate validation directory",
+        ));
+    }
+    let (record, _digest): (EvidenceRecord, String) = context
+        .layout
+        .read_candidate_json(Path::new("validation").join(format!("{id}.json")))?;
+    validate_record(context, &record)?;
+    if record.id != id {
+        return Err(DeliveryError::new(
+            "evidence filename does not match validation ID",
         ));
     }
     reverify_ci_attestation(context, &record, verifier)?;
@@ -730,12 +857,13 @@ fn reverify_ci_attestation(
         source_ref: source_ref.clone(),
         signer_workflow: signer_workflow.clone(),
     };
-    let retained_artifact = context.layout.ci_attestation_artifact(&record.id);
-    let retained_bundle = context.layout.ci_attestation_bundle(&record.id);
-    ensure_external_path(&retained_artifact, &context.external_exclusions)?;
-    ensure_external_path(&retained_bundle, &context.external_exclusions)?;
-    if verify_immutable_digest(&retained_artifact)? != *attestation_artifact_sha256
-        || verify_immutable_digest(&retained_bundle)? != *attestation_bundle_sha256
+    let artifact_relative =
+        Path::new("ci-attestations").join(format!("{}.artifact.json", record.id));
+    let bundle_relative = Path::new("ci-attestations").join(format!("{}.bundle.jsonl", record.id));
+    let retained_artifact = context.layout.anchored_path(&artifact_relative)?;
+    let retained_bundle = context.layout.anchored_path(&bundle_relative)?;
+    if context.layout.verify_candidate_digest(&artifact_relative)? != *attestation_artifact_sha256
+        || context.layout.verify_candidate_digest(&bundle_relative)? != *attestation_bundle_sha256
     {
         return Err(DeliveryError::new(
             "retained CI attestation artifact or bundle digest changed",
@@ -820,6 +948,30 @@ pub(crate) fn validate_record(context: &SnapshotContext, record: &EvidenceRecord
         _ => {
             return Err(DeliveryError::new(
                 "evidence checkout binding does not match validation authority",
+            ));
+        }
+    }
+    match (required.authority, &record.output_capture) {
+        (ValidationAuthority::LocalRunner, Some(capture)) => {
+            validate_sha256(&capture.stdout_sha256, "validation stdout digest")?;
+            validate_sha256(&capture.stderr_sha256, "validation stderr digest")?;
+            if capture.stdout_bytes > DEFAULT_COMMAND_OUTPUT_BYTES as u64
+                || capture.stderr_bytes > DEFAULT_COMMAND_OUTPUT_BYTES as u64
+                || capture.stdout_truncated
+                || capture.stderr_truncated
+                || !record
+                    .payload_locator
+                    .starts_with("private://validation-output/")
+            {
+                return Err(DeliveryError::new(
+                    "local validation output capture metadata is invalid",
+                ));
+            }
+        }
+        (ValidationAuthority::GithubAttestation, None) => {}
+        _ => {
+            return Err(DeliveryError::new(
+                "evidence output capture does not match validation authority",
             ));
         }
     }
@@ -939,19 +1091,18 @@ fn evidence_path(context: &SnapshotContext, id: &str) -> PathBuf {
     context.layout.evidence_dir().join(format!("{id}.json"))
 }
 
-fn discarded_output_digest(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"d2b-delivery-discarded-output-v1\0");
-    hasher.update((stdout.len() as u64).to_be_bytes());
-    hasher.update(stdout);
-    hasher.update((stderr.len() as u64).to_be_bytes());
-    hasher.update(stderr);
-    let mut rendered = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        use std::fmt::Write as _;
-        write!(&mut rendered, "{byte:02x}").expect("String write");
-    }
-    rendered
+fn retained_output_payload(stdout: &[u8], stderr: &[u8]) -> Result<Vec<u8>> {
+    let capacity = 32_usize
+        .checked_add(stdout.len())
+        .and_then(|size| size.checked_add(stderr.len()))
+        .ok_or_else(|| DeliveryError::new("validation output payload length overflow"))?;
+    let mut payload = Vec::with_capacity(capacity);
+    payload.extend_from_slice(b"d2b-output-v1\0");
+    payload.extend_from_slice(&(stdout.len() as u64).to_be_bytes());
+    payload.extend_from_slice(stdout);
+    payload.extend_from_slice(&(stderr.len() as u64).to_be_bytes());
+    payload.extend_from_slice(stderr);
+    Ok(payload)
 }
 
 fn validate_timestamp(timestamp: u64) -> Result<()> {
@@ -1012,7 +1163,7 @@ mod tests {
         command::{CommandOutput, CommandOutputAdapter},
         model::GitObjectFormat,
     };
-    use std::{cell::RefCell, fs};
+    use std::{cell::RefCell, fs, os::unix::fs::symlink};
 
     struct FakeCommand {
         output: CommandOutput,
@@ -1036,10 +1187,10 @@ mod tests {
     }
 
     #[test]
-    fn discarded_output_hash_is_stream_distinct() {
+    fn retained_output_payload_is_stream_distinct() {
         assert_ne!(
-            discarded_output_digest(b"ab", b"c"),
-            discarded_output_digest(b"a", b"bc")
+            retained_output_payload(b"ab", b"c").expect("payload"),
+            retained_output_payload(b"a", b"bc").expect("payload")
         );
     }
 
@@ -1047,6 +1198,34 @@ mod tests {
     fn payload_locator_rejects_absolute_or_unbounded_values() {
         assert!(validate_payload_locator("/home/alice/output").is_err());
         assert!(validate_payload_locator(&format!("discarded://{}", "a".repeat(600))).is_err());
+    }
+
+    #[test]
+    fn chmod_walk_never_follows_symlink_entries() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository")
+            .parent()
+            .expect("repository parent")
+            .join(format!(".d2b-chmod-tree-test-{}", std::process::id()));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(&target, b"target").expect("target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
+        symlink(&target, source.join("link")).expect("symlink");
+        let error = make_source_read_only(&source).expect_err("symlink rejected");
+        assert!(error.to_string().contains("symlink"));
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

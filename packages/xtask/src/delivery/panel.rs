@@ -16,8 +16,7 @@ use super::{
     },
     snapshot::{CurrentVerification, SnapshotContext, load_snapshot_context},
     storage::{
-        ensure_external_path, read_json_with_digest, retain_immutable_file, sha256_file,
-        verify_immutable_digest, verify_json_digest, write_immutable_json,
+        MAX_JSON_BYTES, MAX_PAYLOAD_BYTES, ensure_external_path, read_json_with_digest, sha256_file,
     },
 };
 
@@ -181,7 +180,9 @@ pub fn create_panel_request<P: RepositoryProbe>(
         required_trust_root_sha256: context.snapshot.panel_trust_root_sha256.clone(),
     };
     let path = context.layout.panel_request();
-    write_immutable_json(&path, &request)?;
+    context
+        .layout
+        .write_candidate_json("panel-request.json", &request)?;
     Ok(path)
 }
 
@@ -201,23 +202,60 @@ pub fn validate_and_store_panel<P: RepositoryProbe>(
     )?;
     ensure_external_path(records_dir, &context.external_exclusions)?;
     ensure_external_path(trust_root_path, &context.external_exclusions)?;
-    if sha256_file(trust_root_path)? != context.snapshot.panel_trust_root_sha256 {
+    let staged_trust =
+        context
+            .layout
+            .stage_external_file(trust_root_path, "panel-trust", MAX_PAYLOAD_BYTES)?;
+    if staged_trust.digest() != context.snapshot.panel_trust_root_sha256 {
         return Err(DeliveryError::new(
             "panel trust root does not match checked-in candidate authority",
         ));
     }
-    let records = read_and_validate_records(records_dir, trust_root_path, &context, verifier)?;
-    let trust_root_sha256 =
-        retain_immutable_file(trust_root_path, &context.layout.panel_trust_root())?;
+    let mut staged_pairs = Vec::with_capacity(PANEL_ROLES.len());
+    for receipt_path in receipt_files(records_dir)? {
+        let role_name = receipt_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| DeliveryError::new("panel receipt filename is not UTF-8"))?;
+        let signature_path = receipt_path.with_extension("sig");
+        ensure_external_path(&receipt_path, &context.external_exclusions)?;
+        ensure_external_path(&signature_path, &context.external_exclusions)?;
+        let receipt = context.layout.stage_external_file(
+            &receipt_path,
+            &format!("panel-{role_name}-receipt"),
+            MAX_JSON_BYTES,
+        )?;
+        let signature = context.layout.stage_external_file(
+            &signature_path,
+            &format!("panel-{role_name}-signature"),
+            MAX_PAYLOAD_BYTES,
+        )?;
+        staged_pairs.push((role_name.to_owned(), receipt, signature));
+    }
+    let verification_paths = staged_pairs
+        .iter()
+        .map(|(_, receipt, signature)| {
+            (receipt.path().to_path_buf(), signature.path().to_path_buf())
+        })
+        .collect();
+    let records =
+        read_and_validate_paths(verification_paths, staged_trust.path(), &context, verifier)?;
+    let trust_root_sha256 = context
+        .layout
+        .retain_candidate_file(staged_trust.path(), "panel/trust-root.pem")?;
     for record in &records {
         let role = record.claims.role.as_str();
-        let receipt_sha256 = retain_immutable_file(
-            &records_dir.join(format!("{role}.json")),
-            &context.layout.panel_dir().join(format!("{role}.json")),
+        let (_, receipt, signature) = staged_pairs
+            .iter()
+            .find(|(name, _, _)| name == role)
+            .ok_or_else(|| DeliveryError::new("panel receipt filename does not match role"))?;
+        let receipt_sha256 = context.layout.retain_candidate_file(
+            receipt.path(),
+            Path::new("panel").join(format!("{role}.json")),
         )?;
-        let signature_sha256 = retain_immutable_file(
-            &records_dir.join(format!("{role}.sig")),
-            &context.layout.panel_dir().join(format!("{role}.sig")),
+        let signature_sha256 = context.layout.retain_candidate_file(
+            signature.path(),
+            Path::new("panel").join(format!("{role}.sig")),
         )?;
         if receipt_sha256 != record.receipt_sha256
             || signature_sha256 != record.signature_sha256
@@ -237,11 +275,25 @@ pub(crate) fn read_stored_panel(
     verifier: &dyn PanelReceiptVerifier,
 ) -> Result<Vec<StoredPanelReceipt>> {
     let panel_dir = context.layout.panel_dir();
-    let trust_root = context.layout.panel_trust_root();
+    let trust_relative = Path::new("panel/trust-root.pem");
+    let trust_root = context.layout.anchored_path(trust_relative)?;
     ensure_external_path(&panel_dir, &context.external_exclusions)?;
-    ensure_external_path(&trust_root, &context.external_exclusions)?;
-    let records = read_and_validate_records(&panel_dir, &trust_root, context, verifier)?;
-    let trust_digest = verify_immutable_digest(&trust_root)?;
+    let pairs = PANEL_ROLES
+        .iter()
+        .map(|role| {
+            let role = role.as_str();
+            Ok((
+                context
+                    .layout
+                    .anchored_path(Path::new("panel").join(format!("{role}.json")))?,
+                context
+                    .layout
+                    .anchored_path(Path::new("panel").join(format!("{role}.sig")))?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let records = read_and_validate_paths(pairs, &trust_root, context, verifier)?;
+    let trust_digest = context.layout.verify_candidate_digest(trust_relative)?;
     if trust_digest != context.snapshot.panel_trust_root_sha256 {
         return Err(DeliveryError::new(
             "stored panel trust root differs from checked-in candidate authority",
@@ -249,10 +301,14 @@ pub(crate) fn read_stored_panel(
     }
     for record in &records {
         let role = record.claims.role.as_str();
-        let receipt = panel_dir.join(format!("{role}.json"));
-        let signature = panel_dir.join(format!("{role}.sig"));
-        if verify_json_digest(&receipt)? != record.receipt_sha256
-            || verify_immutable_digest(&signature)? != record.signature_sha256
+        if context
+            .layout
+            .verify_candidate_digest(Path::new("panel").join(format!("{role}.json")))?
+            != record.receipt_sha256
+            || context
+                .layout
+                .verify_candidate_digest(Path::new("panel").join(format!("{role}.sig")))?
+                != record.signature_sha256
             || record.trust_root_sha256 != trust_digest
         {
             return Err(DeliveryError::new(
@@ -263,19 +319,15 @@ pub(crate) fn read_stored_panel(
     Ok(records)
 }
 
-fn read_and_validate_records(
-    records_dir: &Path,
+fn read_and_validate_paths(
+    paths: Vec<(PathBuf, PathBuf)>,
     trust_root_path: &Path,
     context: &SnapshotContext,
     verifier: &dyn PanelReceiptVerifier,
 ) -> Result<Vec<StoredPanelReceipt>> {
-    let paths = receipt_files(records_dir)?;
     let mut by_role = BTreeMap::new();
     let mut runs = BTreeSet::<(String, String)>::new();
-    for receipt_path in paths {
-        let signature_path = receipt_path.with_extension("sig");
-        ensure_external_path(&receipt_path, &context.external_exclusions)?;
-        ensure_external_path(&signature_path, &context.external_exclusions)?;
+    for (receipt_path, signature_path) in paths {
         let verified = verifier.verify(&receipt_path, &signature_path, trust_root_path)?;
         validate_record(context, &verified.claims)?;
         if !runs.insert((

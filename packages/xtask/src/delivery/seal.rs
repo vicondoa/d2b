@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -19,7 +18,7 @@ use super::{
     },
     panel::{PanelReceiptVerifier, read_stored_panel},
     snapshot::{CurrentVerification, SnapshotContext, load_snapshot_context, verify_pr_identity},
-    storage::{ensure_external_path, read_verified_json, verify_json_digest, write_immutable_json},
+    storage::ensure_external_path,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -163,7 +162,7 @@ pub fn construct_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
     };
     validate_seal(&seal, &context)?;
     let path = context.layout.seal();
-    write_immutable_json(&path, &seal)?;
+    context.layout.write_candidate_json("seal.json", &seal)?;
     Ok(path)
 }
 
@@ -188,7 +187,7 @@ pub fn verify_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
         ));
     }
     verify_seal_payloads(&context, &seal, ci_verifier, panel_verifier)?;
-    verify_json_digest(seal_path)?;
+    context.layout.verify_candidate_digest("seal.json")?;
     Ok(seal)
 }
 
@@ -206,7 +205,7 @@ pub(crate) fn verify_seal_recorded<P: RepositoryProbe>(
         CurrentVerification::RecordedObjects,
     )?;
     verify_seal_payloads(&context, &seal, ci_verifier, panel_verifier)?;
-    verify_json_digest(seal_path)?;
+    context.layout.verify_candidate_digest("seal.json")?;
     Ok((context, seal))
 }
 
@@ -256,7 +255,7 @@ pub fn construct_history_proof<P: RepositoryProbe>(
         new_content_id: new_context.snapshot.content_id.clone(),
         old_snapshot_sha256: old_context.digest,
         new_snapshot_sha256: new_context.digest,
-        old_seal_sha256: verify_json_digest(old_seal_path)?,
+        old_seal_sha256: old_context.layout.verify_candidate_digest("seal.json")?,
         transitioned_at_unix_seconds: now_unix_seconds()?,
         transition_kind,
         old_repositories: old_context.snapshot.repository_set.clone(),
@@ -278,7 +277,9 @@ pub fn construct_history_proof<P: RepositoryProbe>(
     };
     validate_history_proof_values(&proof)?;
     let path = new_context.layout.history_proof();
-    write_immutable_json(&path, &proof)?;
+    new_context
+        .layout
+        .write_candidate_json("history-proof.json", &proof)?;
     Ok(path)
 }
 
@@ -325,7 +326,9 @@ pub(crate) fn verify_history_proof_context<P: RepositoryProbe>(
         new_snapshot_path,
         CurrentVerification::ExactRefs,
     )?;
-    let (proof, _proof_digest): (HistoryProof, String) = read_verified_json(proof_path)?;
+    let (proof, _proof_digest): (HistoryProof, String) = new_context
+        .layout
+        .read_candidate_json("history-proof.json")?;
     validate_history_proof_values(&proof)?;
     let transition_kind =
         classify_history_transition(&old_context.snapshot, &new_context.snapshot)?;
@@ -351,7 +354,7 @@ pub(crate) fn verify_history_proof_context<P: RepositoryProbe>(
         || proof.new_content_id != new_context.snapshot.content_id
         || proof.old_snapshot_sha256 != old_context.digest
         || proof.new_snapshot_sha256 != new_context.digest
-        || proof.old_seal_sha256 != verify_json_digest(old_seal_path)?
+        || proof.old_seal_sha256 != old_context.layout.verify_candidate_digest("seal.json")?
         || proof.transition_kind != transition_kind
         || proof.old_repositories != old_context.snapshot.repository_set
         || proof.new_repositories != new_context.snapshot.repository_set
@@ -799,7 +802,8 @@ fn load_seal_context<P: RepositoryProbe>(
             "seal is outside its candidate directory",
         ));
     }
-    let (seal, _seal_digest): (WaveSeal, String) = read_verified_json(seal_path)?;
+    let (seal, _seal_digest): (WaveSeal, String) =
+        context.layout.read_candidate_json("seal.json")?;
     validate_seal(&seal, &context)?;
     Ok((context, seal))
 }
@@ -1100,9 +1104,9 @@ fn collect_validation_payloads(
     context: &SnapshotContext,
     verifier: &dyn CiAttestationVerifier,
 ) -> Result<Vec<ValidationPayloadBinding>> {
-    let directory = context.layout.evidence_dir();
-    ensure_exact_json_set(
-        &directory,
+    ensure_exact_candidate_json_set(
+        context,
+        Path::new("validation"),
         context
             .snapshot
             .required_validations
@@ -1112,7 +1116,10 @@ fn collect_validation_payloads(
     )?;
     let mut payloads = Vec::new();
     for required in &context.snapshot.required_validations {
-        let path = directory.join(format!("{}.json", required.id));
+        let path = context
+            .layout
+            .evidence_dir()
+            .join(format!("{}.json", required.id));
         let record = verify_evidence_in_context(context, &path, verifier)?;
         if record.result != EvidenceResult::Passed {
             return Err(DeliveryError::new(format!(
@@ -1122,7 +1129,9 @@ fn collect_validation_payloads(
         }
         payloads.push(ValidationPayloadBinding {
             id: required.id.clone(),
-            sha256: verify_json_digest(&path)?,
+            sha256: context.layout.verify_candidate_digest(
+                Path::new("validation").join(format!("{}.json", required.id)),
+            )?,
             github_attested: matches!(
                 record.provenance,
                 EvidenceProvenance::GithubAttestation { .. }
@@ -1157,26 +1166,16 @@ fn collect_panel_payloads(
     Ok(payloads)
 }
 
-fn ensure_exact_json_set<'a>(
+fn ensure_exact_candidate_json_set<'a>(
+    context: &SnapshotContext,
     directory: &Path,
     expected: impl Iterator<Item = &'a str>,
     label: &str,
 ) -> Result<()> {
     let expected = expected.map(str::to_owned).collect::<BTreeSet<_>>();
-    let metadata = fs::symlink_metadata(directory).map_err(|error| {
-        DeliveryError::new(format!(
-            "cannot inspect {label} directory {}: {error}",
-            directory.display()
-        ))
-    })?;
-    if !metadata.file_type().is_dir() {
-        return Err(DeliveryError::new(format!(
-            "{label} path is not a directory"
-        )));
-    }
     let mut actual = BTreeSet::new();
     let mut entries = 0_usize;
-    for entry in fs::read_dir(directory)? {
+    for name in context.layout.list_candidate_directory(directory)? {
         entries += 1;
         if entries > expected.len().saturating_mul(3).saturating_add(10) {
             return Err(DeliveryError::new(format!(
@@ -1188,16 +1187,9 @@ fn ensure_exact_json_set<'a>(
                 "{label} directory contains too many artifacts"
             )));
         }
-        let entry = entry?;
-        let path = entry.path();
+        let path = Path::new(&name);
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
-        }
-        if !entry.file_type()?.is_file() {
-            return Err(DeliveryError::new(format!(
-                "{label} JSON is not a regular file: {}",
-                path.display()
-            )));
         }
         let stem = path
             .file_stem()
