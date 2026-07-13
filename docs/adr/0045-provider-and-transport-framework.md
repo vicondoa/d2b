@@ -53,9 +53,13 @@ not as an upgrade layer over d2b 1.x.
 D2b 2.0 has the following fixed decisions:
 
 1. The host is factory-reset for all d2b state from a persistently selected,
-   dedicated v2 reset boot generation. That generation contains the reset
-   binary but no startable d2b service. No d2b 1.x backup is retained, and a
-   reset interruption boots back into reset mode rather than v1.
+   dedicated v2 reset boot generation. Before selecting that generation, every
+   configured user completes a mandatory live-session preparation in which
+   `d2b-userd` deletes d2b-owned Secret Service items, revokes scoped TPM
+   exports, and emits a root-verifiable receipt bound to the reset intent.
+   Reset mode never accesses or unlocks Secret Service and refuses without the
+   exact receipt set. No d2b 1.x backup is retained, and a reset interruption
+   boots back into reset mode rather than v1.
 2. There is no d2b 1.x parser, importer, alias, tombstone, re-export, protocol
    negotiation path, compatibility feature, or fallback in production code.
 3. Every d2b-owned live IPC boundary uses one authenticated
@@ -77,16 +81,19 @@ D2b 2.0 has the following fixed decisions:
    infrastructure and runtime authority do not overlap.
 7. ADR 0043's per-realm `d2bd`, broker, identity, state, audit, cgroup, and
    resource partition is implemented literally. The local-root broker retains
-   host-global authority. Child brokers are dedicated unprivileged host
-   processes confined to realm user, mount, and network namespaces and receive
-   only allocator-approved FDs and leases.
+   host-global authority and is the only broker socket-activated by PID1. Its
+   allocator pre-binds child listeners and parent-spawns each child controller
+   and broker as separate pidfd-supervised processes through typed operations,
+   passing only their listener, namespace, cgroup, resource, and lease FDs.
+   Child processes are not PID1 units.
 8. Dynamic paths use deterministic 96-bit, domain-separated SHA-256 IDs,
    compatible with Nix `builtins.hashString "sha256"`, rendered as 20 lowercase
    unpadded base32 characters. Human names never become runtime path components.
 9. Brokers are the only creators and repair owners of dynamic paths below fixed
-   filesystem anchors. The closed fixed socket-activation set is created by
-   PID1 or the owning user manager. Authoritative state remains bounded,
-   versioned, atomic JSON.
+   filesystem anchors. PID1 creates only the closed local-root endpoint set;
+   the owning user manager creates the closed per-user set, and the local-root
+   allocator creates child-realm listeners. Authoritative state remains
+   bounded, versioned, atomic JSON.
 10. GNOME Keyring is the interactive Secret Service. `d2b-userd` uses `oo7`.
     TTY unlock directly invokes the stdin-only keyring backend without a
     shell. Unattended services receive only explicitly exported TPM2-sealed
@@ -154,12 +161,79 @@ topology and no side-by-side drain mode inside d2b.
 
 ### Factory reset trigger
 
-Reset does not run before a live switch from a v1 generation. W11 builds two
-closures before touching state:
+The host-tree reset does not run as a live switch from a v1 generation. W11
+builds two closures before touching state:
 
 1. the complete final v2 boot generation; and
 2. a dedicated v2 reset boot generation whose default target is
    `d2b-reset.target`.
+
+Before that reset generation is selected, W11 performs a mandatory pre-reset
+user phase in the ordinary multi-user generation while every configured
+owning user has an authenticated login session and an already-unlocked
+keyring. The phase uses the final v2 `d2b-userd` reset-preparation path; it does
+not require a v1 parser or preserve any v1 state. The root coordinator first
+constructs a canonical reset intent containing the reset and final closure
+fingerprints, a fresh 256-bit nonce, the exact UID set from final-v2
+configuration, fixed d2b Secret Service ownership selectors, scoped-export
+inventory digests, the generated deletion-anchor classes, and the private
+outlier-manifest digest when one exists. The non-mutating command:
+
+```text
+d2b host reset --factory --prepare-users
+```
+
+emits the ordered intent and its digest. The only mutating pre-reset command
+is:
+
+```text
+d2b host reset --factory --prepare-users --apply --confirm <reset-intent-digest>
+```
+
+After confirmation and before deleting an item, the coordinator quiesces every
+operational d2b writer that can create a Secret Service item or scoped export
+while leaving the owning desktop/login sessions and keyrings available. It
+admits only itself and one bounded final-v2 user preparation at a time. This is
+not a mixed v1/v2 control topology: no v1 session or parser participates.
+
+For each configured UID, the coordinator parent-starts exactly that user's
+final-v2 `d2b-userd` reset-preparation invocation through the owning user
+manager with a fresh inherited `d2b.user.v2` endpoint. `d2b-userd`:
+
+1. requires the owning login session and unlocked Secret Service to be
+   available; it never prompts for or attempts a keyring unlock;
+2. selects only items carrying the fixed d2b ownership attributes, deletes
+   them through `oo7` without reading secret values, and re-queries the fixed
+   selector to prove absence;
+3. revokes every configured scoped TPM export for that UID through the typed
+   reset-preparation operation, waits for removal of its root-owned
+   materialization and authorization record, and proves the expected export
+   inventory absent; and
+4. emits a bounded completion-receipt payload over the reset-intent digest and
+   nonce, UID, selector version and result digest, expected export-inventory
+   digest and revocation-result digest, and its executable/configuration
+   generation.
+
+The root coordinator verifies the `d2b-userd` peer UID, launch binding,
+ComponentSession transcript, result digests, and export-removal evidence. It
+then MACs the payload with a one-use reset-receipt key and stores the resulting
+root-verifiable `d2b-userd` completion receipt as a root-owned `0600` file
+outside every deletion anchor. The key and receipt set are carried into reset
+mode as root-only reset evidence; they authorize no operation other than
+receipt verification. A receipt is valid only for its exact reset-intent
+digest, nonce, UID, inventories, and closure fingerprints.
+
+After the exact configured-UID receipt set exists, the coordinator closes a
+root-owned pre-reset barrier: new d2b Secret Service writes and scoped exports
+are denied, all prepared login sessions/user managers/keyring daemons are
+terminated, no process or user bus remains for a configured UID, every d2b user
+process is stopped, and all operational d2b user units are masked for the reset
+boot. The root coordinator survives operator-session loss and owns the
+remaining transition. If any user/session/keyring is absent during its phase,
+an item or export cannot be removed, a receipt is missing/duplicate/stale, or
+the barrier cannot close, the reset generation is not selected. Aborting the
+phase invalidates all receipts and requires a new nonce and complete rerun;
+there is no partial-receipt resume.
 
 The reset generation contains the v2 reset binary and its audited data, but no
 startable v1 or v2 d2b daemon, broker, socket, provider, helper, user-agent, or
@@ -172,14 +246,17 @@ back to an older generation. The prebuilt final v2 generation is present but is
 not selected. A power loss, kernel panic, reset-tool crash, failed apply, or
 ordinary reboot therefore returns to reset mode, never to v1.
 
-Both reset commands run only after that reboot. The dry-run command is:
+The two host-tree reset commands run only after that reboot. The dry-run
+command is:
 
 ```text
 d2b host reset --factory
 ```
 
 It emits a bounded deletion plan and a digest over the ordered, canonical plan.
-The only command shape that may mutate the host is exactly:
+That plan includes the reset-intent digest and the ordered digest of the
+verified per-user receipt set. The only reset-mode command shape that may
+mutate the remaining host trees is exactly:
 
 ```text
 d2b host reset --factory --apply --confirm <plan-digest>
@@ -191,36 +268,44 @@ The apply command:
    reset closure, effective uid 0, and the absence or mask state of every d2b
    operational system/user service and socket unit; it never mutates through a
    broker;
-2. acquires the exclusive host reset OFD lock at
+2. validates the root ownership and mode of the reset evidence, authenticates
+   every receipt, and requires exactly one receipt for every configured UID
+   with the current intent digest, nonce, inventories, and closure
+   fingerprints; it does not start a user process, connect to D-Bus, access
+   Secret Service, or attempt a keyring unlock;
+3. acquires the exclusive host reset OFD lock at
    `/run/d2b-reset/host.lock`, then acquires a systemd-logind block inhibitor
    for shutdown, reboot, sleep, and idle for the complete mutation and
    verification interval;
-3. under that lock, proves that every declared d2b cgroup is unpopulated and the
+4. under that lock, proves that every declared d2b cgroup is unpopulated and the
    exact fingerprinted reset process is the only d2b process; no
    ComponentSession, provider/helper/user session, runner, lease, or delegated
    namespace remains; no process has an fd, cwd, root, executable, map, or
    mount-namespace reference into a deletion root; and no mount exists at or
    below a deletion root;
-4. reopens every parent/root with `openat2`, records and compares inode, device,
+5. reopens every parent/root with `openat2`, records and compares inode, device,
    and `statx` mount ID, canonicalizes the complete ordered plan, recomputes its
    digest while the reset lock and inhibitor are held, and requires exact
    equality with `--confirm`;
-5. deletes all declared d2b runtime, persistent, cache, generated
-   configuration, user helper, namespaced Secret Service, key, token, disk, TPM,
-   store-view, audit, ledger, socket, and lock state as opaque trees;
-6. walks and removes only by anchored dirfd using `openat2`, `getdents64`, and
+6. accepts the authenticated receipts as the proof that Secret Service items
+   were deleted, directly proves root-owned scoped-export material absent, then
+   deletes all remaining declared d2b runtime, persistent, cache, generated
+   configuration, user-helper, key, token, disk, TPM, store-view, audit,
+   ledger, socket, and lock state as opaque trees;
+7. walks and removes only by anchored dirfd using `openat2`, `getdents64`, and
    `unlinkat`, with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`,
    `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`; it revalidates inode, device,
    and mount ID after each open and immediately before each unlink, and refuses
    a symlink, bind-mount substitution, mount crossing, or changed object;
-7. never decodes a v1 record and never touches `/etc/nixos`, unrelated Secret
+8. never decodes a v1 record and never touches `/etc/nixos`, unrelated Secret
    Service items, unrelated user files, unrelated systemd credentials, or a
    non-d2b mount;
-8. creates no archive, snapshot, copied tree, rollback generation, or recovery
+9. creates no archive, snapshot, copied tree, rollback generation, or recovery
    token;
-9. fsyncs every affected directory, re-runs the quiescence and absence proofs,
-   and writes bounded reset-complete evidence outside the deleted anchors;
-10. only after all prior steps succeed, atomically selects the already-built
+10. fsyncs every affected directory, re-runs the receipt, quiescence, and
+    absence proofs, and writes bounded reset-complete evidence outside the
+    deleted anchors;
+11. only after all prior steps succeed, atomically selects the already-built
     final v2 generation as the persistent boot default and reboots into it. It
     does not live-switch services from reset mode.
 
@@ -229,15 +314,12 @@ durable or after a failure has left reset mode selected. If clean shutdown
 cannot be inhibited, reset refuses before deletion. SIGTERM, cancellation, or
 an operator disconnect before final selection leaves the reset entry selected.
 
-The plan must include d2b-owned user state and Secret Service items. Item
-selection uses fixed d2b ownership attributes and metadata only; reset never
-reads secret values. If an owning user session is required to delete a known
-d2b item and is unavailable, reset refuses instead of silently leaving state.
-The root reset process may fork one bounded child per declared local user,
-permanently drop that child to the exact verified uid, and use `oo7` against the
-already-running external Secret Service to delete matching items. Those
-children are part of the reset command, not persistent helpers or agents. No
-other d2b process may remain live.
+The plan includes d2b-owned user state, but Secret Service deletion and scoped
+export revocation are completed only in the mandatory pre-reset user phase.
+Reset mode treats the authenticated receipts as required evidence and the
+corresponding item/export absence as a precondition; it never opens a user bus,
+forks a user child, invokes `oo7`, accesses a keyring, or attempts an unlock.
+No d2b process other than the exact reset process may remain live.
 
 The released reset implementation knows only generated current-v2 d2b anchor
 classes. Literal names for legacy outlier roots are not permitted in final v2
@@ -259,11 +341,13 @@ identities.
 ### Repair forward
 
 There is no rollback archive and no d2b 1.x repair path. Before reset, W11 builds
-the reset and final v2 closures and verifies the reset plan in isolated
-validation. During reset, failure returns to the persistently selected reset
-generation. After final-v2 selection, any physical-host failure is repaired
-forward on the private integrated v2 branch. Neither path boots a d2b 1.x
-generation.
+the reset and final v2 closures, verifies the reset plan in isolated
+validation, and completes the mandatory user receipt phase. A failed user phase
+invalidates its partial receipts and is rerun with a fresh nonce; deleted d2b
+items or revoked exports are not restored from v1. During reset, failure returns
+to the persistently selected reset generation. After final-v2 selection, any
+physical-host failure is repaired forward on the private integrated v2 branch.
+Neither path boots a d2b 1.x generation.
 
 ## Realm process and authority model
 
@@ -272,7 +356,7 @@ generation.
 Every host-local realm has all of the following:
 
 - one `d2bd` controller process and public socket;
-- one socket-activated broker service and broker socket, with privilege confined
+- one separate broker process and broker socket, with privilege confined
   according to the local-root/child split below;
 - a distinct system user/group and local access policy;
 - a distinct Noise identity;
@@ -286,14 +370,16 @@ Every host-local realm has all of the following:
 The physical-host topology begins as:
 
 ```text
-local-root d2bd
-  local-root broker
+local-root d2bd (PID1 service)
+  local-root broker (the only PID1 socket-activated broker)
     host-global allocator
+    parent-spawn of child processes
   resolver and realm-tree policy
+  pidfd supervision/adoption of child controllers and brokers
 
-home d2bd + home broker
-dev d2bd + dev broker
-work d2bd + work broker
+home d2bd process + separate home broker process
+dev d2bd process + separate dev broker process
+work d2bd process + separate work broker process
 
 per-user d2b-userd
 per-user d2b-provider-runtime-systemd-user-agent
@@ -319,33 +405,63 @@ d2b-priv-broker.socket
 d2b-priv-broker.service
 ```
 
-A child host-local realm uses its derived ID:
+`d2b-priv-broker.socket` is the only PID1 broker socket activation.
+`d2bd.socket` remains the fixed local-root public endpoint; it does not activate
+or supervise a child realm.
+
+A child host-local realm has no `.socket` or `.service` unit. It uses its
+derived ID in process identities and broker-owned listeners:
 
 ```text
-d2bd-r-<realm-id>.socket
-d2bd-r-<realm-id>.service
-d2b-priv-broker-r-<realm-id>.socket
-d2b-priv-broker-r-<realm-id>.service
+controller uid: d2bd-r-<realm-id>
+broker uid:     d2bbr-r-<realm-id>
+public socket:  /run/d2b/r/<realm-id>/public.sock
+broker socket:  /run/d2b/r/<realm-id>/broker.sock
 ```
 
 The child controller system user is `d2bd-r-<realm-id>`, its child-broker system
 user is `d2bbr-r-<realm-id>`, and its local public access group is
-`d2b-r-<realm-id>`. The controller and broker UIDs are distinct. The local-root
-identities remain `d2bd` and `d2b`. A realm's delegated cgroup root is:
+`d2b-r-<realm-id>`. The controller and broker UIDs are distinct. A separate
+internal `d2bcg-r-<realm-id>` group contains only those two identities and
+owns the narrow cgroup delegation described below; the public access group is
+never a cgroup owner. The local-root identities remain `d2bd` and `d2b`.
+
+The local-root allocator creates this cgroup layout before either child
+process executes:
 
 ```text
 /sys/fs/cgroup/d2b.slice/r-<realm-id>/
+  controller/
+  broker/
+  workloads/
+    w-<workload-id>/
+      <role-id>/
 ```
 
-Workload processes appear only in leaves:
+The realm root, `workloads/`, and every `w-<workload-id>/` are process-free.
+The controller is born directly in `controller/`, the broker is born directly
+in `broker/`, and workload processes appear only in role leaves. There is no
+controller or broker process in a sibling cgroup outside the delegated realm
+root.
 
-```text
-/sys/fs/cgroup/d2b.slice/r-<realm-id>/w-<workload-id>/<role-id>/
-```
+The allocator grants `d2bcg-r-<realm-id>` write access to the cgroup-v2
+delegation files at the realm common ancestor and throughout
+`workloads/` only. Ancestors grant only the execute/search permission needed
+to reach that root, never write permission on `/sys/fs/cgroup/d2b.slice`, the
+cgroup root, or another realm.
+Controller and broker user-namespace maps include that one internal GID. New
+runners use `clone3(CLONE_INTO_CGROUP)` with an already-validated role-leaf FD
+so their first instruction executes in the destination leaf. An equivalent
+privileged spawn may be used only if the child is blocked before its first
+instruction and the local-root broker places it directly in the destination.
+After initial controller/broker placement, any `cgroup.procs` move is confined
+to source and destination leaves beneath the same
+`r-<realm-id>/` root; moving a process through `d2b.slice`, the cgroup root, or
+a peer realm is forbidden.
 
-Interior realm and workload cgroups remain process-free. A child controller,
-public group, broker socket, state root, and delegated cgroup may not be shared
-with another realm even when both realms have the same allowed users.
+A child controller, public group, broker socket, state root, delegated cgroup,
+and internal cgroup group may not be shared with another realm even when both
+realms have the same allowed users.
 
 The user manager similarly owns fixed `d2b-userd.socket`,
 `d2b-runtime-systemd-user.socket`, `d2b-clipd-control.socket`,
@@ -355,7 +471,8 @@ listener.
 
 No per-workload systemd service is introduced. A realm controller supervises
 its workload DAGs. Its broker performs that realm's privileged effects. Unit
-count therefore scales by host-local realm, not by workload.
+count does not scale by host-local realm or workload; child process count and
+pidfd state scale by realm, and workload runner count scales by workload.
 
 ### Local-root allocator
 
@@ -370,10 +487,33 @@ capabilities and global host path/device access. It owns global claims such as:
 - global device and scarce-resource partitions;
 - cross-realm collision checks.
 
+For each child realm generation, the local-root controller requests closed
+typed allocator operations. The local-root broker:
+
+1. creates the realm roots and cgroup layout, opens the exact namespace,
+   cgroup, storage, device, and lease FDs, and pre-binds both the child public
+   listener and child broker listener from generated endpoint rows;
+2. creates dedicated user, mount, network, IPC, PID, and cgroup namespaces with
+   only that realm's generated UID/GID maps and resource views;
+3. invokes the typed child-controller and child-broker spawn operations as
+   separate `clone3` children, places them directly in `controller/` and
+   `broker/`, and passes each process only its declared listener, namespace,
+   cgroup, resource, and bootstrap-session FDs;
+4. returns distinct pidfds and launch records to the local-root `d2bd`, which
+   supervises both processes, adopts them after its own restart only after
+   cgroup/executable/generation verification, and requests a typed respawn on
+   failure.
+
+The controller and broker are separate children with separate UIDs, FD tables,
+listeners, ComponentSessions, state roots, and audit roots. Neither is a PID1
+unit, neither receives `SD_LISTEN_FDS`, and neither self-binds or repairs its
+listener. PID1 cannot independently restart one behind the allocator's
+namespace or cgroup setup.
+
 Child brokers run under distinct dedicated unprivileged host UIDs. Before any
-child-broker code executes, the local-root launch path creates dedicated user,
-mount, and network namespaces and maps only that realm's generated UID/GID
-ranges. The child starts with an empty initial-namespace permitted, effective,
+child-broker code executes, the local-root launch path has installed the
+dedicated namespaces and mapped only that realm's generated UID/GID ranges.
+The child starts with an empty initial-namespace permitted, effective,
 inheritable, ambient, and bounding capability set. Any capabilities granted
 inside its user namespace are a closed generated namespace-scoped set and
 confer no authority in the initial user, mount, network, IPC, PID, or cgroup
@@ -431,8 +571,8 @@ The exception does not permit that executor to create, adopt as authority,
 replace, repair, stop, or recover:
 
 - the controller that authorizes the provider operation;
-- the controller's host service, identity credential, state root, broker, or
-  delegated resource partition;
+- the controller's parent-spawn launch record (or local-root host service),
+  identity credential, state root, broker, or delegated resource partition;
 - any parent substrate required to start that controller.
 
 Those responsibilities remain with local-root or the direct parent. Registry
@@ -1109,7 +1249,7 @@ The fixed profiles are:
 
 | Session | Noise profile and identity |
 | --- | --- |
-| Local Unix client/controller/broker/helper/userd/component | Ephemeral `Noise_NN_25519_ChaChaPoly_SHA256`. Identity evidence is directional: an acceptor authenticates the connecting initiator from kernel-observed `SO_PEERCRED`; an initiator authenticates the responder from trusted socket-activation, inode, unit, and endpoint-policy provenance. Inherited/socketpair endpoints add first-packet `SCM_CREDENTIALS` and a parent launch binding. Noise supplies confidentiality and transcript integrity but no static peer identity. |
+| Local Unix client/controller/broker/helper/userd/component | Ephemeral `Noise_NN_25519_ChaChaPoly_SHA256`. Identity evidence is directional: an acceptor authenticates the connecting initiator from kernel-observed `SO_PEERCRED`; an initiator authenticates the responder from trusted fixed-socket or allocator-issued listener provenance, inode, launch/unit owner, and endpoint policy. Inherited/socketpair endpoints add first-packet `SCM_CREDENTIALS` and a parent launch binding. Noise supplies confidentiality and transcript integrity but no static peer identity. |
 | Enrolled realm/controller/provider/workload peers | `Noise_KK_25519_ChaChaPoly_SHA256` using enrolled static public keys and fresh ephemeral session state. |
 | One-time realm or guest bootstrap | `Noise_IKpsk2_25519_ChaChaPoly_SHA256` using the expected parent static key and a single-use, operation-bound 256-bit-or-stronger PSK. |
 | Normal enrolled guest control | `Noise_KK_25519_ChaChaPoly_SHA256` using the parent realm key and guest vTPM-backed static key. |
@@ -1158,14 +1298,17 @@ process. Instead it authenticates the responder endpoint by all of:
 3. matching pre-connect and post-connect path device/inode/type observations
    under the non-writable anchored parent;
 4. the expected system or user socket unit and activation owner for a fixed
-   endpoint, or the broker-issued listener identity for a dynamic endpoint;
+   local-root/user endpoint, or the allocator/broker-issued listener identity
+   and launch record for a child-realm or other dynamic endpoint;
 5. the endpoint policy's exact purpose, responder role, service, schema, limits,
    and attachment policy.
 
-The service receives a socket-activated listener only from the declared
-system/user manager unit. A dynamic owner receives an already-bound listener FD
-only from the broker named in the generated row. Neither owner unlinks and
-recreates the path.
+A local-root or user service receives a socket-activated listener only from the
+declared system/user manager unit. A child controller or broker receives its
+already-bound listener only from the local-root allocator as part of its typed
+parent spawn. Another dynamic owner receives an already-bound listener FD only
+from the broker named in the generated row. No receiver unlinks and recreates
+the path.
 
 For an inherited or socketpair endpoint, each receiver enables `SO_PASSCRED`
 before traffic and requires the peer's first preface packet to carry exactly one
@@ -1605,8 +1748,9 @@ Endpoint creation and ownership is complete and closed:
 
 | Endpoint/path class | Path creator/binder | Connection owner | Unlink/repair owner |
 | --- | --- | --- | --- |
-| Fixed local-root and child-realm public sockets | PID1 from the generated system socket units | Matching local-root or child-realm `d2bd` receives only the activated listener FD | PID1/system unit lifecycle |
-| Fixed local-root and child-realm broker sockets | PID1 from the generated system socket units | Matching local-root or child broker receives only the activated listener FD | PID1/system unit lifecycle |
+| Fixed local-root public socket | PID1 from the generated `d2bd.socket` unit | Local-root `d2bd` receives only the activated listener FD | PID1/system unit lifecycle |
+| Fixed local-root broker socket | PID1 from the generated `d2b-priv-broker.socket` unit | Local-root broker receives only the activated listener FD | PID1/system unit lifecycle |
+| Child-realm public and broker sockets | Local-root allocator, using generated endpoint rows before parent spawn | Matching child controller and separate child broker receive their respective already-bound listener FDs | Local-root allocator |
 | Fixed `userd.sock` and `runtime-agent.sock` | Exact user's systemd manager from generated user socket units | Matching `d2b-userd` or `systemd-user` runtime agent | Owning user manager/user unit lifecycle |
 | Fixed clipd `control.sock`, `picker.sock`, and `bridge.sock` | Exact user's systemd manager from generated user socket units | The matching clipd component selected by endpoint policy | Owning user manager/user unit lifecycle |
 | Dynamic provider `agent.sock` listener | Owning realm broker, using its delegated parent dirfd and generated endpoint row | Broker passes the already-bound listener FD to exactly one provider agent | Owning realm broker |
@@ -1615,11 +1759,13 @@ Endpoint creation and ownership is complete and closed:
 | One-shot inherited/socketpair endpoint | Declared launching parent through the typed launch operation | The two declared endpoints only | Creating parent until handoff; then kernel close, with no path |
 
 Systemd/tmpfiles creates only the fixed top-level directory anchors and the
-per-user anchor needed for user-manager activation. Fixed system/user socket
-nodes are the narrow exception to broker creation below an anchor: socket
-activation must bind them before the service starts, and their exact set is
-enumerated in the generated endpoint contract. They are never adopted as
-broker-owned dynamic paths.
+per-user anchor needed for user-manager activation. Fixed local-root and user
+socket nodes are the narrow exception to broker creation below an anchor:
+socket activation binds them before the service starts, and their exact set is
+enumerated in the generated endpoint contract. Of broker endpoints, only the
+local-root broker is socket-activated by PID1. Child-realm public and broker
+listeners are allocator-owned dynamic paths, pre-bound before parent spawn, and
+are never adopted as PID1-owned paths.
 
 All other paths below an anchor are created and repaired only by the owning
 broker from generated storage, sync, and endpoint IDs. A daemon, controller,
@@ -1712,6 +1858,10 @@ desktop module.
 - owns trusted graphical prompts and interaction handles;
 - returns secret status or opaque export/lease handles, not secret bytes, to
   d2bd;
+- in the explicit pre-reset preparation mode, requires an existing unlocked
+  owning session, deletes only fixed-attribute d2b items, revokes that user's
+  scoped exports, proves both inventories absent, and emits the digest-bound
+  completion-receipt payload consumed by the root receipt coordinator;
 - never forwards Secret Service or the whole keyring into a guest.
 
 `d2b secret unlock` accepts either:
@@ -1770,15 +1920,26 @@ generation, restarts or reloads only the target service under explicit policy,
 and revokes the old export after bounded handoff. Exporting one item never
 unlocks or copies the whole keyring.
 
+Factory reset does not treat TPM export deletion as a root-mode substitute for
+user revocation. The owning `d2b-userd` revokes the export while its user
+authority is live, and the root side removes the materialization through the
+typed reset-preparation operation. Reset mode accepts only the authenticated
+absence receipt; it has no Secret Service or export-unseal authority.
+
 ### Host-local realm Noise keys
 
 Each host-local realm has a separate static Noise identity:
 
-1. generate the private key on the host for that realm only;
-2. seal it as a TPM2-backed systemd credential bound to TPM, host, owning user,
-   and a realm-specific credential name;
-3. have PID1 assign it only to the owning realm `d2bd`, with DAC, mount
-   namespace, and service sandbox isolation;
+1. generate the private key in the owning controller process for that realm
+   only;
+2. for local-root, seal it as a TPM2-backed systemd credential and have PID1
+   assign it only to local-root `d2bd`, with DAC, mount-namespace, and service
+   sandbox isolation;
+3. for a parent-spawned child controller, pass only its generated key-state
+   dirfd and allocator-approved TPM resource-manager FD; the controller creates
+   or unseals its realm-specific TPM object after entering its namespaces and
+   cgroup leaf, while the allocator and brokers never receive a plaintext key
+   buffer or credential file;
 4. enroll only the public key and generation with parent/children;
 5. rotate through an authenticated parent-authorized generation transition;
 6. revoke the prior generation and close its live sessions.
@@ -1966,6 +2127,10 @@ reset/private-manifest boxes close only on the final manifest-free W11 tree.
 - [ ] Boot the physical host through the persistently selected dedicated reset
       generation, prove all d2b units/sockets and live references absent, and
       complete the locked/inhibited fd-relative reset before final-v2 boot.
+- [ ] Before selecting reset mode, complete the confirmed live-session
+      `d2b-userd` phase for every configured UID, revoke scoped exports, close
+      the write barrier, and carry the exact authenticated receipt set into
+      reset mode; no reset-mode Secret Service or unlock path may exist.
 - [ ] Keep released reset code limited to generic generated current-anchor
       deletion. If W11 needs a literal outlier-root manifest, keep exactly one
       audited data-only copy in the private reset closure and remove the
@@ -2117,8 +2282,9 @@ Parallel slices:
 - provider-agent service;
 - privileged broker service and typed FD attachments;
 - local-root allocator and child-broker lease service, including dedicated
-  child UIDs/namespaces, zero initial-namespace capabilities, and FD-only
-  delegation.
+  child UIDs/namespaces, pre-bound child public/broker listeners, direct
+  controller/broker cgroup-leaf placement, typed parent spawn, pidfd handoff,
+  zero initial-namespace capabilities, and FD-only delegation.
 
 No slice keeps an old handshake or fallback.
 
@@ -2127,7 +2293,8 @@ No slice keeps an old handshake or fallback.
 Parallel slices:
 
 - `d2b-userd`, direct no-shell `gnome-keyring-daemon --unlock` TTY spike,
-  post-unlock `oo7` Secret Service interaction, and TPM2/systemd export;
+  post-unlock `oo7` Secret Service interaction, TPM2/systemd export, and the
+  no-unlock pre-reset deletion/revocation completion statement;
 - renamed systemd-user runtime agent and shell supervisor;
 - clipboard control, picker, bridge, and readiness;
 - notify/wlcontrol event and action flow with bounded projections;
@@ -2141,10 +2308,15 @@ Parallel slices:
 Implement:
 
 - realm/workload/provider options only;
-- local-root/home/dev/work process instances and ordering;
-- per-realm users, generated socket ownership rows, confined child brokers,
-  identities, slices, namespaces, state, and audits;
-- local-root allocator leases;
+- the local-root PID1 units plus generated home/dev/work child process and
+  ordering records, with no child realm `.service` or `.socket` units;
+- per-realm users, internal cgroup groups, generated socket ownership rows,
+  confined child brokers, identities, namespaces, state, and audits;
+- local-root allocator listener creation, typed child controller/broker spawn,
+  pidfd supervision/adoption, and leases;
+- process-free per-realm cgroup roots with `controller/`, `broker/`, and
+  `workloads/` children, direct `CLONE_INTO_CGROUP` placement, and write
+  delegation that ends at the realm root;
 - recursion-safe normalized role/provider/storage index;
 - short-ID paths and complete bundle artifacts;
 - broker-only directory/ACL repair;
@@ -2186,6 +2358,10 @@ Across private sibling branches:
 - Enable production dead-code denial with generated-code-only exceptions.
 - Implement the exact reset-mode-only digest-confirmed factory reset command and
   dedicated no-d2b-service boot target.
+- Implement the pre-reset user intent, confirmation command, root-owned receipt
+  authentication, exact configured-user receipt gate, export-revocation
+  operation, and post-receipt barrier. Reset mode has no Secret Service client
+  or unlock path.
 - Keep the released reset implementation generic: it may delete only generated
   current d2b anchor classes and may not contain a literal legacy outlier name.
 - Add source policy proving old identifiers, paths, crates, services, options,
@@ -2205,26 +2381,35 @@ Before implementation PRs merge:
    selecting final v2 yet;
 3. if required, embed exactly one audited data-only outlier-root manifest in the
    private reset closure; no other source or artifact may contain those names;
-4. install, mark successful, and persistently select the reset generation as
-   the boot default, then reboot into `d2b-reset.target`;
-5. prove every v1/v2 operational d2b system/user service and socket unit absent
+4. while every configured owning session and keyring is available, generate
+   the reset intent, run the confirmed `d2b-userd` preparation for every UID,
+   delete d2b-owned keyring items, revoke scoped TPM exports, verify the exact
+   authenticated receipt set, terminate the prepared user sessions/keyrings,
+   and close the post-receipt barrier;
+5. install, mark successful, and persistently select the reset generation as
+   the boot default only after step 4, then reboot into `d2b-reset.target`;
+6. prove every v1/v2 operational d2b system/user service and socket unit absent
    or masked (with only the inert reset target active), acquire the reset
-   lock/inhibitor, prove cgroup/process/session/fd/mount quiescence, dry-run, and
-   apply the recomputed digest-confirmed reset with no backup;
-6. allow the reset binary to select final v2 and reboot only after deletion,
-   fsync, and absence proofs succeed; any interruption reboots to reset mode;
-7. initialize and verify GNOME Keyring login unlock, `d2b-userd`, and scoped
+   lock/inhibitor, verify every receipt without accessing or unlocking Secret
+   Service, prove cgroup/process/session/fd/mount quiescence, dry-run, and apply
+   the recomputed digest-confirmed reset with no backup;
+7. allow the reset binary to select final v2 and reboot only after deletion,
+   receipt revalidation, fsync, and absence proofs succeed; any interruption
+   reboots to reset mode;
+8. initialize and verify GNOME Keyring login unlock, `d2b-userd`, and scoped
    TPM2 exports;
-8. start local-root, home, dev, and work controller/broker pairs;
-9. recreate `personal-dev` in `dev` and the interactive work provider executor
+9. start the local-root units and verify that its allocator pre-binds and
+   parent-spawns separate home, dev, and work controller/broker processes into
+   their declared cgroup leaves with pidfd supervision and no child PID1 units;
+10. recreate `personal-dev` in `dev` and the interactive work provider executor
    in `work`;
-10. validate complete local desktop parity and available cloud parity;
-11. remove the private outlier manifest, its closure/GC roots, and every literal
-    legacy outlier name from production artifacts, then prove the final
-    integrated production code/configuration/schema/test set and release closure
-    contain only generic current-anchor reset logic;
-12. repair forward on the private stack until validation and a final full panel
-    seal the manifest-free integrated tree.
+11. validate complete local desktop parity and available cloud parity;
+12. remove the private outlier manifest, its closure/GC roots, and every literal
+   legacy outlier name from production artifacts, then prove the final
+   integrated production code/configuration/schema/test set and release closure
+   contain only generic current-anchor reset logic;
+13. repair forward on the private stack until validation and a final full panel
+   seal the manifest-free integrated tree.
 
 #### W12 - Merge, release, and final host pin
 
@@ -2392,17 +2577,28 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 
 - controller ownership and cycle rules, including only the narrow
   independently-running-controller exception;
-- local-root allocator lease isolation and restart reconciliation;
+- local-root allocator lease isolation, pre-bound child public/broker listener
+  provenance, typed parent spawn, pidfd supervision, and restart adoption;
+- local-root broker as the only PID1 socket-activated broker, with no child
+  realm `.socket`/`.service` units or `SD_LISTEN_FDS` path;
 - child-broker dedicated uid/user/mount/network namespace setup, zero
   initial-namespace capability sets, closed UID/GID mappings, FD-only delegated
   access, global-path/`setns` denial, and local-root-only host mutation;
+- child-controller realm-key generation/unseal only after direct placement,
+  using its key-state dirfd and TPM resource-manager FD with no plaintext key
+  buffer/file in the allocator or either broker;
+- process-free realm/workload cgroup interiors, direct controller/broker and
+  runner leaf placement, controller/broker-group write only at the realm common
+  ancestor and workload subtree, same-realm-only moves, and `EACCES` outside
+  that delegated root;
 - per-realm user, socket, broker, key, state, audit, cgroup, and network
   separation;
 - independent Nix/Rust SHA-256 vectors, collision rejection, and a generated
   per-endpoint Unix socket-length proof;
 - no path built from a raw human/provider/device value;
-- complete storage/sync/endpoint inventory, fixed socket-activation exception,
-  broker-only dynamic creation, and no daemon unlink/rebind path;
+- complete storage/sync/endpoint inventory, fixed local-root/user
+  socket-activation exception, allocator-owned child listeners, broker-only
+  other dynamic creation, and no daemon unlink/rebind path;
 - restart adoption before cleanup and typed quarantine;
 - atomic JSON crash consistency;
 - segment chain, checkpoint, retention, and gap behavior;
@@ -2421,6 +2617,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - provider-agent proxy parity;
 - direct no-shell `gnome-keyring-daemon --unlock` TTY behavior, graphical Secret
   Service prompt, post-unlock `oo7`, and fail-closed backend-spike mismatch;
+- pre-reset `d2b-userd` fixed-attribute deletion and export revocation through
+  an authenticated owning session, with no secret-value read and no unlock
+  attempt;
 - systemd credential materialization under read-only
   `$CREDENTIALS_DIRECTORY`, TPM/host/user/credential-name binding, and
   PID1/DAC/namespace assignment isolation;
@@ -2446,10 +2645,20 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 ### Reset and seal safety
 
 - reset and final v2 closures are built before cutover;
+- before reset selection, the canonical intent and confirmed per-user
+  preparation delete d2b-owned Secret Service items, revoke scoped exports,
+  authenticate exactly one digest/nonce/inventory-bound receipt per configured
+  UID, terminate the prepared login/user-manager/keyring processes, and close
+  the no-new-write barrier;
+- unavailable/locked user sessions, missing/duplicate/stale receipts, failed
+  export removal, or a barrier failure prevent reset selection, and retry uses
+  a fresh nonce and complete receipt set;
 - reset generation is the persistent boot default, not a one-shot, and every
   interruption/reboot before completion returns to reset mode rather than v1;
 - all operational d2b system/user service and socket units are absent or masked
   in reset mode, with only the inert reset target active;
+- reset mode verifies root-owned receipts but has no D-Bus, `oo7`, user-child,
+  Secret Service access, or keyring-unlock path;
 - reset lock and shutdown inhibitor fail closed;
 - cgroup, process, ComponentSession, open-fd, cwd/root/executable/map, lease, and
   mount quiescence checks cover every declared root;
@@ -2479,9 +2688,17 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 - Niri login unlock and shell/graphical `d2b secret unlock`;
 - direct TTY backend and graphical unlock plus allowlisted systemd credential
   consumption from `$CREDENTIALS_DIRECTORY` without whole-keyring unlock;
-- local-root/home/dev/work daemon and broker health;
+- pre-reset deletion/revocation with one authenticated receipt per configured
+  UID, fail-closed locked/unavailable-user cases, post-receipt session/keyring
+  termination and write denial, and reset-mode proof that no Secret Service
+  access or unlock is attempted;
+- local-root daemon/broker health and pidfd-supervised home/dev/work
+  controller/broker health, with no child realm PID1 units;
 - child brokers have zero initial-namespace capabilities/global path access and
   operate only on delegated namespace/dirfd/device leases;
+- controller, broker, and workload processes begin in their declared cgroup
+  leaves; same-realm movement succeeds where authorized, while writes or moves
+  through `d2b.slice`, root, and peer realms fail;
 - `personal-dev` lifecycle, restart, exec, persistent shell, graphics, Wayland,
   audio, clipboard, storage, network, USBIP, FIDO, and daemon restart adoption;
 - work interactive provider executor;
@@ -2506,6 +2723,9 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 | An absolute epoch is encoded as a relative ttrpc timeout or expires while queued. | Authenticate issue/expiry separately, enforce 30-second skew and 15-minute lifetime, intersect wall/monotonic remaining time at every queue boundary, set only capped relative `timeout_nano`, and cancel by request ID. |
 | Ancillary FD floods exhaust `RLIMIT_NOFILE` and prevent cancellation/cleanup. | Enforce packet/request/operation/session/process/host credits, keep 64 emergency control slots, reserve before transfer, and close/release deterministically on every rejection and race. |
 | Multiple realm brokers race over global host resources or a child escapes its lease. | Local-root alone retains initial-namespace/global authority; each child has a dedicated uid and user/mount/network namespaces, zero initial-namespace capabilities, and only allocator-issued dirfds/FDs/leases. |
+| Reset mode cannot delete a locked user's Secret Service items and cutover deadlocks. | Delete fixed-attribute items and revoke scoped exports in a mandatory confirmed pre-reset phase while every configured owning session is unlocked; authenticate digest-bound receipts, close the write barrier, and refuse to select reset mode without the exact set. Reset mode never accesses or unlocks Secret Service. |
+| PID1 and the allocator can independently start the same child broker with incompatible namespace/listener ownership. | Socket-activate only the local-root broker. The allocator pre-binds child listeners and parent-spawns separate child controllers/brokers through typed operations; local-root `d2bd` supervises their pidfds, and no child realm PID1 unit exists. |
+| A child controller cannot move a runner from a sibling systemd cgroup or gains write to all of `d2b.slice`. | Create a process-free per-realm root with controller, broker, and workload children; place controller/broker directly with `CLONE_INTO_CGROUP`; delegate the common realm ancestor/workload subtree only; and birth runners in role leaves or move them only within that realm root. |
 | The no-backup reset crashes after deletion and boots v1. | Build both closures first, persistently select a no-d2b-service reset generation, hold a reset lock and shutdown inhibitor, revalidate quiescence/digest/mount IDs, and select final v2 only after fsync/absence proof. Every interruption reboots reset mode. |
 | Legacy outlier names become a permanent compatibility inventory. | Permit one audited data-only manifest only in the private W11 reset closure, never parse records, and remove the manifest, closure roots, and literals before the final seal/release. |
 | File-backed swtpm is treated as non-cloneable identity. | State that host root/whole-state copy can clone it, bind guest admission to the parent runtime/transport/generations/fresh boot nonce, and deny controller-host capability absent accepted non-copyable attestation. |
@@ -2544,13 +2764,20 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 8. A remote peer never receives a local broker protocol or raw host-mutation
    capability.
 9. Each host-local realm has a separate controller/broker/state/audit/resource
-   boundary. Child brokers have no initial-namespace capability or global path
-   access and operate only on allocator-approved namespace/dirfd/device leases.
+   boundary. Child controllers and brokers are separate parent-spawned,
+   pidfd-supervised processes, not PID1 units. Child brokers have no
+   initial-namespace capability or global path access and operate only on
+   allocator-approved namespace/dirfd/device leases.
 10. Local-root alone performs host-global mutation. Allocation of narrow leases
-    does not become peer-realm lifecycle authorization.
-11. Fixed listeners are created only by their declared system/user socket unit;
-    dynamic listeners are created only by the owning broker and handed to the
-    owner as FDs. A daemon never recreates a broker-owned path.
+    does not become peer-realm lifecycle authorization. A child
+    controller/broker group can write only its realm common cgroup ancestor and
+    workload subtree, never `d2b.slice`, root, or a peer realm; processes are
+    born in destination leaves or move only within that realm root.
+11. Fixed local-root/user listeners are created only by their declared
+    system/user socket unit. The local-root allocator creates and pre-binds
+    child public/broker listeners; the owning broker creates other dynamic
+    listeners. Every listener is handed to its declared owner as an FD, and a
+    daemon never recreates an allocator/broker-owned path.
 12. File-backed swtpm is cloneable by host root/whole-state copy. Guest admission
     additionally binds the parent runtime, transport endpoint, controller and
     workload generation, fresh boot nonce, and one-authoritative-generation
@@ -2564,9 +2791,12 @@ where the behavior requires them. No ad hoc top-level shell gate is added.
 15. Private keys, PSKs, credentials, proofs, endpoints, paths, commands,
     payloads, and user-provided labels do not enter telemetry. Metric labels use
     only closed low-cardinality classes.
-16. A normal v2 daemon restart is a continuation event. Factory reset runs only
-    in the persistently selected no-d2b-service reset generation; interruption
-    returns there, and final v2 is selected only after locked, inhibited,
+16. A normal v2 daemon restart is a continuation event. Before factory reset,
+    each configured user's live `d2b-userd` deletes fixed-attribute d2b items,
+    revokes scoped exports, and yields an authenticated intent-bound receipt.
+    Factory reset runs only in the persistently selected no-d2b-service reset
+    generation, never accesses or unlocks Secret Service, refuses without the
+    exact receipt set, and selects final v2 only after locked, inhibited,
     digest-confirmed, fd-relative deletion and absence proof.
 17. Final v2 production code/configuration/schema/test and release artifacts
     contain no legacy reset inventory. One private W11 data-only outlier
@@ -2592,16 +2822,20 @@ The d2b 2.0 program is complete only when:
 - Azure VM remains clearly non-production scaffold with infrastructure-only VM
   authority and runtime-only bound-handle workload authority;
 - every host-local realm runs a separate controller/broker boundary with
-  local-root resource allocation, while child brokers have dedicated
-  uid/user/mount/network namespaces, no initial-namespace capabilities, and
-  FD/lease-only delegated access;
+  local-root resource allocation and pre-bound listeners; every child
+  controller and broker is a separate parent-spawned, pidfd-supervised
+  non-PID1 process born in its declared cgroup leaf, while child brokers have
+  dedicated uid/user/mount/network namespaces, no initial-namespace
+  capabilities, and FD/lease-only delegated access;
 - every dynamic path uses independently derived SHA-256 short
   realm/workload/provider/role IDs, every socket row has a generated length and
   ownership proof, and only the declared manager/broker creates it;
 - d2b-userd, GNOME Keyring, TPM2 scoped exports, and host-local realm key
   lifecycle work from Niri, direct TTY backend, graphical prompt, and
   unattended `$CREDENTIALS_DIRECTORY` delivery with the documented
-  cryptographic and PID1 isolation split;
+  cryptographic, local-root PID1, and parent-spawned child isolation split, and
+  pre-reset preparation produces one authenticated absence/revocation receipt
+  for every configured UID without reset-mode Secret Service access;
 - guest identity rejects copied/stale runtime state through exact
   runtime/transport/generation/boot-nonce binding, and file-backed swtpm never
   advertises controller-host capability;
@@ -2613,10 +2847,12 @@ The d2b 2.0 program is complete only when:
 - every wave has all required tests and a 10/10 immutable-tree panel seal, and
   history-only evidence reuse occurs only after identical-content `xtask`
   proof plus rerun CI;
-- the physical host has booted the persistent reset generation, completed the
-  locked/inhibited/quiescent/mount-revalidated reset with no backup, booted
-  final v2 only after fsync/absence proof, and been validated on the private
-  integrated branch;
+- the physical host has completed the confirmed live-user deletion/revocation
+  phase and exact receipt gate, booted the persistent reset generation,
+  completed the locked/inhibited/quiescent/mount-revalidated reset with no
+  Secret Service access and no backup, booted final v2 only after receipt,
+  fsync, and absence proof, and been validated on the private integrated
+  branch;
 - the final sealed production source/configuration/schema/test set and release
   closure contain only generic current-anchor reset logic and no private
   outlier manifest/literals, and the host is pinned to merged d2b 2.0.0
@@ -2644,10 +2880,12 @@ The d2b 2.0 program is complete only when:
 - Every d2b workload disk, TPM identity, key, token, cache, audit record, and
   persistent session is destroyed once.
 - There is no rollback to d2b 1.x after the physical-host reset.
+- Cutover cannot select reset mode until every configured user has an available
+  unlocked session and completes the destructive receipt-producing preparation.
 - The first implementation touches nearly every crate, Nix surface, IPC path,
   sibling repository, and host integration.
 - Multiple host-local realm brokers require a carefully verified local-root
-  allocator.
+  allocator, parent-spawn path, pidfd supervisor, and cgroup delegation.
 - Universal encrypted local sessions and exact FD validation add implementation
   complexity and memory/latency overhead.
 - Provider and toolkit APIs intentionally break at 2.0.
