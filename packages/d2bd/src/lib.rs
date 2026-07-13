@@ -13185,9 +13185,8 @@ mod wait_for_one_shot_exit_tests {
         assert_eq!(result, Ok(()), "expected Ok(()) for zombie child");
     }
 
-    // v1.2 asserts the timeout path — `wait_for_one_shot_exit` must
-    // return `Err("oneshot-timeout:<pid>")` when the target stays alive
-    // through the full polling window.
+    // A process that remains alive through the polling window must return
+    // the stable timeout error.
     #[test]
     fn wait_for_one_shot_exit_times_out_on_alive_process() {
         let mut child = spawn_sleeping_child();
