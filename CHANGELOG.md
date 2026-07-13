@@ -10,6 +10,8 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-12
+
 ### Added
 
 - Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
@@ -20,6 +22,17 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Fixed unsafe-local persistent shells inheriting `TERM=dumb` from the systemd
+  user manager by supplying a fixed true-color terminal baseline while
+  preserving the rest of the manager environment and login-shell startup.
+- Made the mkfs diagnostic bound test exercise the formatter directly instead
+  of depending on unrelated existing-image repair stages.
+- Made output-ring wake coverage observe data and EOF as separate valid
+  notifications instead of racing both producer events into one read.
+- Made disk-init test directories use exclusive process-local IDs so parallel
+  tests cannot silently share and remove each other's scratch state.
+- Made failed-fd-send coverage track the original pipe identity so concurrent
+  numeric fd reuse cannot produce a false leak report.
 - Stabilized shell-supervisor teardown coverage by allowing its asynchronous
   socket cleanup the same bounded reconciliation horizon used by the runtime,
   waking the supervisor accept loop so its owned listener unlinks before forced
