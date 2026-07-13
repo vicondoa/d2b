@@ -302,6 +302,7 @@
           passthru.rustToolchainVersion = deliveryTools.rustStableVersion;
         };
         git-town = deliveryTools.gitTown;
+        gh = deliveryTools.gh;
         cargo-udeps-nightly = deliveryTools.cargoUdepsNightly;
         cargo-semver-checks = deliveryTools.cargoSemverChecks;
 

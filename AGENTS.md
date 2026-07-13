@@ -473,8 +473,8 @@ Every content change invalidates both the validator and panel lanes, including
 documentation, generated output, dependency metadata, contract/index content,
 or repository-set membership. Re-snapshot the tree and rerun both lanes. A
 history-only rebase or retarget may reuse panel records only when the canonical
-W1 `xtask` proof verifies byte-identical integrated content, generated
-artifacts, dependency diff, contract fingerprints, and repository set.
+delivery history proof/tooling verifies byte-identical integrated content,
+generated artifacts, dependency diff, contract fingerprints, and repository set.
 Required CI still reruns on the new history.
 
 Use the integrated delivery binary's generated command index for every delivery
