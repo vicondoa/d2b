@@ -62,6 +62,10 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 pinned_toolchain_active=0
 if command -v cargo >/dev/null 2>&1 \
   && command -v rustc >/dev/null 2>&1 \
+  && command -v rustfmt >/dev/null 2>&1 \
+  && command -v cargo-fmt >/dev/null 2>&1 \
+  && command -v cargo-clippy >/dev/null 2>&1 \
+  && command -v clippy-driver >/dev/null 2>&1 \
   && cargo --version | grep -Fq "$pinned_channel" \
   && rustc --version | grep -Fq "$pinned_channel"; then
   pinned_toolchain_active=1
