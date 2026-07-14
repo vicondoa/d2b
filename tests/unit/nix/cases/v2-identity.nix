@@ -212,4 +212,9 @@ in
       overlongAccepted = false;
     };
   };
+
+  "v2-identity/literal-nul-escape-is-not-a-nul-byte" = {
+    expr = identity.unixPathHeadroom "foo\\u0000";
+    expected = 98;
+  };
 }

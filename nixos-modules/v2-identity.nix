@@ -342,7 +342,8 @@ let
     builtins.deepSeq checkedProviders (builtins.deepSeq checkedAll true);
 
   hasNul = value:
-    contains "\\u0000" (builtins.toJSON value);
+    contains "\\u0000"
+      (builtins.replaceStrings [ "\\\\" ] [ "" ] (builtins.toJSON value));
 
   unixPathHeadroom = path:
     if hasNul path then throw "v2 identity: Unix pathname contains NUL"
