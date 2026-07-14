@@ -1,0 +1,927 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StateStorageSyncAuditContract",
+  "type": "object",
+  "required": [
+    "audit",
+    "contractFingerprint",
+    "schemaGeneration",
+    "schemaVersion",
+    "storage",
+    "synchronization"
+  ],
+  "properties": {
+    "audit": {
+      "$ref": "#/definitions/AuditContract"
+    },
+    "contractFingerprint": {
+      "type": "string"
+    },
+    "schemaGeneration": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "storage": {
+      "$ref": "#/definitions/StorageInventory"
+    },
+    "synchronization": {
+      "$ref": "#/definitions/SyncInventory"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AuditContract": {
+      "type": "object",
+      "required": [
+        "contractFingerprint",
+        "schemaGeneration",
+        "streams"
+      ],
+      "properties": {
+        "contractFingerprint": {
+          "type": "string"
+        },
+        "schemaGeneration": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "streams": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditStreamSpec"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditOwner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local-root-broker"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-broker"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AuditRetentionPolicy": {
+      "type": "object",
+      "required": [
+        "checkpointRequiredBeforePrune",
+        "maxAgeDays",
+        "maxRecordsPerSegment",
+        "maxSegmentBytes"
+      ],
+      "properties": {
+        "checkpointRequiredBeforePrune": {
+          "type": "boolean"
+        },
+        "maxAgeDays": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "maxRecordsPerSegment": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "maxSegmentBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditStream": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local-root"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AuditStreamSpec": {
+      "type": "object",
+      "required": [
+        "owner",
+        "retention",
+        "stream"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/definitions/AuditOwner"
+        },
+        "retention": {
+          "$ref": "#/definitions/AuditRetentionPolicy"
+        },
+        "stream": {
+          "$ref": "#/definitions/AuditStream"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthorityRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pid1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local-root-allocator"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local-root-broker"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-controller"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm-broker"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId",
+            "workloadId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload-controller"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId",
+            "workloadId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload-broker"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId",
+            "roleId",
+            "workloadId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload-role"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "providerId",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider"
+              ]
+            },
+            "providerId": {
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CancellationPolicy": {
+      "type": "string",
+      "enum": [
+        "cancellable",
+        "complete-atomic-section"
+      ]
+    },
+    "ContentionPolicy": {
+      "type": "string",
+      "enum": [
+        "fail-fast",
+        "bounded-wait"
+      ]
+    },
+    "CreationPolicy": {
+      "type": "string",
+      "enum": [
+        "create-if-missing",
+        "materialize-generation",
+        "bind-precreated",
+        "observe-only"
+      ]
+    },
+    "DeletePolicy": {
+      "type": "string",
+      "enum": [
+        "never",
+        "after-owner-absence-proof",
+        "generation-retirement",
+        "retention-only",
+        "factory-reset-only"
+      ]
+    },
+    "FdTransferPolicy": {
+      "type": "string",
+      "enum": [
+        "never",
+        "component-session-attachment",
+        "scm-rights-lease-handoff",
+        "explicit-fd-mapping"
+      ]
+    },
+    "FileMode": {
+      "type": "string",
+      "enum": [
+        "0600",
+        "0640",
+        "0660",
+        "0700",
+        "0710",
+        "0750",
+        "0770"
+      ]
+    },
+    "GroupPolicy": {
+      "type": "string",
+      "enum": [
+        "owner-primary-group",
+        "local-root-control",
+        "realm-control",
+        "role-private"
+      ]
+    },
+    "IdentityScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local-root"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "realm"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId",
+            "workloadId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "workload"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "providerId",
+            "realmId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider"
+              ]
+            },
+            "providerId": {
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "realmId",
+            "roleId",
+            "workloadId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "role"
+              ]
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LockClass": {
+      "type": "string",
+      "enum": [
+        "local-root",
+        "realm",
+        "workload",
+        "provider",
+        "role"
+      ]
+    },
+    "LockKey": {
+      "type": "object",
+      "required": [
+        "class",
+        "resourceId",
+        "scope"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "#/definitions/LockClass"
+        },
+        "resourceId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/IdentityScope"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LockKind": {
+      "type": "string",
+      "enum": [
+        "ofd",
+        "in-process",
+        "kernel-object",
+        "fd-backed-lease"
+      ]
+    },
+    "LockSpec": {
+      "type": "object",
+      "required": [
+        "acquireAfter",
+        "cancellation",
+        "cloexec",
+        "contention",
+        "deadlineMs",
+        "fdTransfer",
+        "globalOrder",
+        "key",
+        "kind",
+        "lockId",
+        "owner",
+        "releaseAuthority"
+      ],
+      "properties": {
+        "acquireAfter": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32
+        },
+        "cancellation": {
+          "$ref": "#/definitions/CancellationPolicy"
+        },
+        "cloexec": {
+          "type": "boolean"
+        },
+        "contention": {
+          "$ref": "#/definitions/ContentionPolicy"
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "fdTransfer": {
+          "$ref": "#/definitions/FdTransferPolicy"
+        },
+        "globalOrder": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "key": {
+          "$ref": "#/definitions/LockKey"
+        },
+        "kind": {
+          "$ref": "#/definitions/LockKind"
+        },
+        "lockId": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/AuthorityRef"
+        },
+        "releaseAuthority": {
+          "$ref": "#/definitions/AuthorityRef"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LogicalLocation": {
+      "type": "string",
+      "enum": [
+        "host-allocator",
+        "host-broker",
+        "host-audit",
+        "realm-controller",
+        "realm-broker",
+        "realm-audit",
+        "workload-state",
+        "workload-disks",
+        "workload-store-view",
+        "workload-tpm",
+        "workload-media",
+        "workload-audio",
+        "workload-keys",
+        "provider-state",
+        "runtime-realm",
+        "runtime-workload",
+        "runtime-role",
+        "runtime-locks",
+        "runtime-leases",
+        "quarantine",
+        "projection"
+      ]
+    },
+    "OwnershipPolicy": {
+      "type": "object",
+      "required": [
+        "group",
+        "mode",
+        "owner"
+      ],
+      "properties": {
+        "group": {
+          "$ref": "#/definitions/GroupPolicy"
+        },
+        "mode": {
+          "$ref": "#/definitions/FileMode"
+        },
+        "owner": {
+          "$ref": "#/definitions/AuthorityRef"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PersistenceClass": {
+      "type": "string",
+      "enum": [
+        "configuration",
+        "persistent",
+        "boot-scoped",
+        "process-scoped",
+        "regenerable"
+      ]
+    },
+    "ReconcilePolicy": {
+      "type": "string",
+      "enum": [
+        "verify-only",
+        "reconcile-exact",
+        "adopt-after-proof",
+        "regenerate"
+      ]
+    },
+    "RepairPolicy": {
+      "type": "string",
+      "enum": [
+        "fail-closed",
+        "repair-exact",
+        "quarantine",
+        "regenerate",
+        "no-repair"
+      ]
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "directory",
+        "json-document",
+        "json-lines-segment",
+        "unix-socket",
+        "ofd-lock-file",
+        "lease-record",
+        "disk-image",
+        "tpm-state",
+        "store-view",
+        "projection-document"
+      ]
+    },
+    "SecretClass": {
+      "type": "string",
+      "enum": [
+        "public-metadata",
+        "private-metadata",
+        "secret-adjacent",
+        "secret"
+      ]
+    },
+    "StorageAdoptionPolicy": {
+      "type": "string",
+      "enum": [
+        "verify-identity-and-generation",
+        "verify-lease",
+        "reopen-from-persistent-state",
+        "quarantine-on-ambiguity",
+        "not-applicable"
+      ]
+    },
+    "StorageCategory": {
+      "type": "string",
+      "enum": [
+        "local-root",
+        "realm",
+        "workload",
+        "provider",
+        "runtime",
+        "lock",
+        "lease",
+        "quarantine",
+        "audit",
+        "projection"
+      ]
+    },
+    "StorageInventory": {
+      "type": "object",
+      "required": [
+        "applicableScopes",
+        "contractFingerprint",
+        "resources",
+        "schemaGeneration"
+      ],
+      "properties": {
+        "applicableScopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/IdentityScope"
+          },
+          "maxItems": 4096,
+          "minItems": 1
+        },
+        "contractFingerprint": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StorageResource"
+          },
+          "maxItems": 4096,
+          "minItems": 1
+        },
+        "schemaGeneration": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "StorageResource": {
+      "type": "object",
+      "required": [
+        "adoption",
+        "category",
+        "creation",
+        "creationAuthority",
+        "delete",
+        "deleteAuthority",
+        "kind",
+        "logicalLocation",
+        "ownership",
+        "persistence",
+        "reconcile",
+        "reconcileAuthority",
+        "repair",
+        "repairAuthority",
+        "resourceId",
+        "restart",
+        "scope",
+        "secretClass"
+      ],
+      "properties": {
+        "adoption": {
+          "$ref": "#/definitions/StorageAdoptionPolicy"
+        },
+        "category": {
+          "$ref": "#/definitions/StorageCategory"
+        },
+        "creation": {
+          "$ref": "#/definitions/CreationPolicy"
+        },
+        "creationAuthority": {
+          "$ref": "#/definitions/AuthorityRef"
+        },
+        "delete": {
+          "$ref": "#/definitions/DeletePolicy"
+        },
+        "deleteAuthority": {
+          "$ref": "#/definitions/AuthorityRef"
+        },
+        "kind": {
+          "$ref": "#/definitions/ResourceKind"
+        },
+        "logicalLocation": {
+          "$ref": "#/definitions/LogicalLocation"
+        },
+        "ownership": {
+          "$ref": "#/definitions/OwnershipPolicy"
+        },
+        "persistence": {
+          "$ref": "#/definitions/PersistenceClass"
+        },
+        "reconcile": {
+          "$ref": "#/definitions/ReconcilePolicy"
+        },
+        "reconcileAuthority": {
+          "$ref": "#/definitions/AuthorityRef"
+        },
+        "repair": {
+          "$ref": "#/definitions/RepairPolicy"
+        },
+        "repairAuthority": {
+          "$ref": "#/definitions/AuthorityRef"
+        },
+        "resourceId": {
+          "type": "string"
+        },
+        "restart": {
+          "$ref": "#/definitions/StorageRestartPolicy"
+        },
+        "scope": {
+          "$ref": "#/definitions/IdentityScope"
+        },
+        "secretClass": {
+          "$ref": "#/definitions/SecretClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StorageRestartPolicy": {
+      "type": "string",
+      "enum": [
+        "preserve-and-verify",
+        "recreate-after-owner-absence",
+        "regenerate-from-configuration",
+        "quarantine-on-ambiguity",
+        "not-adoptable"
+      ]
+    },
+    "SyncInventory": {
+      "type": "object",
+      "required": [
+        "contractFingerprint",
+        "locks",
+        "schemaGeneration"
+      ],
+      "properties": {
+        "contractFingerprint": {
+          "type": "string"
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LockSpec"
+          },
+          "maxItems": 1024
+        },
+        "schemaGeneration": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

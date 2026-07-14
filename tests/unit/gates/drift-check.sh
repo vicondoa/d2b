@@ -61,6 +61,8 @@ run_xtask gen-cli-shell-artifacts
 run_xtask gen-cli-schemas
 run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
+run_xtask gen-ttrpc-api-fit-spike
+run_xtask gen-v2-services
 
 drift_paths=(
   docs/reference/schemas/
@@ -70,7 +72,11 @@ drift_paths=(
   docs/completions/
   docs/reference/cli-output/
   packages/d2b-contracts/src/generated
+  packages/d2b-contracts/src/generated_v2_services
   packages/d2b-guestd/src/generated
+  packages/d2b-ttrpc-api-fit-spike/src/generated
+  docs/reference/v2-services.json
+  docs/reference/v2-services-schema.json
 )
 
 if git -C "$generator_root" --no-pager diff --exit-code -- "${drift_paths[@]}" >/dev/null; then

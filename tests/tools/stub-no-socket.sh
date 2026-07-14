@@ -174,7 +174,7 @@ run_stub() {
     "$xdg_before" "$tmp_before"
 }
 
-run_stub d2b "d2b 0.0.0-bootstrap (bootstrap stub)"
-run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
+run_stub d2b "d2b 2.0.0"
+run_stub d2bd "d2bd 2.0.0"
 
 ok "Rust stubs left no socket/file runtime state"

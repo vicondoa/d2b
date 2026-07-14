@@ -1,5 +1,5 @@
 # broker-export-audit — d2b-priv-broker integration test successor.
-# Runs under the broker workspace `cargo test --features layer1-bootstrap`
+# Runs under the focused broker package `cargo test --features layer1-bootstrap`
 # pass already exercised by tests/tools/rust-workspace-checks.sh and enumerated by
 # tests/tools/assert-pinned-tests.sh. One bare libtest path per line.
 export_audit_requires_admin_and_exports_op_audit_records

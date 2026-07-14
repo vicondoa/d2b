@@ -1,13 +1,18 @@
 [package]
 name = "d2b-priv-broker"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
-license = "Apache-2.0"
+license.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[lints.clippy]
+all = "warn"
 
 [features]
 # W4-fu clean-break: `layer1-bootstrap` is no longer a default
@@ -34,17 +39,15 @@ layer1-bootstrap = []
 # d2b-host's matching fake backends.
 fake-backends = ["d2b-host/fake-backends"]
 
-[workspace]
-
 
 [dependencies]
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-contracts = { workspace = true, features = ["broker", "guest"] }
+d2b-core = { workspace = true }
+d2b-host = { workspace = true }
+d2b-realm-core = { workspace = true }
 hmac = "0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process", "net"] }
 # W3fu1 H1 (security-3): the W3 broker filesystem ops require
 # `openat2` with `O_NOFOLLOW | RESOLVE_BENEATH`, fd-based
@@ -52,11 +55,11 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 # plan.md §"W3 filesystem path-safety tests". `rustix` provides
 # those calls without a per-syscall `unsafe` block, so the broker's
 # `unsafe_code = "deny"` lint stays clean.
-rustix = { version = "0.38", features = ["fs", "process", "net"] }
+rustix = { workspace = true, features = ["fs", "process", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
-sha2 = "0.10"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "sync"] }
+sha2.workspace = true
 
 [dev-dependencies]
 # Dev-only override to enable d2b-host's `fake-backends` feature
@@ -68,7 +71,7 @@ sha2 = "0.10"
 # the W3 H3 integrator fix: surfaced when the broker-scm-rights-fd-
 # lifecycle gate invoked `cargo test --features layer1-bootstrap` and
 # the broker test target failed to find `d2b_host::cgroup::fake`.
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
-d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap", features = ["fake-backends"] }
+d2b-core = { workspace = true, features = ["test-support"] }
+d2b-host = { workspace = true, features = ["fake-backends"] }
 tempfile = "3"
-sha2 = "0.10"
+sha2.workspace = true

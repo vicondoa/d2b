@@ -1,14 +1,16 @@
 [package]
 name = "d2b-wayland-proxy"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "Provider-neutral host-side Wayland proxy for d2b workloads"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+d2b-core = { workspace = true }
+d2b-realm-core = { workspace = true }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"

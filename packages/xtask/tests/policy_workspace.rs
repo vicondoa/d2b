@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
-const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const FOCUSED_POLICY_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -85,23 +85,34 @@ fn stale_ipc_crate_name_is_absent_from_current_sources() {
 }
 
 #[test]
-fn excluded_workspaces_keep_own_lock_and_supply_chain_policy() {
+fn focused_packages_share_workspace_lock_and_keep_supply_chain_policy() {
     let root = repo_root();
     let main_workspace = read_repo_file("packages/Cargo.toml");
     let flake = read_repo_file("flake.nix");
-    for workspace in EXCLUDED_WORKSPACES {
+    assert!(
+        flake.contains("packages/Cargo.lock"),
+        "flake supply-chain gates must use the canonical workspace lock"
+    );
+    for package in FOCUSED_POLICY_PACKAGES {
         assert!(
-            main_workspace.contains(&format!("\"{workspace}\"")),
-            "main workspace exclude list must mention {workspace}"
+            main_workspace.contains(&format!("\"{package}\"")),
+            "main workspace members must include {package}"
         );
-        for required in ["Cargo.toml", "Cargo.lock", "deny.toml"] {
-            let path = root.join("packages").join(workspace).join(required);
+        for required in ["Cargo.toml", "deny.toml"] {
+            let path = root.join("packages").join(package).join(required);
             assert!(path.exists(), "{} must exist", path.display());
         }
         assert!(
-            flake.contains(&format!("packages/{workspace}/Cargo.lock"))
-                && flake.contains(&format!("packages/{workspace}/deny.toml")),
-            "flake supply-chain gates must cover {workspace}"
+            !root
+                .join("packages")
+                .join(package)
+                .join("Cargo.lock")
+                .exists(),
+            "{package} must not carry a nested lockfile"
+        );
+        assert!(
+            flake.contains(&format!("packages/{package}/deny.toml")),
+            "flake supply-chain gates must cover {package}"
         );
     }
 }

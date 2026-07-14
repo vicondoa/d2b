@@ -283,11 +283,8 @@ fn rust_job(job: &JobSpec) -> String {
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
           cache-directories: |
             .sccache
-            packages/d2b-priv-broker/target-layer1
-            packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"

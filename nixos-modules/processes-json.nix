@@ -32,7 +32,7 @@ let
   packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
   d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
     pname = "d2b-wayland-proxy";
-    version = "0.0.0";
+    version = "2.0.0";
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;

@@ -2,7 +2,7 @@
 # tests/test-rust.sh — `make test-rust`: the comprehensive Rust gate.
 #   fmt + clippy + `cargo test --workspace` (excluding the fixture-dependent
 #   d2b-contract-tests), the contract crate against D2B_FIXTURES, the
-#   CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
+#   CLI-contract layer, no-bash-ast-walker, the privileged broker package
 #   (3 feature passes, concurrent), schema-gen reproducibility, and cargo-deny.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
@@ -20,12 +20,10 @@ manifest="$ROOT/packages/Cargo.toml"
 lock_file="$ROOT/packages/Cargo.lock"
 deny_config="$ROOT/packages/deny.toml"
 broker_manifest="$ROOT/packages/d2b-priv-broker/Cargo.toml"
-broker_lock_file="$ROOT/packages/d2b-priv-broker/Cargo.lock"
 broker_deny_config="$ROOT/packages/d2b-priv-broker/deny.toml"
 guest_shell_runner_manifest="$ROOT/packages/d2b-guest-shell-runner/Cargo.toml"
-guest_shell_runner_lock_file="$ROOT/packages/d2b-guest-shell-runner/Cargo.lock"
 guest_shell_runner_deny_config="$ROOT/packages/d2b-guest-shell-runner/deny.toml"
-for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_lock_file" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_lock_file" "$guest_shell_runner_deny_config"; do
+for required in "$manifest" "$lock_file" "$deny_config" "$broker_manifest" "$broker_deny_config" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"; do
   if [ ! -f "$required" ]; then
     fail "missing Rust workspace input: $required"
     exit 1
@@ -52,9 +50,12 @@ broker_layer1_target_dir=$(d2b_cargo_gate_target_dir broker-layer1 "$pinned_chan
 broker_fakebackends_target_dir=$(d2b_cargo_gate_target_dir broker-fakebackends "$pinned_channel")
 guest_shell_runner_target_dir=$(d2b_cargo_gate_target_dir guest-shell-runner "$pinned_channel")
 
-# Keep fixture-dependent contract crates out of generic workspace tests.
-# Full D2B_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
-workspace_test_excludes=(--exclude d2b-contract-tests)
+# Keep fixture-dependent contracts and the intentionally feature-gated static
+# shell helper out of generic workspace tests. Both run in focused gates below.
+workspace_test_excludes=(
+  --exclude d2b-contract-tests
+  --exclude d2b-guest-shell-runner
+)
 
 d2b_activate_rust_toolchain_path "$pinned_channel" || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
@@ -207,7 +208,7 @@ cleanup_package_test_scratch() {
 }
 
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
-# across the main + broker workspaces and all feature passes — so the broker's
+# across the workspace and all feature passes — so the broker's
 # rebuilds of crates the main workspace already compiled (d2b-core/host/ipc)
 # and its three separate-target-dir feature passes become cache hits. CI points
 # SCCACHE_DIR at a directory restored/saved via actions/cache — we
@@ -237,26 +238,27 @@ fi
 log "--> rust toolchain version"
 assert_pinned_rust_toolchain
 
-# The privileged broker is a SEPARATE workspace with three independent feature
+# The privileged broker has three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other, so the
-# three are run CONCURRENTLY among themselves in the broker section below — but
+# All resolve through the canonical workspace and lockfile; isolated output
+# directories prevent feature-pass artifact interference. The streams may run
+# CONCURRENTLY among themselves in the broker section below — but
 # AFTER the main-workspace section, not overlapping it, so they don't contend
 # with the main workspace's timing-sensitive tests. With sccache the shared
 # crates are cache hits across all streams. Set D2B_NO_PARALLEL_BROKER=1 to force
 # serial. Each stream logs to its own file; failures surface at reap.
 broker_stream_default() {
-  cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
-  CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
+  cargo metadata --locked --format-version 1 --manifest-path "$manifest" >/dev/null
+  CARGO_TARGET_DIR="$broker_target_dir" cargo check --locked --manifest-path "$manifest" -p d2b-priv-broker
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --locked --manifest-path "$manifest" -p d2b-priv-broker
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --locked --manifest-path "$manifest" -p d2b-priv-broker --features layer1-bootstrap
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --locked --manifest-path "$manifest" -p d2b-priv-broker --features layer1-bootstrap
 }
 broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --locked --manifest-path "$manifest" -p d2b-priv-broker --features fake-backends
 }
 broker_streams=(default layer1 fakebackends)
 declare -A broker_pid broker_log
@@ -264,22 +266,52 @@ broker_parallel=0
 [ "${D2B_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=1
 
 guest_shell_runner_gate() {
-  cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo test --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  cargo metadata --locked --format-version 1 --manifest-path "$manifest" >/dev/null
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --locked --manifest-path "$manifest" -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo test --locked --manifest-path "$manifest" -p d2b-guest-shell-runner --features real-libshpool
 }
 
 log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
 ok "cargo fmt --check"
 
+contract_feature_sets=(
+  ""
+  common
+  guest-auth
+  usbip
+  security-key
+  guest
+  broker
+  public
+  unsafe-local
+  schema
+  v2-identity
+  v2-component-session
+  v2-services
+  v2-provider
+  v2-state
+)
+for feature_set in "${contract_feature_sets[@]}"; do
+  feature_args=()
+  label="default-empty"
+  if [ -n "$feature_set" ]; then
+    feature_args=(--features "$feature_set")
+    label="$feature_set"
+  fi
+  log "--> d2b-contracts feature check ($label)"
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo check --locked --manifest-path "$manifest" -p d2b-contracts \
+      --no-default-features --all-targets "${feature_args[@]}"
+done
+ok "d2b-contracts feature matrix"
+
 log "--> cargo clippy --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
 ok "cargo clippy"
 
 log "--> cargo test --workspace ${workspace_test_excludes[*]}"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo test --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 ok "cargo test"
 
 # W3 fixture-contract layer: the d2b-contract-tests crate is EXCLUDED
@@ -307,7 +339,7 @@ elif command -v nix >/dev/null 2>&1; then
   fi
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b-contract-tests
+    cargo test --locked --manifest-path "$manifest" -p d2b-contract-tests
   ok "cargo test -p d2b-contract-tests (W3 fixture-contract layer)"
 
   # CLI-contract layer: spawn the real `d2b` binary against the rendered
@@ -323,14 +355,14 @@ elif command -v nix >/dev/null 2>&1; then
   # forbids it), so the path is delivered out-of-band rather than via a dep edge.
   log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build --manifest-path "$manifest" -p d2bd
+    cargo build --locked --manifest-path "$manifest" -p d2bd
   d2bd_bin="$workspace_target_dir/debug/d2bd"
   [ -x "$d2bd_bin" ] || fail "d2bd binary not found at $d2bd_bin"
   log "--> cargo test -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
   D2B_FIXTURES="$contract_fixtures" \
   D2B_TEST_D2BD_BIN="$d2bd_bin" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b --tests
+    cargo test --locked --manifest-path "$manifest" -p d2b --tests
   ok "cargo test -p d2b --tests (CLI-contract layer)"
 else
   log "  SKIP: d2b-contract-tests (nix unavailable to build fixture-smoke)"
@@ -350,7 +382,7 @@ CARGO_TARGET_DIR="$workspace_target_dir" \
     -- "$ROOT/packages"
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
-# Broker workspace: run the three feature passes (default, layer1-bootstrap,
+# Broker package: run the three feature passes (default, layer1-bootstrap,
 # fake-backends) — each on its own target dir — serially by default because
 # the broker's SIGCHLD reaper tests manipulate process-global signal/reap state.
 # Set D2B_PARALLEL_BROKER=1 only for local timing experiments. The fail-closed
@@ -361,7 +393,7 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 # layer1-bootstrap pass enables — without it those fd-passing tests would not
 # run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
 if [ "$broker_parallel" = 1 ]; then
-  log "--> broker workspace: running default|layer1|fake-backends concurrently (separate target dirs)"
+  log "--> broker package: running default|layer1|fake-backends concurrently (separate target dirs)"
   broker_logdir=$(d2b_mktemp ".d2b-broker-logs.XXXXXX")
   for _stream in "${broker_streams[@]}"; do
     broker_log[$_stream]="$broker_logdir/$_stream.log"
@@ -378,7 +410,7 @@ if [ "$broker_parallel" = 1 ]; then
       broker_failed=1
     fi
   done
-  [ "$broker_failed" -eq 0 ] || { fail "broker workspace checks failed"; exit 1; }
+  [ "$broker_failed" -eq 0 ] || { fail "broker package checks failed"; exit 1; }
 else
   for _stream in "${broker_streams[@]}"; do
     log "--> broker cargo ($_stream feature pass, serial)"
@@ -387,7 +419,7 @@ else
   done
 fi
 
-log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
+log "--> guest shell runner cargo (focused real-libshpool feature)"
 guest_shell_runner_gate
 ok "guest shell runner cargo"
 
@@ -491,20 +523,17 @@ cargo_audit_check() {
 }
 
 cargo_deny_check "main workspace" "$manifest" "$deny_config"
-cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
-cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
+cargo_deny_check "broker policy" "$broker_manifest" "$broker_deny_config"
+cargo_deny_check "guest shell runner policy" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
 
-# Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
-# updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
-# a release on quick-xml >= 0.41.
-cargo_audit_check "main workspace" "$lock_file" \
-  --ignore RUSTSEC-2026-0194 \
-  --ignore RUSTSEC-2026-0195
-cargo_audit_check "broker workspace" "$broker_lock_file"
 # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
 # The helper pins and tracks that transitive unmaintained advisory explicitly
-# while evaluating libshpool feasibility.
-cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
+# while evaluating libshpool feasibility. Build-time wayland-scanner also pulls
+# the tracked quick-xml advisories; remove those ignores after it updates.
+cargo_audit_check "main workspace" "$lock_file" \
+  --ignore RUSTSEC-2026-0194 \
+  --ignore RUSTSEC-2026-0195 \
+  --ignore RUSTSEC-2024-0384
 
 log "--> tests/tools/stub-no-socket.sh"
 D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
@@ -516,6 +545,5 @@ ok "stub-no-socket"
 # coverage). The pinned set is committed under tests/golden/pinned/.
 log "--> tests/tools/assert-pinned-tests.sh"
 D2B_WORKSPACE_GATE_TARGET_DIR="$workspace_target_dir" \
-D2B_BROKER_GATE_TARGET_DIR="$broker_target_dir" \
   bash "$ROOT/tests/tools/assert-pinned-tests.sh"
 ok "assert-pinned-tests"

@@ -1,7 +1,9 @@
 [package]
 name = "d2b-userd"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -9,5 +11,4 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-
+d2b-contracts = { workspace = true, features = ["guest"] }

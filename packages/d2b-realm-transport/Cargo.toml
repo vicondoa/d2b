@@ -1,7 +1,9 @@
 [package]
 name = "d2b-realm-transport"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -17,10 +19,10 @@ workspace = true
 # transport, or any host-only broker/daemon internals (dependency-direction
 # gate). The loopback opens NO real socket.
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
-tokio = { version = "1", default-features = false, features = ["io-util", "net", "rt", "sync", "time"] }
+d2b-realm-core = { workspace = true }
+d2b-realm-provider = { workspace = true }
+async-trait.workspace = true
+tokio = { workspace = true, default-features = false, features = ["io-util", "net", "rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "io-util", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "io-util", "net", "sync", "time"] }

@@ -168,16 +168,13 @@ machine-readable command/option index. Those payloads live outside the
 repository; never add evidence or panel output to this manifest or another
 tracked test artifact.
 
-### Standalone Rust workspaces
+### Unified Rust workspace
 
-Most Rust crates are members of `packages/Cargo.toml`, but some crates are
-intentionally excluded because they require a distinct safety or dependency
-policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
-persistent-shell feasibility helper lives at
-`packages/d2b-guest-shell-runner/`.
-
-Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
-tests live under `src/**`, Type 3 binary/integration tests live under
-`packages/<crate>/tests/*.rs`, and Type 6 static/supply-chain assertions live in
-existing `flake.checks.<system>.*` entries. Do not add a new top-level
-`tests/*.sh`; extend the existing manifest-driven Rust/static entry points.
+Every maintained host and guest crate is a member of `packages/Cargo.toml` and
+uses `packages/Cargo.lock`. Crate-specific safety and feature policy remains
+focused: the broker's default, `layer1-bootstrap`, and `fake-backends` passes
+and the guest shell runner's `real-libshpool` pass run with `-p` from the root
+workspace. Type 2 unit tests live under `src/**`, Type 3 binary/integration
+tests live under `packages/<crate>/tests/*.rs`, and Type 6 supply-chain
+assertions use the canonical lockfile. Do not add a new top-level `tests/*.sh`;
+extend the existing manifest-driven Rust/static entry points.

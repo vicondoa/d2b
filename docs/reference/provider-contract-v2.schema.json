@@ -1,0 +1,1678 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "AdoptionState": {
+      "enum": [
+        "not-attempted",
+        "adopted",
+        "rejected",
+        "ambiguous"
+      ],
+      "type": "string"
+    },
+    "AgentPlacementBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "agentGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "realmId": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "workloadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentGeneration",
+        "realmId",
+        "roleId",
+        "workloadId"
+      ],
+      "type": "object"
+    },
+    "AuthorizedProviderScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "realm"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "workload"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId",
+            "workloadId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "workload-role"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId",
+            "roleId",
+            "workloadId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BoundedVec_0_256_String": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "minItems": 0,
+      "type": "array"
+    },
+    "BoundedVec_0_32_PlannedResourceClass": {
+      "items": {
+        "$ref": "#/definitions/PlannedResourceClass"
+      },
+      "maxItems": 32,
+      "minItems": 0,
+      "type": "array"
+    },
+    "BoundedVec_11_11_ProviderRegistryAxis": {
+      "items": {
+        "$ref": "#/definitions/ProviderRegistryAxis"
+      },
+      "maxItems": 11,
+      "minItems": 11,
+      "type": "array"
+    },
+    "BoundedVec_1_256_ProviderDescriptor": {
+      "items": {
+        "$ref": "#/definitions/ProviderDescriptor"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "BoundedVec_1_256_ProviderFactoryKey": {
+      "items": {
+        "$ref": "#/definitions/ProviderFactoryKey"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "BoundedVec_1_32_SdkOperationClass": {
+      "items": {
+        "$ref": "#/definitions/SdkOperationClass"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "CgroupAuthority": {
+      "enum": [
+        "realm-delegated-leaf",
+        "verified-systemd-user-scope",
+        "provider-managed-remote"
+      ],
+      "type": "string"
+    },
+    "CredentialLease": {
+      "additionalProperties": false,
+      "properties": {
+        "agentBinding": {
+          "$ref": "#/definitions/AgentPlacementBinding"
+        },
+        "allowedOperations": {
+          "$ref": "#/definitions/BoundedVec_1_32_SdkOperationClass"
+        },
+        "consumerProviderGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "consumerProviderId": {
+          "type": "string"
+        },
+        "credentialProviderGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "credentialProviderId": {
+          "type": "string"
+        },
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "issuedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "type": "string"
+        },
+        "revokedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotationGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sourceVersion": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/CredentialLeaseState"
+        },
+        "transferPolicy": {
+          "$ref": "#/definitions/CredentialLeaseTransferPolicy"
+        }
+      },
+      "required": [
+        "agentBinding",
+        "allowedOperations",
+        "consumerProviderGeneration",
+        "consumerProviderId",
+        "credentialProviderGeneration",
+        "credentialProviderId",
+        "expiresAtUnixMs",
+        "issuedAtUnixMs",
+        "leaseId",
+        "rotationGeneration",
+        "sourceVersion",
+        "state",
+        "transferPolicy"
+      ],
+      "type": "object"
+    },
+    "CredentialLeaseState": {
+      "enum": [
+        "active",
+        "revoked",
+        "expired"
+      ],
+      "type": "string"
+    },
+    "CredentialLeaseTransferPolicy": {
+      "enum": [
+        "forbidden"
+      ],
+      "type": "string"
+    },
+    "DeviceMediationPosture": {
+      "enum": [
+        "none",
+        "broker-delegated-typed",
+        "provider-managed-typed"
+      ],
+      "type": "string"
+    },
+    "EndpointRole": {
+      "enum": [
+        "command-client",
+        "local-root-controller",
+        "realm-controller",
+        "local-root-broker",
+        "realm-broker",
+        "guest-agent",
+        "provider-agent",
+        "user-agent",
+        "runtime-systemd-user-agent",
+        "shell-supervisor",
+        "clipboard-daemon",
+        "clipboard-picker",
+        "wayland-proxy",
+        "desktop-observer",
+        "security-key-frontend",
+        "security-key-controller",
+        "activation-helper",
+        "tty-helper",
+        "remote-peer"
+      ],
+      "type": "string"
+    },
+    "HandleOwner": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "provider"
+              ],
+              "type": "string"
+            },
+            "providerId": {
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "providerId",
+            "realmId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "realm-controller"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "workload-role"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId",
+            "roleId",
+            "workloadId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NetworkPosture": {
+      "enum": [
+        "host-shared",
+        "none",
+        "isolated-namespace"
+      ],
+      "type": "string"
+    },
+    "ObservationReason": {
+      "enum": [
+        "none",
+        "identity-mismatch",
+        "configuration-mismatch",
+        "generation-mismatch",
+        "owner-mismatch",
+        "multiple-candidates",
+        "missing-evidence",
+        "cancelled",
+        "deadline-expired"
+      ],
+      "type": "string"
+    },
+    "ObservedLifecycleState": {
+      "enum": [
+        "planned",
+        "ready",
+        "running",
+        "stopped",
+        "released",
+        "destroyed",
+        "unknown",
+        "quarantined"
+      ],
+      "type": "string"
+    },
+    "OperationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "providerGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "requestDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotencyKey",
+        "operationId",
+        "providerGeneration",
+        "providerId",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
+    "OwnershipTransfer": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ownershipEpoch": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "stationary"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "ownershipEpoch",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAtUnixMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "from": {
+              "$ref": "#/definitions/HandleOwner"
+            },
+            "issuedAtUnixMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "ownershipEpoch": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "pending"
+              ],
+              "type": "string"
+            },
+            "to": {
+              "$ref": "#/definitions/HandleOwner"
+            },
+            "transferId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expiresAtUnixMs",
+            "from",
+            "issuedAtUnixMs",
+            "ownershipEpoch",
+            "state",
+            "to",
+            "transferId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PersistentIdentityPosture": {
+      "enum": [
+        "none",
+        "file-backed-cloneable",
+        "non-copyable-attested"
+      ],
+      "type": "string"
+    },
+    "PlannedResourceClass": {
+      "enum": [
+        "workload-execution",
+        "infrastructure",
+        "carriage-session",
+        "substrate-remediation",
+        "display-session",
+        "network",
+        "storage",
+        "device-attachment",
+        "audio-session",
+        "observation-stream"
+      ],
+      "type": "string"
+    },
+    "ProcessAuthority": {
+      "enum": [
+        "provider-owned-pidfd",
+        "verified-systemd-user-scope",
+        "provider-managed-remote"
+      ],
+      "type": "string"
+    },
+    "ProviderApiVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "ProviderAuthority": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "posture": {
+              "$ref": "#/definitions/RuntimeAuthorityPosture"
+            },
+            "type": {
+              "enum": [
+                "runtime"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "posture",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "infrastructure"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "transport"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "substrate"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "credential"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "display"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "network"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "storage"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "device"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "audio"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "observability"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderCapabilitySet": {
+      "items": {
+        "$ref": "#/definitions/ProviderMethod"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "ProviderDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "$ref": "#/definitions/ProviderApiVersion"
+        },
+        "authority": {
+          "$ref": "#/definitions/ProviderAuthority"
+        },
+        "capabilities": {
+          "$ref": "#/definitions/ProviderCapabilitySet"
+        },
+        "configurationSchemaFingerprint": {
+          "type": "string"
+        },
+        "configuredScopeDigest": {
+          "type": "string"
+        },
+        "implementationId": {
+          "type": "string"
+        },
+        "placement": {
+          "$ref": "#/definitions/ProviderPlacement"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "registryGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "authority",
+        "capabilities",
+        "configurationSchemaFingerprint",
+        "configuredScopeDigest",
+        "implementationId",
+        "placement",
+        "providerId",
+        "registryGeneration",
+        "schemaVersion"
+      ],
+      "type": "object"
+    },
+    "ProviderFactoryKey": {
+      "additionalProperties": false,
+      "properties": {
+        "implementationId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/ProviderType"
+        }
+      },
+      "required": [
+        "implementationId",
+        "providerType"
+      ],
+      "type": "object"
+    },
+    "ProviderFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/definitions/OperationBinding"
+        },
+        "correlationId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ProviderFailureKind"
+        },
+        "occurredAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerType": {
+          "$ref": "#/definitions/ProviderType"
+        },
+        "reason": {
+          "$ref": "#/definitions/ProviderHealthReason"
+        },
+        "remediation": {
+          "$ref": "#/definitions/ProviderRemediation"
+        },
+        "retry": {
+          "$ref": "#/definitions/RetryClass"
+        }
+      },
+      "required": [
+        "binding",
+        "correlationId",
+        "kind",
+        "occurredAtUnixMs",
+        "providerType",
+        "reason",
+        "remediation",
+        "retry"
+      ],
+      "type": "object"
+    },
+    "ProviderFailureKind": {
+      "enum": [
+        "capability-denied",
+        "invalid-request",
+        "unauthorized-scope",
+        "cancelled",
+        "deadline-expired",
+        "unavailable",
+        "invariant-violation",
+        "ambiguous-mutation",
+        "adoption-rejected",
+        "registry-changed",
+        "credential-lease-invalid"
+      ],
+      "type": "string"
+    },
+    "ProviderHandle": {
+      "additionalProperties": false,
+      "properties": {
+        "configurationFingerprint": {
+          "type": "string"
+        },
+        "createdAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "createdBy": {
+          "$ref": "#/definitions/OperationBinding"
+        },
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "handleId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ProviderHandleKind"
+        },
+        "owner": {
+          "$ref": "#/definitions/HandleOwner"
+        },
+        "ownershipTransfer": {
+          "$ref": "#/definitions/OwnershipTransfer"
+        },
+        "providerGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "realmId": {
+          "type": "string"
+        },
+        "resourceGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "workloadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "configurationFingerprint",
+        "createdAtUnixMs",
+        "createdBy",
+        "handleId",
+        "kind",
+        "owner",
+        "ownershipTransfer",
+        "providerGeneration",
+        "providerId",
+        "realmId",
+        "resourceGeneration",
+        "schemaVersion"
+      ],
+      "type": "object"
+    },
+    "ProviderHandleKind": {
+      "enum": [
+        "runtime",
+        "infrastructure",
+        "transport",
+        "display",
+        "network",
+        "storage",
+        "device",
+        "audio",
+        "observation"
+      ],
+      "type": "string"
+    },
+    "ProviderHealth": {
+      "additionalProperties": false,
+      "properties": {
+        "observedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/definitions/ProviderHealthReason"
+        },
+        "registryGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "remediation": {
+          "$ref": "#/definitions/ProviderRemediation"
+        },
+        "state": {
+          "$ref": "#/definitions/ProviderHealthState"
+        }
+      },
+      "required": [
+        "observedAtUnixMs",
+        "providerId",
+        "reason",
+        "registryGeneration",
+        "remediation",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ProviderHealthReason": {
+      "enum": [
+        "none",
+        "provider-degraded",
+        "health-timeout",
+        "health-stale",
+        "session-disconnected",
+        "queue-pressure",
+        "handshake-timeout",
+        "authentication-failed",
+        "identity-mismatch",
+        "configuration-mismatch",
+        "generation-mismatch",
+        "capability-mismatch",
+        "adoption-ambiguous"
+      ],
+      "type": "string"
+    },
+    "ProviderHealthState": {
+      "enum": [
+        "healthy",
+        "degraded",
+        "unavailable",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ProviderMethod": {
+      "enum": [
+        "runtime.plan",
+        "runtime.ensure",
+        "runtime.start",
+        "runtime.stop",
+        "runtime.execute",
+        "runtime.inspect",
+        "runtime.adopt",
+        "runtime.destroy",
+        "infrastructure.plan",
+        "infrastructure.apply",
+        "infrastructure.set-power-state",
+        "infrastructure.inspect",
+        "infrastructure.adopt",
+        "infrastructure.bootstrap-binding",
+        "infrastructure.destroy",
+        "transport.connect",
+        "transport.listen",
+        "transport.issue-binding",
+        "transport.revoke-binding",
+        "transport.inspect",
+        "substrate.check",
+        "substrate.plan-remediation",
+        "substrate.apply",
+        "credential.status",
+        "credential.acquire-lease",
+        "credential.refresh-lease",
+        "credential.revoke-lease",
+        "display.open",
+        "display.inspect",
+        "display.adopt",
+        "display.close",
+        "network.plan",
+        "network.ensure",
+        "network.inspect",
+        "network.adopt",
+        "network.release",
+        "storage.plan",
+        "storage.ensure",
+        "storage.inspect",
+        "storage.adopt",
+        "storage.snapshot",
+        "storage.destroy",
+        "device.plan-attach",
+        "device.attach",
+        "device.inspect",
+        "device.adopt",
+        "device.detach",
+        "audio.open",
+        "audio.set-state",
+        "audio.inspect",
+        "audio.adopt",
+        "audio.close",
+        "observability.status",
+        "observability.query",
+        "observability.subscribe",
+        "observability.export"
+      ],
+      "type": "string"
+    },
+    "ProviderObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "adoption": {
+          "$ref": "#/definitions/AdoptionState"
+        },
+        "handleId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health": {
+          "$ref": "#/definitions/ProviderHealth"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/ObservedLifecycleState"
+        },
+        "observedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "realmId": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/definitions/ObservationReason"
+        },
+        "resourceGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workloadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "adoption",
+        "health",
+        "lifecycle",
+        "observedAtUnixMs",
+        "providerGeneration",
+        "providerId",
+        "realmId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProviderOperationContext": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizationDecisionDigest": {
+          "type": "string"
+        },
+        "capability": {
+          "$ref": "#/definitions/ProviderMethod"
+        },
+        "correlationId": {
+          "type": "string"
+        },
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "issuedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "method": {
+          "$ref": "#/definitions/ProviderMethod"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "policyEpoch": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "providerGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/ProviderType"
+        },
+        "requestDigest": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/definitions/AuthorizedProviderScope"
+        },
+        "traceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorizationDecisionDigest",
+        "capability",
+        "correlationId",
+        "expiresAtUnixMs",
+        "idempotencyKey",
+        "issuedAtUnixMs",
+        "method",
+        "operationId",
+        "policyEpoch",
+        "principal",
+        "providerGeneration",
+        "providerId",
+        "providerType",
+        "requestDigest",
+        "schemaVersion",
+        "scope",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "ProviderOperationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/definitions/ProviderOperationContext"
+        },
+        "expectedConfigurationFingerprint": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ProviderTarget"
+        }
+      },
+      "required": [
+        "context",
+        "expectedConfigurationFingerprint",
+        "target"
+      ],
+      "type": "object"
+    },
+    "ProviderPlacement": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "controllerRole": {
+              "$ref": "#/definitions/EndpointRole"
+            },
+            "kind": {
+              "enum": [
+                "trusted-first-party-in-process"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "controllerRole",
+            "kind",
+            "realmId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "endpointRole": {
+              "$ref": "#/definitions/EndpointRole"
+            },
+            "kind": {
+              "enum": [
+                "provider-agent"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "service": {
+              "$ref": "#/definitions/ServicePackage"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentGeneration",
+            "endpointRole",
+            "kind",
+            "realmId",
+            "roleId",
+            "service",
+            "workloadId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/definitions/OperationBinding"
+        },
+        "configurationFingerprint": {
+          "type": "string"
+        },
+        "createdAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "method": {
+          "$ref": "#/definitions/ProviderMethod"
+        },
+        "planId": {
+          "type": "string"
+        },
+        "realmId": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/definitions/BoundedVec_0_32_PlannedResourceClass"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "workloadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "binding",
+        "configurationFingerprint",
+        "createdAtUnixMs",
+        "expiresAtUnixMs",
+        "method",
+        "planId",
+        "realmId",
+        "resources",
+        "schemaVersion"
+      ],
+      "type": "object"
+    },
+    "ProviderRegistryAxis": {
+      "additionalProperties": false,
+      "properties": {
+        "providerType": {
+          "$ref": "#/definitions/ProviderType"
+        },
+        "providers": {
+          "$ref": "#/definitions/BoundedVec_0_256_String"
+        }
+      },
+      "required": [
+        "providerType",
+        "providers"
+      ],
+      "type": "object"
+    },
+    "ProviderRegistrySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "$ref": "#/definitions/BoundedVec_11_11_ProviderRegistryAxis"
+        },
+        "configurationFingerprint": {
+          "type": "string"
+        },
+        "factories": {
+          "$ref": "#/definitions/BoundedVec_1_256_ProviderFactoryKey"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/RegistryLifecycle"
+        },
+        "providers": {
+          "$ref": "#/definitions/BoundedVec_1_256_ProviderDescriptor"
+        },
+        "publishedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "axes",
+        "configurationFingerprint",
+        "factories",
+        "generation",
+        "lifecycle",
+        "providers",
+        "publishedAtUnixMs",
+        "schemaVersion"
+      ],
+      "type": "object"
+    },
+    "ProviderRemediation": {
+      "enum": [
+        "none",
+        "retry-bounded",
+        "inspect-provider",
+        "restart-agent",
+        "re-enroll-peer",
+        "repair-configuration",
+        "replace-generation",
+        "operator-interaction"
+      ],
+      "type": "string"
+    },
+    "ProviderTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "realm"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "workload"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "realmId",
+            "workloadId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handleGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handleId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "handle"
+              ],
+              "type": "string"
+            },
+            "realmId": {
+              "type": "string"
+            },
+            "workloadId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "handleGeneration",
+            "handleId",
+            "kind",
+            "realmId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderType": {
+      "enum": [
+        "runtime",
+        "infrastructure",
+        "transport",
+        "substrate",
+        "credential",
+        "display",
+        "network",
+        "storage",
+        "device",
+        "audio",
+        "observability"
+      ],
+      "type": "string"
+    },
+    "RegistryLifecycle": {
+      "enum": [
+        "accepting",
+        "draining",
+        "retired"
+      ],
+      "type": "string"
+    },
+    "RetryClass": {
+      "enum": [
+        "never",
+        "same-operation",
+        "after-observation",
+        "after-interaction"
+      ],
+      "type": "string"
+    },
+    "RuntimeAuthorityPosture": {
+      "additionalProperties": false,
+      "properties": {
+        "cgroup": {
+          "$ref": "#/definitions/CgroupAuthority"
+        },
+        "deviceMediation": {
+          "$ref": "#/definitions/DeviceMediationPosture"
+        },
+        "network": {
+          "$ref": "#/definitions/NetworkPosture"
+        },
+        "persistentIdentity": {
+          "$ref": "#/definitions/PersistentIdentityPosture"
+        },
+        "process": {
+          "$ref": "#/definitions/ProcessAuthority"
+        },
+        "userNamespace": {
+          "$ref": "#/definitions/UserNamespacePosture"
+        }
+      },
+      "required": [
+        "cgroup",
+        "deviceMediation",
+        "network",
+        "persistentIdentity",
+        "process",
+        "userNamespace"
+      ],
+      "type": "object"
+    },
+    "SdkOperationClass": {
+      "enum": [
+        "authenticate",
+        "discover",
+        "read",
+        "create",
+        "update",
+        "delete",
+        "power",
+        "connect",
+        "listen",
+        "export"
+      ],
+      "type": "string"
+    },
+    "ServicePackage": {
+      "enum": [
+        "d2b.daemon.v2",
+        "d2b.realm.v2",
+        "d2b.guest.v2",
+        "d2b.provider.v2",
+        "d2b.broker.v2",
+        "d2b.user.v2",
+        "d2b.runtime.systemd-user.v2",
+        "d2b.shell.v2",
+        "d2b.clipboard.v2",
+        "d2b.clipboard.picker.v2",
+        "d2b.notify.v2",
+        "d2b.security-key.v2",
+        "d2b.wayland.v2",
+        "d2b.activation.v2",
+        "d2b.tty.v2"
+      ],
+      "type": "string"
+    },
+    "UserNamespacePosture": {
+      "enum": [
+        "broker-preestablished",
+        "unprivileged-self-managed",
+        "none"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "contractFingerprint": {
+      "type": "string"
+    },
+    "credentialLease": {
+      "$ref": "#/definitions/CredentialLease"
+    },
+    "failure": {
+      "$ref": "#/definitions/ProviderFailure"
+    },
+    "handle": {
+      "$ref": "#/definitions/ProviderHandle"
+    },
+    "observation": {
+      "$ref": "#/definitions/ProviderObservation"
+    },
+    "operation": {
+      "$ref": "#/definitions/ProviderOperationRequest"
+    },
+    "plan": {
+      "$ref": "#/definitions/ProviderPlan"
+    },
+    "registry": {
+      "$ref": "#/definitions/ProviderRegistrySnapshot"
+    },
+    "schemaVersion": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "contractFingerprint",
+    "credentialLease",
+    "failure",
+    "handle",
+    "observation",
+    "operation",
+    "plan",
+    "registry",
+    "schemaVersion"
+  ],
+  "title": "ProviderContractDocument",
+  "type": "object"
+}

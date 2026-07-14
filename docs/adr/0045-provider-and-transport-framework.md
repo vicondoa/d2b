@@ -2483,8 +2483,8 @@ reset/private-manifest boxes close only on the final manifest-free W11 tree.
 - [ ] Delete or replace `d2b-realm-provider`, `d2b-realm-transport`,
       `d2b-realm-codec-protobuf`, `d2b-host-providers`, `d2b-provider-aca`,
       `d2b-provider-relay`, `d2b-gateway`, `d2b-gateway-runtime`,
-      `d2b-daemon-access`, `d2b-unsafe-local-helper`, and compile-only
-      `d2b-wlproxy-spike` after its useful invariants move.
+      `d2b-daemon-access`, and `d2b-unsafe-local-helper` after their useful
+      invariants move.
 - [ ] Delete every old provider/gateway crate and Nix package reference,
       including axis-free aliases and re-export-only wrapper crates.
 - [ ] Delete `d2b.vms`, user-facing `d2b.envs`, gateway, relay,

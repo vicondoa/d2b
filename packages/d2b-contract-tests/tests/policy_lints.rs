@@ -331,6 +331,16 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
             && !layer1_workflow.contains("CARGO_BUILD_RUSTC_WRAPPER: \"\""),
         "generated Layer-1 CI must install and retain sccache without wrapper-clearing overrides"
     );
+    let release_workflow = read_repo_file(".github/workflows/release-host-binaries.yml");
+    assert!(
+        release_workflow
+            .contains("mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696")
+            && release_workflow.contains("D2B_CI_SCCACHE: \"1\"")
+            && release_workflow.contains("SCCACHE_DIR: ${{ github.workspace }}/.sccache")
+            && release_workflow.contains("            .sccache")
+            && !release_workflow.contains("packages/.d2b-gate-targets"),
+        "release CI must install and persist sccache without restoring gate target directories"
+    );
     let lock = read_repo_file("flake.lock");
     for pin in [
         r#""rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786""#,

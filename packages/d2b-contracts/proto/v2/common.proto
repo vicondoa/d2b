@@ -1,0 +1,263 @@
+syntax = "proto3";
+
+package d2b.common.v2;
+
+// ComponentSession-authenticated request metadata. Principal and capability
+// are deliberately absent: session state and generated method policy own them.
+message RequestMetadata {
+  bytes request_id = 1;
+  string correlation_id = 2;
+  bytes trace_id = 3;
+  bytes idempotency_key = 4;
+  uint64 issued_at_unix_ms = 5;
+  uint64 expires_at_unix_ms = 6;
+  uint64 session_generation = 7;
+}
+
+message IdentityScope {
+  string realm_id = 1;
+  string workload_id = 2;
+  string provider_id = 3;
+  string role_id = 4;
+}
+
+enum ProviderType {
+  PROVIDER_TYPE_UNSPECIFIED = 0;
+  PROVIDER_TYPE_RUNTIME = 1;
+  PROVIDER_TYPE_INFRASTRUCTURE = 2;
+  PROVIDER_TYPE_TRANSPORT = 3;
+  PROVIDER_TYPE_SUBSTRATE = 4;
+  PROVIDER_TYPE_CREDENTIAL = 5;
+  PROVIDER_TYPE_DISPLAY = 6;
+  PROVIDER_TYPE_NETWORK = 7;
+  PROVIDER_TYPE_STORAGE = 8;
+  PROVIDER_TYPE_DEVICE = 9;
+  PROVIDER_TYPE_AUDIO = 10;
+  PROVIDER_TYPE_OBSERVABILITY = 11;
+}
+
+enum RetryClass {
+  RETRY_CLASS_UNSPECIFIED = 0;
+  RETRY_CLASS_NEVER = 1;
+  RETRY_CLASS_SAME_OPERATION = 2;
+  RETRY_CLASS_AFTER_OBSERVATION = 3;
+  RETRY_CLASS_AFTER_INTERACTION = 4;
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  OUTCOME_ACCEPTED = 1;
+  OUTCOME_SUCCEEDED = 2;
+  OUTCOME_NOT_APPLICABLE = 3;
+  OUTCOME_DENIED = 4;
+  OUTCOME_CANCELLED = 5;
+  OUTCOME_DEGRADED = 6;
+  OUTCOME_FAILED = 7;
+}
+
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_INVALID_REQUEST = 1;
+  ERROR_KIND_UNAUTHENTICATED = 2;
+  ERROR_KIND_UNAUTHORIZED = 3;
+  ERROR_KIND_NOT_FOUND = 4;
+  ERROR_KIND_CONFLICT = 5;
+  ERROR_KIND_CAPABILITY_DENIED = 6;
+  ERROR_KIND_DEADLINE_EXCEEDED = 7;
+  ERROR_KIND_CANCELLED = 8;
+  ERROR_KIND_GENERATION_MISMATCH = 9;
+  ERROR_KIND_RESOURCE_EXHAUSTED = 10;
+  ERROR_KIND_UNAVAILABLE = 11;
+  ERROR_KIND_INVARIANT_VIOLATION = 12;
+  ERROR_KIND_INTERNAL = 13;
+}
+
+enum DesiredState {
+  DESIRED_STATE_UNSPECIFIED = 0;
+  DESIRED_STATE_PRESENT = 1;
+  DESIRED_STATE_ABSENT = 2;
+  DESIRED_STATE_RUNNING = 3;
+  DESIRED_STATE_STOPPED = 4;
+  DESIRED_STATE_ENABLED = 5;
+  DESIRED_STATE_DISABLED = 6;
+  DESIRED_STATE_OPEN = 7;
+  DESIRED_STATE_CLOSED = 8;
+  DESIRED_STATE_ATTACHED = 9;
+  DESIRED_STATE_DETACHED = 10;
+}
+
+enum ObservationState {
+  OBSERVATION_STATE_UNSPECIFIED = 0;
+  OBSERVATION_STATE_ABSENT = 1;
+  OBSERVATION_STATE_PENDING = 2;
+  OBSERVATION_STATE_READY = 3;
+  OBSERVATION_STATE_RUNNING = 4;
+  OBSERVATION_STATE_STOPPED = 5;
+  OBSERVATION_STATE_DEGRADED = 6;
+  OBSERVATION_STATE_UNAVAILABLE = 7;
+  OBSERVATION_STATE_FAILED = 8;
+}
+
+enum ProviderCapability {
+  PROVIDER_CAPABILITY_UNSPECIFIED = 0;
+  PROVIDER_CAPABILITY_RUNTIME_PLAN = 1;
+  PROVIDER_CAPABILITY_RUNTIME_ENSURE = 2;
+  PROVIDER_CAPABILITY_RUNTIME_START = 3;
+  PROVIDER_CAPABILITY_RUNTIME_STOP = 4;
+  PROVIDER_CAPABILITY_RUNTIME_EXECUTE = 5;
+  PROVIDER_CAPABILITY_RUNTIME_INSPECT = 6;
+  PROVIDER_CAPABILITY_RUNTIME_ADOPT = 7;
+  PROVIDER_CAPABILITY_RUNTIME_DESTROY = 8;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN = 9;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY = 10;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE = 11;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT = 12;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT = 13;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING = 14;
+  PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY = 15;
+  PROVIDER_CAPABILITY_TRANSPORT_CONNECT = 16;
+  PROVIDER_CAPABILITY_TRANSPORT_LISTEN = 17;
+  PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING = 18;
+  PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING = 19;
+  PROVIDER_CAPABILITY_TRANSPORT_INSPECT = 20;
+  PROVIDER_CAPABILITY_SUBSTRATE_CHECK = 21;
+  PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION = 22;
+  PROVIDER_CAPABILITY_SUBSTRATE_APPLY = 23;
+  PROVIDER_CAPABILITY_CREDENTIAL_STATUS = 24;
+  PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE = 25;
+  PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE = 26;
+  PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE = 27;
+  PROVIDER_CAPABILITY_DISPLAY_OPEN = 28;
+  PROVIDER_CAPABILITY_DISPLAY_INSPECT = 29;
+  PROVIDER_CAPABILITY_DISPLAY_ADOPT = 30;
+  PROVIDER_CAPABILITY_DISPLAY_CLOSE = 31;
+  PROVIDER_CAPABILITY_NETWORK_PLAN = 32;
+  PROVIDER_CAPABILITY_NETWORK_ENSURE = 33;
+  PROVIDER_CAPABILITY_NETWORK_INSPECT = 34;
+  PROVIDER_CAPABILITY_NETWORK_ADOPT = 35;
+  PROVIDER_CAPABILITY_NETWORK_RELEASE = 36;
+  PROVIDER_CAPABILITY_STORAGE_PLAN = 37;
+  PROVIDER_CAPABILITY_STORAGE_ENSURE = 38;
+  PROVIDER_CAPABILITY_STORAGE_INSPECT = 39;
+  PROVIDER_CAPABILITY_STORAGE_ADOPT = 40;
+  PROVIDER_CAPABILITY_STORAGE_SNAPSHOT = 41;
+  PROVIDER_CAPABILITY_STORAGE_DESTROY = 42;
+  PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH = 43;
+  PROVIDER_CAPABILITY_DEVICE_ATTACH = 44;
+  PROVIDER_CAPABILITY_DEVICE_INSPECT = 45;
+  PROVIDER_CAPABILITY_DEVICE_ADOPT = 46;
+  PROVIDER_CAPABILITY_DEVICE_DETACH = 47;
+  PROVIDER_CAPABILITY_AUDIO_OPEN = 48;
+  PROVIDER_CAPABILITY_AUDIO_SET_STATE = 49;
+  PROVIDER_CAPABILITY_AUDIO_INSPECT = 50;
+  PROVIDER_CAPABILITY_AUDIO_ADOPT = 51;
+  PROVIDER_CAPABILITY_AUDIO_CLOSE = 52;
+  PROVIDER_CAPABILITY_OBSERVABILITY_STATUS = 53;
+  PROVIDER_CAPABILITY_OBSERVABILITY_QUERY = 54;
+  PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE = 55;
+  PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT = 56;
+}
+
+message ProviderOperationContext {
+  RequestMetadata metadata = 1;
+  IdentityScope scope = 2;
+  string operation_id = 3;
+  string provider_id = 4;
+  ProviderType provider_type = 5;
+  uint64 provider_generation = 6;
+  uint64 policy_epoch = 7;
+  bytes authorization_digest = 8;
+  bytes request_digest = 9;
+}
+
+// A bounded, authority-neutral request. Method authority comes exclusively
+// from generated service metadata; values are opaque IDs or digests.
+message ServiceRequest {
+  reserved 5;
+  RequestMetadata metadata = 1;
+  IdentityScope scope = 2;
+  string resource_id = 3;
+  string operation_id = 4;
+  bytes request_digest = 6;
+  string stream_id = 7;
+  repeated uint32 attachment_indexes = 8;
+  uint32 page_size = 9;
+  string page_cursor = 10;
+  DesiredState desired_state = 11;
+}
+
+message ProviderRequest {
+  reserved 3;
+  ProviderOperationContext context = 1;
+  string resource_id = 2;
+  bytes plan_digest = 4;
+  string binding_id = 5;
+  repeated uint32 attachment_indexes = 6;
+  DesiredState desired_state = 7;
+  string stream_id = 8;
+}
+
+message CapabilityRequest {
+  ProviderOperationContext context = 1;
+}
+
+message ErrorEnvelope {
+  ErrorKind kind = 1;
+  RetryClass retry = 2;
+  string correlation_id = 3;
+}
+
+message Observation {
+  string resource_id = 1;
+  ObservationState state = 2;
+  uint64 generation = 3;
+  bytes digest = 4;
+}
+
+message ServiceResponse {
+  Outcome outcome = 1;
+  string operation_id = 2;
+  string resource_handle = 3;
+  string stream_id = 4;
+  bytes result_digest = 5;
+  repeated Observation observations = 6;
+  string next_page_cursor = 7;
+  ErrorEnvelope error = 8;
+  repeated uint32 attachment_indexes = 9;
+}
+
+message ProviderResponse {
+  Outcome outcome = 1;
+  string operation_id = 2;
+  string resource_handle = 3;
+  bytes result_digest = 4;
+  repeated Observation observations = 5;
+  ErrorEnvelope error = 6;
+  string stream_id = 7;
+  repeated uint32 attachment_indexes = 8;
+}
+
+message CapabilityResponse {
+  repeated ProviderCapability capabilities = 1;
+  uint64 provider_generation = 2;
+  bytes descriptor_digest = 3;
+  ErrorEnvelope error = 4;
+}
+
+message CancelRequest {
+  uint64 session_generation = 1;
+  bytes request_id = 2;
+}
+
+enum CancelOutcome {
+  CANCEL_OUTCOME_UNSPECIFIED = 0;
+  CANCEL_OUTCOME_CANCELLED_BEFORE_DISPATCH = 1;
+  CANCEL_OUTCOME_CANCELLATION_SIGNALLED = 2;
+  CANCEL_OUTCOME_ALREADY_TERMINAL = 3;
+  CANCEL_OUTCOME_UNKNOWN_REQUEST = 4;
+  CANCEL_OUTCOME_GENERATION_MISMATCH = 5;
+}
+
+message CancelResponse {
+  CancelOutcome outcome = 1;
+}

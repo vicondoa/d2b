@@ -63,7 +63,7 @@ full picture and threat model.
 │   ├── d2b/                   <- rust-native CLI
 │   ├── d2bd/                  <- unprivileged public daemon / supervisor
 │   ├── d2b-priv-broker/       <- privileged broker for audited host mutations
-│   ├── d2b-guest-shell-runner/ <- standalone static guest helper for persistent shell feasibility
+│   ├── d2b-guest-shell-runner/ <- static guest helper for persistent shell feasibility
 │   └── xtask/                     <- schema/docs codegen + Layer-1/delivery workflows
 ├── tests/                          <- see "Test layout" below
 ├── examples/                       <- minimal / graphics-workstation / multi-env / with-entra-id
@@ -842,13 +842,10 @@ feature branches; `main` itself is maintained as a by-release history.
   required so volatile files can't race
   `builtins.getFlake (toString $ROOT)` source-capture during
   flake-eval gates (W2fu4 H8/H9).
-- Rust worktrees share `/home/paydro/.cache/d2b-cargo-target/`
-  through the repo-local `.cargo/config.toml` files.
-- The persistent-shell helper is intentionally excluded from the main
-  Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
-  manifest path (and with `--features real-libshpool` when checking the
-  real shpool bridge); the top-level Rust/static/supply-chain gates wire
-  it explicitly like the broker workspace.
+- Every maintained host and guest crate uses the single workspace and lockfile
+  under `packages/`. Focus broker feature passes with
+  `-p d2b-priv-broker`; focus the persistent-shell helper's real bridge with
+  `-p d2b-guest-shell-runner --features real-libshpool`.
 - The integrator MUST run `nix-collect-garbage` after each wave merge.
 - For the operator host running heavy iteration: prune OLD
   NixOS system generations periodically:
@@ -896,8 +893,7 @@ feature branches; `main` itself is maintained as a by-release history.
   derivations (via `checks.${system}.rust-deny` / `.rust-audit`).
   Each derivation fetches the pinned RustSec advisory DB snapshot
   from the Nix store (no network at build time) and runs cargo-deny /
-  cargo-audit against both `packages/Cargo.lock` and
-  `packages/d2b-priv-broker/Cargo.lock`. The advisory DB is a
+  cargo-audit against `packages/Cargo.lock`. The advisory DB is a
   `fetchFromGitHub` pinned to a specific commit; update the rev + hash
   in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).

@@ -837,7 +837,7 @@ fn persist_storage_lifecycle_report(
 }
 
 pub fn banner() -> String {
-    "d2bd 0.0.0-bootstrap (bootstrap stub)".to_owned()
+    format!("d2bd {}", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn banner_note() -> String {

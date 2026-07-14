@@ -31,7 +31,8 @@
 //! and every W3 broker op enum variant must round-trip through the
 //! wire-tag set.
 
-use d2b_contracts::{BrokerCapabilities, PROTOCOL_VERSION, W3BrokerOperation};
+use d2b_contracts::{BrokerCapabilities, PROTOCOL_VERSION};
+use d2b_core::privileges_w3::W3BrokerOperation;
 
 /// W2 broker operation tags — the closed pre-W3 set the version-skew
 /// scenarios pretend an "old daemon" or "old broker" advertised. We

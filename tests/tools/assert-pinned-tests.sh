@@ -9,7 +9,6 @@ DEFAULT_PINNED_DIR="$ROOT/tests/golden/pinned"
 . "$ROOT/tests/lib.sh"
 
 workspace_target_dir=${D2B_WORKSPACE_GATE_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}
-broker_target_dir=${D2B_BROKER_GATE_TARGET_DIR:-$(d2b_cargo_target_dir broker)}
 
 if ! command -v cargo >/dev/null 2>&1; then
   for candidate in "$HOME"/.rustup/toolchains/1.94.1-*/bin; do
@@ -71,7 +70,7 @@ collect_present() {
 collect_present < <(
   cd "$ROOT/packages"
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest list --workspace --exclude d2b-contract-tests --message-format oneline
+    cargo nextest list --locked --workspace --exclude d2b-contract-tests --message-format oneline
 )
 # Fixture contract tests are excluded from the default workspace test pass, but
 # test-rust.sh runs them with D2B_FIXTURES. Include their nextest
@@ -79,15 +78,14 @@ collect_present < <(
 collect_present < <(
   cd "$ROOT/packages"
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest list -p d2b-contract-tests --message-format oneline
+    cargo nextest list --locked -p d2b-contract-tests --message-format oneline
 )
-# Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
-# cargo workspace, excluded from the main one. Retired canaries pinned
+# Broker package feature tests are part of the unified workspace. Retired canaries pinned
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
 # pinned gate must enumerate it too — otherwise those retirements would be
 # silently unguarded against deletion.
 collect_present < <(
-  cd "$ROOT/packages/d2b-priv-broker"
+  cd "$ROOT/packages"
   # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
   # test surface: the default real-wire tests, the layer1-bootstrap legacy
   # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
@@ -95,9 +93,10 @@ collect_present < <(
   # (e.g. tests/pidfd_handoff_scm_rights.rs). test-rust.sh runs the
   # default, layer1-bootstrap, AND fake-backends broker test passes, so every
   # listed test is actually executed and can be guarded by the pinned gate.
-  CARGO_TARGET_DIR="$broker_target_dir" \
-    cargo nextest list --locked --workspace \
-      --features layer1-bootstrap,fake-backends --message-format oneline
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo nextest list --locked -p d2b-priv-broker \
+      --features d2b-priv-broker/layer1-bootstrap,d2b-priv-broker/fake-backends \
+      --message-format oneline
 )
 
 declare -A seen

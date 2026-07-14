@@ -60,122 +60,32 @@
           mkdir -p $out/packages
           cp -r ${./packages}/. $out/packages/
         '';
+        workspaceVersion =
+          (builtins.fromTOML (builtins.readFile ./packages/Cargo.toml))
+            .workspace.package.version;
+        workspaceCargoLock = {
+          lockFile = ./packages/Cargo.lock;
+          outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+        };
         rustWorkspaceWith = rustPlatform: args: rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
-          version = "0.0.0-bootstrap";
+          version = workspaceVersion;
           src = rustPackagesSrc;
           sourceRoot = "d2b-rust-src/packages";
-          cargoLock = {
-            lockFile = ./packages/Cargo.lock;
-            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-          };
+          cargoLock = workspaceCargoLock;
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
         rustWorkspace = rustWorkspaceWith pkgs.rustPlatform;
         deliveryRustWorkspace =
           rustWorkspaceWith deliveryTools.stableRustPlatform;
-        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
-          mkdir -p $out/packages
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
-          cp -r ${./packages/d2b-core} $out/packages/d2b-core
-          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
-          cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-realm-core
-          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-realm-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [dependencies]
-          serde.workspace = true
-          schemars.workspace = true
-          EOF
-          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [features]
-          test-support = []
-
-          [dependencies]
-          serde.workspace = true
-          serde_json.workspace = true
-          schemars.workspace = true
-          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-          semver = "1"
-          rustix = { workspace = true }
-          sha2 = { workspace = true }
-          EOF
-          cat > $out/packages/Cargo.toml <<'EOF'
-          [workspace]
-          resolver = "2"
-          members = [
-            "d2b-realm-core",
-            "d2b-core",
-            "d2b-contracts",
-            "d2b-guestd",
-            "d2b-userd",
-            "d2b-exec-runner",
-            "d2b-sk-frontend",
-          ]
-
-          [workspace.package]
-          license = "Apache-2.0"
-
-          [workspace.lints.clippy]
-          all = "warn"
-
-          [workspace.lints.rust]
-          unsafe_code = "forbid"
-          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
-
-          [workspace.dependencies]
-          serde = { version = "1", features = ["derive"] }
-          serde_json = "1"
-          schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
-          sha2 = "0.10"
-          tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-          tokio-vsock = "0.7"
-          EOF
-        '';
-        cargoLock = {
-          lockFile = ./packages/Cargo.guest.lock;
-        };
         guestStaticPackage = packageName: binName:
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "${binName}-static";
-            version = "0.0.0-bootstrap";
-            src = guestRustPackagesSrc;
-            sourceRoot = "d2b-guest-rust-src/packages";
-            inherit cargoLock;
+            version = workspaceVersion;
+            src = rustPackagesSrc;
+            sourceRoot = "d2b-rust-src/packages";
+            cargoLock = workspaceCargoLock;
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
             RUSTC_WRAPPER = "";
@@ -208,12 +118,16 @@
         guestShellRunnerStatic =
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
-            version = "0.0.0-bootstrap";
-            src = ./packages/d2b-guest-shell-runner;
-            cargoLock = {
-              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
-            };
-            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            version = workspaceVersion;
+            src = rustPackagesSrc;
+            sourceRoot = "d2b-rust-src/packages";
+            cargoLock = workspaceCargoLock;
+            cargoBuildFlags = [
+              "--package"
+              "d2b-guest-shell-runner"
+              "--features"
+              "real-libshpool"
+            ];
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
@@ -681,106 +595,19 @@
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
         '';
-        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
-          mkdir -p $out/packages
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
-          cp -r ${./packages/d2b-core} $out/packages/d2b-core
-          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
-          cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-realm-core
-          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-realm-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [dependencies]
-          serde.workspace = true
-          schemars.workspace = true
-          EOF
-          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [features]
-          test-support = []
-
-          [dependencies]
-          serde.workspace = true
-          serde_json.workspace = true
-          schemars.workspace = true
-          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-          semver = "1"
-          rustix = { workspace = true }
-          sha2 = { workspace = true }
-          EOF
-          cat > $out/packages/Cargo.toml <<'EOF'
-          [workspace]
-          resolver = "2"
-          members = [
-            "d2b-realm-core",
-            "d2b-core",
-            "d2b-contracts",
-            "d2b-guestd",
-            "d2b-userd",
-            "d2b-exec-runner",
-            "d2b-sk-frontend",
-          ]
-
-          [workspace.package]
-          license = "Apache-2.0"
-
-          [workspace.lints.clippy]
-          all = "warn"
-
-          [workspace.lints.rust]
-          unsafe_code = "forbid"
-          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
-
-          [workspace.dependencies]
-          serde = { version = "1", features = ["derive"] }
-          serde_json = "1"
-          schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
-          sha2 = "0.10"
-          tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-          tokio-vsock = "0.7"
-          EOF
-        '';
+        workspaceVersion =
+          (builtins.fromTOML (builtins.readFile ./packages/Cargo.toml))
+            .workspace.package.version;
+        workspaceCargoLock = {
+          lockFile = ./packages/Cargo.lock;
+          outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+        };
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
-          version = "0.0.0-bootstrap";
+          version = workspaceVersion;
           src = rustPackagesSrc;
           sourceRoot = "d2b-rust-src/packages";
-          cargoLock = {
-            lockFile = ./packages/Cargo.lock;
-            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-          };
+          cargoLock = workspaceCargoLock;
           # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
           # have sccache on PATH (and even if it did, sccache wants
@@ -793,22 +620,28 @@
         } // args);
         rustToolchainChannel =
           (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
-        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
         mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
         assertRustSupplyChainInputs = ''
           test -f ${rustPackagesSrc}/packages/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
           test -f ${rustPackagesSrc}/packages/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
           test -f ${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock
           test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml
           printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
-          printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
-          printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
+          test '${mainManifestToml.workspace.package.version}' = '2.0.0'
+        '';
+        workspaceVendor = pkgs.rustPlatform.importCargoLock workspaceCargoLock;
+        workspaceVendorConfig = ''
+          [source.crates-io]
+          replace-with = "vendored-sources"
+          [source."git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772"]
+          git = "https://github.com/vicondoa/wl-proxy.git"
+          rev = "072945b59fef21a2a8166460454280d543f48772"
+          replace-with = "vendored-sources"
+          [source.vendored-sources]
+          directory = "${workspaceVendor}"
         '';
 
         # Pinned RustSec advisory DB snapshot for offline cargo-deny /
@@ -871,6 +704,7 @@
             "readiness-waves.nix"
             "restart-policy.nix"
             "usb-security-key.nix"
+            "v2-identity.nix"
             "vm-eval-overlays.nix"
           ];
           nix-unit-network = [
@@ -1243,8 +1077,8 @@
           printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
         '';
 
-        # Real cargo-deny gate: bans, licenses, and sources for both
-        # the main workspace and the broker workspace.  Advisory
+        # Real cargo-deny gate: workspace-wide bans, licenses, and sources plus
+        # focused broker and guest-shell policy configurations. Advisory
         # checks are handled by rust-audit below (cargo-deny requires
         # a fetchable URL for the advisory DB which is incompatible
         # with the Nix sandbox's no-network constraint).
@@ -1252,28 +1086,7 @@
         # cargo-deny shells out to `cargo metadata`, so we vendor
         # the crate registry and override the sccache wrapper that
         # the repo-local .cargo/config.toml enables.
-        rust-deny = let
-          mainVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/Cargo.lock;
-            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-          };
-          brokerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-priv-broker/Cargo.lock;
-          };
-          guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
-          };
-          cargoConfig = vendorDir: ''
-            [source.crates-io]
-            replace-with = "vendored-sources"
-            [source."git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772"]
-            git = "https://github.com/vicondoa/wl-proxy.git"
-            rev = "072945b59fef21a2a8166460454280d543f48772"
-            replace-with = "vendored-sources"
-            [source.vendored-sources]
-            directory = "${vendorDir}"
-          '';
-        in pkgs.runCommand "d2b-rust-deny" {
+        rust-deny = pkgs.runCommand "d2b-rust-deny" {
           nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
         } ''
           export HOME="$TMPDIR"
@@ -1290,57 +1103,36 @@
             mkdir -p "$ws/.cargo"
             printf '%s\n' "$vendor_cfg" > "$ws/.cargo/config.toml"
             echo "==> cargo deny check ($label)"
-            cargo-deny --manifest-path "$ws/$manifest" \
-              check --config "$deny_cfg" bans licenses sources
+            (
+              cd "$ws"
+              cargo-deny --manifest-path "$manifest" \
+                check --config "$deny_cfg" bans licenses sources
+            )
             rm -rf "$ws"
           }
 
           run_deny "main" \
             "${rustPackagesSrc}" \
             "Cargo.toml" \
-            '${cargoConfig mainVendor}' \
+            '${workspaceVendorConfig}' \
             "${rustPackagesSrc}/packages/deny.toml"
 
           run_deny "broker" \
             "${rustPackagesSrc}" \
             "d2b-priv-broker/Cargo.toml" \
-            '${cargoConfig brokerVendor}' \
+            '${workspaceVendorConfig}' \
             "${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml"
 
           run_deny "guest-shell-runner" \
             "${rustPackagesSrc}" \
             "d2b-guest-shell-runner/Cargo.toml" \
-            '${cargoConfig guestShellRunnerVendor}' \
+            '${workspaceVendorConfig}' \
             "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml"
 
           echo ok > $out
         '';
 
-        guest-rust-deny = let
-          guestVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/Cargo.guest.lock;
-          };
-          cargoConfig = ''
-            [source.crates-io]
-            replace-with = "vendored-sources"
-            [source.vendored-sources]
-            directory = "${guestVendor}"
-          '';
-        in pkgs.runCommand "d2b-guest-rust-deny" {
-          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
-        } ''
-          export HOME="$TMPDIR"
-          ws="$TMPDIR/guest"
-          cp -r "${guestRustPackagesSrc}/packages" "$ws"
-          chmod -R u+w "$ws"
-          mkdir -p "$ws/.cargo"
-          printf '%s\n' '${cargoConfig}' > "$ws/.cargo/config.toml"
-          cargo-deny --manifest-path "$ws/Cargo.toml" \
-            check --config "${rustPackagesSrc}/packages/deny.toml" bans licenses sources
-          echo ok > "$out"
-        '';
-
-        # Real cargo-audit gate: vulnerability scan of every committed lockfile
+        # Real cargo-audit gate: vulnerability scan of the canonical lockfile
         # against the pinned advisory DB snapshot.  Runs offline via
         # --no-fetch with the bundled git-repo copy of the RustSec DB.
         rust-audit = pkgs.runCommand "d2b-rust-audit" {
@@ -1359,35 +1151,51 @@
           # wayland-scanner publishes a release on quick-xml >= 0.41.
           run_audit ${rustPackagesSrc}/packages/Cargo.lock \
             --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
-          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
-          run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
-          # Track that feasibility-spike warning explicitly while the helper
-          # evaluates the pinned shpool dependency.
-          run_audit ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock \
+            --ignore RUSTSEC-2026-0195 \
             --ignore RUSTSEC-2024-0384
           echo ok > $out
         '';
 
         guest-static-dependency-policy =
-          pkgs.runCommand "d2b-guest-static-dependency-policy" { } ''
-            lock=${./packages/Cargo.guest.lock}
-            if grep -E 'name = "(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd)"' "$lock"; then
-              echo "guest static lock contains a native-link/build-script dependency" >&2
+          pkgs.runCommand "d2b-guest-static-dependency-policy" {
+            nativeBuildInputs = [ pkgs.cargo ];
+          } ''
+            cp -r ${rustPackagesSrc}/packages "$TMPDIR/workspace"
+            chmod -R u+w "$TMPDIR/workspace"
+            printf '%s\n' '${workspaceVendorConfig}' > "$TMPDIR/workspace/.cargo/config.toml"
+            tree=$TMPDIR/guest.tree
+            (
+              cd "$TMPDIR/workspace"
+              cargo tree --locked --offline --manifest-path Cargo.toml \
+                --edges normal,build \
+                -p d2b-guestd -p d2b-userd -p d2b-exec-runner -p d2b-sk-frontend
+            ) > "$tree"
+            if grep -E '(^|[[:space:]])(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd) v' "$tree"; then
+              echo "guest static dependency closure contains a native-link/build-script dependency" >&2
               exit 1
             fi
             echo ok > "$out"
           '';
 
         guest-shell-runner-static-dependency-policy =
-          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./packages/d2b-guest-shell-runner/Cargo.lock}
-            if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
-              echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
+          pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" {
+            nativeBuildInputs = [ pkgs.cargo ];
+          } ''
+            cp -r ${rustPackagesSrc}/packages "$TMPDIR/workspace"
+            chmod -R u+w "$TMPDIR/workspace"
+            printf '%s\n' '${workspaceVendorConfig}' > "$TMPDIR/workspace/.cargo/config.toml"
+            tree=$TMPDIR/guest-shell-runner.tree
+            (
+              cd "$TMPDIR/workspace"
+              cargo tree --locked --offline --manifest-path Cargo.toml \
+                -p d2b-guest-shell-runner --features real-libshpool \
+                --edges normal,build
+            ) > "$tree"
+            if grep -E '(^|[[:space:]])(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2) v' "$tree"; then
+              echo "guest shell runner closure contains a forbidden dynamic/PAM/systemd dependency" >&2
               exit 1
             fi
-            if ! grep -A6 'name = "motd"' "$lock" | grep -F 'version = "0.2.2"' >/dev/null; then
+            if ! grep -F 'motd v0.2.2' "$tree" >/dev/null; then
               echo "guest shell runner lock must pin the expected PAM-free motd dependency posture" >&2
               exit 1
             fi

@@ -1,0 +1,13 @@
+syntax = "proto3";
+package d2b.realm.v2;
+import "common.proto";
+service RealmService {
+  rpc Bootstrap(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Enroll(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ResolveRoute(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc AuthorizeShortcut(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc RevokeShortcut(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ReportShortcutClose(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Inspect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

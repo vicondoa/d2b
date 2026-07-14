@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServiceInventoryDocument",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "services"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ServiceDocument"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "MethodDocument": {
+      "type": "object",
+      "required": [
+        "maxLifetimeMs",
+        "maxRequestBytes",
+        "methodId",
+        "mutating",
+        "name",
+        "requiresIdempotency"
+      ],
+      "properties": {
+        "maxLifetimeMs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "maxRequestBytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "methodId": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mutating": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "requiresIdempotency": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ServiceDocument": {
+      "type": "object",
+      "required": [
+        "methods",
+        "package",
+        "schemaFingerprint",
+        "service"
+      ],
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MethodDocument"
+          }
+        },
+        "package": {
+          "type": "string"
+        },
+        "schemaFingerprint": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

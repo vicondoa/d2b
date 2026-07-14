@@ -1,7 +1,9 @@
 [package]
 name = "d2b-gateway"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -21,13 +23,13 @@ workspace = true
 # live Azure in unit tests. Host-side leaf crate: nothing in the constellation
 # contract crates depends on it (dep-direction gate).
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
+d2b-realm-core = { workspace = true }
+async-trait.workspace = true
 hmac = "0.12"
-sha2 = "0.10"
+sha2.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 

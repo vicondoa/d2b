@@ -490,7 +490,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+successor_ids = ["focused broker package cargo test --features layer1-bootstrap (d2b-priv-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the focused broker layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -499,7 +499,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_socket_acl::socket_acl_rejects_non_d2bd_peers_and_accepts_daemon) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+successor_ids = ["focused broker package cargo test --features layer1-bootstrap (d2b-priv-broker broker_socket_acl::socket_acl_rejects_non_d2bd_peers_and_accepts_daemon) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the focused broker layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -562,7 +562,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) — already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
+successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) — already gated in tests/tools/rust-workspace-checks.sh", "focused broker package cargo test [+ --features layer1-bootstrap] (d2b-priv-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the workspace and focused broker passes)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
 exercised_today = "yes"
 
 [[script]]
@@ -607,7 +607,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
+successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/tools/rust-workspace-checks.sh", "focused broker package cargo test [+ --features layer1-bootstrap] (d2b-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the workspace and focused broker passes)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1507,7 +1507,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1525,7 +1525,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1534,7 +1534,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via focused broker package cargo test)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across the workspace and focused broker passes)"]
 exercised_today = "skip"
 
 [[script]]

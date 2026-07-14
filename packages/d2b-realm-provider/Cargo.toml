@@ -1,7 +1,9 @@
 [package]
 name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -16,16 +18,16 @@ workspace = true
 # MUST NOT depend on `prost`/codec crates, transport crates, or host-only
 # broker/daemon internals (dependency-direction gate).
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-async-trait = "0.1"
+d2b-realm-core = { workspace = true }
+async-trait.workspace = true
 serde.workspace = true
 schemars.workspace = true
 # Transport sessions/streams carry real bidirectional bytes (the mock
 # loopback and later relay sessions implement AsyncRead/AsyncWrite). Only
 # the io traits are needed here; no runtime/network features.
-tokio = { version = "1", default-features = false, features = ["io-util"] }
+tokio = { workspace = true, default-features = false, features = ["io-util"] }
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "io-util"] }
+tokio = { workspace = true, features = ["macros", "rt", "io-util"] }
 serde_json = { workspace = true }

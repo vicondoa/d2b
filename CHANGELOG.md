@@ -12,6 +12,19 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added independent Rust and pure-Nix canonical v2 identity derivation with
+  shared vectors, plus generated schemas and references for identity,
+  ComponentSession, providers, services, and state/storage/sync/audit.
+- Added the strict d2b 2.0 provider contract rail with eleven closed authority
+  axes, bounded descriptors and registries, shared in-process/agent traits,
+  explicit lifecycle and adoption bindings, and co-located opaque credential
+  leases.
+- Added the complete internal ComponentSession v2 protobuf/ttrpc service
+  inventory, strict bounded wire validation, schema fingerprints, reference
+  artifacts, and generated asynchronous client/server bindings.
+- Added a hermetic async ttrpc API-fit contract that pins the selected runtime
+  and generator versions, commits drift-checked test bindings, and proves a
+  yielding Unix-socket round trip without freezing a production service schema.
 - Added the checked-in W1 delivery authority manifest so the wave is validated
   and sealed by the same immutable workflow introduced for later waves.
 - Added Rust delivery tooling for validated stack graphs, immutable
@@ -25,6 +38,13 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Split `d2b-contracts` into default-empty, least-privilege feature families,
+  migrated every workspace consumer to explicit domains, and reserved
+  independent empty d2b 2.0 identity, component-session, service, provider,
+  and state contract rails.
+- Unified all maintained host and guest Rust crates at version 2.0.0 under one
+  workspace, toolchain policy, dependency graph, and canonical lockfile while
+  retaining focused broker feature and static guest validation.
 - Kept sccache enabled throughout generated CI and persisted its local cache
   without exposing cache-service credentials to compiled code.
 - Replaced the unavailable GitHub stack preview dependency with locked Git
@@ -54,6 +74,21 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Closed W2 service-contract ambiguity by making provider capability claims
+  method-exact, binding response attachments and streams, rejecting mixed
+  identity scopes and contradictory error outcomes, returning exact typed
+  validation errors, making role scopes and audit actors workload-bound,
+  keeping schema and serde enum-field casing identical, and distinguishing
+  `SCM_CREDENTIALS` records from pidfds.
+- Made pure-Nix identity checks and rejection vectors portable to
+  implementations that cannot materialize NUL-containing JSON strings, and
+  corrected generated tuple-struct API documentation.
+- Moved the async ttrpc API-fit socket fixture to the validation-owned socket
+  root so canonical read-only source checks can execute it.
+- Made W2 delivery authority fingerprint each generated service binding and
+  source protobuf as a tracked blob instead of using unsupported directories.
+- Kept unified toolchain-scoped Cargo gate targets out of CI caches while
+  retaining `.sccache`, and installed pinned sccache for release builds.
 - Hardened final delivery authority with secret-free validation environments,
   authenticated merged-prefix topology, tolerant external GraphQL decoding,
   shared signal forwarding, and kernel-backed child-output polling.
@@ -135,6 +170,8 @@ deprecations ship one minor release before removal.
   branch.
 - Expanded W1 delivery fingerprints into explicit tracked source blobs so the
   immutable snapshot covers the complete delivery and Layer-1 implementations.
+- Removed the redundant guest-only deny check after guest crates joined the
+  canonical workspace, and made binary banners report the 2.0.0 package version.
 - Hardened delivery subprocess supervision against PID reuse, orphaned process
   groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
   lost bounded diagnostics.
@@ -182,6 +219,12 @@ deprecations ship one minor release before removal.
   built the delivery app with pinned Rust 1.94.1 on both supported systems,
   kept delivery evidence outside Git metadata, and bound non-generated PR
   workflow summaries to the exact checked-out candidate commit.
+
+### Removed
+
+- Removed the superseded standalone Wayland-proxy feasibility crate, redundant
+  nested Cargo workspaces and lockfiles, and the stale duplicate
+  activation-helper source.
 
 ## [1.4.1] - 2026-07-12
 

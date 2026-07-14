@@ -1,29 +1,62 @@
 #![doc = "Canonical public and private IPC wire types for d2b."]
 
+#[cfg(feature = "common")]
 use schemars::JsonSchema;
+#[cfg(feature = "common")]
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+#[cfg(feature = "common")]
 use std::collections::BTreeSet;
 
+#[cfg(feature = "broker")]
 pub mod broker_wire;
+#[cfg(feature = "cli-output")]
+pub mod cli_output;
+#[cfg(feature = "guest")]
 pub mod generated;
+#[cfg(any(feature = "guest", feature = "guest-auth"))]
 pub mod guest_auth;
+#[cfg(feature = "guest")]
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
 }
+#[cfg(feature = "guest")]
 pub mod guest_wire;
+#[cfg(feature = "public")]
 pub mod public_wire;
+#[cfg(feature = "security-key")]
 pub mod security_key;
+#[cfg(feature = "public")]
 pub mod terminal_wire;
+#[cfg(feature = "broker")]
 pub mod types;
+#[cfg(feature = "unsafe-local")]
 pub mod unsafe_local_wire;
+#[cfg(feature = "usbip")]
 pub mod usbip;
 
-pub use d2b_core::error::{Error, SemverRange, Version};
-pub use d2b_core::privileges_w3::W3BrokerOperation;
+#[cfg(feature = "v2-component-session")]
+pub mod v2_component_session;
+#[cfg(feature = "v2-identity")]
+pub mod v2_identity;
+#[cfg(feature = "v2-provider")]
+pub mod v2_provider;
+#[cfg(feature = "v2-services")]
+pub mod v2_services;
+#[cfg(feature = "v2-state")]
+pub mod v2_state;
 
+#[cfg(feature = "common")]
+use d2b_core::error::{Error, SemverRange, Version};
+#[cfg(feature = "broker")]
+use d2b_core::privileges_w3::W3BrokerOperation;
+
+#[cfg(feature = "common")]
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
+#[cfg(feature = "common")]
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
+#[cfg(feature = "common")]
 pub const BROKER_SOCKET_PATH: &str = "/run/d2b/priv.sock";
+#[cfg(feature = "common")]
 pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.sock";
 
 /// Wire-protocol version. Earlier builds negotiated via [`SemverRange`];
@@ -37,6 +70,7 @@ pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.
 /// uids/gids, argv, env, caps, or seccomp profiles across the wire. Legacy
 /// callers that send the old payload shape are refused with
 /// `wire-version-mismatch`.
+#[cfg(feature = "common")]
 pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Broker operation capability set advertised at handshake time. The
@@ -44,6 +78,7 @@ pub const PROTOCOL_VERSION: u32 = 3;
 /// with `wire-version-mismatch` when either side is older.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "broker")]
 pub struct BrokerCapabilities {
     /// Wire protocol version (matches [`PROTOCOL_VERSION`] when both
     /// sides support the same protocol).
@@ -54,6 +89,7 @@ pub struct BrokerCapabilities {
     pub broker_operations: Vec<String>,
 }
 
+#[cfg(feature = "broker")]
 impl BrokerCapabilities {
     /// Capabilities advertised by an up-to-date broker. The list
     /// includes both legacy variants that survive the current contract and
@@ -97,8 +133,10 @@ impl BrokerCapabilities {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+#[cfg(feature = "common")]
 pub struct FeatureFlag(String);
 
+#[cfg(feature = "common")]
 impl FeatureFlag {
     pub fn new(value: impl Into<String>) -> Result<Self, String> {
         let value = value.into();
@@ -130,6 +168,7 @@ impl FeatureFlag {
     }
 }
 
+#[cfg(feature = "common")]
 impl<'de> Deserialize<'de> for FeatureFlag {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -140,6 +179,7 @@ impl<'de> Deserialize<'de> for FeatureFlag {
     }
 }
 
+#[cfg(feature = "common")]
 impl JsonSchema for FeatureFlag {
     fn schema_name() -> String {
         "FeatureFlag".to_owned()
@@ -151,6 +191,7 @@ impl JsonSchema for FeatureFlag {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg(feature = "common")]
 pub enum KnownFeatureFlag {
     TypedErrors,
     ManifestV04,
@@ -161,6 +202,7 @@ pub enum KnownFeatureFlag {
     UnsafeLocalShellV1,
 }
 
+#[cfg(feature = "common")]
 impl KnownFeatureFlag {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -181,6 +223,7 @@ impl KnownFeatureFlag {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "common")]
 pub struct Hello {
     pub client_version: SemverRange,
     #[serde(default)]
@@ -189,6 +232,7 @@ pub struct Hello {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "common")]
 pub struct HelloOk {
     pub server_version: Version,
     pub selected_version: Version,
@@ -197,12 +241,14 @@ pub struct HelloOk {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "common")]
 pub struct HelloRejected {
     pub reason: HelloRejectedReason,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "common")]
 pub enum HelloRejectedReason {
     VersionMismatch,
     CapabilityNegotiationFailed,
@@ -211,6 +257,7 @@ pub enum HelloRejectedReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "common")]
 pub struct FramingSpec {
     pub transport: String,
     pub length_prefix_bytes: u8,
@@ -221,6 +268,7 @@ pub struct FramingSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "common")]
 pub struct SocketSpec {
     pub path: String,
     pub mode: String,
@@ -231,6 +279,7 @@ pub struct SocketSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg(feature = "schema")]
 pub struct WireProtocolSchema {
     pub schema_version: String,
     pub framing: FramingSpec,
@@ -247,6 +296,7 @@ pub struct WireProtocolSchema {
     pub broker_response: broker_wire::BrokerResponse,
 }
 
+#[cfg(feature = "common")]
 pub fn negotiate_hello(
     hello: &Hello,
     server_version: &Version,
@@ -282,6 +332,7 @@ pub fn negotiate_hello(
     })
 }
 
+#[cfg(feature = "common")]
 pub fn encode_frame<T>(message: &T) -> Result<Vec<u8>, Error>
 where
     T: Serialize,
@@ -301,6 +352,7 @@ where
     Ok(frame)
 }
 
+#[cfg(feature = "common")]
 pub fn decode_frame<T>(type_name: &'static str, frame: &[u8]) -> Result<T, Error>
 where
     T: DeserializeOwned,
@@ -326,6 +378,7 @@ where
     decode_json_body(type_name, body)
 }
 
+#[cfg(feature = "common")]
 pub fn decode_json_body<T>(type_name: &'static str, body: &[u8]) -> Result<T, Error>
 where
     T: DeserializeOwned,
@@ -333,8 +386,7 @@ where
     serde_json::from_slice(body).map_err(|error| classify_deserialize_error(type_name, &error))
 }
 
-pub mod cli_output;
-
+#[cfg(feature = "common")]
 fn classify_deserialize_error(type_name: &'static str, error: &serde_json::Error) -> Error {
     let message = error.to_string();
     if let Some(field) = extract_unknown_field(&message) {
@@ -359,6 +411,7 @@ fn classify_deserialize_error(type_name: &'static str, error: &serde_json::Error
     Error::malformed_json(type_name, opaque_reason)
 }
 
+#[cfg(feature = "common")]
 fn extract_unknown_field(message: &str) -> Option<String> {
     let needle = "unknown field `";
     let start = message.find(needle)? + needle.len();
@@ -367,6 +420,7 @@ fn extract_unknown_field(message: &str) -> Option<String> {
     Some(rest[..end].to_owned())
 }
 
+#[cfg(feature = "common")]
 fn extract_ifname_error(message: &str) -> Option<d2b_core::host::IfNameError> {
     if message.contains("interface name must not be empty") {
         Some(d2b_core::host::IfNameError::Empty)
@@ -379,7 +433,7 @@ fn extract_ifname_error(message: &str) -> Option<d2b_core::host::IfNameError> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "schema"))]
 mod tests {
     use super::{
         BrokerCapabilities, FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, PROTOCOL_VERSION,

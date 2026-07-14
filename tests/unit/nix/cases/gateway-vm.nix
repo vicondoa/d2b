@@ -755,7 +755,7 @@ in
   };
 
   "gateway-vm/source-host-tools-opt-out-selects-source-daemon" = {
-    expr = lib.hasInfix "d2bd-0.0.0-bootstrap"
+    expr = lib.hasInfix "d2bd-2.0.0"
       (toString sourceGatewayGuestCfg.systemd.services.d2bd.serviceConfig.ExecStart);
     expected = true;
   };

@@ -1,7 +1,9 @@
 [package]
 name = "d2b"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
@@ -11,10 +13,10 @@ workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", default-features = false, features = ["socket", "user", "signal"] }
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }
+d2b-core = { workspace = true }
+d2b-contracts = { workspace = true, features = ["cli-output"] }
+d2b-realm-core = { workspace = true }
+d2b-realm-router = { workspace = true }
 rustix = { workspace = true }
 schemars.workspace = true
 serde.workspace = true

@@ -172,6 +172,7 @@ fn run_libshpool_session_command(
 
 #[derive(Clone, Copy)]
 enum ManagementStatus {
+    #[cfg_attr(not(feature = "real-libshpool"), allow(dead_code))]
     Ok,
     #[cfg(not(feature = "real-libshpool"))]
     Unsupported,

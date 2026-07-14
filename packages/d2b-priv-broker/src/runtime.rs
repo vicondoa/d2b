@@ -5087,9 +5087,10 @@ fn prepare_runner_preopened_fds(
                 response_fds: Vec::new(),
             });
         }
-        let mut expected_fd = crate::sys::pidfd_sys::RENDER_NODE_INHERITED_FD;
         let mut child_fds = Vec::with_capacity(intents.len());
-        for intent in intents {
+        for (expected_fd, intent) in
+            (crate::sys::pidfd_sys::RENDER_NODE_INHERITED_FD..).zip(intents)
+        {
             if intent.fd != expected_fd {
                 return Err(BrokerError::LiveHandler(format!(
                     "macvtap fd contract mismatch for {}: processes.json declares fd {}, broker would install fd {}",
@@ -5101,7 +5102,6 @@ fn prepare_runner_preopened_fds(
             let fd = crate::ops::tap::live_create_macvtap_fd(&intent)
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             child_fds.push(fd);
-            expected_fd += 1;
         }
         let _ = audit_log;
         let _ = daemon_uid;
@@ -9674,6 +9674,7 @@ mod tests {
         ])
         .expect("serve command parses");
 
+        #[allow(clippy::infallible_destructuring_match)]
         let config = match mode {
             BrokerMode::Serve(config) => config,
             #[cfg(feature = "layer1-bootstrap")]
@@ -9695,6 +9696,7 @@ mod tests {
         let mode = parse_command(["serve".to_owned(), "--test-mode".to_owned()])
             .expect("serve command parses with defaults");
 
+        #[allow(clippy::infallible_destructuring_match)]
         let config = match mode {
             BrokerMode::Serve(config) => config,
             #[cfg(feature = "layer1-bootstrap")]

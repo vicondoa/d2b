@@ -1,20 +1,84 @@
 [package]
 name = "d2b-contracts"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 license.workspace = true
 
 [lints]
 workspace = true
 
+[features]
+default = []
+common = ["dep:d2b-core", "dep:schemars", "dep:serde", "dep:serde_json"]
+guest-auth = []
+usbip = ["dep:serde"]
+security-key = ["dep:schemars", "dep:serde"]
+guest = [
+    "common",
+    "guest-auth",
+    "usbip",
+    "dep:protobuf",
+]
+broker = [
+    "common",
+    "guest-auth",
+    "security-key",
+    "usbip",
+]
+public = [
+    "broker",
+    "guest",
+    "dep:d2b-realm-core",
+]
+cli-output = ["public"]
+unsafe-local = ["public"]
+v2-identity = ["dep:schemars", "dep:serde", "dep:sha2"]
+v2-component-session = ["v2-identity", "dep:schemars", "dep:serde"]
+v2-provider = ["v2-component-session", "dep:schemars", "dep:serde"]
+v2-state = ["v2-identity", "dep:schemars", "dep:serde"]
+v2-services = [
+    "v2-component-session",
+    "v2-provider",
+    "v2-state",
+    "dep:async-trait",
+    "dep:protobuf",
+    "dep:schemars",
+    "dep:serde",
+    "dep:ttrpc",
+]
+# Maintained code-generation/test union. Production consumers must select
+# domain features instead.
+schema = [
+    "cli-output",
+    "unsafe-local",
+    "v2-identity",
+    "v2-component-session",
+    "v2-services",
+    "v2-provider",
+    "v2-state",
+]
+
 [dependencies]
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
-protobuf = "3.7.2"
+async-trait = { workspace = true, optional = true }
+d2b-core = { workspace = true, optional = true }
+d2b-realm-core = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+protobuf = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+ttrpc = { workspace = true, features = ["async"], optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[[test]]
+name = "version_skew"
+required-features = ["broker"]
+
+[[test]]
+name = "guest_proto_bindings"
+required-features = ["guest"]

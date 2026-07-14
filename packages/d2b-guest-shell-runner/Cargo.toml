@@ -1,15 +1,18 @@
 [package]
 name = "d2b-guest-shell-runner"
-version = "0.0.0-bootstrap"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
-license = "Apache-2.0"
-
-[workspace]
+license.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[lints.clippy]
+all = "warn"
 
 [features]
 default = []
@@ -19,8 +22,8 @@ real-libshpool = ["dep:libshpool"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 libshpool = { version = "0.11.0", optional = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror = "2"
 
 [dev-dependencies]

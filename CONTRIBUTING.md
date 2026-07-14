@@ -47,8 +47,9 @@ For a focused local run:
 
 ```bash
 cargo --manifest-path packages/Cargo.toml fmt --check
-cargo --manifest-path packages/Cargo.toml clippy --workspace --all-targets -- -D warnings
-cargo --manifest-path packages/Cargo.toml test --workspace
+cargo --manifest-path packages/Cargo.toml metadata --locked --format-version 1
+cargo --manifest-path packages/Cargo.toml clippy --locked --workspace --all-targets -- -D warnings
+cargo --manifest-path packages/Cargo.toml test --locked --workspace
 cargo --manifest-path packages/Cargo.toml deny check
 cargo --manifest-path packages/Cargo.toml audit
 nix build .#checks.x86_64-linux.rust-build \
@@ -67,27 +68,16 @@ inside `packages/`. See
 [ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
 toolchain, MSRV, and supply-chain policy.
 
-All d2b worktrees on paydro's host share Cargo build artifacts via
-repo-local `.cargo/config.toml` files:
-
-- `packages/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/workspace`
-- `packages/d2b-priv-broker/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/broker`
-- `packages/d2b-guest-shell-runner/.cargo/config.toml` → the helper workspace target dir
-- `packages/d2b-core/fuzz/.cargo/config.toml` → `/home/paydro/.cache/d2b-cargo-target/fuzz`
-
-Cargo's internal locking makes concurrent worktree builds safe, but a
-very old checkout may pay one slower rebuild while incremental state is
-refreshed in the shared cache.
-
-The persistent-shell feasibility helper is a standalone excluded workspace. Run
-it explicitly when iterating on that crate:
+All maintained host and guest crates inherit `packages/.cargo/config.toml` and
+resolve through `packages/Cargo.lock`. Focus the persistent-shell helper's
+optional real bridge from that workspace:
 
 ```bash
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml fmt --check
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml clippy --workspace --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path packages/d2b-guest-shell-runner/Cargo.toml test --workspace --features real-libshpool
+cargo --manifest-path packages/Cargo.toml fmt --check
+cargo --manifest-path packages/Cargo.toml clippy --locked -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
+cargo --manifest-path packages/Cargo.toml test --locked -p d2b-guest-shell-runner --features real-libshpool
 cargo deny --manifest-path packages/d2b-guest-shell-runner/Cargo.toml check --config packages/d2b-guest-shell-runner/deny.toml
-cargo audit --file packages/d2b-guest-shell-runner/Cargo.lock --ignore RUSTSEC-2024-0384
+cargo audit --file packages/Cargo.lock --ignore RUSTSEC-2024-0384
 ```
 
 Use the owning crate test or `make test-rust` while iterating. The legacy
