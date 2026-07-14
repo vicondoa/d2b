@@ -2,8 +2,9 @@
 
 The canonical provider DTOs live in
 `d2b_contracts::v2_provider`. The same object-safe traits and request/result
-types are used by trusted first-party in-process adapters and by authenticated
-provider-agent proxies over ComponentSession service `d2b.provider.v2`.
+types are defined for trusted first-party in-process adapters and authenticated
+provider-agent proxies over ComponentSession service `d2b.provider.v2` in later
+implementation waves.
 
 ## Authority
 

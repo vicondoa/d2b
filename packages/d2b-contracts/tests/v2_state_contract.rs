@@ -263,11 +263,31 @@ fn fixture_is_complete_and_fingerprint_bound() {
         mismatch.validate(),
         Err(StateContractError::ContractFingerprintMismatch)
     );
+
+    let mut unsupported_version = contract.clone();
+    unsupported_version.schema_version += 1;
+    assert_eq!(
+        unsupported_version.validate(),
+        Err(StateContractError::UnsupportedSchemaVersion)
+    );
+    let mut unsupported_generation = contract;
+    unsupported_generation.schema_generation += 1;
+    assert_eq!(
+        unsupported_generation.validate(),
+        Err(StateContractError::UnsupportedSchemaGeneration)
+    );
 }
 
 #[test]
 fn schema_and_serde_are_closed_and_bounded() {
-    let schema = serde_json::to_value(schema_for!(StateStorageSyncAuditContract)).unwrap();
+    let mut generated = schema_for!(StateStorageSyncAuditContract);
+    generated.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
+    let schema = serde_json::to_value(generated).unwrap();
+    let committed_schema: Value = serde_json::from_str(include_str!(
+        "../../../docs/reference/schemas/v2/state-storage-sync-audit.json"
+    ))
+    .unwrap();
+    assert_eq!(schema, committed_schema);
     assert_eq!(
         schema
             .pointer("/additionalProperties")

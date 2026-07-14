@@ -47,7 +47,9 @@ struct Vector {
 #[serde(deny_unknown_fields)]
 struct Malformed {
     case: String,
-    encoded: String,
+    encoded: Option<String>,
+    #[serde(rename = "encodedHex")]
+    encoded_hex: Option<String>,
 }
 
 fn vectors() -> Vectors {
@@ -55,6 +57,28 @@ fn vectors() -> Vectors {
         "../../../docs/reference/v2-identity-vectors.json"
     ))
     .expect("identity vectors must be valid JSON")
+}
+
+fn malformed_input(row: &Malformed) -> String {
+    match (&row.encoded, &row.encoded_hex) {
+        (Some(encoded), None) => encoded.clone(),
+        (None, Some(encoded_hex)) => {
+            assert_eq!(encoded_hex.len() % 2, 0, "{} hex length", row.case);
+            let bytes = encoded_hex
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let pair = std::str::from_utf8(pair).expect("ASCII hex pair");
+                    u8::from_str_radix(pair, 16).expect("valid hex pair")
+                })
+                .collect::<Vec<_>>();
+            String::from_utf8(bytes).expect("malformed vector remains UTF-8")
+        }
+        _ => panic!(
+            "{} must contain exactly one of encoded or encodedHex",
+            row.case
+        ),
+    }
 }
 
 #[test]
@@ -177,8 +201,9 @@ fn partition_boundaries_are_unambiguous() {
 fn malformed_and_noncanonical_inputs_fail_closed() {
     let vectors = vectors();
     for row in &vectors.malformed {
+        let encoded = malformed_input(row);
         assert!(
-            recompute_canonical_identity(&row.encoded).is_err(),
+            recompute_canonical_identity(&encoded).is_err(),
             "{} unexpectedly recomputed",
             row.case
         );

@@ -2,7 +2,9 @@
 
 This reference defines the serialized d2b 2.0 contract implemented by
 `d2b_contracts::v2_state`. The complete machine-readable example is
-[`state-storage-sync-audit-v2-fixture.json`](./state-storage-sync-audit-v2-fixture.json).
+[`state-storage-sync-audit-v2-fixture.json`](./state-storage-sync-audit-v2-fixture.json),
+and its generated schema is
+[`schemas/v2/state-storage-sync-audit.json`](./schemas/v2/state-storage-sync-audit.json).
 It is a clean v2 surface: no current-generation or v1 aliases are accepted.
 
 ## Version and bounds

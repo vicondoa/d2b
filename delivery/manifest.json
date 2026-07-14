@@ -642,6 +642,11 @@
       "name": "v2-state-fixture",
       "repository": "github.com/vicondoa/d2b",
       "path": "docs/reference/state-storage-sync-audit-v2-fixture.json"
+    },
+    {
+      "name": "v2-state-schema",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/schemas/v2/state-storage-sync-audit.json"
     }
   ]
 }

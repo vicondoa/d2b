@@ -22,6 +22,7 @@ use d2b_contracts::{
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
     v2_services::{ServiceInventoryDocument, service_inventory_document},
+    v2_state::StateStorageSyncAuditContract,
 };
 use d2b_core::{
     allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
@@ -331,6 +332,7 @@ struct RustItem {
     file_rel: String,
     line: usize,
     fields: Vec<Field>,
+    tuple_fields: Vec<String>,
     variants: Vec<Variant>,
 }
 
@@ -740,7 +742,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     };
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 20] = [
+    let schemas: [(&str, RootSchema); 21] = [
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
@@ -762,6 +764,10 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
         ("storage.json", schemars::schema_for!(StorageJson)),
+        (
+            "state-storage-sync-audit.json",
+            schemars::schema_for!(StateStorageSyncAuditContract),
+        ),
         ("sync.json", schemars::schema_for!(SyncJson)),
         (
             "realm-controllers.json",
@@ -1210,6 +1216,11 @@ fn parse_rust_items(
         } else {
             Vec::new()
         };
+        let tuple_fields = if kind == ItemKind::Struct {
+            parse_tuple_fields(&item_text, &name)
+        } else {
+            Vec::new()
+        };
         let variants = if kind == ItemKind::Enum {
             parse_variants(&body)
         } else {
@@ -1221,6 +1232,7 @@ fn parse_rust_items(
             file_rel: file_rel.clone(),
             line: start + 1,
             fields,
+            tuple_fields,
             variants,
         });
     }
@@ -1275,6 +1287,27 @@ fn parse_fields(body: &str) -> Vec<Field> {
                 ty: normalize_ws(ty),
             })
         })
+        .collect()
+}
+
+fn parse_tuple_fields(item_text: &str, name: &str) -> Vec<String> {
+    let marker = format!("struct {name}");
+    let Some((_, declaration)) = item_text.split_once(&marker) else {
+        return Vec::new();
+    };
+    let Some(open) = declaration.find('(') else {
+        return Vec::new();
+    };
+    if declaration.find('{').is_some_and(|brace| brace < open) {
+        return Vec::new();
+    }
+    let Some(close) = declaration.rfind(')') else {
+        return Vec::new();
+    };
+    split_top_level_entries(&declaration[open + 1..close])
+        .into_iter()
+        .map(|field| normalize_ws(field.trim().trim_start_matches("pub ")))
+        .filter(|field| !field.is_empty())
         .collect()
 }
 
@@ -1380,7 +1413,16 @@ fn render_fields(fields: &[Field]) -> String {
 fn render_shape(item: &RustItem) -> String {
     match item.kind {
         ItemKind::Struct => {
-            if item.fields.is_empty() {
+            if !item.tuple_fields.is_empty() {
+                format!(
+                    "tuple struct ({})",
+                    item.tuple_fields
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else if item.fields.is_empty() {
                 "empty struct".to_string()
             } else {
                 format!("struct {{ {} }}", render_fields(&item.fields))

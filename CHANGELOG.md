@@ -12,6 +12,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added independent Rust and pure-Nix canonical v2 identity derivation with
+  shared vectors, plus generated schemas and references for identity,
+  ComponentSession, providers, services, and state/storage/sync/audit.
 - Added the strict d2b 2.0 provider contract rail with eleven closed authority
   axes, bounded descriptors and registries, shared in-process/agent traits,
   explicit lifecycle and adoption bindings, and co-located opaque credential
@@ -71,6 +74,13 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Closed W2 service-contract ambiguity by making provider capability claims
+  method-exact, binding response attachments and streams, rejecting mixed
+  identity scopes and contradictory error outcomes, and distinguishing
+  `SCM_CREDENTIALS` records from pidfds.
+- Made identity rejection vectors portable to Nix implementations that cannot
+  materialize NUL-containing JSON strings, and corrected generated tuple-struct
+  API documentation.
 - Made W2 delivery authority fingerprint each generated service binding and
   source protobuf as a tracked blob instead of using unsupported directories.
 - Kept unified toolchain-scoped Cargo gate targets out of CI caches while

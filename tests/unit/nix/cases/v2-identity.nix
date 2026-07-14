@@ -37,6 +37,8 @@ let
   roleVectorValues = map
     (row: builtins.elemAt row.parts 2)
     (lib.filter (row: lib.hasPrefix "role-" row.case) vectors.valid);
+
+  nixMalformed = lib.filter (row: row ? encoded) vectors.malformed;
 in
 {
   "v2-identity/canonical-cross-language-vectors" = {
@@ -83,13 +85,13 @@ in
         inherit (row) case;
         accepted = attempt (identity.recompute row.encoded);
       })
-      vectors.malformed;
+      nixMalformed;
     expected = map
       (row: {
         inherit (row) case;
         accepted = false;
       })
-      vectors.malformed;
+      nixMalformed;
   };
 
   "v2-identity/malformed-short-ids-are-rejected" = {

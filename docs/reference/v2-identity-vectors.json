@@ -46,7 +46,7 @@
       },
       {
          "case" : "nul-byte",
-         "encoded" : "d2b-id-v2;12:d2b-v2:realm;1;1:\u0000;"
+         "encodedHex" : "6432622d69642d76323b31323a6432622d76323a7265616c6d3b313b313a003b"
       },
       {
          "case" : "unicode-part",

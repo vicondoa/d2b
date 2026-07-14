@@ -390,6 +390,24 @@ fn provider_artifacts_are_exact_and_fingerprint_bound() {
 }
 
 #[test]
+fn unsupported_provider_schema_version_fails_closed() {
+    let mut contract = document(PROVIDER_CONTRACT_FINGERPRINT);
+    contract.schema_version += 1;
+    assert_eq!(
+        contract.validate(5_000),
+        Err(ProviderContractError::UnsupportedSchemaVersion)
+    );
+}
+
+#[test]
+fn generated_daemon_reference_preserves_tuple_struct_shapes() {
+    let daemon_api = fs::read_to_string(artifact_path("daemon-api.md")).unwrap();
+    assert!(daemon_api.contains("| `ProviderCapability` | struct | [`ProviderCapability`]"));
+    assert!(daemon_api.contains("| tuple struct (`ProviderMethod`) |"));
+    assert!(daemon_api.contains("| tuple struct (`Vec<ProviderCapability>`) |"));
+}
+
+#[test]
 fn eleven_authority_axes_and_method_inventory_are_closed() {
     assert_eq!(ProviderType::ALL.len(), 11);
     assert_eq!(ProviderAuthority::ALL_TYPES, ProviderType::ALL);
