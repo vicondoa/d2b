@@ -251,4 +251,10 @@ fn v2_foundation_io_surfaces_are_async_first() {
             && !state_async.contains("thread::sleep"),
         "sync kernel state APIs must be isolated behind spawn_blocking"
     );
+    assert!(
+        read_repo_file("packages/d2b-state/src/lib.rs").contains(
+            "#[cfg(all(feature = \"host-fs\", not(target_os = \"linux\")))]\ncompile_error!(\"the host-fs feature requires Linux\");"
+        ),
+        "state host filesystem/OFD-lock support must fail explicitly off Linux"
+    );
 }

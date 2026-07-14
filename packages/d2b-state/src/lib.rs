@@ -5,6 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(all(feature = "host-fs", not(target_os = "linux")))]
+compile_error!("the host-fs feature requires Linux");
+
 #[cfg(feature = "host-fs")]
 mod atomic;
 #[cfg(feature = "host-fs")]
