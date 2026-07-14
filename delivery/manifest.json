@@ -80,9 +80,259 @@
       "path": ".github/workflows/pr-l1-static-fast.yml"
     },
     {
-      "name": "v2-services-bindings",
+      "name": "v2-services-binding-activation",
       "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-contracts/src/generated_v2_services"
+      "path": "packages/d2b-contracts/src/generated_v2_services/activation.rs"
+    },
+    {
+      "name": "v2-services-binding-activation-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/activation_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-broker",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/broker.rs"
+    },
+    {
+      "name": "v2-services-binding-broker-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/broker_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-clipboard",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/clipboard.rs"
+    },
+    {
+      "name": "v2-services-binding-clipboard-picker",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_picker.rs"
+    },
+    {
+      "name": "v2-services-binding-clipboard-picker-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_picker_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-clipboard-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/clipboard_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-common",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/common.rs"
+    },
+    {
+      "name": "v2-services-binding-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/daemon.rs"
+    },
+    {
+      "name": "v2-services-binding-daemon-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/daemon_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-guest",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/guest.rs"
+    },
+    {
+      "name": "v2-services-binding-guest-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/guest_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-notify",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/notify.rs"
+    },
+    {
+      "name": "v2-services-binding-notify-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-audio",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_audio.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-audio-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_audio_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-credential",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_credential.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-credential-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_credential_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-device",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_device.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-device-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_device_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-display",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_display.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-display-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_display_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-infrastructure",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-infrastructure-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_infrastructure_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-network",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_network.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-network-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_network_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-observability",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_observability.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-observability-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_observability_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-runtime",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_runtime.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-runtime-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_runtime_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-storage",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_storage.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-storage-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_storage_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-substrate",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_substrate.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-substrate-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_substrate_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-transport",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_transport.rs"
+    },
+    {
+      "name": "v2-services-binding-provider-transport-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/provider_transport_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-realm",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/realm.rs"
+    },
+    {
+      "name": "v2-services-binding-realm-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/realm_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-runtime-systemd-user",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user.rs"
+    },
+    {
+      "name": "v2-services-binding-runtime-systemd-user-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/runtime_systemd_user_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-security-key",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/security_key.rs"
+    },
+    {
+      "name": "v2-services-binding-security-key-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/security_key_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-shell",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/shell.rs"
+    },
+    {
+      "name": "v2-services-binding-shell-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/shell_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-tty",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/tty.rs"
+    },
+    {
+      "name": "v2-services-binding-tty-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/tty_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-user",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/user.rs"
+    },
+    {
+      "name": "v2-services-binding-user-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/user_ttrpc.rs"
+    },
+    {
+      "name": "v2-services-binding-wayland",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/wayland.rs"
+    },
+    {
+      "name": "v2-services-binding-wayland-ttrpc",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services/wayland_ttrpc.rs"
     },
     {
       "name": "v2-services-inventory",
@@ -254,9 +504,134 @@
       "path": "packages/d2b-contracts/src/v2_services.rs"
     },
     {
-      "name": "v2-services-proto",
+      "name": "v2-services-proto-activation",
       "repository": "github.com/vicondoa/d2b",
-      "path": "packages/d2b-contracts/proto/v2"
+      "path": "packages/d2b-contracts/proto/v2/activation.proto"
+    },
+    {
+      "name": "v2-services-proto-broker",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/broker.proto"
+    },
+    {
+      "name": "v2-services-proto-clipboard",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/clipboard.proto"
+    },
+    {
+      "name": "v2-services-proto-clipboard-picker",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/clipboard_picker.proto"
+    },
+    {
+      "name": "v2-services-proto-common",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/common.proto"
+    },
+    {
+      "name": "v2-services-proto-daemon",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/daemon.proto"
+    },
+    {
+      "name": "v2-services-proto-guest",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/guest.proto"
+    },
+    {
+      "name": "v2-services-proto-notify",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/notify.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-audio",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_audio.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-credential",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_credential.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-device",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_device.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-display",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_display.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-infrastructure",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_infrastructure.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-network",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_network.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-observability",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_observability.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-runtime",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_runtime.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-storage",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_storage.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-substrate",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_substrate.proto"
+    },
+    {
+      "name": "v2-services-proto-provider-transport",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/provider_transport.proto"
+    },
+    {
+      "name": "v2-services-proto-realm",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/realm.proto"
+    },
+    {
+      "name": "v2-services-proto-runtime-systemd-user",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/runtime_systemd_user.proto"
+    },
+    {
+      "name": "v2-services-proto-security-key",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/security_key.proto"
+    },
+    {
+      "name": "v2-services-proto-shell",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/shell.proto"
+    },
+    {
+      "name": "v2-services-proto-tty",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/tty.proto"
+    },
+    {
+      "name": "v2-services-proto-user",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/user.proto"
+    },
+    {
+      "name": "v2-services-proto-wayland",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2/wayland.proto"
     },
     {
       "name": "v2-state-contract",

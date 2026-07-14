@@ -71,6 +71,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made W2 delivery authority fingerprint each generated service binding and
+  source protobuf as a tracked blob instead of using unsupported directories.
 - Kept unified toolchain-scoped Cargo gate targets out of CI caches while
   retaining `.sccache`, and installed pinned sccache for release builds.
 - Hardened final delivery authority with secret-free validation environments,
