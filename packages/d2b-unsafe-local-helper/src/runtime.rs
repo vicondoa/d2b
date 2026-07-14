@@ -1804,7 +1804,7 @@ mod tests {
     #[test]
     fn fake_proxy_and_app_complete_typed_readiness_and_cleanup() {
         let scratch = Scratch::new();
-        let spec = graphical_spec(scratch.0.clone());
+        let spec = graphical_spec(crate::test_socket_root());
         let private_directory = spec.private_directory().unwrap();
         let runtime = PrivateGraphicalDirectory::prepare(&spec).unwrap();
         let metadata = fs::symlink_metadata(&private_directory).unwrap();
@@ -1817,11 +1817,7 @@ mod tests {
                 .contains(rustix::io::FdFlags::CLOEXEC)
         );
         let unused_listener = UnixListener::bind(scratch.0.join("unused.sock")).unwrap();
-        let wayland_path = PathBuf::from(&spec.display);
-        let generated_private_directory = wayland_path.parent().unwrap().to_path_buf();
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(&generated_private_directory).unwrap();
+        let wayland_path = spec.wayland_socket().unwrap();
 
         let proxy_spec = spec.clone();
         let proxy_wayland_path = wayland_path.clone();
@@ -1850,7 +1846,7 @@ mod tests {
         let event = read_test_event(&mut channel);
         validate_readiness_event(&event, ProxyReadinessStage::Listener, &spec).unwrap();
 
-        let app_path = PathBuf::from(&spec.display);
+        let app_path = wayland_path.clone();
         let app = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
@@ -1871,8 +1867,7 @@ mod tests {
         drop(channel);
         drop(runtime);
         assert!(!private_directory.exists());
-        fs::remove_file(&wayland_path).unwrap();
-        fs::remove_dir(&generated_private_directory).unwrap();
+        assert!(!wayland_path.exists());
     }
 
     #[test]

@@ -105,6 +105,8 @@ deprecations ship one minor release before removal.
   panel receipt contract.
 - Added pinned OpenSSL to the delivery app runtime so panel receipt signature
   verification works outside the development shell.
+- Corrected the unsafe-local graphical readiness test to exercise its declared
+  runtime-directory socket instead of a checkout-relative shadow path.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

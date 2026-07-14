@@ -22,6 +22,14 @@ pub(crate) fn test_scratch_root() -> std::path::PathBuf {
         })
 }
 
+#[cfg(test)]
+pub(crate) fn test_socket_root() -> std::path::PathBuf {
+    std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 pub fn run_tty_exec(args: &[String]) -> i32 {
     tty_exec::run(args)
 }
