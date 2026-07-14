@@ -555,6 +555,26 @@ mod tests {
     }
 
     #[test]
+    fn agents_panel_receipt_example_matches_program_policy() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository");
+        let agents = fs::read_to_string(repository.join("AGENTS.md")).expect("AGENTS.md");
+        let example = agents
+            .split("Each role then supplies one strict 13-field attestation shaped like:")
+            .nth(1)
+            .and_then(|tail| tail.split("```json\n").nth(1))
+            .and_then(|tail| tail.split("\n```").next())
+            .expect("panel receipt example");
+        let receipt: PanelAttestation =
+            serde_json::from_str(example).expect("strict panel receipt JSON");
+        assert_eq!(receipt.artifact_kind, PANEL_ATTESTATION_ARTIFACT_KIND);
+        assert_eq!(receipt.provider, PANEL_PROVIDER_POLICY);
+        assert_eq!(receipt.model_version, PANEL_MODEL_POLICY);
+    }
+
+    #[test]
     fn openssl_verifier_binds_receipt_signature_and_trust_root() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()

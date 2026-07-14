@@ -496,14 +496,14 @@ Each role then supplies one strict 13-field attestation shaped like:
 
 ```json
 {
-  "artifact_kind": "d2b-delivery/panel-attestation",
+  "artifact_kind": "d2b-delivery/panel-receipt",
   "schema_version": 1,
   "role": "software",
   "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "content_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "model_version": "gemini-3.1-pro-preview",
-  "provider": "google",
+  "provider": "github-copilot",
   "run_id": "run-001",
   "receipt_locator": "github-copilot://runs/run-001/software",
   "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",

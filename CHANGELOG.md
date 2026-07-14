@@ -99,6 +99,8 @@ deprecations ship one minor release before removal.
   subprocesses unwind normally and remove read-only validation checkouts.
 - Described panel model enforcement as a candidate-bound contract rather than
   embedding a provider-specific review attribution in process prose.
+- Corrected the strict panel receipt example to use the implemented artifact
+  kind and provider identifiers.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
