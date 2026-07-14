@@ -219,8 +219,13 @@ fn v2_rails_are_independently_owned_without_current_aliases() {
         let gate = format!("#[cfg(feature = \"{feature}\")]\npub mod {module};");
         assert!(lib.contains(&gate), "missing independent rail gate: {gate}");
         let source = read_repo_file(&format!("packages/d2b-contracts/src/{module}.rs"));
+        assert!(
+            !source
+                .lines()
+                .any(|line| line.trim_start().starts_with("pub use ")),
+            "{module} must not re-export current contracts"
+        );
         for forbidden in [
-            "pub use",
             "crate::broker_wire",
             "crate::cli_output",
             "crate::guest_auth",
