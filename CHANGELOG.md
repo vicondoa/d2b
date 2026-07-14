@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the strict d2b 2.0 provider contract rail with eleven closed authority
+  axes, bounded descriptors and registries, shared in-process/agent traits,
+  explicit lifecycle and adoption bindings, and co-located opaque credential
+  leases.
 - Added a hermetic async ttrpc API-fit contract that pins the selected runtime
   and generator versions, commits drift-checked test bindings, and proves a
   yielding Unix-socket round trip without freezing a production service schema.
