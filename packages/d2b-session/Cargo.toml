@@ -11,6 +11,17 @@ publish = false
 default = []
 
 [dependencies]
+async-trait.workspace = true
+d2b-contracts = { workspace = true, features = ["v2-component-session", "v2-services"] }
+protobuf.workspace = true
+sha2.workspace = true
+snow.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+ttrpc = { workspace = true, features = ["async"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
