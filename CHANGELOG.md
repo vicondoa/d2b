@@ -71,6 +71,8 @@ deprecations ship one minor release before removal.
   validation-owned paths while keeping Unix socket names short.
 - Kept tracked validation sources read-only while allowing only private,
   ignored Cargo target directories to remain writable.
+- Added ShellCheck to the delivery environment and routed the remaining short
+  CLI socket fixture through the validation socket root.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

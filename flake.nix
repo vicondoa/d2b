@@ -294,6 +294,7 @@
             wrapProgram "$out/bin/xtask" \
               --prefix PATH : ${pkgs.lib.makeBinPath [
                 pkgs.git
+                pkgs.shellcheck
                 deliveryTools.gh
                 deliveryTools.gitTown
               ]}
@@ -330,6 +331,7 @@
             pkgs.pkg-config
             pkgs.protobuf
             pkgs.sccache
+            pkgs.shellcheck
             pkgs.stdenv.cc
             deliveryTools.stableRust
             deliveryTools.gh

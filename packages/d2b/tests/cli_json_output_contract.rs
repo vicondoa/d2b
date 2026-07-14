@@ -157,9 +157,12 @@ fn target_tempdir(prefix: &str) -> tempfile::TempDir {
 }
 
 fn short_repo_tempdir(prefix: &str) -> tempfile::TempDir {
+    let base = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(repo_root);
     tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(repo_root())
+        .tempdir_in(base)
         .expect("short repo tempdir")
 }
 
