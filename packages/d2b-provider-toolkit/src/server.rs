@@ -195,8 +195,7 @@ impl GeneratedProviderServiceServer {
         let response = tokio::select! {
             biased;
             () = inbound.cancellation().cancelled() => {
-                inbound.complete().await?;
-                return Err(rpc_status(ttrpc::Code::CANCELLED));
+                Err(rpc_status(ttrpc::Code::CANCELLED))
             }
             response = self.adapter.invoke_session(
                 RpcCall {
@@ -205,10 +204,9 @@ impl GeneratedProviderServiceServer {
                     payload: RpcPayload::None,
                 },
                 &mut [],
-            ) => response,
+            ) => Ok(response),
         };
-        inbound.complete().await?;
-        match response {
+        match inbound.finish(response).await? {
             Ok(RpcResponse::Capabilities(capabilities)) => {
                 let mut wire = common::CapabilityResponse::new();
                 wire.capabilities = capabilities
@@ -275,8 +273,7 @@ impl GeneratedProviderServiceServer {
             }
             response = self.dispatch_provider_call(operation, method, request, &admitted) => response,
         };
-        inbound.complete().await?;
-        response
+        inbound.finish(response).await
     }
 
     async fn dispatch_provider_call(
@@ -678,18 +675,47 @@ impl InboundCallRegistration {
         &self.cancellation
     }
 
+    async fn finish<T>(self, result: ttrpc::Result<T>) -> ttrpc::Result<T> {
+        match result {
+            Ok(response) => {
+                self.complete().await?;
+                Ok(response)
+            }
+            Err(error) => {
+                self.remove().await?;
+                Err(error)
+            }
+        }
+    }
+
     async fn complete(mut self) -> ttrpc::Result<()> {
         let request_id = self
             .request_id
-            .as_ref()
+            .take()
             .ok_or_else(|| rpc_status(ttrpc::Code::INTERNAL))?;
         if self
             .driver
-            .complete_inbound_call(request_id.clone())
+            .complete_inbound_call(request_id)
             .await
             .map_err(session_error)?
         {
-            self.request_id = None;
+            Ok(())
+        } else {
+            Err(rpc_status(ttrpc::Code::INTERNAL))
+        }
+    }
+
+    async fn remove(mut self) -> ttrpc::Result<()> {
+        let request_id = self
+            .request_id
+            .take()
+            .ok_or_else(|| rpc_status(ttrpc::Code::INTERNAL))?;
+        if self
+            .driver
+            .remove_inbound_call(request_id)
+            .await
+            .map_err(session_error)?
+        {
             Ok(())
         } else {
             Err(rpc_status(ttrpc::Code::INTERNAL))

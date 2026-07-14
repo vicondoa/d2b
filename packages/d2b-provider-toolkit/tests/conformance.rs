@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use d2b_contracts::{
     v2_component_session::{
         AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
-        AttachmentPurpose, BoundedVec, CloseReason, KernelObjectType, Remediation, RequestId,
-        ServicePackage, SessionErrorCode,
+        AttachmentPurpose, BoundedVec, CancelRequest, CancelResult, CloseReason, KernelObjectType,
+        Remediation, RequestId, ServicePackage, SessionErrorCode,
     },
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
@@ -269,11 +269,15 @@ impl FakeSessionDriver {
         }
     }
 
-    fn signal(&self, request_id: &RequestId) -> bool {
+    fn cancel_request(&self, request_id: RequestId) -> CancelResult {
         self.requests
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .signal(request_id)
+            .cancel(CancelRequest {
+                reconnect_generation: 7,
+                request_id,
+            })
+            .result
     }
 
     fn active_requests(&self) -> usize {
@@ -632,10 +636,13 @@ async fn canonical_session_attachments_are_owned_and_index_bound() {
             .await
             .is_err()
     );
+    assert_eq!(driver.completions.load(Ordering::Acquire), 1);
+    assert_eq!(driver.removals.load(Ordering::Acquire), 1);
+    assert_eq!(driver.active_requests(), 0);
 }
 
 #[tokio::test]
-async fn session_cancel_reaches_active_generated_handler_and_completes_registration() {
+async fn session_cancel_reaches_active_generated_handler_and_removes_registration() {
     let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
     let driver = Arc::new(FakeSessionDriver::new(&fixture));
     driver.block_attachments.store(true, Ordering::Release);
@@ -667,7 +674,10 @@ async fn session_cancel_reaches_active_generated_handler_and_completes_registrat
     driver.wait_for_registrations(1).await;
     driver.wait_for_attachment_dispatch().await;
     let request_id = RequestId::new(vec![0x11; 16]).unwrap_or_else(|_| unreachable!());
-    assert!(driver.signal(&request_id));
+    assert_ne!(
+        driver.cancel_request(request_id),
+        CancelResult::UnknownRequest
+    );
     match task.await.unwrap_or_else(|_| unreachable!()) {
         Err(ttrpc::Error::RpcStatus(status)) => {
             assert_eq!(
@@ -678,8 +688,8 @@ async fn session_cancel_reaches_active_generated_handler_and_completes_registrat
         other => panic!("expected cancelled provider call, got {other:?}"),
     }
     driver.wait_for_cleanup(1).await;
-    assert_eq!(driver.completions.load(Ordering::Acquire), 1);
-    assert_eq!(driver.removals.load(Ordering::Acquire), 0);
+    assert_eq!(driver.completions.load(Ordering::Acquire), 0);
+    assert_eq!(driver.removals.load(Ordering::Acquire), 1);
     assert_eq!(driver.active_requests(), 0);
 }
 
