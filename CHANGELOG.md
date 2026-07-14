@@ -103,6 +103,8 @@ deprecations ship one minor release before removal.
   kind and provider identifiers.
 - Synchronized the independent documentation policy test with the 13-field
   panel receipt contract.
+- Added pinned OpenSSL to the delivery app runtime so panel receipt signature
+  verification works outside the development shell.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

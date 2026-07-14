@@ -262,8 +262,11 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         flake.contains("gh --version | grep -F 'gh version 2.92.0'")
             && flake.contains("git-town --version | grep -Fx 'Git Town 23.0.1'")
             && flake.contains("gh = deliveryTools.gh;")
-            && flake.contains("git-town = deliveryTools.gitTown;"),
-        "delivery packages and checks must expose and verify both exact source-built tools"
+            && flake.contains("git-town = deliveryTools.gitTown;")
+            && flake.contains(
+                "pkgs.git\n                pkgs.openssl\n                pkgs.shellcheck"
+            ),
+        "delivery packages and checks must expose all runtime verification tools"
     );
 
     let flake = read_repo_file("flake.nix");
