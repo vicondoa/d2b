@@ -8,7 +8,7 @@ use d2b_contracts::v2_services::{
     StrictWireMessage, common, decode_strict, encode_strict, provider_method_for_capability,
     service_inventory_document,
 };
-use protobuf::{Enum, MessageField};
+use protobuf::{Enum, EnumOrUnknown, MessageField};
 
 const TTRPC_SOURCES: &[(&str, &str, &str)] = &[
     (
@@ -406,6 +406,67 @@ fn responses_bind_attachments_streams_and_error_outcomes() {
     assert_eq!(
         provider.validate_wire(false),
         Err(ServiceContractError::BoundExceeded)
+    );
+}
+
+#[test]
+fn strict_wire_errors_classify_the_rejected_field() {
+    let mut request = valid_request();
+    request.desired_state = EnumOrUnknown::from_i32(999);
+    assert_eq!(
+        request.validate_wire(true),
+        Err(ServiceContractError::InvalidEnum)
+    );
+    request.desired_state = common::DesiredState::DESIRED_STATE_UNSPECIFIED.into();
+    request.request_digest = vec![0x11];
+    assert_eq!(
+        request.validate_wire(true),
+        Err(ServiceContractError::InvalidDigest)
+    );
+
+    let mut context = common::ProviderOperationContext::new();
+    context.metadata = request.metadata.clone();
+    context.scope = request.scope.clone();
+    context.operation_id = "operation-1".to_owned();
+    context.provider_id = "caaaaaaaaaaaaaaaaaaq".to_owned();
+    context.provider_type = common::ProviderType::PROVIDER_TYPE_RUNTIME.into();
+    context.provider_generation = 1;
+    context.policy_epoch = 1;
+    context.authorization_digest = vec![0x22];
+    context.request_digest = vec![0x33; 32];
+    let mut provider = common::ProviderRequest::new();
+    provider.context = MessageField::some(context);
+    assert_eq!(
+        provider.validate_wire(true),
+        Err(ServiceContractError::InvalidDigest)
+    );
+
+    let mut response = common::ServiceResponse::new();
+    response.outcome = EnumOrUnknown::from_i32(999);
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::InvalidEnum)
+    );
+
+    let mut error = valid_error();
+    error.correlation_id = "x".repeat(65);
+    response.outcome = common::Outcome::OUTCOME_FAILED.into();
+    response.error = MessageField::some(error);
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::InvalidId)
+    );
+
+    let mut observation = common::Observation::new();
+    observation.resource_id = "resource-1".to_owned();
+    observation.generation = 1;
+    observation.state = EnumOrUnknown::from_i32(999);
+    observation.digest = vec![0x44; 32];
+    response.error = MessageField::some(valid_error());
+    response.observations.push(observation);
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::InvalidEnum)
     );
 }
 

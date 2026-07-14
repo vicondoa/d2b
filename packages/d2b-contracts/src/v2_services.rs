@@ -762,10 +762,14 @@ impl StrictWireMessage for common::ServiceRequest {
             || (!self.page_cursor.is_empty()
                 && !bounded_opaque(&self.page_cursor, MAX_PAGE_CURSOR_BYTES))
             || self.page_size > MAX_PAGE_SIZE
-            || !optional_digest(&self.request_digest)
-            || self.desired_state.enum_value().is_err()
         {
             return Err(ServiceContractError::BoundExceeded);
+        }
+        if !optional_digest(&self.request_digest) {
+            return Err(ServiceContractError::InvalidDigest);
+        }
+        if self.desired_state.enum_value().is_err() {
+            return Err(ServiceContractError::InvalidEnum);
         }
         validate_attachments(&self.attachment_indexes)
     }
@@ -783,12 +787,16 @@ fn validate_provider_context(
     if !bounded_opaque(&value.operation_id, MAX_SERVICE_STRING_BYTES)
         || Generation::new(value.provider_generation).is_err()
         || value.policy_epoch == 0
-        || value.provider_type.enum_value().is_err()
-        || value.provider_type.value() == common::ProviderType::PROVIDER_TYPE_UNSPECIFIED.value()
-        || !required_digest(&value.authorization_digest)
-        || !required_digest(&value.request_digest)
     {
         return Err(ServiceContractError::InvalidId);
+    }
+    if value.provider_type.enum_value().is_err()
+        || value.provider_type.value() == common::ProviderType::PROVIDER_TYPE_UNSPECIFIED.value()
+    {
+        return Err(ServiceContractError::InvalidEnum);
+    }
+    if !required_digest(&value.authorization_digest) || !required_digest(&value.request_digest) {
+        return Err(ServiceContractError::InvalidDigest);
     }
     Ok(())
 }
@@ -832,10 +840,14 @@ impl StrictWireMessage for common::ProviderRequest {
                 && !bounded_opaque(&self.binding_id, MAX_SERVICE_STRING_BYTES))
             || (!self.stream_id.is_empty()
                 && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
-            || !optional_digest(&self.plan_digest)
-            || self.desired_state.enum_value().is_err()
         {
             return Err(ServiceContractError::BoundExceeded);
+        }
+        if !optional_digest(&self.plan_digest) {
+            return Err(ServiceContractError::InvalidDigest);
+        }
+        if self.desired_state.enum_value().is_err() {
+            return Err(ServiceContractError::InvalidEnum);
         }
         validate_attachments(&self.attachment_indexes)
     }
@@ -864,10 +876,13 @@ fn validate_error(value: &common::ErrorEnvelope) -> Result<(), ServiceContractEr
         || value.kind.value() == common::ErrorKind::ERROR_KIND_UNSPECIFIED.value()
         || value.retry.enum_value().is_err()
         || value.retry.value() == common::RetryClass::RETRY_CLASS_UNSPECIFIED.value()
-        || (!value.correlation_id.is_empty()
-            && CorrelationId::new(value.correlation_id.as_bytes().to_vec()).is_err())
     {
         return Err(ServiceContractError::InvalidEnum);
+    }
+    if !value.correlation_id.is_empty()
+        && CorrelationId::new(value.correlation_id.as_bytes().to_vec()).is_err()
+    {
+        return Err(ServiceContractError::InvalidId);
     }
     Ok(())
 }
@@ -1081,12 +1096,17 @@ fn validate_observations(values: &[common::Observation]) -> Result<(), ServiceCo
         reject_unknown(value)?;
         if !bounded_opaque(&value.resource_id, MAX_SERVICE_STRING_BYTES)
             || Generation::new(value.generation).is_err()
-            || value.state.enum_value().is_err()
+        {
+            return Err(ServiceContractError::InvalidId);
+        }
+        if value.state.enum_value().is_err()
             || value.state.value()
                 == common::ObservationState::OBSERVATION_STATE_UNSPECIFIED.value()
-            || !required_digest(&value.digest)
         {
-            return Err(ServiceContractError::BoundExceeded);
+            return Err(ServiceContractError::InvalidEnum);
+        }
+        if !required_digest(&value.digest) {
+            return Err(ServiceContractError::InvalidDigest);
         }
     }
     Ok(())
@@ -1097,17 +1117,22 @@ impl StrictWireMessage for common::ServiceResponse {
         reject_unknown(self)?;
         if self.outcome.enum_value().is_err()
             || self.outcome.value() == common::Outcome::OUTCOME_UNSPECIFIED.value()
-            || (!self.operation_id.is_empty()
-                && !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES))
+        {
+            return Err(ServiceContractError::InvalidEnum);
+        }
+        if (!self.operation_id.is_empty()
+            && !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES))
             || (!self.resource_handle.is_empty()
                 && !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES))
             || (!self.stream_id.is_empty()
                 && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
             || (!self.next_page_cursor.is_empty()
                 && !bounded_opaque(&self.next_page_cursor, MAX_PAGE_CURSOR_BYTES))
-            || !optional_digest(&self.result_digest)
         {
             return Err(ServiceContractError::BoundExceeded);
+        }
+        if !optional_digest(&self.result_digest) {
+            return Err(ServiceContractError::InvalidDigest);
         }
         validate_observations(&self.observations)?;
         validate_attachments(&self.attachment_indexes)?;
@@ -1125,14 +1150,19 @@ impl StrictWireMessage for common::ProviderResponse {
         reject_unknown(self)?;
         if self.outcome.enum_value().is_err()
             || self.outcome.value() == common::Outcome::OUTCOME_UNSPECIFIED.value()
-            || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
+        {
+            return Err(ServiceContractError::InvalidEnum);
+        }
+        if !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
             || (!self.resource_handle.is_empty()
                 && !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES))
             || (!self.stream_id.is_empty()
                 && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
-            || !optional_digest(&self.result_digest)
         {
             return Err(ServiceContractError::BoundExceeded);
+        }
+        if !optional_digest(&self.result_digest) {
+            return Err(ServiceContractError::InvalidDigest);
         }
         validate_observations(&self.observations)?;
         validate_attachments(&self.attachment_indexes)?;
@@ -1162,9 +1192,11 @@ impl StrictWireMessage for common::CapabilityResponse {
         if self.capabilities.is_empty()
             || self.capabilities.len() > MAX_PROVIDER_CAPABILITIES
             || self.provider_generation == 0
-            || !required_digest(&self.descriptor_digest)
         {
             return Err(ServiceContractError::BoundExceeded);
+        }
+        if !required_digest(&self.descriptor_digest) {
+            return Err(ServiceContractError::InvalidDigest);
         }
         let mut unique = BTreeSet::new();
         for capability in &self.capabilities {
