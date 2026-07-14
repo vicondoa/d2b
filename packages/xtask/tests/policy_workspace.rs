@@ -6,6 +6,14 @@ use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const FOCUSED_POLICY_PACKAGES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const V2_FOUNDATION_CRATES: &[&str] = &[
+    "d2b-client",
+    "d2b-provider",
+    "d2b-provider-toolkit",
+    "d2b-session",
+    "d2b-state",
+    "d2b-unix-session",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -102,6 +110,7 @@ fn focused_packages_share_workspace_lock_and_keep_supply_chain_policy() {
             let path = root.join("packages").join(package).join(required);
             assert!(path.exists(), "{} must exist", path.display());
         }
+
         assert!(
             !root
                 .join("packages")
@@ -113,6 +122,42 @@ fn focused_packages_share_workspace_lock_and_keep_supply_chain_policy() {
         assert!(
             flake.contains(&format!("packages/{package}/deny.toml")),
             "flake supply-chain gates must cover {package}"
+        );
+    }
+}
+
+#[test]
+fn v2_foundation_crates_are_default_empty_and_not_publishable() {
+    let root = repo_root();
+    let workspace = read_repo_file("packages/Cargo.toml");
+    for package in V2_FOUNDATION_CRATES {
+        assert!(
+            workspace.contains(&format!("\"{package}\""))
+                && workspace.contains(&format!(
+                    "{package} = {{ path = \"{package}\", version = \"2.0.0\", default-features = false }}"
+                )),
+            "workspace must own {package} with default features disabled"
+        );
+        let manifest = read_repo_file(&format!("packages/{package}/Cargo.toml"));
+        for required in [
+            "version.workspace = true",
+            "rust-version.workspace = true",
+            "publish = false",
+            "[features]\ndefault = []",
+            "[lints]\nworkspace = true",
+        ] {
+            assert!(
+                manifest.contains(required),
+                "{package} manifest is missing {required:?}"
+            );
+        }
+        assert!(
+            !root
+                .join("packages")
+                .join(package)
+                .join("Cargo.lock")
+                .exists(),
+            "{package} must use the workspace lockfile"
         );
     }
 }

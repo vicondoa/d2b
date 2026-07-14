@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "program": "adr0045",
-  "wave": "w2",
+  "wave": "w3",
   "authority_repository": "github.com/vicondoa/d2b",
   "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
   "repositories": [
@@ -9,15 +9,15 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-w2-integrated"
+      "integration_ref": "adr0045-w3-integrated"
     }
   ],
   "stack_nodes": [
     {
-      "id": "d2b-w2",
+      "id": "d2b-w3",
       "repository": "github.com/vicondoa/d2b",
-      "branch": "adr0045-w2-integrated",
-      "pr_number": 311,
+      "branch": "adr0045-w3-integrated",
+      "pr_number": 312,
       "external_dependencies": []
     }
   ],
@@ -40,7 +40,7 @@
   ],
   "required_checks": [
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "check",
       "publisher": {
         "kind": "check_run",
@@ -51,7 +51,7 @@
       }
     },
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "eval",
       "publisher": {
         "kind": "check_run",
@@ -62,7 +62,7 @@
       }
     },
     {
-      "node": "d2b-w2",
+      "node": "d2b-w3",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
