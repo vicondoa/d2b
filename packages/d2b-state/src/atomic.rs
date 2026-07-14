@@ -7,15 +7,16 @@ use std::{
 
 use d2b_contracts::v2_state::{
     AtomicWritePhase, AtomicWriteReceipt, AuthorityRef, CanonicalPayloadVerifier, Digest,
-    Generation, MAX_JSON_DOCUMENT_BYTES, QuarantineReason, Remediation, STATE_SCHEMA_GENERATION,
-    STATE_SCHEMA_VERSION, StateContractError, StateEnvelope, state_payload_digest,
+    Generation, MAX_JSON_DOCUMENT_BYTES, OwnershipEpoch, QuarantineReason, Remediation,
+    STATE_SCHEMA_GENERATION, STATE_SCHEMA_VERSION, StateContractError, StateEnvelope,
+    state_payload_digest,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
 use sha2::{Digest as _, Sha256};
 
-use crate::{AnchoredResource, Error, ErrorCode, LeafName, Result};
+use crate::{AnchoredResource, Error, ErrorCode, LeafName, LockGuard, Result};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -65,6 +66,8 @@ pub struct WritePolicy {
     pub config_generation: Generation,
     pub state_generation: Generation,
     pub expected_previous: Option<Generation>,
+    pub lock_id: d2b_contracts::v2_state::ResourceId,
+    pub ownership_epoch: OwnershipEpoch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +82,9 @@ pub struct DurableState<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuarantineRecord {
     pub resource_id: d2b_contracts::v2_state::ResourceId,
+    pub lock_id: d2b_contracts::v2_state::ResourceId,
+    pub writer: AuthorityRef,
+    pub ownership_epoch: OwnershipEpoch,
     pub reason: QuarantineReason,
     pub remediation: Remediation,
     pub observed_document_digest: Option<Digest>,
@@ -87,6 +93,9 @@ pub struct QuarantineRecord {
 impl QuarantineRecord {
     pub fn for_error(
         resource_id: d2b_contracts::v2_state::ResourceId,
+        lock_id: d2b_contracts::v2_state::ResourceId,
+        writer: AuthorityRef,
+        ownership_epoch: OwnershipEpoch,
         error: &Error,
         bytes: Option<&[u8]>,
     ) -> Self {
@@ -110,6 +119,9 @@ impl QuarantineRecord {
         };
         Self {
             resource_id,
+            lock_id,
+            writer,
+            ownership_epoch,
             reason,
             remediation,
             observed_document_digest: bytes.map(document_digest),
@@ -278,10 +290,21 @@ impl<F: AtomicFilesystem> AtomicWrite<F> {
         raw.decode(policy)
     }
 
-    pub fn write<T>(&mut self, payload: &T, policy: &WritePolicy) -> Result<AtomicWriteReceipt>
+    pub fn write<T>(
+        &mut self,
+        payload: &T,
+        policy: &WritePolicy,
+        guard: Option<&LockGuard>,
+    ) -> Result<AtomicWriteReceipt>
     where
         T: DeserializeOwned + Serialize + PartialEq,
     {
+        self.validate_lock(
+            guard,
+            &policy.lock_id,
+            &policy.writer,
+            policy.ownership_epoch,
+        )?;
         policy.metadata.validate()?;
         self.validate_generation_before_write::<T>(policy)?;
         let payload_bytes = CanonicalJson::encode(payload)?;
@@ -384,7 +407,20 @@ impl<F: AtomicFilesystem> AtomicWrite<F> {
         Ok(())
     }
 
-    pub fn quarantine(&mut self, record: &QuarantineRecord) -> Result<()> {
+    pub fn quarantine(
+        &mut self,
+        record: &QuarantineRecord,
+        guard: Option<&LockGuard>,
+    ) -> Result<()> {
+        if record.resource_id != *self.filesystem.resource_id() {
+            return Err(Error::Code(ErrorCode::LockMismatch));
+        }
+        self.validate_lock(
+            guard,
+            &record.lock_id,
+            &record.writer,
+            record.ownership_epoch,
+        )?;
         let name = LeafName::parse(format!(
             "quarantine-{}-{}",
             record.resource_id.as_str(),
@@ -396,6 +432,23 @@ impl<F: AtomicFilesystem> AtomicWrite<F> {
 
     pub fn into_inner(self) -> F {
         self.filesystem
+    }
+
+    fn validate_lock(
+        &self,
+        guard: Option<&LockGuard>,
+        lock_id: &d2b_contracts::v2_state::ResourceId,
+        writer: &AuthorityRef,
+        ownership_epoch: OwnershipEpoch,
+    ) -> Result<()> {
+        guard
+            .ok_or(Error::Code(ErrorCode::LockRequired))?
+            .validate_state_binding(
+                lock_id,
+                self.filesystem.resource_id(),
+                writer,
+                ownership_epoch,
+            )
     }
 }
 
