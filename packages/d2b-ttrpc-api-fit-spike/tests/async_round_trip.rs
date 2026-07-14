@@ -1,6 +1,6 @@
 use std::{
-    fs,
-    path::{Path, PathBuf},
+    env, fs,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -32,14 +32,13 @@ struct SocketFixture {
 
 impl SocketFixture {
     fn new() -> Self {
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("crate lives under the repository packages directory");
+        let socket_root = env::var_os("D2B_VALIDATION_SOCKET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir);
 
         for _ in 0..100 {
             let nonce = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let dir = repo_root.join(format!(
+            let dir = socket_root.join(format!(
                 ".ttrpc-api-fit-spike.{}.{nonce}",
                 std::process::id()
             ));
