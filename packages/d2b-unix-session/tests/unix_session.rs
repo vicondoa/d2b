@@ -13,8 +13,9 @@ use d2b_unix_session::{
     AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
     OutboundPacket, OwnedUnixAttachment, PeerIdentityPolicy, PidfdEvidence, PidfdIdentityPolicy,
     PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
-    SentPacket, SeqpacketSocket, StreamSocket, UnixAttachmentPayload, UnixSeqpacketTransport,
-    UnixSessionError, UnixStreamTransport, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
+    SentPacket, SeqpacketSocket, StreamRead, StreamSocket, UnixAttachmentPayload,
+    UnixSeqpacketTransport, UnixSessionError, UnixStreamTransport, parse_pidfd_fdinfo,
+    prearmed_seqpacket_pair,
 };
 use rustix::{
     fd::BorrowedFd,
@@ -32,7 +33,7 @@ use std::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -89,6 +90,28 @@ fn seqpacket_pair() -> (SeqpacketSocket, SeqpacketSocket) {
     )
 }
 
+fn stream_pair() -> (StreamSocket, StreamSocket) {
+    let (left, right) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    (
+        StreamSocket::from_owned(left).unwrap(),
+        StreamSocket::from_owned(right).unwrap(),
+    )
+}
+
+fn protected_record(payload: &[u8]) -> Vec<u8> {
+    let length = u16::try_from(payload.len()).unwrap();
+    let mut record = Vec::with_capacity(payload.len() + 2);
+    record.extend_from_slice(&length.to_be_bytes());
+    record.extend_from_slice(payload);
+    record
+}
+
 fn descriptor(
     index: u16,
     object_type: KernelObjectType,
@@ -136,6 +159,10 @@ fn ancillary_capacity_is_derived_from_closed_hard_bounds() {
     assert_eq!(maximum.max_files(), 32);
     assert!(maximum.credentials_allowed());
     assert!(maximum.bytes() > one.bytes());
+    let credentials_only = AncillaryCapacity::from_policy(attachment_policy(0, true)).unwrap();
+    assert_eq!(credentials_only.max_files(), 0);
+    assert!(credentials_only.credentials_allowed());
+    assert!(credentials_only.bytes() > 0);
     assert_eq!(
         AncillaryCapacity::from_policy(attachment_policy(33, false)),
         Err(UnixSessionError::AncillaryCapacity)
@@ -497,17 +524,20 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let mut stream_sender = UnixStreamTransport::new(
         StreamSocket::from_owned(left).unwrap(),
         d2b_contracts::v2_component_session::Locality::HostLocal,
+        LimitProfile::local_default(),
     );
     let mut stream_receiver = UnixStreamTransport::new(
         StreamSocket::from_owned(right).unwrap(),
         d2b_contracts::v2_component_session::Locality::HostLocal,
+        LimitProfile::local_default(),
     );
+    let stream_record = protected_record(b"stream-record");
     stream_sender
-        .send(TransportPacket::new(b"stream-record".to_vec()))
+        .send(TransportPacket::new(stream_record.clone()))
         .await
         .unwrap();
     let stream_packet = stream_receiver.receive(64).await.unwrap();
-    assert_eq!(stream_packet.as_bytes(), b"stream-record");
+    assert_eq!(stream_packet.as_bytes(), stream_record);
     let (stream_read, _stream_write) = pipe_with(PipeFlags::CLOEXEC).unwrap();
     let stream_identity = ObjectIdentity::from_trusted(
         &stream_read,
@@ -532,6 +562,113 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     );
     stream_sender.close().await.unwrap();
     stream_receiver.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_transport_reassembles_partial_and_coalesced_records() {
+    let (sender, receiver) = stream_pair();
+    let first = protected_record(b"first-record");
+    let second = protected_record(b"second-record");
+    let first_for_sender = first.clone();
+    let second_for_sender = second.clone();
+    let sender_task = tokio::spawn(async move {
+        sender.write_all(&first_for_sender[..1]).await.unwrap();
+        tokio::task::yield_now().await;
+        sender.write_all(&first_for_sender[1..4]).await.unwrap();
+        tokio::task::yield_now().await;
+        let mut coalesced = first_for_sender[4..].to_vec();
+        coalesced.extend_from_slice(&second_for_sender);
+        sender.write_all(&coalesced).await.unwrap();
+    });
+    let mut receiver =
+        UnixStreamTransport::new(receiver, Locality::HostLocal, LimitProfile::local_default());
+    assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), first);
+    assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), second);
+    sender_task.await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_transport_distinguishes_clean_and_partial_eof() {
+    let (sender, receiver) = stream_pair();
+    sender.close().unwrap();
+    let mut receiver =
+        UnixStreamTransport::new(receiver, Locality::HostLocal, LimitProfile::local_default());
+    assert!(matches!(
+        receiver.receive(64).await,
+        Err(d2b_session::TransportError::Disconnected)
+    ));
+
+    let (sender, receiver) = stream_pair();
+    sender.write_all(&[0]).await.unwrap();
+    sender.close().unwrap();
+    let mut receiver =
+        UnixStreamTransport::new(receiver, Locality::HostLocal, LimitProfile::local_default());
+    assert!(matches!(
+        receiver.receive(64).await,
+        Err(d2b_session::TransportError::Truncated)
+    ));
+
+    let (sender, receiver) = stream_pair();
+    sender.write_all(&[0, 3, 1]).await.unwrap();
+    sender.close().unwrap();
+    let mut receiver =
+        UnixStreamTransport::new(receiver, Locality::HostLocal, LimitProfile::local_default());
+    assert!(matches!(
+        receiver.receive(64).await,
+        Err(d2b_session::TransportError::Truncated)
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_socket_zero_byte_read_is_exact_graceful_eof() {
+    let (sender, receiver) = stream_pair();
+    sender.close().unwrap();
+    let mut output = Vec::new();
+    for _ in 0..2 {
+        let read = tokio::time::timeout(
+            Duration::from_secs(1),
+            receiver.read_available(&mut output, 16, 8),
+        )
+        .await
+        .expect("EOF read must terminate")
+        .unwrap();
+        assert_eq!(
+            read,
+            StreamRead {
+                bytes: 0,
+                eof: true,
+                drained_to_would_block: false,
+            }
+        );
+        assert!(output.is_empty());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_transport_rejects_oversize_and_incomplete_records() {
+    let mut limits = LimitProfile::local_default();
+    limits.protected_ciphertext_bytes = 4;
+
+    let (sender, receiver) = stream_pair();
+    sender.write_all(&5_u16.to_be_bytes()).await.unwrap();
+    let mut receiver = UnixStreamTransport::new(receiver, Locality::HostLocal, limits);
+    assert!(matches!(
+        receiver.receive(6).await,
+        Err(d2b_session::TransportError::LimitExceeded)
+    ));
+
+    let (sender, _receiver) = stream_pair();
+    let mut sender = UnixStreamTransport::new(sender, Locality::HostLocal, limits);
+    assert_eq!(
+        sender
+            .send(TransportPacket::new(protected_record(&[0; 5])))
+            .await,
+        Err(d2b_session::TransportError::LimitExceeded)
+    );
+    assert_eq!(
+        sender.send(TransportPacket::new(vec![0, 2, 1])).await,
+        Err(d2b_session::TransportError::Truncated)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -580,6 +717,51 @@ async fn inherited_transport_consumes_stable_credentials_as_identity_evidence() 
         assert_eq!(actual, payload);
         assert!(attachments.is_empty());
     }
+    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inherited_transport_handshakes_with_zero_semantic_fd_capacity() {
+    let _serial = serialize_fd_test().await;
+    let (left, right) = prearmed_seqpacket_pair().unwrap();
+    let sender_socket = SeqpacketSocket::from_parent_prearmed(left).unwrap();
+    let receiver_socket = SeqpacketSocket::from_parent_prearmed(right).unwrap();
+    let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+    let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
+    let (sender_scopes, sender_pools) = scopes(1);
+    let (receiver_scopes, receiver_pools) = scopes(1);
+    let resolver =
+        Arc::new(move |_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch));
+    let mut sender = UnixSeqpacketTransport::new(
+        sender_socket,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        AttachmentPolicy::disabled(),
+        sender_scopes,
+        resolver.clone(),
+        PeerIdentityPolicy::inherited_socketpair(sender_peer),
+    )
+    .unwrap();
+    let mut receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        AttachmentPolicy::disabled(),
+        receiver_scopes,
+        resolver,
+        PeerIdentityPolicy::inherited_socketpair(receiver_peer),
+    )
+    .unwrap();
+
+    sender
+        .send(TransportPacket::new(b"preface".to_vec()))
+        .await
+        .unwrap();
+    let received = receiver.receive(64).await.unwrap();
+    let (bytes, attachments) = received.into_parts();
+    assert_eq!(bytes, b"preface");
+    assert!(attachments.is_empty());
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
 }

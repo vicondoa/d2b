@@ -308,7 +308,10 @@ impl UnixSeqpacketTransport {
         peer_identity: PeerIdentityPolicy,
     ) -> Result<Self, UnixSessionError> {
         let class = peer_identity.transport_class();
-        if policy.kind != AttachmentPolicyKind::PacketAtomic {
+        if !matches!(
+            policy.kind,
+            AttachmentPolicyKind::PacketAtomic | AttachmentPolicyKind::Disabled
+        ) {
             return Err(UnixSessionError::InvalidSocket);
         }
         policy
@@ -329,6 +332,7 @@ impl UnixSeqpacketTransport {
             peer_identity,
             ActivePeerIdentityPolicy::InheritedSocketpair { .. }
         ) {
+            ancillary_policy.kind = AttachmentPolicyKind::PacketAtomic;
             ancillary_policy.credentials_allowed = true;
         }
         let capacity = AncillaryCapacity::from_policy(ancillary_policy)?;
@@ -402,10 +406,17 @@ impl UnixSeqpacketTransport {
             PeerPacketPhase::Established
         };
         consume_peer_credentials(self.peer_identity, phase, &mut controls)?;
+        let file_count = controls
+            .iter()
+            .filter(|control| matches!(control, ReceivedControl::File(_)))
+            .count();
+        if file_count > usize::from(self.policy.max_per_packet) {
+            return Err(UnixSessionError::CreditExceeded);
+        }
         let packet_state = Arc::new(ReceivedPacketState::new(
             credits,
             self.credits.clone(),
-            controls.len(),
+            file_count,
         ));
         let attachments = controls
             .into_iter()
@@ -538,6 +549,7 @@ impl OwnedTransport for UnixSeqpacketTransport {
 pub struct UnixStreamTransport {
     socket: StreamSocket,
     locality: Locality,
+    limits: LimitProfile,
     closed: bool,
 }
 
@@ -546,18 +558,55 @@ impl fmt::Debug for UnixStreamTransport {
         formatter
             .debug_struct("UnixStreamTransport")
             .field("locality", &self.locality)
+            .field(
+                "protected_ciphertext_limit",
+                &self.limits.protected_ciphertext_bytes,
+            )
             .field("closed", &self.closed)
             .finish_non_exhaustive()
     }
 }
 
 impl UnixStreamTransport {
-    pub fn new(socket: StreamSocket, locality: Locality) -> Self {
+    pub fn new(socket: StreamSocket, locality: Locality, limits: LimitProfile) -> Self {
         Self {
             socket,
             locality,
+            limits,
             closed: false,
         }
+    }
+
+    fn configured_wire_limit(&self) -> Result<usize, TransportError> {
+        usize::try_from(self.limits.protected_ciphertext_bytes)
+            .map_err(|_| TransportError::LimitExceeded)?
+            .checked_add(2)
+            .ok_or(TransportError::LimitExceeded)
+    }
+
+    async fn read_exact_record_bytes(
+        &self,
+        output: &mut Vec<u8>,
+        target_len: usize,
+    ) -> Result<(), TransportError> {
+        while output.len() < target_len {
+            let remaining = target_len
+                .checked_sub(output.len())
+                .ok_or(TransportError::LimitExceeded)?;
+            let received = self
+                .socket
+                .read_available(output, remaining, 1)
+                .await
+                .map_err(map_transport_error)?;
+            if received.eof {
+                return if output.is_empty() {
+                    Err(TransportError::Disconnected)
+                } else {
+                    Err(TransportError::Truncated)
+                };
+            }
+        }
+        Ok(())
     }
 }
 
@@ -576,18 +625,23 @@ impl OwnedTransport for UnixStreamTransport {
         if self.closed {
             return Err(TransportError::Disconnected);
         }
-        if protected_limit == 0 {
+        let configured_wire_limit = self.configured_wire_limit()?;
+        if protected_limit < 2 || protected_limit > configured_wire_limit {
             return Err(TransportError::LimitExceeded);
         }
-        let mut bytes = Vec::new();
-        let received = self
-            .socket
-            .read_available(&mut bytes, protected_limit, 64)
-            .await
-            .map_err(map_transport_error)?;
-        if received.eof && bytes.is_empty() {
-            return Err(TransportError::Disconnected);
+        let mut bytes = Vec::with_capacity(2);
+        self.read_exact_record_bytes(&mut bytes, 2).await?;
+        let declared = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+        let wire_len = declared
+            .checked_add(2)
+            .ok_or(TransportError::LimitExceeded)?;
+        if wire_len > protected_limit || wire_len > configured_wire_limit {
+            return Err(TransportError::LimitExceeded);
         }
+        bytes
+            .try_reserve_exact(declared)
+            .map_err(|_| TransportError::LimitExceeded)?;
+        self.read_exact_record_bytes(&mut bytes, wire_len).await?;
         Ok(TransportPacket::new(bytes))
     }
 
@@ -598,6 +652,21 @@ impl OwnedTransport for UnixStreamTransport {
         let (bytes, attachments) = packet.into_parts();
         if !attachments.is_empty() {
             return Err(TransportError::InvalidAttachment);
+        }
+        let configured_wire_limit = self.configured_wire_limit()?;
+        if bytes.len() < 2 {
+            return Err(TransportError::Truncated);
+        }
+        let declared = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+        if declared
+            .checked_add(2)
+            .ok_or(TransportError::LimitExceeded)?
+            != bytes.len()
+        {
+            return Err(TransportError::Truncated);
+        }
+        if bytes.len() > configured_wire_limit {
+            return Err(TransportError::LimitExceeded);
         }
         self.socket
             .write_all(&bytes)

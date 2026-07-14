@@ -42,7 +42,7 @@ pub struct AncillaryCapacity {
 impl AncillaryCapacity {
     pub fn from_policy(policy: AttachmentPolicy) -> Result<Self, UnixSessionError> {
         if policy.kind != AttachmentPolicyKind::PacketAtomic
-            || policy.max_per_packet == 0
+            || (policy.max_per_packet == 0 && !policy.credentials_allowed)
             || policy.max_per_packet > MAX_PACKET_ATTACHMENTS
         {
             return Err(UnixSessionError::AncillaryCapacity);
@@ -110,17 +110,17 @@ impl OutboundPacket {
         if payload.is_empty() {
             return Err(UnixSessionError::EmptyPacket);
         }
-        let attachment_count = files.len() + usize::from(credentials.is_some());
+        let file_count = files.len();
         if payload.len()
             > usize::try_from(limits.protected_ciphertext_bytes)
                 .map_err(|_| UnixSessionError::PayloadLimit)?
-            || attachment_count > capacity.max_files
+            || file_count > capacity.max_files
             || (credentials.is_some() && !capacity.credentials_allowed)
         {
             return Err(UnixSessionError::PayloadLimit);
         }
         let credits = credit_scopes
-            .reserve(attachment_count)
+            .reserve(file_count)
             .map_err(|_| UnixSessionError::CreditExceeded)?;
         Ok(Self {
             payload,
@@ -242,8 +242,12 @@ impl SeqpacketSocket {
             {
                 Ok(Ok((payload, controls, unknown_control))) => {
                     let first_on_socket = !self.received_any.swap(true, Ordering::AcqRel);
+                    let file_count = controls
+                        .iter()
+                        .filter(|control| matches!(control, ReceivedControl::File(_)))
+                        .count();
                     let credits = ingress_credit_scopes
-                        .reserve_ingress(controls.len())
+                        .reserve_ingress(file_count)
                         .map_err(|_| UnixSessionError::CreditExceeded)?;
                     packets.push(ReceivedPacket {
                         payload,
