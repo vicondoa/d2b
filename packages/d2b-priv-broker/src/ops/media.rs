@@ -2752,7 +2752,7 @@ mod tests {
 
     #[test]
     fn registry_writes_runtime_only_root_private_modes() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("registry tempdir");
+        let dir = crate::test_tempdir("media-registry");
         let root = dir.path().join("registry");
         let uid = rustix::process::getuid().as_raw();
         let gid = rustix::process::getgid().as_raw();
@@ -2790,7 +2790,7 @@ mod tests {
 
     #[test]
     fn runtime_udev_rules_are_root_private_and_cover_partitions() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("udev tempdir");
+        let dir = crate::test_tempdir("media-udev");
         let path = dir
             .path()
             .join("run/udev/rules.d/99-d2b-media-ignore.rules");
@@ -2964,7 +2964,7 @@ mod tests {
 
     #[test]
     fn read_usb_identity_for_selector_uses_injected_roots_and_fails_closed() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("selector tempdir");
+        let dir = crate::test_tempdir("media-selector");
         let sysfs_root = dir.path().join("sys");
         let by_id_root = dir.path().join("by-id");
         write_usb_candidate_fixture(
@@ -3008,7 +3008,7 @@ mod tests {
 
     #[test]
     fn declared_selector_artifacts_write_registry_index_and_udev_rules() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("boot artifacts tempdir");
+        let dir = crate::test_tempdir("media-boot-artifacts");
         let registry_root = dir.path().join("registry");
         let redacted_index = dir.path().join("run/d2b/qemu-media-registry-index.json");
         let rules_path = dir
@@ -3155,7 +3155,7 @@ mod tests {
             image
         ));
 
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = crate::test_tempdir("media-preflight");
         let loop_dir = root.path().join("block/loop0/loop");
         std::fs::create_dir_all(&loop_dir).expect("loop dir");
         std::fs::write(
@@ -3189,7 +3189,7 @@ mod tests {
 
     #[test]
     fn image_fd_locking_fails_when_already_locked() {
-        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("image tempdir");
+        let dir = crate::test_tempdir("media-image");
         let path = dir.path().join("installer.img");
         std::fs::write(&path, b"not a real disk image").expect("image file");
 
