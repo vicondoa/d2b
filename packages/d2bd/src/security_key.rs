@@ -918,8 +918,7 @@ mod tests {
 
     fn test_scratch_dir(name: &str) -> PathBuf {
         static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
-        let root = PathBuf::from("t").join("sk");
-        fs::create_dir_all(&root).expect("create security-key test root");
+        let root = crate::test_socket_root("sk");
         let dir = root.join(format!(
             "{name}-{}-{}",
             std::process::id(),

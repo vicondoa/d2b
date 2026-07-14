@@ -107,6 +107,8 @@ deprecations ship one minor release before removal.
   verification works outside the development shell.
 - Corrected the unsafe-local graphical readiness test to exercise its declared
   runtime-directory socket instead of a checkout-relative shadow path.
+- Routed d2bd config, broker-dispatch, and security-key test fixtures through
+  validation-owned output and short socket roots.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

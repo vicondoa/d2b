@@ -246,6 +246,32 @@ pub mod concurrency;
 // `d2b-priv-broker`'s `OpenHidrawSecurityKey` op via `SCM_RIGHTS`.
 pub mod security_key;
 
+#[cfg(test)]
+pub(crate) fn test_output_root(component: &str) -> PathBuf {
+    let root = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+        .map(PathBuf::from)
+        .map(|root| root.join("rust-test-scratch/d2bd"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch"))
+        .join(component);
+    fs::create_dir_all(&root).expect("create d2bd test output root");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+        .expect("harden d2bd test output root");
+    root
+}
+
+#[cfg(test)]
+pub(crate) fn test_socket_root(component: &str) -> PathBuf {
+    let root = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(component);
+    fs::create_dir_all(&root).expect("create d2bd test socket root");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+        .expect("harden d2bd test socket root");
+    root
+}
+
 // Compile-only peer-module skeletons wiring the realm
 // provider/router trait surface. NOT called from the running
 // daemon (zero behavior change); see the module docs.
@@ -893,7 +919,7 @@ mod config_loading_tests {
     use super::*;
 
     fn temp_root() -> tempfile::TempDir {
-        tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("temp config root")
+        tempfile::tempdir_in(test_output_root("config")).expect("temp config root")
     }
 
     fn realm_controllers_json() -> &'static str {
@@ -23751,8 +23777,7 @@ mod broker_dispatch_tests {
     }
 
     fn test_daemon_state_dir(test_name: &str) -> PathBuf {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("t");
-        fs::create_dir_all(&dir).expect("create broker dispatch scratch dir");
+        let dir = crate::test_output_root("broker-dispatch");
         let state_dir = dir.join(format!(
             "{test_name}-{}-{}",
             std::process::id(),
@@ -23839,8 +23864,9 @@ mod broker_dispatch_tests {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let base = std::env::var_os("XDG_RUNTIME_DIR")
+        let base = std::env::var_os("D2B_VALIDATION_SOCKET_DIR")
             .map(PathBuf::from)
+            .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
             .or_else(|| {
                 let candidate = PathBuf::from("/run/user")
                     .join(nix::unistd::Uid::current().as_raw().to_string());
@@ -26026,8 +26052,7 @@ mod broker_dispatch_tests {
 
         let store_marker = daemon_state_dir.join("store-marker");
         fs::write(&store_marker, b"ok").expect("write store marker");
-        let short_socket_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target");
-        fs::create_dir_all(&short_socket_dir).expect("create short socket dir");
+        let short_socket_dir = crate::test_socket_root("vm-start");
         let socket_id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
         let share_ro_socket = short_socket_dir.join(format!("vm-start-ro-{socket_id}.sock"));
         let share_meta_socket = short_socket_dir.join(format!("vm-start-meta-{socket_id}.sock"));
