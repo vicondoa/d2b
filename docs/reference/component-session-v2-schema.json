@@ -169,7 +169,8 @@
             "hidraw",
             "pty-master",
             "pty-slave",
-            "wayland-socket"
+            "wayland-socket",
+            "process-credentials"
           ],
           "type": "string"
         },

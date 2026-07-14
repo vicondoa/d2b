@@ -190,9 +190,11 @@ No numeric or raw file descriptor is serialized. Payload and ancillary data
 arrive in one packet. Message truncation, control truncation, unknown control,
 missing or extra descriptors, order mismatch, absent `CLOEXEC`, policy
 mismatch, and credit exhaustion are fatal before semantic dispatch. Credit
-arithmetic is checked at all six scopes. A `credentials` descriptor is accepted
+arithmetic is checked at all six scopes. A `credentials` descriptor represents
+exactly one `SCM_CREDENTIALS` control record as `process-credentials`; it is not
+a pidfd or another `SCM_RIGHTS` object, has no `CLOEXEC` claim, and is accepted
 only when the exact negotiated attachment policy sets
-`credentialsAllowed = true`; count and credit validation still fail first when
+`credentialsAllowed = true`. Count and credit validation still fail first when
 those bounds are violated.
 
 ## Errors and telemetry

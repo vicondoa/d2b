@@ -726,7 +726,8 @@ fn attachments_are_packet_atomic_and_exactly_accounted() {
 
     let mut credentials_descriptor = descriptor(0);
     credentials_descriptor.kind = AttachmentKind::Credentials;
-    credentials_descriptor.object_type = KernelObjectType::UnixSeqpacketSocket;
+    credentials_descriptor.object_type = KernelObjectType::ProcessCredentials;
+    credentials_descriptor.cloexec_required = false;
     let credentials = AttachmentPacket {
         declared_count: 1,
         descriptors: BoundedVec::new(vec![credentials_descriptor.clone()]).unwrap(),
@@ -740,6 +741,18 @@ fn attachments_are_packet_atomic_and_exactly_accounted() {
     assert_eq!(
         credentials.validate(packet_policy(), 1, false, false, false),
         Ok(())
+    );
+    let mut pidfd_credentials = credentials.clone();
+    pidfd_credentials.descriptors[0].object_type = KernelObjectType::Pidfd;
+    assert_eq!(
+        pidfd_credentials.validate(packet_policy(), 1, false, false, false),
+        Err(AttachmentReceiveError::DescriptorMismatch)
+    );
+    let mut credentials_as_fd = credentials.clone();
+    credentials_as_fd.descriptors[0].kind = AttachmentKind::FileDescriptor;
+    assert_eq!(
+        credentials_as_fd.validate(packet_policy(), 1, false, false, false),
+        Err(AttachmentReceiveError::DescriptorMismatch)
     );
     assert_eq!(
         credentials.validate(credentials_disabled, 0, false, false, false),

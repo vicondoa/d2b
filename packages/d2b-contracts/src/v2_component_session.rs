@@ -1792,7 +1792,8 @@ closed_enum!(KernelObjectType {
     Hidraw = 14 => "hidraw",
     PtyMaster = 15 => "pty-master",
     PtySlave = 16 => "pty-slave",
-    WaylandSocket = 17 => "wayland-socket"
+    WaylandSocket = 17 => "wayland-socket",
+    ProcessCredentials = 18 => "process-credentials"
 });
 
 closed_enum!(AttachmentAccess {
@@ -1846,7 +1847,6 @@ impl AttachmentDescriptor {
     pub fn validate(&self, expected_index: u16) -> Result<(), ContractError> {
         if self.index != expected_index
             || self.reconnect_generation == 0
-            || !self.cloexec_required
             || self.credit_classes.as_slice()
                 != [
                     AttachmentCreditClass::Packet,
@@ -1856,8 +1856,19 @@ impl AttachmentDescriptor {
                     AttachmentCreditClass::Process,
                     AttachmentCreditClass::Host,
                 ]
-            || (self.kind == AttachmentKind::Credentials
-                && self.object_type != KernelObjectType::UnixSeqpacketSocket)
+            || match self.kind {
+                AttachmentKind::FileDescriptor => {
+                    !self.cloexec_required
+                        || self.object_type == KernelObjectType::ProcessCredentials
+                }
+                AttachmentKind::Credentials => {
+                    self.cloexec_required
+                        || self.object_type != KernelObjectType::ProcessCredentials
+                        || self.access != AttachmentAccess::ReadOnly
+                        || self.purpose != AttachmentPurpose::ProcessIdentity
+                        || self.duplicate_object_allowed
+                }
+            }
         {
             return Err(ContractError::InvalidAttachment);
         }
