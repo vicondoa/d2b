@@ -19,11 +19,12 @@ use d2b_contracts::v2_component_session::{
     RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
 };
 use d2b_session::{
-    AttachmentPayload, BootstrapAdmission, BootstrapPsk, DeadlineBudget, FairScheduler, Fragmenter,
-    HandshakeCredentials, HandshakeRole, KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux,
-    NoiseHandshake, OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler,
-    RecordProtector, Secret32, SessionEngine, SessionEvent, SessionLifecycle, StreamEvent,
-    StreamId, StreamPhase, TransportDescriptor, TransportError, TransportPacket, negotiate_offer,
+    AttachmentPayload, BootstrapAdmission, BootstrapPsk, ComponentSessionDriver, DeadlineBudget,
+    FairScheduler, Fragmenter, HandshakeCredentials, HandshakeRole, KeepaliveAction, MetricEvent,
+    MetricsSink, NamedStreamMux, NoiseHandshake, OutboundFrame, OwnedAttachment, OwnedTransport,
+    QueueClass, Reassembler, RecordProtector, Secret32, SessionEngine, SessionEvent,
+    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportDescriptor, TransportError,
+    TransportPacket, negotiate_offer,
 };
 use snow::{
     params::DHChoice,
@@ -889,14 +890,17 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     let (mut initiator, mut responder, _) = engine_pair().await;
     let request_id = RequestId::new(vec![0x61; 16]).unwrap();
     let payload = vec![0x5a; 200_000];
-    let cancelled = initiator
-        .call(request_id.clone(), payload.clone())
-        .await
-        .unwrap();
+    let cancelled =
+        ComponentSessionDriver::invoke(&mut initiator, request_id.clone(), payload.clone())
+            .await
+            .unwrap();
     assert_eq!(receive_ttrpc(&mut responder).await, payload);
 
     let inbound = responder.register_inbound_call(request_id.clone()).unwrap();
-    initiator.cancel_call(&request_id).await.unwrap();
+    let generation = ComponentSessionDriver::generation(&initiator);
+    ComponentSessionDriver::cancel(&mut initiator, generation, &request_id)
+        .await
+        .unwrap();
     let event = responder.receive().await.unwrap();
     assert!(matches!(
         event,
@@ -907,7 +911,9 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     ));
     assert!(inbound.is_cancelled());
     assert!(matches!(
-        initiator.receive().await.unwrap(),
+        ComponentSessionDriver::receive(&mut initiator)
+            .await
+            .unwrap(),
         SessionEvent::CancelAck(CancelAck {
             result: CancelResult::CancelledBeforeDispatch,
             ..

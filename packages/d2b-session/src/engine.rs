@@ -27,8 +27,6 @@ const STREAM_CREDIT: u8 = 2;
 const STREAM_RESET: u8 = 3;
 const ATTACHMENT_DESCRIPTOR_BYTES: usize = 62;
 
-pub type ComponentSessionDriver<T> = SessionEngine<T>;
-
 pub enum SessionEvent {
     Ttrpc(Vec<u8>),
     NamedStream(StreamEvent),

@@ -9,6 +9,7 @@ mod attachment;
 mod bootstrap;
 mod cancellation;
 mod deadline;
+mod driver;
 mod engine;
 mod error;
 mod fragmentation;
@@ -23,7 +24,8 @@ mod transport;
 pub use bootstrap::{AdmittedBootstrapPsk, BootstrapAdmission, BootstrapPsk, Secret32};
 pub use cancellation::{Cancellation, RequestRegistry};
 pub use deadline::DeadlineBudget;
-pub use engine::{ComponentSessionDriver, SessionEngine, SessionEvent};
+pub use driver::ComponentSessionDriver;
+pub use engine::{SessionEngine, SessionEvent};
 pub use error::{Result, SessionError};
 pub use fragmentation::{Fragment, Fragmenter, Reassembler};
 pub use handshake::{
