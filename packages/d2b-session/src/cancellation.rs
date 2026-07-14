@@ -167,6 +167,14 @@ impl RequestRegistry {
         self.requests.remove(request_id).is_some()
     }
 
+    pub fn remove(&mut self, request_id: &RequestId) -> bool {
+        let Some(state) = self.requests.remove(request_id) else {
+            return false;
+        };
+        state.cancellation.cancel();
+        true
+    }
+
     pub fn signal(&self, request_id: &RequestId) -> bool {
         self.requests
             .get(request_id)

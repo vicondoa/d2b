@@ -87,6 +87,12 @@ pub struct SessionEngine<T: OwnedTransport> {
     next_record_sequence: u64,
     pending_attachment_credits: BTreeMap<u64, u16>,
     outstanding_attachment_credits: u16,
+    withheld_stream_credits: BTreeMap<StreamId, VecDeque<WithheldStreamCredit>>,
+}
+
+struct WithheldStreamCredit {
+    logical_remaining: u32,
+    transport_bytes: u32,
 }
 
 impl<T: OwnedTransport> SessionEngine<T> {
@@ -193,6 +199,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             next_record_sequence: 0,
             pending_attachment_credits: BTreeMap::new(),
             outstanding_attachment_credits: 0,
+            withheld_stream_credits: BTreeMap::new(),
         })
     }
 
@@ -262,6 +269,14 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.inbound_requests.register(request_id)
     }
 
+    pub fn complete_inbound_call(&mut self, request_id: &RequestId) -> bool {
+        self.inbound_requests.complete(request_id)
+    }
+
+    pub fn remove_inbound_call(&mut self, request_id: &RequestId) -> bool {
+        self.inbound_requests.remove(request_id)
+    }
+
     pub async fn cancel_call(&mut self, request_id: &RequestId) -> Result<()> {
         let request = CancelRequest {
             reconnect_generation: self.generation(),
@@ -292,24 +307,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
         receive_credit: u32,
     ) -> Result<()> {
         self.streams.open(stream, send_credit, receive_credit)
-    }
-
-    pub async fn send_named_stream(&mut self, stream: StreamId, bytes: Vec<u8>) -> Result<()> {
-        let fragments = self.fragment_named_stream(stream, bytes)?;
-        let required = fragments.iter().try_fold(0_u32, |total, fragment| {
-            let len = u32::try_from(fragment.as_bytes().len())
-                .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
-            total
-                .checked_add(len)
-                .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))
-        })?;
-        if self.named_stream_send_credit(stream).unwrap_or(0) < required {
-            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
-        }
-        for fragment in fragments {
-            self.send_named_stream_fragment(stream, fragment).await?;
-        }
-        Ok(())
     }
 
     pub(crate) fn fragment_named_stream(
@@ -375,12 +372,45 @@ impl<T: OwnedTransport> SessionEngine<T> {
         Ok(())
     }
 
+    /// Reports application consumption in logical plaintext bytes and releases
+    /// only the corresponding withheld final-fragment transport credit.
     pub async fn grant_named_stream_credit(&mut self, stream: StreamId, bytes: u32) -> Result<()> {
-        self.streams.release_receive_credit(stream, bytes)?;
+        if bytes == 0 {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
+        let queue = self
+            .withheld_stream_credits
+            .get_mut(&stream)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::QueueBackpressure))?;
+        let mut consumed = bytes;
+        let mut released = 0_u32;
+        while consumed > 0 {
+            let Some(front) = queue.front_mut() else {
+                break;
+            };
+            let amount = consumed.min(front.logical_remaining);
+            consumed -= amount;
+            front.logical_remaining -= amount;
+            if front.logical_remaining == 0 {
+                let complete = queue
+                    .pop_front()
+                    .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
+                released = released
+                    .checked_add(complete.transport_bytes)
+                    .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+            }
+        }
+        if queue.is_empty() {
+            self.withheld_stream_credits.remove(&stream);
+        }
+        if released == 0 {
+            return Ok(());
+        }
+        self.streams.release_receive_credit(stream, released)?;
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CREDIT, stream, bytes),
+            encode_stream_control(STREAM_CREDIT, stream, released),
             Vec::new(),
         )
         .await
@@ -399,6 +429,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     pub async fn reset_named_stream(&mut self, stream: StreamId) -> Result<()> {
         self.streams.reset(stream)?;
+        self.withheld_stream_credits.remove(&stream);
         self.scheduler.remove_stream(stream);
         self.send_logical(
             RecordKind::SessionControl,
@@ -692,8 +723,30 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.streams
             .reserve_receive_fragment(stream, fragment_len)?;
         let complete = self.reassemble(header, protected_payload)?;
-        // Reassembly now owns the bytes, so replenish the fragment window
-        // without exposing protocol fragments to the caller.
+        if let Some(bytes) = complete {
+            let logical_bytes = u32::try_from(bytes.len())
+                .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+            let withheld = self.withheld_stream_credits.entry(stream).or_default();
+            let total_transport = withheld.iter().try_fold(fragment_len, |total, entry| {
+                total
+                    .checked_add(entry.transport_bytes)
+                    .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))
+            })?;
+            if total_transport > self.offer.limits.named_stream_queue_bytes {
+                return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+            }
+            withheld.push_back(WithheldStreamCredit {
+                logical_remaining: logical_bytes,
+                transport_bytes: fragment_len,
+            });
+            return Ok(SessionEvent::NamedStream(
+                self.streams.complete_receive(stream, bytes),
+            ));
+        }
+
+        // Reassembly owns incomplete fragments, so replenish only their
+        // transport window. Final-fragment credit remains withheld until the
+        // application reports logical-message consumption.
         self.streams.release_receive_credit(stream, fragment_len)?;
         self.send_logical(
             RecordKind::SessionControl,
@@ -702,10 +755,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             Vec::new(),
         )
         .await?;
-        Ok(match complete {
-            Some(bytes) => SessionEvent::NamedStream(self.streams.complete_receive(stream, bytes)),
-            None => SessionEvent::ControlProcessed,
-        })
+        Ok(SessionEvent::ControlProcessed)
     }
 
     fn receive_stream_control(&mut self, payload: &[u8]) -> Result<SessionEvent> {
@@ -720,6 +770,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             }
             STREAM_RESET => {
                 self.scheduler.remove_stream(stream);
+                self.withheld_stream_credits.remove(&stream);
                 Ok(SessionEvent::NamedStream(self.streams.reset(stream)?))
             }
             _ => Err(SessionError::new(SessionErrorCode::UnknownControl)),

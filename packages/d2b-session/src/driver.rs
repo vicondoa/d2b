@@ -13,8 +13,8 @@ use d2b_contracts::v2_component_session::{CloseReason, Remediation, RequestId, S
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Fragment, OwnedAttachment, OwnedTransport, Result, SessionEngine, SessionError, SessionEvent,
-    StreamEvent, StreamId,
+    Cancellation, Fragment, OwnedAttachment, OwnedTransport, Result, SessionEngine, SessionError,
+    SessionEvent, StreamEvent, StreamId,
 };
 
 const DRIVER_COMMAND_CAPACITY: usize = 128;
@@ -37,6 +37,15 @@ pub trait ComponentSessionDriver: Send + Sync {
 
     async fn receive_ttrpc(&self) -> Result<Vec<u8>>;
 
+    /// Registers an authenticated inbound request before handler dispatch.
+    async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation>;
+
+    /// Removes a normally completed inbound request.
+    async fn complete_inbound_call(&self, request_id: RequestId) -> Result<bool>;
+
+    /// Cancels and removes an aborted inbound request.
+    async fn remove_inbound_call(&self, request_id: RequestId) -> Result<bool>;
+
     async fn send_attachments(&self, attachments: Vec<OwnedAttachment>) -> Result<()>;
 
     async fn receive_attachments(&self) -> Result<Vec<OwnedAttachment>>;
@@ -54,6 +63,7 @@ pub trait ComponentSessionDriver: Send + Sync {
 
     async fn receive_named_stream(&self) -> Result<StreamEvent>;
 
+    /// Reports application consumption in logical plaintext bytes.
     async fn grant_named_stream_credit(&self, stream: StreamId, bytes: u32) -> Result<()>;
 
     async fn close_named_stream(&self, stream: StreamId) -> Result<()>;
@@ -127,6 +137,21 @@ impl ComponentSessionDriver for SessionDriverHandle {
 
     async fn receive_ttrpc(&self) -> Result<Vec<u8>> {
         self.request(DriverCommand::ReceiveTtrpc).await
+    }
+
+    async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation> {
+        self.request(|reply| DriverCommand::RegisterInboundCall { request_id, reply })
+            .await
+    }
+
+    async fn complete_inbound_call(&self, request_id: RequestId) -> Result<bool> {
+        self.request(|reply| DriverCommand::CompleteInboundCall { request_id, reply })
+            .await
+    }
+
+    async fn remove_inbound_call(&self, request_id: RequestId) -> Result<bool> {
+        self.request(|reply| DriverCommand::RemoveInboundCall { request_id, reply })
+            .await
     }
 
     async fn send_attachments(&self, attachments: Vec<OwnedAttachment>) -> Result<()> {
@@ -232,6 +257,18 @@ enum DriverCommand {
         reply: Reply<()>,
     },
     ReceiveTtrpc(Reply<Vec<u8>>),
+    RegisterInboundCall {
+        request_id: RequestId,
+        reply: Reply<Cancellation>,
+    },
+    CompleteInboundCall {
+        request_id: RequestId,
+        reply: Reply<bool>,
+    },
+    RemoveInboundCall {
+        request_id: RequestId,
+        reply: Reply<bool>,
+    },
     SendAttachments {
         attachments: Vec<OwnedAttachment>,
         reply: Reply<()>,
@@ -279,6 +316,7 @@ type Reply<T> = oneshot::Sender<Result<T>>;
 struct PendingInvoke {
     request_id: RequestId,
     frame: Vec<u8>,
+    cancellation: Option<Cancellation>,
     reply: Reply<Vec<u8>>,
 }
 
@@ -430,13 +468,16 @@ async fn run_driver<T: OwnedTransport>(
     let mut queues = DriverQueues::new();
     let result = loop {
         if queues.active_invoke.is_none()
-            && let Some(invoke) = queues.invokes.pop_front()
+            && let Some(mut invoke) = queues.invokes.pop_front()
         {
             match engine
                 .call(invoke.request_id.clone(), invoke.frame.clone())
                 .await
             {
-                Ok(_) => queues.active_invoke = Some(invoke),
+                Ok(cancellation) => {
+                    invoke.cancellation = Some(cancellation);
+                    queues.active_invoke = Some(invoke);
+                }
                 Err(error) => {
                     let _ = invoke.reply.send(Err(error));
                     continue;
@@ -451,8 +492,28 @@ async fn run_driver<T: OwnedTransport>(
             Ok(false) => {}
             Err(error) => break Err(error),
         }
+        let active_cancellation = queues
+            .active_invoke
+            .as_ref()
+            .and_then(|invoke| invoke.cancellation.clone());
 
         tokio::select! {
+            biased;
+            () = await_cancellation(active_cancellation) => {
+                let invoke = queues
+                    .active_invoke
+                    .take()
+                    .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant));
+                match invoke {
+                    Ok(invoke) => {
+                        engine.complete_call(&invoke.request_id);
+                        let _ = invoke
+                            .reply
+                            .send(Err(SessionError::new(SessionErrorCode::Cancelled)));
+                    }
+                    Err(error) => break Err(error),
+                }
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     break Err(disconnected());
@@ -476,6 +537,13 @@ async fn run_driver<T: OwnedTransport>(
     queues.fail(error);
 }
 
+async fn await_cancellation(cancellation: Option<Cancellation>) {
+    match cancellation {
+        Some(cancellation) => cancellation.cancelled().await,
+        None => std::future::pending().await,
+    }
+}
+
 enum DriverAction {
     Continue,
     Close,
@@ -494,6 +562,7 @@ async fn handle_command<T: OwnedTransport>(
         } => queues.enqueue_invoke(PendingInvoke {
             request_id,
             frame,
+            cancellation: None,
             reply,
         })?,
         DriverCommand::Cancel {
@@ -513,6 +582,15 @@ async fn handle_command<T: OwnedTransport>(
             let _ = reply.send(result);
         }
         DriverCommand::ReceiveTtrpc(reply) => queues.ttrpc.receive(reply)?,
+        DriverCommand::RegisterInboundCall { request_id, reply } => {
+            let _ = reply.send(engine.register_inbound_call(request_id));
+        }
+        DriverCommand::CompleteInboundCall { request_id, reply } => {
+            let _ = reply.send(Ok(engine.complete_inbound_call(&request_id)));
+        }
+        DriverCommand::RemoveInboundCall { request_id, reply } => {
+            let _ = reply.send(Ok(engine.remove_inbound_call(&request_id)));
+        }
         DriverCommand::SendAttachments { attachments, reply } => {
             let result = engine.send_attachments(attachments).await;
             let _ = reply.send(result);

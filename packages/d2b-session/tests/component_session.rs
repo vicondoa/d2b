@@ -727,6 +727,7 @@ struct FakeTransport {
     receiver: mpsc::Receiver<TransportPacket>,
     corrupt_attachment: Arc<AtomicBool>,
     attachment_mode: Arc<AtomicU8>,
+    attachment_sends: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
 }
 
@@ -758,6 +759,9 @@ impl OwnedTransport for FakeTransport {
 
     async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
         let (mut bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            self.attachment_sends.fetch_add(1, Ordering::AcqRel);
+        }
         if !attachments.is_empty() && self.corrupt_attachment.swap(false, Ordering::AcqRel) {
             let last = bytes.last_mut().ok_or(TransportError::Truncated)?;
             *last ^= 1;
@@ -802,6 +806,7 @@ impl OwnedTransport for FakeTransport {
 struct FakeHandles {
     corrupt_a: Arc<AtomicBool>,
     attachment_mode_a: Arc<AtomicU8>,
+    attachment_sends_a: Arc<AtomicUsize>,
     closed_a: Arc<AtomicBool>,
     closed_b: Arc<AtomicBool>,
 }
@@ -811,6 +816,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
     let (b_to_a_tx, b_to_a_rx) = mpsc::channel(128);
     let corrupt_a = Arc::new(AtomicBool::new(false));
     let attachment_mode_a = Arc::new(AtomicU8::new(0));
+    let attachment_sends_a = Arc::new(AtomicUsize::new(0));
     let closed_a = Arc::new(AtomicBool::new(false));
     let closed_b = Arc::new(AtomicBool::new(false));
     (
@@ -819,6 +825,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             receiver: b_to_a_rx,
             corrupt_attachment: Arc::clone(&corrupt_a),
             attachment_mode: Arc::clone(&attachment_mode_a),
+            attachment_sends: Arc::clone(&attachment_sends_a),
             closed: Arc::clone(&closed_a),
         },
         FakeTransport {
@@ -826,11 +833,13 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             receiver: a_to_b_rx,
             corrupt_attachment: Arc::new(AtomicBool::new(false)),
             attachment_mode: Arc::new(AtomicU8::new(0)),
+            attachment_sends: Arc::new(AtomicUsize::new(0)),
             closed: Arc::clone(&closed_b),
         },
         FakeHandles {
             corrupt_a,
             attachment_mode_a,
+            attachment_sends_a,
             closed_a,
             closed_b,
         },
@@ -1006,14 +1015,15 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
     assert_eq!(invoke.await.unwrap(), b"response");
 
     let request_id = RequestId::new(vec![0x42; 16]).unwrap();
+    let inbound_request_id = request_id.clone();
     let caller = Arc::clone(&initiator);
-    let invoke = tokio::spawn(async move {
-        caller
-            .invoke(request_id, b"cancel-me".to_vec())
-            .await
-            .unwrap()
-    });
+    let invoke =
+        tokio::spawn(async move { caller.invoke(request_id, b"cancel-me".to_vec()).await });
     assert_eq!(responder.receive_ttrpc().await.unwrap(), b"cancel-me");
+    let inbound_cancellation = responder
+        .register_inbound_call(inbound_request_id.clone())
+        .await
+        .unwrap();
     initiator
         .cancel(
             initiator.generation(),
@@ -1023,14 +1033,45 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
         .unwrap();
     assert!(matches!(
         responder.receive_control().await.unwrap(),
-        SessionEvent::CancelRequest(_)
+        SessionEvent::CancelRequest(CancelAck {
+            result: CancelResult::CancelledBeforeDispatch,
+            ..
+        })
     ));
     assert!(matches!(
         initiator.receive_control().await.unwrap(),
         SessionEvent::CancelAck(_)
     ));
-    responder.send_ttrpc(b"terminal".to_vec()).await.unwrap();
-    assert_eq!(invoke.await.unwrap(), b"terminal");
+    assert!(inbound_cancellation.is_cancelled());
+    assert_eq!(
+        invoke.await.unwrap().unwrap_err().code(),
+        SessionErrorCode::Cancelled
+    );
+    assert!(
+        responder
+            .complete_inbound_call(inbound_request_id)
+            .await
+            .unwrap()
+    );
+
+    let removed_request = RequestId::new(vec![0x43; 16]).unwrap();
+    let removed_cancellation = responder
+        .register_inbound_call(removed_request.clone())
+        .await
+        .unwrap();
+    assert!(
+        responder
+            .remove_inbound_call(removed_request.clone())
+            .await
+            .unwrap()
+    );
+    assert!(removed_cancellation.is_cancelled());
+    assert!(
+        !responder
+            .complete_inbound_call(removed_request)
+            .await
+            .unwrap()
+    );
 
     let stream = StreamId::new(0x100).unwrap();
     initiator.open_named_stream(stream, 4, 4).await.unwrap();
@@ -1088,44 +1129,55 @@ async fn driver_fragments_one_mib_logical_stream_under_256_kib_credit() {
         event => panic!("unexpected event {event:?}"),
     }
     send.await.unwrap().unwrap();
+    responder
+        .grant_named_stream_credit(stream, limits.logical_named_stream_bytes)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
-async fn engine_enforces_named_stream_backpressure_and_credit() {
-    let (mut initiator, mut responder, _) = engine_pair().await;
+async fn driver_withholds_logical_delivery_credit_until_grant() {
+    let (initiator, responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
     let stream = StreamId::new(0x100).unwrap();
-    initiator.open_named_stream(stream, 4, 4).unwrap();
-    responder.open_named_stream(stream, 4, 4).unwrap();
+    initiator.open_named_stream(stream, 4, 4).await.unwrap();
+    responder.open_named_stream(stream, 4, 4).await.unwrap();
     initiator
         .send_named_stream(stream, b"data".to_vec())
         .await
         .unwrap();
-    assert_eq!(
-        initiator
-            .send_named_stream(stream, b"x".to_vec())
-            .await
-            .unwrap_err()
-            .code(),
-        SessionErrorCode::QueueBackpressure
-    );
-    match responder.receive().await.unwrap() {
-        SessionEvent::NamedStream(StreamEvent::Data { bytes, .. }) => {
-            assert_eq!(bytes, b"data")
-        }
+    match responder.receive_named_stream().await.unwrap() {
+        StreamEvent::Data { bytes, .. } => assert_eq!(bytes, b"data"),
         event => panic!("unexpected event {event:?}"),
     }
+
+    let sender = Arc::clone(&initiator);
+    let mut blocked =
+        tokio::spawn(async move { sender.send_named_stream(stream, b"more".to_vec()).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut blocked)
+            .await
+            .is_err()
+    );
     responder
-        .grant_named_stream_credit(stream, 4)
+        .grant_named_stream_credit(stream, 2)
         .await
         .unwrap();
-    assert!(matches!(
-        initiator.receive().await.unwrap(),
-        SessionEvent::ControlProcessed
-    ));
-    initiator
-        .send_named_stream(stream, b"more".to_vec())
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut blocked)
+            .await
+            .is_err()
+    );
+    responder
+        .grant_named_stream_credit(stream, 2)
         .await
         .unwrap();
+    blocked.await.unwrap().unwrap();
+    match responder.receive_named_stream().await.unwrap() {
+        StreamEvent::Data { bytes, .. } => assert_eq!(bytes, b"more"),
+        event => panic!("unexpected event {event:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1224,7 +1276,7 @@ async fn payload_validator_failure_drops_unbound_payload_once() {
 
 #[tokio::test]
 async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
-    let (mut initiator, _, _) = engine_pair().await;
+    let (mut initiator, _, handles) = engine_pair().await;
     let closes = Arc::new(AtomicUsize::new(0));
     let descriptor = engine_attachment(Arc::clone(&closes));
     descriptor.close();
@@ -1239,6 +1291,21 @@ async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
             .unwrap();
     AttachmentPayload::close(payload);
     assert_eq!(downcast_closes.load(Ordering::Acquire), 1);
+
+    let unbound_closes = Arc::new(AtomicUsize::new(0));
+    let unbound =
+        OwnedAttachment::unbound(Box::new(CountingAttachment(Arc::clone(&unbound_closes))));
+    assert_eq!(
+        initiator
+            .send_attachments(vec![unbound])
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::AttachmentDescriptorMismatch
+    );
+    assert_eq!(unbound_closes.load(Ordering::Acquire), 1);
+    assert_eq!(handles.attachment_sends_a.load(Ordering::Acquire), 0);
+    assert_eq!(initiator.outstanding_attachment_credits(), 0);
 
     let rejected = Arc::new(AtomicUsize::new(0));
     let attachment = OwnedAttachment::new(
