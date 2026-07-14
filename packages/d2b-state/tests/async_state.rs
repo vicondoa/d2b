@@ -452,6 +452,55 @@ impl Clock for BlockingClock {
     }
 }
 
+#[derive(Default)]
+struct WorkerProbe {
+    entered: AtomicBool,
+    exited: AtomicBool,
+}
+
+impl WorkerProbe {
+    async fn wait_entered(&self) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !self.entered.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn wait_exited(&self) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !self.exited.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+struct ProbeClock {
+    probe: Arc<WorkerProbe>,
+}
+
+impl Clock for ProbeClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        self.probe.entered.store(true, Ordering::Release);
+        std::thread::sleep(duration);
+    }
+}
+
+impl Drop for ProbeClock {
+    fn drop(&mut self) {
+        self.probe.exited.store(true, Ordering::Release);
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn lock_adapter_keeps_current_thread_runtime_live_with_blocking_clock() {
     let scratch = Scratch::new("lock-heartbeat");
@@ -483,6 +532,72 @@ async fn lock_adapter_keeps_current_thread_runtime_live_with_blocking_clock() {
     async_ofd_lock_release(waiter).await.unwrap();
     stop.store(true, Ordering::Release);
     beat.await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dropping_contended_acquire_cancels_worker_and_allows_followup_work() {
+    let scratch = Scratch::new("drop-cancel");
+    let anchor = async_open_anchored_dir(scratch.0.clone()).await.unwrap();
+    let metadata = host_metadata(&scratch.0, 0o600);
+    let holder = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+    let probe = Arc::new(WorkerProbe::default());
+    let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ProbeClock {
+        probe: Arc::clone(&probe),
+    });
+    let task = tokio::spawn(async_ofd_lock_acquire_with_clock(
+        LockSet::new(),
+        lock_spec(ContentionPolicy::BoundedWait),
+        lock_resource(&anchor),
+        metadata,
+        epoch(1),
+        Arc::new(NeverCancelled),
+        clock,
+    ));
+    probe.wait_entered().await;
+    task.abort();
+    let join_error = task.await.unwrap_err();
+    assert!(join_error.is_cancelled());
+    probe.wait_exited().await;
+    assert_eq!(tokio::task::spawn_blocking(|| 41 + 1).await.unwrap(), 42);
+
+    async_ofd_lock_release(holder).await.unwrap();
+    let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+    async_ofd_lock_release(reacquired).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timing_out_contended_acquire_cancels_worker_and_allows_next_lock() {
+    let scratch = Scratch::new("timeout-cancel");
+    let anchor = async_open_anchored_dir(scratch.0.clone()).await.unwrap();
+    let metadata = host_metadata(&scratch.0, 0o600);
+    let holder = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+    let probe = Arc::new(WorkerProbe::default());
+    let clock: Arc<dyn Clock + Send + Sync> = Arc::new(ProbeClock {
+        probe: Arc::clone(&probe),
+    });
+    let mut spec = lock_spec(ContentionPolicy::BoundedWait);
+    spec.cancellation = CancellationPolicy::CompleteAtomicSection;
+    let timed = tokio::time::timeout(
+        Duration::from_millis(100),
+        async_ofd_lock_acquire_with_clock(
+            LockSet::new(),
+            spec,
+            lock_resource(&anchor),
+            metadata,
+            epoch(1),
+            Arc::new(NeverCancelled),
+            clock,
+        ),
+    )
+    .await;
+    assert!(timed.is_err());
+    assert!(probe.entered.load(Ordering::Acquire));
+    probe.wait_exited().await;
+    assert_eq!(tokio::task::spawn_blocking(|| 6 * 7).await.unwrap(), 42);
+
+    async_ofd_lock_release(holder).await.unwrap();
+    let reacquired = acquire_state_lock(&anchor, metadata, ContentionPolicy::FailFast).await;
+    async_ofd_lock_release(reacquired).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

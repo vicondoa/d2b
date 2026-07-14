@@ -20,6 +20,10 @@ use crate::{AnchoredResource, Error, ErrorCode, MetadataExpectation, RelativePat
 
 pub trait Cancellation {
     fn is_cancelled(&self) -> bool;
+
+    fn acquisition_abandoned(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,16 +267,17 @@ impl LockSet {
         let started = clock.now();
         let deadline = Duration::from_millis(u64::from(spec.deadline_ms));
         loop {
+            if cancellation.acquisition_abandoned()
+                || (spec.cancellation == CancellationPolicy::Cancellable
+                    && cancellation.is_cancelled())
+            {
+                return Err(Error::Code(ErrorCode::Cancelled));
+            }
             match set_ofd_lock(&fd, libc::F_WRLCK as i16) {
                 Ok(()) => break,
                 Err(Errno::EAGAIN | Errno::EACCES) => {
                     if spec.contention == ContentionPolicy::FailFast {
                         return Err(Error::Code(ErrorCode::LockContended));
-                    }
-                    if spec.cancellation == CancellationPolicy::Cancellable
-                        && cancellation.is_cancelled()
-                    {
-                        return Err(Error::Code(ErrorCode::Cancelled));
                     }
                     if clock.now().saturating_duration_since(started) >= deadline {
                         return Err(Error::Code(ErrorCode::Deadline));

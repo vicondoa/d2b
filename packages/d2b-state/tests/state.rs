@@ -14,8 +14,9 @@ use d2b_contracts::v2_state::{
     AuditReason, AuditRetentionDecision, AuditRetentionEvidence, AuditRetentionPolicy, AuditStream,
     AuthorityRef, CancellationPolicy, ContentionPolicy, Digest, FdTransferPolicy, Generation,
     IdentityScope, LeaseRevocation, LockClass, LockKey, LockKind, LockSpec,
-    MAX_AUDIT_RECORDS_PER_SEGMENT, MAX_AUDIT_SEGMENT_BYTES, OwnershipEpoch, PruneStatus,
-    ResourceId,
+    MAX_AUDIT_RECORDS_PER_SEGMENT, MAX_AUDIT_SEGMENT_BYTES, MAX_JSON_DOCUMENT_BYTES,
+    OwnershipEpoch, PruneStatus, ResourceId, STATE_SCHEMA_GENERATION, STATE_SCHEMA_VERSION,
+    StateEnvelope, state_payload_digest,
 };
 use d2b_state::{
     AnchoredDir, AnchoredResource, AtomicFilesystem, AtomicWrite, AuditAppender, AuditRecordInput,
@@ -54,6 +55,12 @@ fn metadata() -> MetadataExpectation {
 #[serde(deny_unknown_fields)]
 struct Payload {
     value: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LargePayload {
+    padding: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +331,49 @@ fn bounded_canonical_read_rejects_missing_corrupt_noncanonical_and_unknown_state
             .unwrap_err()
             .code(),
         ErrorCode::NonCanonical
+    );
+}
+
+#[test]
+fn bounded_read_rejects_canonical_state_document_over_maximum() {
+    let empty_payload_len = serde_json::to_vec(&LargePayload {
+        padding: String::new(),
+    })
+    .unwrap()
+    .len();
+    let padding_len = usize::try_from(MAX_JSON_DOCUMENT_BYTES).unwrap() - empty_payload_len - 1;
+    let payload = LargePayload {
+        padding: "x".repeat(padding_len),
+    };
+    let payload_bytes = serde_json::to_vec(&payload).unwrap();
+    assert_eq!(payload_bytes.len() as u64, MAX_JSON_DOCUMENT_BYTES - 1);
+
+    let envelope = StateEnvelope {
+        schema_version: STATE_SCHEMA_VERSION,
+        schema_generation: STATE_SCHEMA_GENERATION,
+        config_generation: generation(7),
+        state_generation: generation(1),
+        writer: AuthorityRef::LocalRootBroker,
+        encoded_bytes: payload_bytes.len() as u64,
+        checksum: state_payload_digest(&payload_bytes).unwrap(),
+        payload,
+    };
+    envelope
+        .validate_payload_bytes(&payload_bytes, &CanonicalJson)
+        .unwrap();
+    let document = serde_json::to_vec(&envelope).unwrap();
+    let decoded: StateEnvelope<LargePayload> = serde_json::from_slice(&document).unwrap();
+    assert_eq!(serde_json::to_vec(&decoded).unwrap(), document);
+    assert!(document.len() as u64 > MAX_JSON_DOCUMENT_BYTES);
+
+    let mut fake = FakeFs::empty();
+    fake.target = Some(document);
+    assert_eq!(
+        AtomicWrite::new(fake)
+            .read::<LargePayload>(&read_policy(1))
+            .unwrap_err()
+            .code(),
+        ErrorCode::TooLarge
     );
 }
 

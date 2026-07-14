@@ -1,4 +1,11 @@
-use std::{os::fd::OwnedFd, path::PathBuf, sync::Arc};
+use std::{
+    os::fd::OwnedFd,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use d2b_contracts::v2_state::{
     AtomicWriteReceipt, AuditRecord, AuditStream, Digest, LockSpec, OwnershipEpoch,
@@ -19,6 +26,47 @@ where
     tokio::task::spawn_blocking(operation)
         .await
         .map_err(Error::task_join)?
+}
+
+struct CancelOnDrop {
+    cancelled: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl CancelOnDrop {
+    fn new(cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            cancelled,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancelled.store(true, Ordering::Release);
+        }
+    }
+}
+
+struct CombinedCancellation {
+    caller: Arc<dyn Cancellation + Send + Sync>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Cancellation for CombinedCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.dropped.load(Ordering::Acquire) || self.caller.is_cancelled()
+    }
+
+    fn acquisition_abandoned(&self) -> bool {
+        self.dropped.load(Ordering::Acquire)
+    }
 }
 
 pub async fn async_open_anchored_dir(path: PathBuf) -> Result<AnchoredDir> {
@@ -105,18 +153,26 @@ pub async fn async_ofd_lock_acquire_with_clock(
     cancellation: Arc<dyn Cancellation + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
 ) -> Result<LockSet> {
-    blocking(move || {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut cancel_on_drop = CancelOnDrop::new(Arc::clone(&dropped));
+    let cancellation = CombinedCancellation {
+        caller: cancellation,
+        dropped,
+    };
+    let result = blocking(move || {
         locks.acquire_with_clock(
             &spec,
             &resource,
             metadata,
             ownership_epoch,
-            cancellation.as_ref(),
+            &cancellation,
             clock.as_ref(),
         )?;
         Ok(locks)
     })
-    .await
+    .await;
+    cancel_on_drop.disarm();
+    result
 }
 
 pub async fn async_ofd_lock_release(mut locks: LockSet) -> Result<LockSet> {

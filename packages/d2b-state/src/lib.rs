@@ -8,40 +8,40 @@
 #[cfg(all(feature = "host-fs", not(target_os = "linux")))]
 compile_error!("the host-fs feature requires Linux");
 
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod atomic;
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod audit;
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod error;
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod lease;
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod lock;
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 mod path;
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", target_os = "linux"))]
 mod tokio_api;
 
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use atomic::{
     AtomicFilesystem, AtomicWrite, CanonicalJson, DurableState, GenerationPolicy,
     MetadataExpectation, QuarantineRecord, ReadPolicy, RealAtomicFilesystem, WritePolicy,
 };
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use audit::{
     AuditAppender, AuditRecordInput, SegmentBuilder, checkpoint, decide_retention, detect_gap,
     read_audit_segment,
 };
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use error::{Error, ErrorCode, Result};
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use lease::{LeaseStatus, grant_lease, revoke_lease, validate_lease};
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use lock::{Cancellation, Clock, LockGuard, LockSet, NeverCancelled, OfdTransfer, SystemClock};
-#[cfg(feature = "host-fs")]
+#[cfg(all(feature = "host-fs", target_os = "linux"))]
 pub use path::{AnchoredDir, AnchoredResource, LeafName, RelativePath};
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", target_os = "linux"))]
 pub use tokio_api::{
     async_anchored_dir_from_fd, async_atomic_quarantine, async_atomic_read, async_atomic_write,
     async_audit_append, async_audit_create, async_audit_resume, async_ofd_lock_acquire,
