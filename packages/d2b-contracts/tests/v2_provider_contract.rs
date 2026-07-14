@@ -509,6 +509,30 @@ fn operation_idempotency_scope_expiry_and_cancellation_are_exact() {
 }
 
 #[test]
+fn role_scopes_are_workload_bound_and_controller_ownership_is_realm_scoped() {
+    let scope = AuthorizedProviderScope::WorkloadRole {
+        realm_id: realm_id(),
+        workload_id: workload_id(),
+        role_id: role_id(),
+    };
+    assert_eq!(scope.realm_id(), &realm_id());
+    assert_eq!(scope.workload_id(), Some(&workload_id()));
+    let scope_json = serde_json::to_value(&scope).unwrap();
+    assert_eq!(scope_json["kind"], "workload-role");
+    assert!(scope_json.get("workloadId").is_some());
+    assert!(scope_json.get("roleId").is_some());
+
+    let owner = HandleOwner::RealmController {
+        realm_id: realm_id(),
+    };
+    assert_eq!(owner.realm_id(), &realm_id());
+    assert_eq!(owner.workload_id(), None);
+    let owner_json = serde_json::to_value(&owner).unwrap();
+    assert_eq!(owner_json["kind"], "realm-controller");
+    assert!(owner_json.get("roleId").is_none());
+}
+
+#[test]
 fn handles_bind_identity_generation_owner_and_transfer() {
     let mut transferred_handle = handle();
     transferred_handle.validate().unwrap();

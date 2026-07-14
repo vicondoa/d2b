@@ -27,7 +27,7 @@ pub const MAX_PROVIDER_LEASE_LIFETIME_MS: u64 = 60 * 60 * 1_000;
 pub const MAX_PROVIDER_DRAIN_MS: u32 = 5 * 60 * 1_000;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const PROVIDER_CONTRACT_FINGERPRINT: &str =
-    "daf51d65ed5c7273865fbfedb2e753c20cc20fec90bf3014f1cdf128395a5313";
+    "a23694cfd1320716b9ca2ba39b82c81e156214b392dd9374e07ef7b9536bf5db";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -836,8 +836,9 @@ pub enum AuthorizedProviderScope {
         realm_id: RealmId,
         workload_id: WorkloadId,
     },
-    Controller {
+    WorkloadRole {
         realm_id: RealmId,
+        workload_id: WorkloadId,
         role_id: RoleId,
     },
 }
@@ -847,14 +848,16 @@ impl AuthorizedProviderScope {
         match self {
             Self::Realm { realm_id }
             | Self::Workload { realm_id, .. }
-            | Self::Controller { realm_id, .. } => realm_id,
+            | Self::WorkloadRole { realm_id, .. } => realm_id,
         }
     }
 
     pub fn workload_id(&self) -> Option<&WorkloadId> {
         match self {
-            Self::Workload { workload_id, .. } => Some(workload_id),
-            Self::Realm { .. } | Self::Controller { .. } => None,
+            Self::Workload { workload_id, .. } | Self::WorkloadRole { workload_id, .. } => {
+                Some(workload_id)
+            }
+            Self::Realm { .. } => None,
         }
     }
 }
@@ -1196,9 +1199,8 @@ pub enum HandleOwner {
         realm_id: RealmId,
         provider_id: ProviderId,
     },
-    Controller {
+    RealmController {
         realm_id: RealmId,
-        role_id: RoleId,
     },
     WorkloadRole {
         realm_id: RealmId,
@@ -1211,7 +1213,7 @@ impl fmt::Debug for HandleOwner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Provider { .. } => "HandleOwner::Provider(<redacted>)",
-            Self::Controller { .. } => "HandleOwner::Controller(<redacted>)",
+            Self::RealmController { .. } => "HandleOwner::RealmController(<redacted>)",
             Self::WorkloadRole { .. } => "HandleOwner::WorkloadRole(<redacted>)",
         })
     }
@@ -1221,7 +1223,7 @@ impl HandleOwner {
     pub fn realm_id(&self) -> &RealmId {
         match self {
             Self::Provider { realm_id, .. }
-            | Self::Controller { realm_id, .. }
+            | Self::RealmController { realm_id, .. }
             | Self::WorkloadRole { realm_id, .. } => realm_id,
         }
     }
@@ -1229,7 +1231,7 @@ impl HandleOwner {
     pub fn workload_id(&self) -> Option<&WorkloadId> {
         match self {
             Self::WorkloadRole { workload_id, .. } => Some(workload_id),
-            Self::Provider { .. } | Self::Controller { .. } => None,
+            Self::Provider { .. } | Self::RealmController { .. } => None,
         }
     }
 }

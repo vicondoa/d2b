@@ -86,7 +86,7 @@
           "properties": {
             "kind": {
               "enum": [
-                "controller"
+                "workload-role"
               ],
               "type": "string"
             },
@@ -95,12 +95,16 @@
             },
             "role_id": {
               "type": "string"
+            },
+            "workload_id": {
+              "type": "string"
             }
           },
           "required": [
             "kind",
             "realm_id",
-            "role_id"
+            "role_id",
+            "workload_id"
           ],
           "type": "object"
         }
@@ -316,21 +320,17 @@
           "properties": {
             "kind": {
               "enum": [
-                "controller"
+                "realm-controller"
               ],
               "type": "string"
             },
             "realm_id": {
               "type": "string"
-            },
-            "role_id": {
-              "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id",
-            "role_id"
+            "realm_id"
           ],
           "type": "object"
         },

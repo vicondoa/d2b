@@ -39,6 +39,10 @@ Every serialized operation is bound to an already-authorized scope, provider
 ID and authority, registry generation, method/capability, operation ID,
 idempotency key, request digest, policy epoch, decision digest, expiry, and
 audit/trace correlation. Plans and handles retain that binding.
+Operation scopes are realm, workload, or workload-role scopes. Controller
+authority comes from authenticated ComponentSession state rather than a
+payload-supplied role ID; realm-controller handle ownership is an explicit
+realm-scoped owner kind.
 
 Handles bind realm, optional workload, owner, provider and resource
 generations, and configuration fingerprint. Ownership transfer is explicit,
