@@ -9,10 +9,13 @@ publish = false
 
 [features]
 default = []
+host-socket = ["dep:d2b-unix-session", "d2b-unix-session/host-socket"]
 
 [dependencies]
 async-trait.workspace = true
 d2b-contracts = { workspace = true, default-features = false, features = ["v2-services"] }
+d2b-session = { workspace = true, default-features = false }
+d2b-unix-session = { workspace = true, optional = true }
 protobuf.workspace = true
 tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
 ttrpc = { workspace = true, default-features = false, features = ["async"] }

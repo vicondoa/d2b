@@ -7,15 +7,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v2_component_session::{
-    KernelObjectType, MAX_LOGICAL_MESSAGE_BYTES, MAX_NAMED_STREAM_QUEUE_BYTES,
-};
-use d2b_contracts::v2_services::common::ServiceRequest;
-use d2b_contracts::v2_services::common::ServiceResponse;
-use tokio::sync::Notify;
+use d2b_contracts::v2_component_session::MAX_LOGICAL_MESSAGE_BYTES;
+use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId, TransportPacket};
+use tokio::sync::{Mutex, Notify};
 use ttrpc::r#async::transport::Socket;
 
 use crate::{ClientError, MethodHandle, ResolvedTarget, ServiceKind};
+
+pub type SharedDriver = Arc<dyn ComponentSessionDriver>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionFailure {
@@ -30,7 +29,7 @@ pub enum SessionFailure {
 
 pub struct SessionCall {
     pub method: MethodHandle,
-    pub request: ServiceRequest,
+    pub packet: TransportPacket,
     pub relative_timeout_nanos: u64,
 }
 
@@ -40,118 +39,37 @@ impl fmt::Debug for SessionCall {
             .debug_struct("SessionCall")
             .field("service", &self.method.service())
             .field("method_index", &self.method.index())
-            .field(
-                "has_attachments",
-                &!self.request.attachment_indexes.is_empty(),
-            )
-            .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct SessionAttachment {
-    index: u32,
-    object_type: KernelObjectType,
-}
-
-impl SessionAttachment {
-    pub const fn new(index: u32, object_type: KernelObjectType) -> Self {
-        Self { index, object_type }
-    }
-
-    pub const fn index(&self) -> u32 {
-        self.index
-    }
-
-    pub const fn object_type(&self) -> KernelObjectType {
-        self.object_type
-    }
-}
-
-impl fmt::Debug for SessionAttachment {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SessionAttachment")
-            .field("index", &self.index)
-            .field("object_type", &self.object_type)
+            .field("attachment_count", &self.packet.attachments().len())
             .finish()
     }
 }
 
 pub struct SessionReply {
-    pub response: ServiceResponse,
-    pub attachments: Vec<SessionAttachment>,
+    pub packet: TransportPacket,
 }
 
 impl fmt::Debug for SessionReply {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SessionReply")
-            .field("attachment_count", &self.attachments.len())
+            .field("attachment_count", &self.packet.attachments().len())
             .finish()
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct StreamId(String);
-
-impl StreamId {
-    pub fn new(value: impl Into<String>) -> Result<Self, ClientError> {
-        let value = value.into();
-        let valid = !value.is_empty()
-            && value.len() <= 64
-            && value.is_ascii()
-            && value.as_bytes()[0].is_ascii_lowercase()
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-        valid
-            .then_some(Self(value))
-            .ok_or(ClientError::ContractViolation)
-    }
-}
-
-impl fmt::Debug for StreamId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("StreamId([redacted])")
-    }
-}
-
-#[async_trait]
-pub trait ComponentSession: Send + Sync {
-    fn generation(&self) -> u64;
-
-    async fn invoke(&self, call: SessionCall) -> Result<SessionReply, SessionFailure>;
-
-    async fn cancel(&self, generation: u64, request_id: [u8; 16]) -> Result<(), SessionFailure>;
-
-    async fn stream_send(&self, stream: &StreamId, message: &[u8]) -> Result<(), SessionFailure>;
-
-    async fn stream_receive(&self, stream: &StreamId) -> Result<Vec<u8>, SessionFailure>;
-
-    async fn stream_detach(&self, stream: &StreamId) -> Result<(), SessionFailure>;
-
-    async fn stream_close(&self, stream: &StreamId) -> Result<(), SessionFailure>;
-
-    async fn stream_cancel(&self, stream: &StreamId) -> Result<(), SessionFailure>;
-}
-
 pub struct ConnectedSession {
-    pub control: Arc<dyn ComponentSession>,
+    pub driver: SharedDriver,
     pub ttrpc_socket: Socket,
 }
 
 impl fmt::Debug for ConnectedSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ConnectedSession")
-            .field("generation", &self.control.generation())
-            .finish()
+        formatter.write_str("ConnectedSession { driver: [redacted] }")
     }
 }
 
 #[async_trait]
-pub trait ComponentSessionConnector: Send + Sync {
+pub trait ComponentSessionConnector: Send + Sync + 'static {
     async fn connect(
         &self,
         target: &ResolvedTarget,
@@ -165,10 +83,10 @@ const STREAM_CLOSED: u8 = 2;
 const STREAM_CANCELLED: u8 = 3;
 
 pub struct NamedStream {
-    session: Arc<dyn ComponentSession>,
+    driver: SharedDriver,
     id: StreamId,
     state: AtomicU8,
-    operation_lock: tokio::sync::Mutex<()>,
+    operation_lock: Mutex<()>,
     changed: Notify,
     permit: StreamPermit,
 }
@@ -183,16 +101,12 @@ impl fmt::Debug for NamedStream {
 }
 
 impl NamedStream {
-    pub(crate) fn new(
-        session: Arc<dyn ComponentSession>,
-        id: StreamId,
-        active: Arc<AtomicU16>,
-    ) -> Self {
+    pub(crate) fn new(driver: SharedDriver, id: StreamId, active: Arc<AtomicU16>) -> Self {
         Self {
-            session,
+            driver,
             id,
             state: AtomicU8::new(STREAM_OPEN),
-            operation_lock: tokio::sync::Mutex::new(()),
+            operation_lock: Mutex::new(()),
             changed: Notify::new(),
             permit: StreamPermit {
                 active,
@@ -210,68 +124,77 @@ impl NamedStream {
     }
 
     pub async fn send(&self, message: &[u8]) -> Result<(), ClientError> {
-        if message.len() > MAX_LOGICAL_MESSAGE_BYTES as usize
-            || message.len() > MAX_NAMED_STREAM_QUEUE_BYTES as usize
-        {
+        if message.is_empty() || message.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
             return Err(ClientError::StreamLimitExceeded);
         }
         let _guard = self.operation_lock.lock().await;
         self.require_open()?;
-        self.session
-            .stream_send(&self.id, message)
+        self.driver
+            .send_named_stream(self.id, message.to_vec())
             .await
-            .map_err(map_session_failure)
+            .map_err(|_| ClientError::TransportFailed)
     }
 
     pub async fn receive(&self) -> Result<Vec<u8>, ClientError> {
         let _guard = self.operation_lock.lock().await;
         self.require_open()?;
-        let message = self
-            .session
-            .stream_receive(&self.id)
+        match self
+            .driver
+            .receive_named_stream()
             .await
-            .map_err(map_session_failure)?;
-        if message.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
-            return Err(ClientError::ContractViolation);
+            .map_err(|_| ClientError::TransportFailed)?
+        {
+            StreamEvent::Data { stream, bytes } if stream == self.id => {
+                if bytes.is_empty() || bytes.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
+                    return Err(ClientError::ContractViolation);
+                }
+                Ok(bytes)
+            }
+            StreamEvent::RemoteClosed { stream } if stream == self.id => {
+                self.finish(STREAM_CLOSED);
+                Err(ClientError::StreamClosed)
+            }
+            StreamEvent::Reset { stream } if stream == self.id => {
+                self.finish(STREAM_CANCELLED);
+                Err(ClientError::StreamClosed)
+            }
+            _ => Err(ClientError::ContractViolation),
         }
-        Ok(message)
     }
 
     pub async fn detach(&self) -> Result<(), ClientError> {
-        self.transition(STREAM_DETACHED, |session, id| async move {
-            session.stream_detach(&id).await
-        })
-        .await
+        let _guard = self.operation_lock.lock().await;
+        self.require_open()?;
+        self.finish(STREAM_DETACHED);
+        Ok(())
     }
 
     pub async fn close(&self) -> Result<(), ClientError> {
-        self.transition(STREAM_CLOSED, |session, id| async move {
-            session.stream_close(&id).await
-        })
-        .await
+        let _guard = self.operation_lock.lock().await;
+        self.require_open()?;
+        self.driver
+            .close_named_stream(self.id)
+            .await
+            .map_err(|_| ClientError::TransportFailed)?;
+        self.finish(STREAM_CLOSED);
+        Ok(())
     }
 
     pub async fn cancel(&self) -> Result<(), ClientError> {
-        self.transition(STREAM_CANCELLED, |session, id| async move {
-            session.stream_cancel(&id).await
-        })
-        .await
-    }
-
-    async fn transition<F, Fut>(&self, next: u8, operation: F) -> Result<(), ClientError>
-    where
-        F: FnOnce(Arc<dyn ComponentSession>, StreamId) -> Fut,
-        Fut: std::future::Future<Output = Result<(), SessionFailure>>,
-    {
         let _guard = self.operation_lock.lock().await;
         self.require_open()?;
-        operation(Arc::clone(&self.session), self.id.clone())
+        self.driver
+            .reset_named_stream(self.id)
             .await
-            .map_err(map_session_failure)?;
+            .map_err(|_| ClientError::TransportFailed)?;
+        self.finish(STREAM_CANCELLED);
+        Ok(())
+    }
+
+    fn finish(&self, next: u8) {
         self.state.store(next, Ordering::Release);
         self.permit.release();
         self.changed.notify_waiters();
-        Ok(())
     }
 
     pub fn is_terminal(&self) -> bool {

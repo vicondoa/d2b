@@ -124,13 +124,15 @@ impl MethodHandle {
 pub struct ServiceHandle {
     kind: ServiceKind,
     generated: GeneratedClient,
+    raw: ttrpc::r#async::Client,
 }
 
 impl ServiceHandle {
     pub(crate) fn new(kind: ServiceKind, client: ttrpc::r#async::Client) -> Self {
         Self {
             kind,
-            generated: GeneratedClient::new(kind, client),
+            generated: GeneratedClient::new(kind, client.clone()),
+            raw: client,
         }
     }
 
@@ -154,6 +156,26 @@ impl ServiceHandle {
             index,
             spec,
         })
+    }
+
+    pub(crate) async fn invoke(
+        &self,
+        method: MethodHandle,
+        payload: Vec<u8>,
+        timeout_nano: u64,
+    ) -> ttrpc::Result<Vec<u8>> {
+        let spec = self.kind.spec();
+        let request = ttrpc::Request {
+            service: format!("{}.{}", spec.package, spec.service),
+            method: method.spec().name.to_owned(),
+            timeout_nano: timeout_nano.try_into().unwrap_or(i64::MAX),
+            payload,
+            ..Default::default()
+        };
+        self.raw
+            .request(request)
+            .await
+            .map(|response| response.payload)
     }
 }
 

@@ -9,23 +9,24 @@ use std::{
 
 use d2b_contracts::{
     v2_component_session::{
-        CorrelationId, IdempotencyKey, MAX_ACTIVE_NAMED_STREAMS, MAX_REQUEST_LIFETIME_MS,
-        RequestId, TraceId,
+        AttachmentPurpose, CorrelationId, IdempotencyKey, MAX_ACTIVE_NAMED_STREAMS,
+        MAX_REQUEST_LIFETIME_MS, RequestId, ServicePackage, TraceId,
     },
     v2_services::{
         StrictWireMessage,
         common::{
             self, ErrorKind as WireErrorKind, Outcome, RetryClass as WireRetryClass, ServiceRequest,
         },
+        decode_strict, encode_strict,
     },
 };
 use protobuf::MessageField;
 use tokio::sync::Notify;
 
 use crate::{
-    ClientError, ComponentSession, ComponentSessionConnector, MethodHandle, NamedStream,
+    ClientError, ComponentSessionConnector, MethodHandle, NamedStream, OwnedAttachment,
     RemoteErrorKind, ResolvedTarget, RetryClass, ServiceHandle, ServiceKind, ServiceOwner,
-    SessionCall, SessionFailure, SessionReply, StreamId, TargetInput, TargetResolver,
+    SessionCall, SessionFailure, SessionReply, TargetInput, TargetResolver, TransportPacket,
     TransportSelection,
 };
 
@@ -155,13 +156,6 @@ impl MetadataInput {
         metadata.session_generation = trusted_generation;
         Ok(metadata)
     }
-
-    fn request_id_array(&self) -> [u8; 16] {
-        self.request_id
-            .as_bytes()
-            .try_into()
-            .expect("RequestId has a fixed contract length")
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,7 +231,7 @@ impl CancellationToken {
 
 pub struct Client<R, C, W = SystemClock> {
     resolver: R,
-    connector: C,
+    connector: Arc<C>,
     clock: Arc<W>,
 }
 
@@ -245,7 +239,7 @@ impl<R, C> Client<R, C, SystemClock> {
     pub fn new(resolver: R, connector: C) -> Self {
         Self {
             resolver,
-            connector,
+            connector: Arc::new(connector),
             clock: Arc::new(SystemClock),
         }
     }
@@ -255,7 +249,7 @@ impl<R, C, W> Client<R, C, W> {
     pub fn with_clock(resolver: R, connector: C, clock: W) -> Self {
         Self {
             resolver,
-            connector,
+            connector: Arc::new(connector),
             clock: Arc::new(clock),
         }
     }
@@ -275,14 +269,16 @@ where
     ) -> Result<ConnectedClient, ClientError> {
         let resolved = self.resolver.resolve(&target, service, selection)?;
         let connected = self.connector.connect(&resolved, service).await?;
-        if connected.control.generation() == 0 {
+        let generation = connected.driver.generation();
+        if generation == 0 {
             return Err(ClientError::ContractViolation);
         }
         let generated = ttrpc::r#async::Client::new(connected.ttrpc_socket);
         Ok(ConnectedClient {
             target: resolved,
             service: ServiceHandle::new(service, generated),
-            session: connected.control,
+            driver: connected.driver,
+            generation,
             clock: self.clock.clone(),
             active_streams: Arc::new(AtomicU16::new(0)),
         })
@@ -292,7 +288,8 @@ where
 pub struct ConnectedClient {
     target: ResolvedTarget,
     service: ServiceHandle,
-    session: Arc<dyn ComponentSession>,
+    driver: crate::SharedDriver,
+    generation: u64,
     clock: Arc<dyn WallClock>,
     active_streams: Arc<AtomicU16>,
 }
@@ -303,14 +300,14 @@ impl fmt::Debug for ConnectedClient {
             .debug_struct("ConnectedClient")
             .field("target", &self.target)
             .field("service", &self.service.kind())
-            .field("generation", &self.session.generation())
+            .field("generation", &self.generation)
             .finish()
     }
 }
 
 pub struct Response {
     pub message: common::ServiceResponse,
-    pub attachments: Vec<crate::SessionAttachment>,
+    pub attachments: Vec<OwnedAttachment>,
 }
 
 impl fmt::Debug for Response {
@@ -331,7 +328,19 @@ impl ConnectedClient {
     pub async fn invoke(
         &self,
         method: MethodHandle,
+        request: ServiceRequest,
+        options: CallOptions,
+        cancellation: &CancellationToken,
+    ) -> Result<Response, ClientError> {
+        self.invoke_with_attachments(method, request, Vec::new(), options, cancellation)
+            .await
+    }
+
+    pub async fn invoke_with_attachments(
+        &self,
+        method: MethodHandle,
         mut request: ServiceRequest,
+        attachments: Vec<OwnedAttachment>,
         options: CallOptions,
         cancellation: &CancellationToken,
     ) -> Result<Response, ClientError> {
@@ -345,10 +354,20 @@ impl ConnectedClient {
         }
         options.metadata.validate_lifetime()?;
         request.scope = MessageField::some(scope_for(self.target.owner()));
-        request.metadata =
-            MessageField::some(options.metadata.protobuf(self.session.generation())?);
+        request.metadata = MessageField::some(options.metadata.protobuf(self.generation)?);
+        request.attachment_indexes = (0..attachments.len())
+            .map(|index| u32::try_from(index).map_err(|_| ClientError::AttachmentMismatch))
+            .collect::<Result<Vec<_>, _>>()?;
         request
             .validate_wire(spec.requires_idempotency)
+            .map_err(|_| ClientError::ContractViolation)?;
+        validate_outbound_attachments(
+            &attachments,
+            method,
+            &options.metadata.request_id,
+            self.generation,
+        )?;
+        let request_bytes = encode_strict(&request, spec.requires_idempotency)
             .map_err(|_| ClientError::ContractViolation)?;
 
         let now = self.clock.now_unix_ms();
@@ -366,6 +385,8 @@ impl ConnectedClient {
             .ok_or(ClientError::InvalidMetadata)?;
 
         let mut attempt = 0_u8;
+        let has_attachments = !attachments.is_empty();
+        let mut attachments = Some(attachments);
         loop {
             attempt = attempt.saturating_add(1);
             if cancellation.is_cancelled() {
@@ -376,25 +397,72 @@ impl ConnectedClient {
                 self.relative_timeout(monotonic_deadline, options.metadata.expires_at_unix_ms)?;
             let call = SessionCall {
                 method,
-                request: request.clone(),
+                packet: TransportPacket::with_attachments(
+                    request_bytes.clone(),
+                    attachments.take().unwrap_or_default(),
+                ),
                 relative_timeout_nanos,
             };
+            let (request_bytes, request_attachments) = call.packet.into_parts();
+            if !request_attachments.is_empty()
+                && self
+                    .driver
+                    .send_attachments(request_attachments)
+                    .await
+                    .is_err()
+            {
+                return Err(ClientError::TransportFailed);
+            }
             let result = tokio::select! {
-                result = self.session.invoke(call) => result,
+                result = async {
+                    let response_bytes = self
+                        .service
+                        .invoke(method, request_bytes, call.relative_timeout_nanos)
+                        .await
+                        .map_err(|_| SessionFailure::Retryable)?;
+                    let attachment_count = decode_strict::<common::ServiceResponse>(
+                        &response_bytes,
+                        false,
+                    )
+                    .map_err(|_| SessionFailure::Protocol)?
+                    .attachment_indexes
+                    .len();
+                    let attachments = if attachment_count == 0 {
+                        Vec::new()
+                    } else {
+                        self.driver
+                            .receive_attachments()
+                            .await
+                            .map_err(|_| SessionFailure::Protocol)?
+                    };
+                    Ok::<_, SessionFailure>(SessionReply {
+                        packet: TransportPacket::with_attachments(
+                            response_bytes,
+                            attachments,
+                        ),
+                    })
+                } => result,
                 () = cancellation.cancelled() => {
                     self.cancel_request(&options.metadata).await;
                     return Err(ClientError::Cancelled);
                 }
             };
             match result {
-                Ok(reply) => match validate_reply(reply) {
+                Ok(reply) => match validate_reply(
+                    reply,
+                    method,
+                    &options.metadata.request_id,
+                    self.generation,
+                ) {
                     Ok(response) => return Ok(response),
                     Err(
                         error @ ClientError::Remote {
                             retry: RetryClass::Safe,
                             ..
                         },
-                    ) if can_retry(attempt, options.retry, spec.mutating, has_idempotency) => {
+                    ) if !has_attachments
+                        && can_retry(attempt, options.retry, spec.mutating, has_idempotency) =>
+                    {
                         let _ = error;
                         tokio::task::yield_now().await;
                     }
@@ -402,6 +470,7 @@ impl ConnectedClient {
                 },
                 Err(failure)
                     if retryable_failure(failure, spec.mutating, has_idempotency)
+                        && !has_attachments
                         && can_retry(attempt, options.retry, spec.mutating, has_idempotency) =>
                 {
                     tokio::task::yield_now().await;
@@ -438,19 +507,33 @@ impl ConnectedClient {
 
     async fn cancel_request(&self, metadata: &MetadataInput) {
         let _ = self
-            .session
-            .cancel(self.session.generation(), metadata.request_id_array())
+            .driver
+            .cancel(self.generation, metadata.request_id.clone())
             .await;
     }
 
-    pub fn named_stream(&self, response: &Response) -> Result<NamedStream, ClientError> {
+    pub async fn named_stream(&self, response: &Response) -> Result<NamedStream, ClientError> {
         if response.message.stream_id.is_empty() {
             return Err(ClientError::ContractViolation);
         }
-        let id = StreamId::new(response.message.stream_id.clone())?;
+        let channel = response
+            .message
+            .stream_id
+            .strip_prefix("stream-")
+            .and_then(|value| value.parse::<u16>().ok())
+            .ok_or(ClientError::ContractViolation)?;
+        let id = d2b_session::StreamId::new(channel).map_err(|_| ClientError::ContractViolation)?;
+        self.driver
+            .open_named_stream(
+                id,
+                d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
+                d2b_contracts::v2_component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
+            )
+            .await
+            .map_err(|_| ClientError::TransportFailed)?;
         self.reserve_stream()?;
         Ok(NamedStream::new(
-            Arc::clone(&self.session),
+            Arc::clone(&self.driver),
             id,
             Arc::clone(&self.active_streams),
         ))
@@ -497,23 +580,68 @@ fn scope_for(owner: &ServiceOwner) -> common::IdentityScope {
     scope
 }
 
-fn validate_reply(reply: SessionReply) -> Result<Response, ClientError> {
-    reply
-        .response
+fn validate_outbound_attachments(
+    attachments: &[OwnedAttachment],
+    method: MethodHandle,
+    request_id: &RequestId,
+    generation: u64,
+) -> Result<(), ClientError> {
+    for (index, attachment) in attachments.iter().enumerate() {
+        let expected_index = u16::try_from(index).map_err(|_| ClientError::AttachmentMismatch)?;
+        let Some(descriptor) = attachment.descriptor() else {
+            return Err(ClientError::AttachmentMismatch);
+        };
+        if descriptor.validate(expected_index).is_err()
+            || descriptor.purpose != AttachmentPurpose::RequestInput
+            || descriptor.service != service_package(method.service())
+            || descriptor.method_id != method_id(method)
+            || &descriptor.request_id != request_id
+            || descriptor.reconnect_generation != generation
+        {
+            return Err(ClientError::AttachmentMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn validate_reply(
+    reply: SessionReply,
+    method: MethodHandle,
+    request_id: &RequestId,
+    generation: u64,
+) -> Result<Response, ClientError> {
+    let (bytes, attachments) = reply.packet.into_parts();
+    let response: common::ServiceResponse =
+        decode_strict(&bytes, false).map_err(|_| ClientError::ContractViolation)?;
+    response
         .validate_wire(false)
         .map_err(|_| ClientError::ContractViolation)?;
-    if reply.response.attachment_indexes.len() != reply.attachments.len()
-        || reply
-            .response
+    if response.attachment_indexes.len() != attachments.len()
+        || response
             .attachment_indexes
             .iter()
-            .zip(&reply.attachments)
-            .any(|(expected, actual)| *expected != actual.index())
+            .zip(&attachments)
+            .enumerate()
+            .any(|(position, (expected, actual))| {
+                let Ok(index) = u16::try_from(position) else {
+                    return true;
+                };
+                let Some(descriptor) = actual.descriptor() else {
+                    return true;
+                };
+                *expected != u32::from(index)
+                    || descriptor.validate(index).is_err()
+                    || descriptor.purpose != AttachmentPurpose::ResponseOutput
+                    || descriptor.service != service_package(method.service())
+                    || descriptor.method_id != method_id(method)
+                    || &descriptor.request_id != request_id
+                    || descriptor.packet_sequence == 0
+                    || descriptor.reconnect_generation != generation
+            })
     {
         return Err(ClientError::AttachmentMismatch);
     }
-    let outcome = reply
-        .response
+    let outcome = response
         .outcome
         .enum_value()
         .map_err(|_| ClientError::ContractViolation)?;
@@ -521,8 +649,7 @@ fn validate_reply(reply: SessionReply) -> Result<Response, ClientError> {
         outcome,
         Outcome::OUTCOME_DENIED | Outcome::OUTCOME_CANCELLED | Outcome::OUTCOME_FAILED
     ) {
-        let error = reply
-            .response
+        let error = response
             .error
             .as_ref()
             .ok_or(ClientError::ContractViolation)?;
@@ -542,9 +669,44 @@ fn validate_reply(reply: SessionReply) -> Result<Response, ClientError> {
         });
     }
     Ok(Response {
-        message: reply.response,
-        attachments: reply.attachments,
+        message: response,
+        attachments,
     })
+}
+
+fn method_id(method: MethodHandle) -> u32 {
+    let service = method.service().spec();
+    method.spec().method_id(service.package, service.service)
+}
+
+fn service_package(service: ServiceKind) -> ServicePackage {
+    match service {
+        ServiceKind::Daemon => ServicePackage::DaemonV2,
+        ServiceKind::Realm => ServicePackage::RealmV2,
+        ServiceKind::Guest => ServicePackage::GuestV2,
+        ServiceKind::ProviderRuntime
+        | ServiceKind::ProviderInfrastructure
+        | ServiceKind::ProviderTransport
+        | ServiceKind::ProviderSubstrate
+        | ServiceKind::ProviderCredential
+        | ServiceKind::ProviderDisplay
+        | ServiceKind::ProviderNetwork
+        | ServiceKind::ProviderStorage
+        | ServiceKind::ProviderDevice
+        | ServiceKind::ProviderAudio
+        | ServiceKind::ProviderObservability => ServicePackage::ProviderV2,
+        ServiceKind::Broker => ServicePackage::BrokerV2,
+        ServiceKind::User => ServicePackage::UserV2,
+        ServiceKind::RuntimeSystemdUser => ServicePackage::RuntimeSystemdUserV2,
+        ServiceKind::Shell => ServicePackage::ShellV2,
+        ServiceKind::Clipboard => ServicePackage::ClipboardV2,
+        ServiceKind::ClipboardPicker => ServicePackage::ClipboardPickerV2,
+        ServiceKind::Notify => ServicePackage::NotifyV2,
+        ServiceKind::SecurityKey => ServicePackage::SecurityKeyV2,
+        ServiceKind::Wayland => ServicePackage::WaylandV2,
+        ServiceKind::Activation => ServicePackage::ActivationV2,
+        ServiceKind::Tty => ServicePackage::TtyV2,
+    }
 }
 
 fn map_remote_kind(kind: WireErrorKind) -> Result<RemoteErrorKind, ClientError> {

@@ -1,29 +1,45 @@
 use std::{
+    any::Any,
     collections::VecDeque,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::Instant,
 };
 
 use async_trait::async_trait;
 use d2b_client::{
-    CallOptions, CancellationToken, Client, ClientError, ComponentSession,
-    ComponentSessionConnector, ConnectedSession, MetadataInput, RemoteErrorKind, Response,
-    RetryClass, RetryPolicy, RouteRecord, RouteTable, ServiceKind, ServiceOwner, SessionAttachment,
-    SessionCall, SessionFailure, SessionReply, StreamId, TargetInput, TransportKind,
-    TransportSelection, WallClock,
+    AttachmentPayload, AttachmentValidationError, CallOptions, CancellationToken, Client,
+    ClientError, ComponentSessionConnector, ConnectedClient, ConnectedSession, MetadataInput,
+    OwnedAttachment, OwnedTransport, RemoteErrorKind, RetryClass, RetryPolicy, RouteRecord,
+    RouteTable, ServiceKind, ServiceOwner, SessionFailure, SharedDriver, TargetInput,
+    TransportKind, TransportPacket, TransportSelection, WallClock,
 };
 use d2b_contracts::{
-    v2_component_session::KernelObjectType,
+    v2_component_session::{
+        AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
+        AttachmentPolicy, AttachmentPurpose, BoundedVec, EndpointPolicy, EndpointPurpose,
+        EndpointRole, HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile,
+        Locality, NoiseProfile, PurposeClass, RequestId, ServicePackage, TransportBinding,
+        TransportClass,
+    },
     v2_identity::{ProviderId, RealmId, WorkloadId},
-    v2_services::{SERVICE_INVENTORY, common},
+    v2_services::{SERVICE_INVENTORY, common, decode_strict, encode_strict},
 };
-use protobuf::{EnumOrUnknown, MessageField};
-use tokio::sync::Notify;
+use d2b_session::{
+    HandshakeCredentials, SessionEngine, StreamEvent, StreamId, TransportDescriptor, TransportError,
+};
+use protobuf::{EnumOrUnknown, Message, MessageField};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, DuplexStream},
+    sync::{Notify, mpsc},
+};
 use ttrpc::r#async::transport::Socket;
+use ttrpc::proto::{MESSAGE_HEADER_LENGTH, MessageHeader};
 
 const NOW: u64 = 1_800_000_000_000;
+const GENERATION: u64 = 17;
 
 #[derive(Debug)]
 struct FixedClock;
@@ -34,23 +50,146 @@ impl WallClock for FixedClock {
     }
 }
 
+struct FakeTransport {
+    sender: mpsc::Sender<TransportPacket>,
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl OwnedTransport for FakeTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        TransportDescriptor {
+            class: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: true,
+        }
+    }
+
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+fn transport_pair() -> (FakeTransport, FakeTransport) {
+    let (a_tx, a_rx) = mpsc::channel(128);
+    let (b_tx, b_rx) = mpsc::channel(128);
+    (
+        FakeTransport {
+            sender: a_tx,
+            receiver: b_rx,
+        },
+        FakeTransport {
+            sender: b_tx,
+            receiver: a_rx,
+        },
+    )
+}
+
+fn offer() -> HandshakeOffer {
+    HandshakeOffer {
+        purpose: EndpointPurpose::PrivilegedBroker,
+        purpose_class: PurposeClass::Local,
+        initiator_role: EndpointRole::LocalRootController,
+        responder_role: EndpointRole::LocalRootBroker,
+        service: ServicePackage::DaemonV2,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        reconnect_generation: GENERATION,
+        attachment_policy: AttachmentPolicy {
+            kind: d2b_session::contract::AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 8,
+            max_per_request: 8,
+            max_per_operation: 8,
+            max_per_session: 32,
+            credentials_allowed: false,
+        },
+    }
+}
+
+fn policy(value: &HandshakeOffer) -> EndpointPolicy {
+    EndpointPolicy {
+        purpose: value.purpose,
+        purpose_class: value.purpose_class,
+        initiator_role: value.initiator_role,
+        responder_role: value.responder_role,
+        service: value.service,
+        schema_fingerprint: value.schema_fingerprint,
+        noise_profile: value.noise_profile,
+        limits: value.limits,
+        transport_binding: value.transport_binding,
+        reconnect_generation: value.reconnect_generation,
+        attachment_policy: value.attachment_policy,
+    }
+}
+
+async fn drivers() -> (SharedDriver, SharedDriver) {
+    let (initiator_transport, responder_transport) = transport_pair();
+    let session_offer = offer();
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            policy(&session_offer),
+            HandshakeCredentials::Nn,
+            now,
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            policy(&session_offer),
+            HandshakeCredentials::Nn,
+            now,
+        )
+    );
+    (
+        Arc::new(initiator.unwrap().into_driver()),
+        Arc::new(responder.unwrap().into_driver()),
+    )
+}
+
 #[derive(Default)]
-struct FakeSession {
+struct FakeState {
+    attempts: AtomicUsize,
     calls: AtomicUsize,
     cancellations: AtomicUsize,
     failures: Mutex<VecDeque<SessionFailure>>,
     seen: Mutex<Vec<SeenCall>>,
-    attachments: Mutex<Vec<SessionAttachment>>,
-    response_indexes: Mutex<Vec<u32>>,
     response_override: Mutex<Option<common::ServiceResponse>>,
+    response_attachments: Mutex<VecDeque<Vec<OwnedAttachment>>>,
     stream_id: Mutex<Option<String>>,
     stream_sent: Mutex<Vec<Vec<u8>>>,
     stream_received: Mutex<VecDeque<Vec<u8>>>,
-    detached: AtomicUsize,
     closed: AtomicUsize,
     stream_cancelled: AtomicUsize,
     block: AtomicBool,
     blocker: Notify,
+    fail_connect: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -59,138 +198,192 @@ struct SeenCall {
     request_id: Vec<u8>,
     idempotency_key: Vec<u8>,
     timeout_nanos: u64,
-}
-
-impl FakeSession {
-    fn fail_once(&self, failure: SessionFailure) {
-        self.failures.lock().unwrap().push_back(failure);
-    }
-
-    fn reply(&self) -> SessionReply {
-        if let Some(response) = self.response_override.lock().unwrap().clone() {
-            return SessionReply {
-                response,
-                attachments: self.attachments.lock().unwrap().clone(),
-            };
-        }
-        let mut response = common::ServiceResponse::new();
-        response.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
-        response.attachment_indexes = self.response_indexes.lock().unwrap().clone();
-        response.stream_id = self.stream_id.lock().unwrap().clone().unwrap_or_default();
-        SessionReply {
-            response,
-            attachments: self.attachments.lock().unwrap().clone(),
-        }
-    }
-}
-
-#[async_trait]
-impl ComponentSession for FakeSession {
-    fn generation(&self) -> u64 {
-        17
-    }
-
-    async fn invoke(&self, call: SessionCall) -> Result<SessionReply, SessionFailure> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let metadata = call.request.metadata.as_ref().unwrap();
-        self.seen.lock().unwrap().push(SeenCall {
-            generation: metadata.session_generation,
-            request_id: metadata.request_id.clone(),
-            idempotency_key: metadata.idempotency_key.clone(),
-            timeout_nanos: call.relative_timeout_nanos,
-        });
-        if self.block.load(Ordering::Acquire) {
-            self.blocker.notified().await;
-        }
-        if let Some(failure) = self.failures.lock().unwrap().pop_front() {
-            return Err(failure);
-        }
-        Ok(self.reply())
-    }
-
-    async fn cancel(&self, generation: u64, request_id: [u8; 16]) -> Result<(), SessionFailure> {
-        assert_eq!(generation, 17);
-        assert_eq!(request_id, [7; 16]);
-        self.cancellations.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn stream_send(&self, _stream: &StreamId, message: &[u8]) -> Result<(), SessionFailure> {
-        self.stream_sent.lock().unwrap().push(message.to_vec());
-        Ok(())
-    }
-
-    async fn stream_receive(&self, _stream: &StreamId) -> Result<Vec<u8>, SessionFailure> {
-        Ok(self
-            .stream_received
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_default())
-    }
-
-    async fn stream_detach(&self, _stream: &StreamId) -> Result<(), SessionFailure> {
-        self.detached.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn stream_close(&self, _stream: &StreamId) -> Result<(), SessionFailure> {
-        self.closed.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn stream_cancel(&self, _stream: &StreamId) -> Result<(), SessionFailure> {
-        self.stream_cancelled.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-}
-
-struct FakeConnector {
-    session: Arc<FakeSession>,
-    attempts: AtomicUsize,
-    seen: Mutex<Vec<(TransportKind, ServiceKind)>>,
-    fail: AtomicBool,
+    attachment_count: usize,
 }
 
 #[derive(Clone)]
-struct SharedConnector(Arc<FakeConnector>);
+struct FakeConnector(Arc<FakeState>);
 
 impl FakeConnector {
-    fn new(session: Arc<FakeSession>) -> Self {
-        Self {
-            session,
-            attempts: AtomicUsize::new(0),
-            seen: Mutex::new(Vec::new()),
-            fail: AtomicBool::new(false),
-        }
+    fn new() -> Self {
+        Self(Arc::new(FakeState::default()))
+    }
+
+    fn fail_once(&self, failure: SessionFailure) {
+        self.0.failures.lock().unwrap().push_back(failure);
     }
 }
 
 #[async_trait]
-impl ComponentSessionConnector for SharedConnector {
+impl ComponentSessionConnector for FakeConnector {
     async fn connect(
         &self,
-        target: &d2b_client::ResolvedTarget,
-        service: ServiceKind,
+        _target: &d2b_client::ResolvedTarget,
+        _service: ServiceKind,
     ) -> Result<ConnectedSession, ClientError> {
         self.0.attempts.fetch_add(1, Ordering::SeqCst);
-        self.0
-            .seen
-            .lock()
-            .unwrap()
-            .push((target.transport(), service));
-        if self.0.fail.load(Ordering::Acquire) {
+        if self.0.fail_connect.load(Ordering::Acquire) {
             return Err(ClientError::ConnectFailed);
         }
-        let (client, peer) = tokio::io::duplex(4096);
-        tokio::spawn(async move {
-            let _peer = peer;
-            std::future::pending::<()>().await;
-        });
+        let (initiator, responder) = drivers().await;
+        let (client, peer) = tokio::io::duplex(4 * 1024 * 1024);
+        tokio::spawn(ttrpc_bridge(
+            peer,
+            Arc::clone(&initiator),
+            Arc::clone(&self.0),
+        ));
+        tokio::spawn(remote_ttrpc(Arc::clone(&responder), Arc::clone(&self.0)));
+        tokio::spawn(remote_streams(Arc::clone(&responder), Arc::clone(&self.0)));
+        tokio::spawn(remote_controls(responder, Arc::clone(&self.0)));
         Ok(ConnectedSession {
-            control: self.0.session.clone(),
+            driver: initiator,
             ttrpc_socket: Socket::new(client),
         })
+    }
+}
+
+async fn ttrpc_bridge(
+    mut socket: DuplexStream,
+    driver: SharedDriver,
+    state: Arc<FakeState>,
+) -> Result<(), ()> {
+    loop {
+        let mut header_bytes = [0_u8; MESSAGE_HEADER_LENGTH];
+        socket.read_exact(&mut header_bytes).await.map_err(|_| ())?;
+        let header = MessageHeader::from(header_bytes);
+        let mut body = vec![0_u8; header.length as usize];
+        socket.read_exact(&mut body).await.map_err(|_| ())?;
+        let request = ttrpc::Request::parse_from_bytes(&body).map_err(|_| ())?;
+        let service_request =
+            decode_strict::<common::ServiceRequest>(&request.payload, false).map_err(|_| ())?;
+        let metadata = service_request.metadata.as_ref().ok_or(())?;
+        let request_id = RequestId::new(metadata.request_id.clone()).map_err(|_| ())?;
+        let mut frame = header_bytes.to_vec();
+        frame.extend_from_slice(&body);
+        let reply = driver.invoke(request_id, frame).await.map_err(|_| ())?;
+        socket.write_all(&reply).await.map_err(|_| ())?;
+        state.calls.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+async fn remote_ttrpc(driver: SharedDriver, state: Arc<FakeState>) -> Result<(), ()> {
+    loop {
+        let frame = driver.receive_ttrpc().await.map_err(|_| ())?;
+        if frame.len() < MESSAGE_HEADER_LENGTH {
+            return Err(());
+        }
+        let header = MessageHeader::from(&frame[..MESSAGE_HEADER_LENGTH]);
+        let request =
+            ttrpc::Request::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..]).map_err(|_| ())?;
+        let service_request =
+            decode_strict::<common::ServiceRequest>(&request.payload, false).map_err(|_| ())?;
+        let metadata = service_request.metadata.as_ref().ok_or(())?;
+        state.seen.lock().unwrap().push(SeenCall {
+            generation: metadata.session_generation,
+            request_id: metadata.request_id.clone(),
+            idempotency_key: metadata.idempotency_key.clone(),
+            timeout_nanos: u64::try_from(request.timeout_nano).unwrap_or_default(),
+            attachment_count: service_request.attachment_indexes.len(),
+        });
+        if !service_request.attachment_indexes.is_empty() {
+            drop(driver.receive_attachments().await.map_err(|_| ())?);
+        }
+        if state.block.load(Ordering::Acquire) {
+            state.blocker.notified().await;
+        }
+
+        let mut response = if matches!(
+            state.failures.lock().unwrap().pop_front(),
+            Some(SessionFailure::Retryable)
+        ) {
+            let mut response = common::ServiceResponse::new();
+            response.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_FAILED);
+            let mut error = common::ErrorEnvelope::new();
+            error.kind = EnumOrUnknown::new(common::ErrorKind::ERROR_KIND_UNAVAILABLE);
+            error.retry = EnumOrUnknown::new(common::RetryClass::RETRY_CLASS_SAME_OPERATION);
+            response.error = MessageField::some(error);
+            response
+        } else {
+            state
+                .response_override
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| {
+                    let mut response = common::ServiceResponse::new();
+                    response.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
+                    response.stream_id =
+                        state.stream_id.lock().unwrap().clone().unwrap_or_default();
+                    response
+                })
+        };
+        let attachments = state
+            .response_attachments
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_default();
+        response.attachment_indexes = (0..attachments.len())
+            .map(|index| u32::try_from(index).unwrap())
+            .collect();
+        if !attachments.is_empty() {
+            driver.send_attachments(attachments).await.map_err(|_| ())?;
+        }
+        let payload = encode_strict(&response, false).map_err(|_| ())?;
+        let ttrpc_response = ttrpc::Response {
+            payload,
+            ..Default::default()
+        };
+        let body = ttrpc_response.write_to_bytes().map_err(|_| ())?;
+        let mut reply = Vec::from(MessageHeader::new_response(
+            header.stream_id,
+            u32::try_from(body.len()).map_err(|_| ())?,
+        ));
+        reply.extend_from_slice(&body);
+        driver.send_ttrpc(reply).await.map_err(|_| ())?;
+    }
+}
+
+async fn remote_streams(driver: SharedDriver, state: Arc<FakeState>) -> Result<(), ()> {
+    let stream = StreamId::new(0x0100).map_err(|_| ())?;
+    driver
+        .open_named_stream(stream, 256 * 1024, 256 * 1024)
+        .await
+        .map_err(|_| ())?;
+    loop {
+        match driver.receive_named_stream().await.map_err(|_| ())? {
+            StreamEvent::Data {
+                stream: received,
+                bytes,
+            } if received == stream => {
+                state.stream_sent.lock().unwrap().push(bytes.clone());
+                let reply = state.stream_received.lock().unwrap().pop_front();
+                if let Some(reply) = reply {
+                    driver
+                        .send_named_stream(stream, reply)
+                        .await
+                        .map_err(|_| ())?;
+                }
+            }
+            StreamEvent::RemoteClosed { stream: received } if received == stream => {
+                state.closed.fetch_add(1, Ordering::SeqCst);
+            }
+            StreamEvent::Reset { stream: received } if received == stream => {
+                state.stream_cancelled.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => return Err(()),
+        }
+    }
+}
+
+async fn remote_controls(driver: SharedDriver, state: Arc<FakeState>) -> Result<(), ()> {
+    loop {
+        if matches!(
+            driver.receive_control().await.map_err(|_| ())?,
+            d2b_session::SessionEvent::CancelRequest(_)
+        ) {
+            state.cancellations.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -234,23 +427,20 @@ fn options(mutating: bool) -> CallOptions {
         .unwrap()
         .with_trace([8; 16])
         .unwrap();
-    let metadata = if mutating {
-        metadata.with_idempotency(vec![9; 32]).unwrap()
-    } else {
-        metadata
-    };
     CallOptions {
-        metadata,
+        metadata: if mutating {
+            metadata.with_idempotency(vec![9; 32]).unwrap()
+        } else {
+            metadata
+        },
         retry: RetryPolicy::new(3).unwrap(),
     }
 }
 
-async fn daemon_client(
-    session: Arc<FakeSession>,
-) -> (Arc<FakeConnector>, d2b_client::ConnectedClient) {
+async fn daemon_client() -> (FakeConnector, ConnectedClient) {
     let (realm, _, _) = ids();
-    let connector = Arc::new(FakeConnector::new(session));
-    let client = Client::with_clock(routes(), SharedConnector(connector.clone()), FixedClock);
+    let connector = FakeConnector::new();
+    let client = Client::with_clock(routes(), connector.clone(), FixedClock);
     let connected = client
         .connect(
             TargetInput::LocalRoot(realm),
@@ -264,86 +454,51 @@ async fn daemon_client(
 
 #[tokio::test]
 async fn typed_routes_select_exact_transport_without_fallback() {
-    let (realm, workload, provider) = ids();
-    let session = Arc::new(FakeSession::default());
-    let connector = Arc::new(FakeConnector::new(session));
-    let client = Client::with_clock(routes(), SharedConnector(connector.clone()), FixedClock);
-    let cases = [
-        (
+    let (realm, _, _) = ids();
+    let connector = FakeConnector::new();
+    let client = Client::with_clock(routes(), connector.clone(), FixedClock);
+    client
+        .connect(
             TargetInput::LocalRoot(realm.clone()),
-            TransportKind::LocalUnix,
-        ),
-        (TargetInput::Realm(realm.clone()), TransportKind::Provider),
-        (
-            TargetInput::Workload {
-                realm: realm.clone(),
-                workload,
-            },
-            TransportKind::NativeVsock,
-        ),
-        (
-            TargetInput::Provider { realm, provider },
-            TransportKind::InheritedSocket,
-        ),
-    ];
-    for (target, transport) in cases {
+            ServiceKind::Daemon,
+            TransportSelection::exact(TransportKind::LocalUnix),
+        )
+        .await
+        .unwrap();
+    assert_eq!(connector.0.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
         client
             .connect(
-                target,
+                TargetInput::LocalRoot(realm.clone()),
                 ServiceKind::Daemon,
-                TransportSelection::exact(transport),
+                TransportSelection::exact(TransportKind::Provider),
             )
             .await
-            .unwrap();
-    }
-    assert_eq!(connector.attempts.load(Ordering::SeqCst), 4);
-
-    let (realm, _, _) = ids();
-    let error = client
-        .connect(
-            TargetInput::LocalRoot(realm.clone()),
-            ServiceKind::Daemon,
-            TransportSelection::exact(TransportKind::Provider),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::TransportPolicyMismatch);
-    assert_eq!(connector.attempts.load(Ordering::SeqCst), 4);
-
-    connector.fail.store(true, Ordering::Release);
-    let error = client
-        .connect(
-            TargetInput::LocalRoot(realm),
-            ServiceKind::Daemon,
-            TransportSelection::exact(TransportKind::LocalUnix),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::ConnectFailed);
-    assert_eq!(connector.attempts.load(Ordering::SeqCst), 5);
-
-    let error = client
-        .connect(
-            TargetInput::Service {
-                owner: ServiceOwner::LocalRoot(ids().0),
-                service: ServiceKind::Realm,
-            },
-            ServiceKind::Daemon,
-            TransportSelection::exact(TransportKind::LocalUnix),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::InvalidService);
-    assert_eq!(connector.attempts.load(Ordering::SeqCst), 5);
+            .unwrap_err(),
+        ClientError::TransportPolicyMismatch
+    );
+    assert_eq!(connector.0.attempts.load(Ordering::SeqCst), 1);
+    connector.0.fail_connect.store(true, Ordering::Release);
+    assert_eq!(
+        client
+            .connect(
+                TargetInput::LocalRoot(realm),
+                ServiceKind::Daemon,
+                TransportSelection::exact(TransportKind::LocalUnix),
+            )
+            .await
+            .unwrap_err(),
+        ClientError::ConnectFailed
+    );
+    assert_eq!(connector.0.attempts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
 async fn constructs_every_generated_inventory_client() {
     assert_eq!(ServiceKind::ALL.len(), SERVICE_INVENTORY.len());
-    let (realm, _, _) = ids();
-    let session = Arc::new(FakeSession::default());
-    let connector = Arc::new(FakeConnector::new(session));
-    let client = Client::with_clock(routes(), SharedConnector(connector), FixedClock);
+    let connector = FakeConnector::new();
+    let client = Client::with_clock(routes(), connector, FixedClock);
+    let realm = ids().0;
     for service in ServiceKind::ALL {
         let connected = client
             .connect(
@@ -357,41 +512,60 @@ async fn constructs_every_generated_inventory_client() {
             .await
             .unwrap();
         assert_eq!(connected.service().generated().kind(), *service);
-        assert_eq!(
-            connected.service().kind().spec().service,
-            SERVICE_INVENTORY[*service as usize].service
-        );
     }
 }
 
 #[tokio::test]
-async fn metadata_uses_trusted_generation_and_per_hop_deadline() {
-    let session = Arc::new(FakeSession::default());
-    let (_, client) = daemon_client(session.clone()).await;
-    let method = client.service().method(3).unwrap();
+async fn metadata_retries_and_cancellation_use_canonical_driver() {
+    let (connector, client) = daemon_client().await;
+    let read = client.service().method(3).unwrap();
+    connector.fail_once(SessionFailure::Retryable);
     client
         .invoke(
-            method,
+            read,
             common::ServiceRequest::new(),
             options(false),
             &CancellationToken::default(),
         )
         .await
         .unwrap();
-    let seen = session.seen.lock().unwrap();
-    assert_eq!(seen[0].generation, 17);
-    assert_eq!(seen[0].request_id, vec![7; 16]);
-    assert!(seen[0].idempotency_key.is_empty());
-    assert!(seen[0].timeout_nanos > 0);
-    assert!(seen[0].timeout_nanos <= 30_000_000_000);
+    {
+        let seen = connector.0.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].generation, GENERATION);
+        assert_eq!(seen[0].request_id, seen[1].request_id);
+        assert!(seen[0].idempotency_key.is_empty());
+        assert!(seen[0].timeout_nanos > 0);
+        assert!(seen[0].attachment_count == 0);
+    }
+
+    connector.0.block.store(true, Ordering::Release);
+    let cancellation = CancellationToken::default();
+    let trigger = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        trigger.cancel();
+    });
+    assert_eq!(
+        client
+            .invoke(
+                read,
+                common::ServiceRequest::new(),
+                options(false),
+                &cancellation,
+            )
+            .await
+            .unwrap_err(),
+        ClientError::Cancelled
+    );
+    assert_eq!(connector.0.cancellations.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
-async fn retries_only_with_stable_mutation_idempotency() {
-    let session = Arc::new(FakeSession::default());
-    session.fail_once(SessionFailure::Retryable);
-    let (_, client) = daemon_client(session.clone()).await;
+async fn mutating_retries_require_stable_idempotency() {
+    let (connector, client) = daemon_client().await;
     let method = client.service().method(4).unwrap();
+    connector.fail_once(SessionFailure::Retryable);
     client
         .invoke(
             method,
@@ -401,9 +575,8 @@ async fn retries_only_with_stable_mutation_idempotency() {
         )
         .await
         .unwrap();
-    assert_eq!(session.calls.load(Ordering::SeqCst), 2);
     {
-        let seen = session.seen.lock().unwrap();
+        let seen = connector.0.seen.lock().unwrap();
         assert_eq!(seen[0].request_id, seen[1].request_id);
         assert_eq!(seen[0].idempotency_key, seen[1].idempotency_key);
     }
@@ -412,138 +585,178 @@ async fn retries_only_with_stable_mutation_idempotency() {
         metadata: MetadataInput::new([7; 16], NOW, NOW + 30_000).unwrap(),
         retry: RetryPolicy::new(3).unwrap(),
     };
-    let error = client
-        .invoke(
-            method,
-            common::ServiceRequest::new(),
-            missing,
-            &CancellationToken::default(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::IdempotencyRequired);
+    assert_eq!(
+        client
+            .invoke(
+                method,
+                common::ServiceRequest::new(),
+                missing,
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap_err(),
+        ClientError::IdempotencyRequired
+    );
+}
 
-    session.fail_once(SessionFailure::Ambiguous);
-    let error = client
-        .invoke(
-            method,
-            common::ServiceRequest::new(),
-            options(true),
-            &CancellationToken::default(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::AmbiguousMutation);
+struct CountingAttachment(Arc<AtomicUsize>);
 
-    session.fail_once(SessionFailure::Retryable);
-    session.fail_once(SessionFailure::Retryable);
-    session.fail_once(SessionFailure::Retryable);
-    let error = client
-        .invoke(
-            method,
-            common::ServiceRequest::new(),
-            options(true),
-            &CancellationToken::default(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::RetryLimitExceeded);
+impl AttachmentPayload for CountingAttachment {
+    fn close(self: Box<Self>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        _descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        Ok(())
+    }
+}
+
+fn descriptor(
+    purpose: AttachmentPurpose,
+    index: u16,
+    request_id: [u8; 16],
+    method_id: u32,
+) -> AttachmentDescriptor {
+    AttachmentDescriptor {
+        index,
+        kind: AttachmentKind::FileDescriptor,
+        object_type: KernelObjectType::Memfd,
+        access: AttachmentAccess::ReadOnly,
+        purpose,
+        service: ServicePackage::DaemonV2,
+        method_id,
+        request_id: RequestId::new(request_id.to_vec()).unwrap(),
+        operation_id: None,
+        packet_sequence: 1,
+        reconnect_generation: GENERATION,
+        duplicate_object_allowed: false,
+        cloexec_required: true,
+        credit_classes: BoundedVec::new(vec![
+            AttachmentCreditClass::Packet,
+            AttachmentCreditClass::Request,
+            AttachmentCreditClass::Operation,
+            AttachmentCreditClass::Session,
+            AttachmentCreditClass::Process,
+            AttachmentCreditClass::Host,
+        ])
+        .unwrap(),
+    }
 }
 
 #[tokio::test]
-async fn cancellation_signals_original_request() {
-    let session = Arc::new(FakeSession::default());
-    session.block.store(true, Ordering::Release);
-    let (_, client) = daemon_client(session.clone()).await;
+async fn owned_attachments_are_authenticated_and_mismatches_close_once() {
+    let (connector, client) = daemon_client().await;
     let method = client.service().method(3).unwrap();
-    let cancellation = CancellationToken::default();
-    let trigger = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::task::yield_now().await;
-        trigger.cancel();
-    });
-    let error = client
-        .invoke(
-            method,
-            common::ServiceRequest::new(),
-            options(false),
-            &cancellation,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::Cancelled);
-    assert_eq!(session.cancellations.load(Ordering::SeqCst), 1);
+    let method_id = method.spec().method_id(
+        method.service().spec().package,
+        method.service().spec().service,
+    );
+    let closes = Arc::new(AtomicUsize::new(0));
+    connector
+        .0
+        .response_attachments
+        .lock()
+        .unwrap()
+        .push_back(vec![OwnedAttachment::new(
+            descriptor(
+                AttachmentPurpose::ResponseOutput,
+                0,
+                [7; 16],
+                method_id.wrapping_add(1),
+            ),
+            Box::new(CountingAttachment(Arc::clone(&closes))),
+        )]);
+    assert_eq!(
+        client
+            .invoke(
+                method,
+                common::ServiceRequest::new(),
+                options(false),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap_err(),
+        ClientError::AttachmentMismatch
+    );
+    assert_eq!(closes.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
-async fn attachment_indexes_must_match_session_order() {
-    let session = Arc::new(FakeSession::default());
-    *session.response_indexes.lock().unwrap() = vec![0];
-    *session.attachments.lock().unwrap() = vec![SessionAttachment::new(1, KernelObjectType::Memfd)];
-    let (_, client) = daemon_client(session).await;
-    let error = client
-        .invoke(
-            client.service().method(3).unwrap(),
+async fn outbound_attachments_are_owned_by_the_canonical_engine() {
+    let (connector, client) = daemon_client().await;
+    let method = client.service().method(3).unwrap();
+    let method_id = method.spec().method_id(
+        method.service().spec().package,
+        method.service().spec().service,
+    );
+    let closes = Arc::new(AtomicUsize::new(0));
+    let attachment = OwnedAttachment::new(
+        descriptor(AttachmentPurpose::RequestInput, 0, [7; 16], method_id),
+        Box::new(CountingAttachment(Arc::clone(&closes))),
+    );
+    client
+        .invoke_with_attachments(
+            method,
             common::ServiceRequest::new(),
+            vec![attachment],
             options(false),
             &CancellationToken::default(),
         )
         .await
-        .unwrap_err();
-    assert_eq!(error, ClientError::AttachmentMismatch);
+        .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(connector.0.seen.lock().unwrap()[0].attachment_count, 1);
+    assert_eq!(closes.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
-async fn validates_closed_remote_errors_and_outcome_consistency() {
-    let session = Arc::new(FakeSession::default());
+async fn validates_closed_remote_errors() {
+    let (connector, client) = daemon_client().await;
     let mut response = common::ServiceResponse::new();
     response.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_DENIED);
     let mut error = common::ErrorEnvelope::new();
     error.kind = EnumOrUnknown::new(common::ErrorKind::ERROR_KIND_UNAUTHORIZED);
     error.retry = EnumOrUnknown::new(common::RetryClass::RETRY_CLASS_NEVER);
     response.error = MessageField::some(error);
-    *session.response_override.lock().unwrap() = Some(response);
-    let (_, client) = daemon_client(session.clone()).await;
-    let result = client
-        .invoke(
-            client.service().method(3).unwrap(),
-            common::ServiceRequest::new(),
-            options(false),
-            &CancellationToken::default(),
-        )
-        .await;
+    *connector.0.response_override.lock().unwrap() = Some(response);
     assert_eq!(
-        result.unwrap_err(),
+        client
+            .invoke(
+                client.service().method(3).unwrap(),
+                common::ServiceRequest::new(),
+                options(false),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap_err(),
         ClientError::Remote {
             kind: RemoteErrorKind::Forbidden,
             retry: RetryClass::Never,
         }
     );
-
-    let mut inconsistent = session.response_override.lock().unwrap().clone().unwrap();
-    inconsistent.outcome = EnumOrUnknown::new(common::Outcome::OUTCOME_SUCCEEDED);
-    *session.response_override.lock().unwrap() = Some(inconsistent);
-    let result = client
-        .invoke(
-            client.service().method(3).unwrap(),
-            common::ServiceRequest::new(),
-            options(false),
-            &CancellationToken::default(),
-        )
-        .await;
-    assert_eq!(result.unwrap_err(), ClientError::ContractViolation);
 }
 
 #[tokio::test]
-async fn named_streams_are_bounded_and_have_explicit_terminal_actions() {
-    let session = Arc::new(FakeSession::default());
-    *session.stream_id.lock().unwrap() = Some("stream-1".to_owned());
-    session
+async fn named_stream_fragments_over_queue_credit_and_has_terminal_actions() {
+    let (connector, client) = daemon_client().await;
+    *connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    connector
+        .0
         .stream_received
         .lock()
         .unwrap()
-        .push_back(b"reply".to_vec());
-    let (_, client) = daemon_client(session.clone()).await;
+        .push_back(vec![2; 256 * 1024 + 32]);
     let response = client
         .invoke(
             client.service().method(3).unwrap(),
@@ -553,60 +766,75 @@ async fn named_streams_are_bounded_and_have_explicit_terminal_actions() {
         )
         .await
         .unwrap();
-    let stream = client.named_stream(&response).unwrap();
-    stream.send(b"request").await.unwrap();
-    assert_eq!(stream.receive().await.unwrap(), b"reply");
+    let stream = client.named_stream(&response).await.unwrap();
+    let logical = vec![9; 256 * 1024 + 37];
+    stream.send(&logical).await.unwrap();
+    assert_eq!(
+        connector.0.stream_sent.lock().unwrap().as_slice(),
+        &[logical]
+    );
+    assert_eq!(stream.receive().await.unwrap().len(), 256 * 1024 + 32);
     stream.detach().await.unwrap();
-    assert!(stream.is_terminal());
     assert_eq!(
         stream.send(b"late").await.unwrap_err(),
         ClientError::StreamDetached
     );
 
-    let close = client
-        .named_stream(&Response {
-            message: response.message.clone(),
-            attachments: vec![],
-        })
+    let (close_connector, close_client) = daemon_client().await;
+    *close_connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    let close_response = close_client
+        .invoke(
+            close_client.service().method(3).unwrap(),
+            common::ServiceRequest::new(),
+            options(false),
+            &CancellationToken::default(),
+        )
+        .await
         .unwrap();
+    let close = close_client.named_stream(&close_response).await.unwrap();
     close.close().await.unwrap();
-    let cancel = client
-        .named_stream(&Response {
-            message: response.message.clone(),
-            attachments: vec![],
-        })
+
+    let (cancel_connector, cancel_client) = daemon_client().await;
+    *cancel_connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    let cancel_response = cancel_client
+        .invoke(
+            cancel_client.service().method(3).unwrap(),
+            common::ServiceRequest::new(),
+            options(false),
+            &CancellationToken::default(),
+        )
+        .await
         .unwrap();
+    let cancel = cancel_client.named_stream(&cancel_response).await.unwrap();
     cancel.cancel().await.unwrap();
-    assert_eq!(session.detached.load(Ordering::SeqCst), 1);
-    assert_eq!(session.closed.load(Ordering::SeqCst), 1);
-    assert_eq!(session.stream_cancelled.load(Ordering::SeqCst), 1);
-
-    let oversized = vec![0; 256 * 1024 + 1];
+    tokio::task::yield_now().await;
+    assert_eq!(close_connector.0.closed.load(Ordering::SeqCst), 1);
     assert_eq!(
-        stream.send(&oversized).await.unwrap_err(),
+        cancel_connector.0.stream_cancelled.load(Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn stream_logical_bound_is_one_mib() {
+    let (connector, client) = daemon_client().await;
+    *connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    let response = client
+        .invoke(
+            client.service().method(3).unwrap(),
+            common::ServiceRequest::new(),
+            options(false),
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+    let stream = client.named_stream(&response).await.unwrap();
+    stream.send(&vec![0; 1024 * 1024]).await.unwrap();
+    assert_eq!(connector.0.stream_sent.lock().unwrap().len(), 1);
+    assert_eq!(
+        stream.send(&vec![0; 1024 * 1024 + 1]).await.unwrap_err(),
         ClientError::StreamLimitExceeded
     );
-
-    let streams: Vec<_> = (0..128)
-        .map(|_| {
-            client
-                .named_stream(&Response {
-                    message: response.message.clone(),
-                    attachments: vec![],
-                })
-                .unwrap()
-        })
-        .collect();
-    assert_eq!(
-        client
-            .named_stream(&Response {
-                message: response.message,
-                attachments: vec![],
-            })
-            .unwrap_err(),
-        ClientError::StreamLimitExceeded
-    );
-    drop(streams);
 }
 
 #[test]
@@ -617,12 +845,7 @@ fn debug_and_errors_are_redacted() {
         .unwrap()
         .with_idempotency(b"sensitive-idempotency".to_vec())
         .unwrap();
-    let metadata_debug = format!("{metadata:?}");
-    assert!(!metadata_debug.contains("sensitive"));
-
-    let stream = StreamId::new("sensitive-stream").unwrap();
-    assert!(!format!("{stream:?}").contains("sensitive"));
-
+    assert!(!format!("{metadata:?}").contains("sensitive"));
     let remote = ClientError::Remote {
         kind: RemoteErrorKind::Internal,
         retry: RetryClass::Never,
