@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "program": "adr0045",
-  "wave": "w1",
+  "wave": "w2",
   "authority_repository": "github.com/vicondoa/d2b",
   "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
   "repositories": [
@@ -9,15 +9,15 @@
       "id": "github.com/vicondoa/d2b",
       "object_format": "sha1",
       "trunk_ref": "main",
-      "integration_ref": "adr0045-w1-integrated"
+      "integration_ref": "adr0045-w2-integrated"
     }
   ],
   "stack_nodes": [
     {
-      "id": "d2b-w1",
+      "id": "d2b-w2",
       "repository": "github.com/vicondoa/d2b",
-      "branch": "adr0045-w1-integrated",
-      "pr_number": 307,
+      "branch": "adr0045-w2-integrated",
+      "pr_number": 311,
       "external_dependencies": []
     }
   ],
@@ -40,7 +40,7 @@
   ],
   "required_checks": [
     {
-      "node": "d2b-w1",
+      "node": "d2b-w2",
       "name": "check",
       "publisher": {
         "kind": "check_run",
@@ -51,7 +51,7 @@
       }
     },
     {
-      "node": "d2b-w1",
+      "node": "d2b-w2",
       "name": "eval",
       "publisher": {
         "kind": "check_run",
@@ -62,7 +62,7 @@
       }
     },
     {
-      "node": "d2b-w1",
+      "node": "d2b-w2",
       "name": "eval-shell-tests",
       "publisher": {
         "kind": "check_run",
@@ -78,6 +78,21 @@
       "name": "layer1-workflow",
       "repository": "github.com/vicondoa/d2b",
       "path": ".github/workflows/pr-l1-static-fast.yml"
+    },
+    {
+      "name": "v2-services-bindings",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/generated_v2_services"
+    },
+    {
+      "name": "v2-services-inventory",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/v2-services.json"
+    },
+    {
+      "name": "v2-services-schema",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/v2-services-schema.json"
     }
   ],
   "dependency_fingerprints": [
@@ -85,6 +100,11 @@
       "name": "cargo-lock",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/Cargo.lock"
+    },
+    {
+      "name": "cargo-workspace",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/Cargo.toml"
     },
     {
       "name": "delivery-tools",
@@ -182,6 +202,71 @@
       "name": "layer1-workflow",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/xtask/src/layer1/workflow.rs"
+    },
+    {
+      "name": "v2-component-session-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_component_session.rs"
+    },
+    {
+      "name": "v2-component-session-schema",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/component-session-v2-schema.json"
+    },
+    {
+      "name": "v2-component-session-vectors",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/component-session-v2-vectors.json"
+    },
+    {
+      "name": "v2-identity-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_identity.rs"
+    },
+    {
+      "name": "v2-identity-nix",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "nixos-modules/v2-identity.nix"
+    },
+    {
+      "name": "v2-identity-vectors",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/v2-identity-vectors.json"
+    },
+    {
+      "name": "v2-provider-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_provider.rs"
+    },
+    {
+      "name": "v2-provider-fixture",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/provider-contract-v2-fixture.json"
+    },
+    {
+      "name": "v2-provider-schema",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/provider-contract-v2.schema.json"
+    },
+    {
+      "name": "v2-services-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_services.rs"
+    },
+    {
+      "name": "v2-services-proto",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/proto/v2"
+    },
+    {
+      "name": "v2-state-contract",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-contracts/src/v2_state.rs"
+    },
+    {
+      "name": "v2-state-fixture",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "docs/reference/state-storage-sync-audit-v2-fixture.json"
     }
   ]
 }
