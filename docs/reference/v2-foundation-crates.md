@@ -52,6 +52,23 @@ scavenges every received descriptor on failure, enforces `CLOEXEC` and exact
 object identity, and rolls attachment credits back through every reserved
 scope.
 
+For inherited or socketpair endpoints, `SCM_CREDENTIALS` is phase-aware
+transport identity evidence. The Unix transport requires and consumes the
+first-packet credentials before the session accepts the preface, then verifies
+stable credentials on subsequent packets while `SO_PASSCRED` remains enabled.
+Credentials never become semantic `OwnedAttachment` values on Unix because
+automatic and explicitly sent credentials are indistinguishable. Only
+`SCM_RIGHTS` objects enter the two-phase attachment path: the transport owns
+them without descriptors, then `d2b-session` decrypts and authenticates the
+descriptor batch before binding and invoking object-specific validation.
+
+`SessionEngine` drives handshake, protected records, control RPC, cancellation,
+attachments, lifecycle, and named streams through one owned transport.
+`SessionDriverHandle` is the clonable object-safe seam consumed by clients and
+provider-agent servers. Logical named-stream messages remain bounded at 1 MiB
+and are fragmented, scheduled, and reassembled internally under a 256 KiB
+credit window.
+
 ## State invariants
 
 Host filesystem access is absent unless `host-fs` is selected. Atomic state

@@ -664,6 +664,11 @@
       "path": "packages/d2b-client/src/error.rs"
     },
     {
+      "name": "w3-client-host-socket",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-client/src/host_socket.rs"
+    },
+    {
       "name": "w3-client-lib",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-client/src/lib.rs"
@@ -769,9 +774,19 @@
       "path": "packages/d2b-provider-toolkit/src/registration.rs"
     },
     {
+      "name": "w3-provider-toolkit-server",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-provider-toolkit/src/server.rs"
+    },
+    {
       "name": "w3-provider-toolkit-tests",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-provider-toolkit/tests/conformance.rs"
+    },
+    {
+      "name": "w3-session-attachment",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/attachment.rs"
     },
     {
       "name": "w3-session-bootstrap",
@@ -792,6 +807,16 @@
       "name": "w3-session-deadline",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-session/src/deadline.rs"
+    },
+    {
+      "name": "w3-session-driver",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/driver.rs"
+    },
+    {
+      "name": "w3-session-engine",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-session/src/engine.rs"
     },
     {
       "name": "w3-session-error",
@@ -899,6 +924,11 @@
       "path": "packages/d2b-state/tests/state.rs"
     },
     {
+      "name": "w3-unix-session-adapter",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unix-session/src/adapter.rs"
+    },
+    {
       "name": "w3-unix-session-cargo",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-unix-session/Cargo.toml"
@@ -922,6 +952,11 @@
       "name": "w3-unix-session-lib",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-unix-session/src/lib.rs"
+    },
+    {
+      "name": "w3-unix-session-pidfd",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-unix-session/src/pidfd.rs"
     },
     {
       "name": "w3-unix-session-socket",
