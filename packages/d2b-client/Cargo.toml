@@ -11,6 +11,14 @@ publish = false
 default = []
 
 [dependencies]
+async-trait.workspace = true
+d2b-contracts = { workspace = true, default-features = false, features = ["v2-services"] }
+protobuf.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
+ttrpc = { workspace = true, default-features = false, features = ["async"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
 
 [lints]
 workspace = true
