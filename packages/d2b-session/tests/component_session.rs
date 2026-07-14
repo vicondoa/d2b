@@ -890,17 +890,14 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     let (mut initiator, mut responder, _) = engine_pair().await;
     let request_id = RequestId::new(vec![0x61; 16]).unwrap();
     let payload = vec![0x5a; 200_000];
-    let cancelled =
-        ComponentSessionDriver::invoke(&mut initiator, request_id.clone(), payload.clone())
-            .await
-            .unwrap();
+    let cancelled = initiator
+        .call(request_id.clone(), payload.clone())
+        .await
+        .unwrap();
     assert_eq!(receive_ttrpc(&mut responder).await, payload);
 
     let inbound = responder.register_inbound_call(request_id.clone()).unwrap();
-    let generation = ComponentSessionDriver::generation(&initiator);
-    ComponentSessionDriver::cancel(&mut initiator, generation, &request_id)
-        .await
-        .unwrap();
+    initiator.cancel_call(&request_id).await.unwrap();
     let event = responder.receive().await.unwrap();
     assert!(matches!(
         event,
@@ -911,15 +908,82 @@ async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
     ));
     assert!(inbound.is_cancelled());
     assert!(matches!(
-        ComponentSessionDriver::receive(&mut initiator)
-            .await
-            .unwrap(),
+        initiator.receive().await.unwrap(),
         SessionEvent::CancelAck(CancelAck {
             result: CancelResult::CancelledBeforeDispatch,
             ..
         })
     ));
     assert!(cancelled.is_cancelled());
+}
+
+#[tokio::test]
+async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations() {
+    let (initiator, responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    assert_eq!(initiator.generation(), 7);
+
+    let request_id = RequestId::new(vec![0x41; 16]).unwrap();
+    let caller = Arc::clone(&initiator);
+    let invoke = tokio::spawn(async move {
+        caller
+            .invoke(request_id, b"request".to_vec())
+            .await
+            .unwrap()
+    });
+    assert_eq!(responder.receive_ttrpc().await.unwrap(), b"request");
+    responder.send_ttrpc(b"response".to_vec()).await.unwrap();
+    assert_eq!(invoke.await.unwrap(), b"response");
+
+    let request_id = RequestId::new(vec![0x42; 16]).unwrap();
+    let caller = Arc::clone(&initiator);
+    let invoke = tokio::spawn(async move {
+        caller
+            .invoke(request_id, b"cancel-me".to_vec())
+            .await
+            .unwrap()
+    });
+    assert_eq!(responder.receive_ttrpc().await.unwrap(), b"cancel-me");
+    initiator
+        .cancel(
+            initiator.generation(),
+            RequestId::new(vec![0x42; 16]).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        responder.receive_control().await.unwrap(),
+        SessionEvent::CancelRequest(_)
+    ));
+    assert!(matches!(
+        initiator.receive_control().await.unwrap(),
+        SessionEvent::CancelAck(_)
+    ));
+    responder.send_ttrpc(b"terminal".to_vec()).await.unwrap();
+    assert_eq!(invoke.await.unwrap(), b"terminal");
+
+    let stream = StreamId::new(0x100).unwrap();
+    initiator.open_named_stream(stream, 4, 4).await.unwrap();
+    responder.open_named_stream(stream, 4, 4).await.unwrap();
+    initiator
+        .send_named_stream(stream, b"data".to_vec())
+        .await
+        .unwrap();
+    assert!(matches!(
+        responder.receive_named_stream().await.unwrap(),
+        StreamEvent::Data { bytes, .. } if bytes == b"data"
+    ));
+
+    let closes = Arc::new(AtomicUsize::new(0));
+    initiator
+        .send_attachments(vec![engine_attachment(Arc::clone(&closes))])
+        .await
+        .unwrap();
+    let attachments = responder.receive_attachments().await.unwrap();
+    assert_eq!(attachments.len(), 1);
+    drop(attachments);
+    assert_eq!(closes.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
