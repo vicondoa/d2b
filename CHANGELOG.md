@@ -101,6 +101,8 @@ deprecations ship one minor release before removal.
   embedding a provider-specific review attribution in process prose.
 - Corrected the strict panel receipt example to use the implemented artifact
   kind and provider identifiers.
+- Synchronized the independent documentation policy test with the 13-field
+  panel receipt contract.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

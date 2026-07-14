@@ -169,6 +169,7 @@ fn delivery_panel_example_matches_hardened_attestation_schema() {
         "model_version",
         "provider",
         "run_id",
+        "receipt_locator",
         "output_sha256",
         "signoff",
         "recommendations",
@@ -179,10 +180,15 @@ fn delivery_panel_example_matches_hardened_attestation_schema() {
         actual, expected,
         "panel example must contain exactly the strict serde field set"
     );
-    assert_eq!(record["artifact_kind"], "d2b-delivery/panel-attestation");
+    assert_eq!(record["artifact_kind"], "d2b-delivery/panel-receipt");
     assert_eq!(record["schema_version"], 1);
     assert_eq!(record["role"], "software");
     assert_eq!(record["model_version"], "gemini-3.1-pro-preview");
+    assert_eq!(record["provider"], "github-copilot");
+    assert_eq!(
+        record["receipt_locator"],
+        "github-copilot://runs/run-001/software"
+    );
     assert_eq!(record["signoff"], true);
     assert_eq!(record["recommendations"], serde_json::json!([]));
     for field in [
