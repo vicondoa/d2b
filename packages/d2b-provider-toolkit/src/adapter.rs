@@ -12,6 +12,7 @@ use d2b_provider::{
     RpcResponse, SessionIdentity,
 };
 
+use crate::OwnedAttachment;
 use crate::ToolkitError;
 
 pub struct ProviderAgentAdapter {
@@ -70,6 +71,24 @@ impl ProviderAgentAdapter {
 
     pub fn published_capabilities(&self) -> d2b_contracts::v2_provider::ProviderCapabilitySet {
         self.instance.capabilities()
+    }
+
+    pub async fn invoke_session(
+        &self,
+        call: RpcCall<'_>,
+        attachments: &mut [OwnedAttachment],
+    ) -> ProviderResult<RpcResponse> {
+        if attachments
+            .windows(2)
+            .any(|pair| pair[0].index() >= pair[1].index())
+        {
+            return Err(self.failure(
+                &call,
+                ProviderFailureKind::InvalidRequest,
+                ProviderHealthReason::CapabilityMismatch,
+            ));
+        }
+        self.invoke(call).await
     }
 
     fn failure(

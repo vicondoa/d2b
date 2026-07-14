@@ -74,6 +74,7 @@ impl Fixture {
             ProviderMethod::ALL
                 .iter()
                 .filter(|method| method.provider_type() == provider_type)
+                .filter(|method| **method != ProviderMethod::RuntimeExecute)
                 .copied()
                 .map(ProviderCapability)
                 .collect(),
