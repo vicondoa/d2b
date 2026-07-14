@@ -562,19 +562,31 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 for (index, (declared, received)) in
                     packet.descriptors.iter().zip(attachments).enumerate()
                 {
-                    if received.descriptor().is_some()
-                        || declared.packet_sequence != header.sequence
+                    if declared.packet_sequence != header.sequence
                         || declared.reconnect_generation != self.generation()
                         || declared.service != self.offer.service
+                        || received
+                            .descriptor()
+                            .is_some_and(|actual| actual != declared)
                     {
                         return Err(SessionError::new(
                             SessionErrorCode::AttachmentDescriptorMismatch,
                         ));
                     }
                     declared.validate(index as u16)?;
-                    bound.push(received.bind_received(declared.clone()).ok_or_else(|| {
-                        SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
-                    })?);
+                    let received = if received.descriptor().is_some() {
+                        received
+                    } else {
+                        received.bind_received(declared.clone()).ok_or_else(|| {
+                            SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
+                        })?
+                    };
+                    received
+                        .validate_payload_descriptor(declared)
+                        .map_err(|_| {
+                            SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
+                        })?;
+                    bound.push(received);
                 }
                 self.send_attachment_ack(header.sequence, packet.declared_count)
                     .await?;

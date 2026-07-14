@@ -86,7 +86,7 @@ pub trait OwnedTransport: Send {
     /// Receives protected bytes and opaque transport-owned payloads.
     ///
     /// A transport must construct received attachments with
-    /// [`OwnedAttachment::received`]. Their descriptors remain encrypted until
+    /// [`OwnedAttachment::unbound`]. Their descriptors remain encrypted until
     /// ComponentSession authenticates and binds them.
     async fn receive(
         &mut self,

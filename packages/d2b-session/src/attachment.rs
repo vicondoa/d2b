@@ -6,6 +6,26 @@ pub trait AttachmentPayload: Any + Send {
     fn close(self: Box<Self>);
 
     fn as_any(&self) -> &dyn Any;
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send>;
+
+    /// Validates transport-observed properties against authenticated metadata.
+    ///
+    /// ComponentSession invokes this only after decrypting and validating the
+    /// complete attachment descriptor packet.
+    fn validate_descriptor(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentValidationError {
+    Kind,
+    ObjectType,
+    Access,
+    CloseOnExec,
+    Other,
 }
 
 pub struct OwnedAttachment {
@@ -23,7 +43,7 @@ impl OwnedAttachment {
 
     /// Creates an attachment received from a transport before its encrypted
     /// descriptor has been decoded and authenticated by ComponentSession.
-    pub fn received(payload: Box<dyn AttachmentPayload>) -> Self {
+    pub fn unbound(payload: Box<dyn AttachmentPayload>) -> Self {
         Self {
             descriptor: None,
             payload: Some(payload),
@@ -44,6 +64,10 @@ impl OwnedAttachment {
     /// after extraction does not close the transferred payload.
     pub fn into_payload(mut self) -> Option<Box<dyn AttachmentPayload>> {
         self.payload.take()
+    }
+
+    pub fn into_any(mut self) -> Option<Box<dyn Any + Send>> {
+        self.payload.take().map(|payload| payload.into_any())
     }
 
     pub fn close(mut self) {
@@ -69,6 +93,16 @@ impl OwnedAttachment {
         }
         self.descriptor = Some(descriptor);
         Some(self)
+    }
+
+    pub(crate) fn validate_payload_descriptor(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        self.payload
+            .as_ref()
+            .ok_or(AttachmentValidationError::Other)?
+            .validate_descriptor(descriptor)
     }
 
     fn close_once(&mut self) {
