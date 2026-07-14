@@ -102,6 +102,18 @@ impl NamedStreamMux {
         self.streams.get(&stream).map(|state| state.send_credit)
     }
 
+    pub(crate) fn ensure_send_open(&mut self, stream: StreamId) -> Result<()> {
+        let state = self.stream_mut(stream)?;
+        if matches!(
+            state.phase,
+            StreamPhase::Open | StreamPhase::HalfClosedRemote
+        ) {
+            Ok(())
+        } else {
+            Err(SessionError::new(SessionErrorCode::QueueBackpressure))
+        }
+    }
+
     pub fn reserve_send(&mut self, stream: StreamId, bytes: usize) -> Result<()> {
         let bytes = checked_message_len(bytes, self.limits.logical_named_stream_bytes)?;
         let state = self.stream_mut(stream)?;
@@ -136,16 +148,25 @@ impl NamedStreamMux {
 
     pub fn receive_data(&mut self, stream: StreamId, bytes: Vec<u8>) -> Result<StreamEvent> {
         let len = checked_message_len(bytes.len(), self.limits.logical_named_stream_bytes)?;
+        self.reserve_receive_fragment(stream, len)?;
+        Ok(self.complete_receive(stream, bytes))
+    }
+
+    pub(crate) fn reserve_receive_fragment(&mut self, stream: StreamId, bytes: u32) -> Result<()> {
         let state = self.stream_mut(stream)?;
         if !matches!(
             state.phase,
             StreamPhase::Open | StreamPhase::HalfClosedLocal
-        ) || state.receive_credit < len
+        ) || state.receive_credit < bytes
         {
             return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
         }
-        state.receive_credit -= len;
-        Ok(StreamEvent::Data { stream, bytes })
+        state.receive_credit -= bytes;
+        Ok(())
+    }
+
+    pub(crate) fn complete_receive(&self, stream: StreamId, bytes: Vec<u8>) -> StreamEvent {
+        StreamEvent::Data { stream, bytes }
     }
 
     pub fn release_receive_credit(&mut self, stream: StreamId, bytes: u32) -> Result<u32> {

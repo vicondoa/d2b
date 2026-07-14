@@ -1056,6 +1056,41 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
 }
 
 #[tokio::test]
+async fn driver_fragments_one_mib_logical_stream_under_256_kib_credit() {
+    let (initiator, responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let stream = StreamId::new(0x100).unwrap();
+    let limits = LimitProfile::local_default();
+    initiator
+        .open_named_stream(
+            stream,
+            limits.named_stream_queue_bytes,
+            limits.named_stream_queue_bytes,
+        )
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(
+            stream,
+            limits.named_stream_queue_bytes,
+            limits.named_stream_queue_bytes,
+        )
+        .await
+        .unwrap();
+
+    let payload = vec![0xa5; limits.logical_named_stream_bytes as usize];
+    let expected = payload.clone();
+    let sender = Arc::clone(&initiator);
+    let send = tokio::spawn(async move { sender.send_named_stream(stream, payload).await });
+    match responder.receive_named_stream().await.unwrap() {
+        StreamEvent::Data { bytes, .. } => assert_eq!(bytes, expected),
+        event => panic!("unexpected event {event:?}"),
+    }
+    send.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn engine_enforces_named_stream_backpressure_and_credit() {
     let (mut initiator, mut responder, _) = engine_pair().await;
     let stream = StreamId::new(0x100).unwrap();
