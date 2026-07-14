@@ -109,6 +109,8 @@ deprecations ship one minor release before removal.
   runtime-directory socket instead of a checkout-relative shadow path.
 - Routed d2bd config, broker-dispatch, and security-key test fixtures through
   validation-owned output and short socket roots.
+- Routed xtask signal-marker and dangling-symlink fixtures through validation
+  output and kept signal-test diagnostics independently bounded.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

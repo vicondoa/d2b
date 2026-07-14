@@ -3458,8 +3458,8 @@ mod tests {
                 None,
                 &environment,
                 CommandLimits {
-                    stdout_bytes: 128,
-                    stderr_bytes: 128,
+                    stdout_bytes: 4096,
+                    stderr_bytes: 4096,
                     timeout: Duration::from_secs(2),
                 },
                 &mut signals,
@@ -3547,20 +3547,31 @@ mod tests {
         symlink(root.join("missing-target"), &dangling).expect("dangling symlink");
         for path in [&dangling, &dangling.join("child")] {
             let error = reject_symlink_components(path).expect_err("dangling symlink");
-            assert!(error.to_string().contains("symlink component"));
+            assert!(
+                error.to_string().contains("symlink component"),
+                "unexpected error: {error}"
+            );
         }
         fs::remove_file(&dangling).expect("remove symlink");
         fs::remove_dir(&root).expect("remove test root");
     }
 
     fn unique_test_path(label: &str) -> PathBuf {
-        std::env::current_dir()
-            .expect("current directory")
-            .join(format!(
-                ".d2b-{label}-{}-{}",
-                std::process::id(),
-                NEXT_TEST_PATH.fetch_add(1, AtomicOrdering::Relaxed)
-            ))
+        let root = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+            .map(PathBuf::from)
+            .map(|root| root.join("rust-test-scratch/xtask"))
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .expect("workspace root")
+                    .join("target/xtask-test-scratch")
+            });
+        fs::create_dir_all(&root).expect("create xtask test scratch");
+        root.join(format!(
+            ".d2b-{label}-{}-{}",
+            std::process::id(),
+            NEXT_TEST_PATH.fetch_add(1, AtomicOrdering::Relaxed)
+        ))
     }
 
     #[test]
