@@ -82,7 +82,7 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -91,7 +91,7 @@
                 "realm-broker"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -150,7 +150,7 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -159,7 +159,7 @@
                 "realm"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -238,7 +238,7 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -247,7 +247,7 @@
                 "realm-controller"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -257,7 +257,7 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -266,7 +266,7 @@
                 "realm-broker"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -276,8 +276,8 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id",
-            "workload_id"
+            "realmId",
+            "workloadId"
           ],
           "properties": {
             "kind": {
@@ -286,10 +286,10 @@
                 "workload-controller"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
@@ -299,8 +299,8 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id",
-            "workload_id"
+            "realmId",
+            "workloadId"
           ],
           "properties": {
             "kind": {
@@ -309,10 +309,10 @@
                 "workload-broker"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
@@ -322,9 +322,9 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id",
-            "role_id",
-            "workload_id"
+            "realmId",
+            "roleId",
+            "workloadId"
           ],
           "properties": {
             "kind": {
@@ -333,13 +333,13 @@
                 "workload-role"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "role_id": {
+            "roleId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
@@ -349,8 +349,8 @@
           "type": "object",
           "required": [
             "kind",
-            "provider_id",
-            "realm_id"
+            "providerId",
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -359,10 +359,10 @@
                 "provider"
               ]
             },
-            "provider_id": {
+            "providerId": {
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -454,7 +454,7 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -463,7 +463,7 @@
                 "realm"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -473,8 +473,8 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id",
-            "workload_id"
+            "realmId",
+            "workloadId"
           ],
           "properties": {
             "kind": {
@@ -483,10 +483,10 @@
                 "workload"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
@@ -496,8 +496,8 @@
           "type": "object",
           "required": [
             "kind",
-            "provider_id",
-            "realm_id"
+            "providerId",
+            "realmId"
           ],
           "properties": {
             "kind": {
@@ -506,10 +506,10 @@
                 "provider"
               ]
             },
-            "provider_id": {
+            "providerId": {
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
@@ -519,9 +519,9 @@
           "type": "object",
           "required": [
             "kind",
-            "realm_id",
-            "role_id",
-            "workload_id"
+            "realmId",
+            "roleId",
+            "workloadId"
           ],
           "properties": {
             "kind": {
@@ -530,13 +530,13 @@
                 "role"
               ]
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "role_id": {
+            "roleId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },

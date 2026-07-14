@@ -19,6 +19,30 @@ fn fixture() -> StateStorageSyncAuditContract {
     .expect("v2 state fixture must deserialize")
 }
 
+fn assert_schema_properties_are_camel_case(value: &Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::Object(properties)) = object.get("properties") {
+                for name in properties.keys() {
+                    assert!(
+                        !name.contains('_'),
+                        "schema property must use serde camelCase: {name}"
+                    );
+                }
+            }
+            for child in object.values() {
+                assert_schema_properties_are_camel_case(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                assert_schema_properties_are_camel_case(child);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn realm_id() -> RealmId {
     RealmId::parse("yl2hpmks5td5dkeso6qq").unwrap()
 }
@@ -288,6 +312,7 @@ fn schema_and_serde_are_closed_and_bounded() {
     ))
     .unwrap();
     assert_eq!(schema, committed_schema);
+    assert_schema_properties_are_camel_case(&schema);
     assert_eq!(
         schema
             .pointer("/additionalProperties")

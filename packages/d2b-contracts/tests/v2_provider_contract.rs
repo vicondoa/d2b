@@ -341,6 +341,30 @@ fn canonical_json(value: &Value) -> Vec<u8> {
     serde_json::to_vec(value).unwrap()
 }
 
+fn assert_schema_properties_are_camel_case(value: &Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::Object(properties)) = object.get("properties") {
+                for name in properties.keys() {
+                    assert!(
+                        !name.contains('_'),
+                        "schema property must use serde camelCase: {name}"
+                    );
+                }
+            }
+            for child in object.values() {
+                assert_schema_properties_are_camel_case(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                assert_schema_properties_are_camel_case(child);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn contract_fingerprint(schema: &Value, fixture: &Value) -> String {
     let mut normalized = fixture.clone();
     normalized["contractFingerprint"] = Value::String(ZERO.to_owned());
@@ -381,12 +405,15 @@ fn provider_artifacts_are_exact_and_fingerprint_bound() {
     )
     .unwrap();
     assert_eq!(committed_schema, schema);
+    assert_schema_properties_are_camel_case(&schema);
     assert_eq!(
         contract_fingerprint(&schema, &fixture_value),
         PROVIDER_CONTRACT_FINGERPRINT
     );
     let fixture: ProviderContractDocument = serde_json::from_value(fixture_value).unwrap();
     fixture.validate(5_000).unwrap();
+    let reference = fs::read_to_string(artifact_path("provider-contract-v2.md")).unwrap();
+    assert!(reference.contains(PROVIDER_CONTRACT_FINGERPRINT));
 }
 
 #[test]

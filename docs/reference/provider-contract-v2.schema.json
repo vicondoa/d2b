@@ -48,13 +48,13 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "type": "object"
         },
@@ -67,17 +67,17 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id",
-            "workload_id"
+            "realmId",
+            "workloadId"
           ],
           "type": "object"
         },
@@ -90,21 +90,21 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "role_id": {
+            "roleId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id",
-            "role_id",
-            "workload_id"
+            "realmId",
+            "roleId",
+            "workloadId"
           ],
           "type": "object"
         }
@@ -301,17 +301,17 @@
               ],
               "type": "string"
             },
-            "provider_id": {
+            "providerId": {
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "provider_id",
-            "realm_id"
+            "providerId",
+            "realmId"
           ],
           "type": "object"
         },
@@ -324,13 +324,13 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "type": "object"
         },
@@ -343,21 +343,21 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "role_id": {
+            "roleId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id",
-            "role_id",
-            "workload_id"
+            "realmId",
+            "roleId",
+            "workloadId"
           ],
           "type": "object"
         }
@@ -433,7 +433,7 @@
         {
           "additionalProperties": false,
           "properties": {
-            "ownership_epoch": {
+            "ownershipEpoch": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
@@ -446,7 +446,7 @@
             }
           },
           "required": [
-            "ownership_epoch",
+            "ownershipEpoch",
             "state"
           ],
           "type": "object"
@@ -454,7 +454,7 @@
         {
           "additionalProperties": false,
           "properties": {
-            "expires_at_unix_ms": {
+            "expiresAtUnixMs": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
@@ -462,12 +462,12 @@
             "from": {
               "$ref": "#/definitions/HandleOwner"
             },
-            "issued_at_unix_ms": {
+            "issuedAtUnixMs": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
             },
-            "ownership_epoch": {
+            "ownershipEpoch": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
@@ -481,18 +481,18 @@
             "to": {
               "$ref": "#/definitions/HandleOwner"
             },
-            "transfer_id": {
+            "transferId": {
               "type": "string"
             }
           },
           "required": [
-            "expires_at_unix_ms",
+            "expiresAtUnixMs",
             "from",
-            "issued_at_unix_ms",
-            "ownership_epoch",
+            "issuedAtUnixMs",
+            "ownershipEpoch",
             "state",
             "to",
-            "transfer_id"
+            "transferId"
           ],
           "type": "object"
         }
@@ -1247,7 +1247,7 @@
         {
           "additionalProperties": false,
           "properties": {
-            "controller_role": {
+            "controllerRole": {
               "$ref": "#/definitions/EndpointRole"
             },
             "kind": {
@@ -1256,26 +1256,26 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
           "required": [
-            "controller_role",
+            "controllerRole",
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "agent_generation": {
+            "agentGeneration": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
             },
-            "endpoint_role": {
+            "endpointRole": {
               "$ref": "#/definitions/EndpointRole"
             },
             "kind": {
@@ -1284,27 +1284,27 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "role_id": {
+            "roleId": {
               "type": "string"
             },
             "service": {
               "$ref": "#/definitions/ServicePackage"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
           "required": [
-            "agent_generation",
-            "endpoint_role",
+            "agentGeneration",
+            "endpointRole",
             "kind",
-            "realm_id",
-            "role_id",
+            "realmId",
+            "roleId",
             "service",
-            "workload_id"
+            "workloadId"
           ],
           "type": "object"
         }
@@ -1452,13 +1452,13 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "type": "object"
         },
@@ -1471,29 +1471,29 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": "string"
             }
           },
           "required": [
             "kind",
-            "realm_id",
-            "workload_id"
+            "realmId",
+            "workloadId"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "handle_generation": {
+            "handleGeneration": {
               "format": "uint64",
               "minimum": 0.0,
               "type": "integer"
             },
-            "handle_id": {
+            "handleId": {
               "type": "string"
             },
             "kind": {
@@ -1502,10 +1502,10 @@
               ],
               "type": "string"
             },
-            "realm_id": {
+            "realmId": {
               "type": "string"
             },
-            "workload_id": {
+            "workloadId": {
               "type": [
                 "string",
                 "null"
@@ -1513,10 +1513,10 @@
             }
           },
           "required": [
-            "handle_generation",
-            "handle_id",
+            "handleGeneration",
+            "handleId",
             "kind",
-            "realm_id"
+            "realmId"
           ],
           "type": "object"
         }

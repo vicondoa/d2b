@@ -27,7 +27,7 @@ pub const MAX_PROVIDER_LEASE_LIFETIME_MS: u64 = 60 * 60 * 1_000;
 pub const MAX_PROVIDER_DRAIN_MS: u32 = 5 * 60 * 1_000;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const PROVIDER_CONTRACT_FINGERPRINT: &str =
-    "a23694cfd1320716b9ca2ba39b82c81e156214b392dd9374e07ef7b9536bf5db";
+    "025a883c7e6975a797bae9fe74483a5f96a16adfd27d1e2d31a63f5a0fcd2312";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -509,12 +509,7 @@ pub struct RuntimeAuthorityPosture {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "type",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderAuthority {
     Runtime { posture: RuntimeAuthorityPosture },
     Infrastructure,
@@ -550,23 +545,25 @@ impl ProviderAuthority {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderPlacement {
     TrustedFirstPartyInProcess {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "controllerRole")]
         controller_role: EndpointRole,
     },
     ProviderAgent {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
+        #[serde(rename = "roleId")]
         role_id: RoleId,
+        #[serde(rename = "endpointRole")]
         endpoint_role: EndpointRole,
         service: ServicePackage,
+        #[serde(rename = "agentGeneration")]
         agent_generation: Generation,
     },
 }
@@ -822,23 +819,24 @@ impl ProviderHealth {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AuthorizedProviderScope {
     Realm {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     Workload {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
     },
     WorkloadRole {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
+        #[serde(rename = "roleId")]
         role_id: RoleId,
     },
 }
@@ -1000,24 +998,26 @@ impl fmt::Debug for OperationBinding {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ProviderTarget {
     Realm {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     Workload {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
     },
     Handle {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: Option<WorkloadId>,
+        #[serde(rename = "handleId")]
         handle_id: HandleId,
+        #[serde(rename = "handleGeneration")]
         handle_generation: Generation,
     },
 }
@@ -1188,23 +1188,24 @@ pub enum ProviderHandleKind {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum HandleOwner {
     Provider {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "providerId")]
         provider_id: ProviderId,
     },
     RealmController {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     WorkloadRole {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
+        #[serde(rename = "roleId")]
         role_id: RoleId,
     },
 }
@@ -1237,22 +1238,22 @@ impl HandleOwner {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "state",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "state", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum OwnershipTransfer {
     Stationary {
+        #[serde(rename = "ownershipEpoch")]
         ownership_epoch: Generation,
     },
     Pending {
+        #[serde(rename = "transferId")]
         transfer_id: TransferId,
+        #[serde(rename = "ownershipEpoch")]
         ownership_epoch: Generation,
         from: HandleOwner,
         to: HandleOwner,
+        #[serde(rename = "issuedAtUnixMs")]
         issued_at_unix_ms: u64,
+        #[serde(rename = "expiresAtUnixMs")]
         expires_at_unix_ms: u64,
     },
 }

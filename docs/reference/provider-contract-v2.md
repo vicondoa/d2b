@@ -63,6 +63,6 @@ policy. Selection never probes an unconfigured fallback.
 - [`provider-contract-v2-fixture.json`](./provider-contract-v2-fixture.json)
   is the canonical complete fixture.
 - Fingerprint
-  `daf51d65ed5c7273865fbfedb2e753c20cc20fec90bf3014f1cdf128395a5313`
+  `025a883c7e6975a797bae9fe74483a5f96a16adfd27d1e2d31a63f5a0fcd2312`
   binds the canonical compact schema and fixture with its fingerprint field
   zeroed. The focused Rust contract test rejects any drift.

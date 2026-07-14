@@ -341,64 +341,73 @@ fn ensure_safe_json_integer(value: u64) -> Result<(), StateContractError> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum IdentityScope {
     LocalRoot,
     Realm {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     Workload {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
     },
     Provider {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "providerId")]
         provider_id: ProviderId,
     },
     Role {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
+        #[serde(rename = "roleId")]
         role_id: RoleId,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AuthorityRef {
     Pid1,
     LocalRootAllocator,
     LocalRootBroker,
     RealmController {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     RealmBroker {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
     },
     WorkloadController {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
     },
     WorkloadBroker {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
     },
     WorkloadRole {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "workloadId")]
         workload_id: WorkloadId,
+        #[serde(rename = "roleId")]
         role_id: RoleId,
     },
     Provider {
+        #[serde(rename = "realmId")]
         realm_id: RealmId,
+        #[serde(rename = "providerId")]
         provider_id: ProviderId,
     },
 }
@@ -1528,12 +1537,7 @@ pub struct ResourceCleanupTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CleanupTarget {
     Resource { resource: ResourceCleanupTarget },
     Runner { runner: RunnerCleanupTarget },
@@ -1612,14 +1616,10 @@ impl<G: CleanupLockGuard + ?Sized> HeldCleanupAuthorization<'_, G> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AdoptionDecision {
     Adopt {
+        #[serde(rename = "freshPidfdOpened")]
         fresh_pidfd_opened: bool,
     },
     Quarantine {
@@ -1628,6 +1628,7 @@ pub enum AdoptionDecision {
     },
     Cleanup {
         target: Box<CleanupTarget>,
+        #[serde(rename = "ownerAbsenceProof")]
         owner_absence_proof: Box<OwnerAbsenceProof>,
     },
 }
@@ -1928,27 +1929,23 @@ impl LeaseRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AuditStream {
     LocalRoot,
-    Realm { realm_id: RealmId },
+    Realm {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AuditOwner {
     LocalRootBroker,
-    RealmBroker { realm_id: RealmId },
+    RealmBroker {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2012,19 +2009,26 @@ pub struct AuditCorrelation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AuditActor {
     LocalRootAllocator,
     LocalRootBroker,
-    RealmController { realm_id: RealmId },
-    RealmBroker { realm_id: RealmId },
-    Provider { provider_id: ProviderId },
-    WorkloadRole { role_id: RoleId },
+    RealmController {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+    },
+    RealmBroker {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+    },
+    Provider {
+        #[serde(rename = "providerId")]
+        provider_id: ProviderId,
+    },
+    WorkloadRole {
+        #[serde(rename = "roleId")]
+        role_id: RoleId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
