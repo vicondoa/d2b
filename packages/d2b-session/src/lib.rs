@@ -39,5 +39,5 @@ pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 
-pub use attachment::{AttachmentPayload, OwnedAttachment};
+pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts::v2_component_session as contract;

@@ -3,7 +3,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -19,12 +19,12 @@ use d2b_contracts::v2_component_session::{
     RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
 };
 use d2b_session::{
-    AttachmentPayload, BootstrapAdmission, BootstrapPsk, ComponentSessionDriver, DeadlineBudget,
-    FairScheduler, Fragmenter, HandshakeCredentials, HandshakeRole, KeepaliveAction, MetricEvent,
-    MetricsSink, NamedStreamMux, NoiseHandshake, OutboundFrame, OwnedAttachment, OwnedTransport,
-    QueueClass, Reassembler, RecordProtector, Secret32, SessionEngine, SessionEvent,
-    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportDescriptor, TransportError,
-    TransportPacket, negotiate_offer,
+    AttachmentPayload, AttachmentValidationError, BootstrapAdmission, BootstrapPsk,
+    ComponentSessionDriver, DeadlineBudget, FairScheduler, Fragmenter, HandshakeCredentials,
+    HandshakeRole, KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux, NoiseHandshake,
+    OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler, RecordProtector,
+    Secret32, SessionEngine, SessionEvent, SessionLifecycle, StreamEvent, StreamId, StreamPhase,
+    TransportDescriptor, TransportError, TransportPacket, negotiate_offer,
 };
 use snow::{
     params::DHChoice,
@@ -726,6 +726,7 @@ struct FakeTransport {
     sender: mpsc::Sender<TransportPacket>,
     receiver: mpsc::Receiver<TransportPacket>,
     corrupt_attachment: Arc<AtomicBool>,
+    attachment_mode: Arc<AtomicU8>,
     closed: Arc<AtomicBool>,
 }
 
@@ -761,6 +762,31 @@ impl OwnedTransport for FakeTransport {
             let last = bytes.last_mut().ok_or(TransportError::Truncated)?;
             *last ^= 1;
         }
+        let attachment_mode = self.attachment_mode.swap(0, Ordering::AcqRel);
+        let attachments = attachments
+            .into_iter()
+            .map(|attachment| {
+                let mut descriptor = attachment.descriptor().cloned();
+                let payload = attachment
+                    .into_payload()
+                    .ok_or(TransportError::InvalidAttachment)?;
+                match attachment_mode {
+                    0 => Ok(OwnedAttachment::unbound(payload)),
+                    1 => descriptor
+                        .take()
+                        .map(|descriptor| OwnedAttachment::new(descriptor, payload))
+                        .ok_or(TransportError::InvalidAttachment),
+                    2 => descriptor
+                        .take()
+                        .map(|mut descriptor| {
+                            descriptor.method_id = descriptor.method_id.saturating_add(1);
+                            OwnedAttachment::new(descriptor, payload)
+                        })
+                        .ok_or(TransportError::InvalidAttachment),
+                    _ => Err(TransportError::Other),
+                }
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         self.sender
             .send(TransportPacket::with_attachments(bytes, attachments))
             .await
@@ -775,6 +801,7 @@ impl OwnedTransport for FakeTransport {
 
 struct FakeHandles {
     corrupt_a: Arc<AtomicBool>,
+    attachment_mode_a: Arc<AtomicU8>,
     closed_a: Arc<AtomicBool>,
     closed_b: Arc<AtomicBool>,
 }
@@ -783,6 +810,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
     let (a_to_b_tx, a_to_b_rx) = mpsc::channel(128);
     let (b_to_a_tx, b_to_a_rx) = mpsc::channel(128);
     let corrupt_a = Arc::new(AtomicBool::new(false));
+    let attachment_mode_a = Arc::new(AtomicU8::new(0));
     let closed_a = Arc::new(AtomicBool::new(false));
     let closed_b = Arc::new(AtomicBool::new(false));
     (
@@ -790,16 +818,19 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             sender: a_to_b_tx,
             receiver: b_to_a_rx,
             corrupt_attachment: Arc::clone(&corrupt_a),
+            attachment_mode: Arc::clone(&attachment_mode_a),
             closed: Arc::clone(&closed_a),
         },
         FakeTransport {
             sender: b_to_a_tx,
             receiver: a_to_b_rx,
             corrupt_attachment: Arc::new(AtomicBool::new(false)),
+            attachment_mode: Arc::new(AtomicU8::new(0)),
             closed: Arc::clone(&closed_b),
         },
         FakeHandles {
             corrupt_a,
+            attachment_mode_a,
             closed_a,
             closed_b,
         },
@@ -853,9 +884,47 @@ impl AttachmentPayload for CountingAttachment {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        _descriptor: &AttachmentDescriptor,
+    ) -> std::result::Result<(), AttachmentValidationError> {
+        Ok(())
+    }
+}
+
+struct RejectingAttachment(Arc<AtomicUsize>);
+
+impl AttachmentPayload for RejectingAttachment {
+    fn close(self: Box<Self>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        _descriptor: &AttachmentDescriptor,
+    ) -> std::result::Result<(), AttachmentValidationError> {
+        Err(AttachmentValidationError::ObjectType)
+    }
 }
 
 fn engine_attachment(counter: Arc<AtomicUsize>) -> OwnedAttachment {
+    engine_attachment_with_payload(Box::new(CountingAttachment(counter)))
+}
+
+fn engine_attachment_with_payload(payload: Box<dyn AttachmentPayload>) -> OwnedAttachment {
     OwnedAttachment::new(
         AttachmentDescriptor {
             index: 0,
@@ -881,7 +950,7 @@ fn engine_attachment(counter: Arc<AtomicUsize>) -> OwnedAttachment {
             ])
             .unwrap(),
         },
-        Box::new(CountingAttachment(counter)),
+        payload,
     )
 }
 
@@ -987,6 +1056,41 @@ async fn driver_handle_is_clonable_object_safe_and_routes_concurrent_operations(
 }
 
 #[tokio::test]
+async fn driver_fragments_one_mib_logical_stream_under_256_kib_credit() {
+    let (initiator, responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let stream = StreamId::new(0x100).unwrap();
+    let limits = LimitProfile::local_default();
+    initiator
+        .open_named_stream(
+            stream,
+            limits.named_stream_queue_bytes,
+            limits.named_stream_queue_bytes,
+        )
+        .await
+        .unwrap();
+    responder
+        .open_named_stream(
+            stream,
+            limits.named_stream_queue_bytes,
+            limits.named_stream_queue_bytes,
+        )
+        .await
+        .unwrap();
+
+    let payload = vec![0xa5; limits.logical_named_stream_bytes as usize];
+    let expected = payload.clone();
+    let sender = Arc::clone(&initiator);
+    let send = tokio::spawn(async move { sender.send_named_stream(stream, payload).await });
+    match responder.receive_named_stream().await.unwrap() {
+        StreamEvent::Data { bytes, .. } => assert_eq!(bytes, expected),
+        event => panic!("unexpected event {event:?}"),
+    }
+    send.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn engine_enforces_named_stream_backpressure_and_credit() {
     let (mut initiator, mut responder, _) = engine_pair().await;
     let stream = StreamId::new(0x100).unwrap();
@@ -1038,6 +1142,7 @@ async fn engine_binds_acknowledges_and_releases_owned_attachments() {
         event => panic!("unexpected event {event:?}"),
     };
     assert_eq!(attachments.len(), 1);
+    assert!(attachments[0].descriptor().is_some());
     assert_eq!(closes.load(Ordering::Acquire), 0);
     drop(attachments);
     assert_eq!(closes.load(Ordering::Acquire), 1);
@@ -1067,12 +1172,73 @@ async fn invalid_protected_attachment_drops_payload_once_and_closes_session() {
 }
 
 #[tokio::test]
+async fn authenticated_descriptor_mismatch_drops_prebound_payload_once() {
+    let (mut initiator, mut responder, handles) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    handles.attachment_mode_a.store(2, Ordering::Release);
+    initiator
+        .send_attachments(vec![engine_attachment(Arc::clone(&closes))])
+        .await
+        .unwrap();
+    assert_eq!(
+        responder.receive().await.unwrap_err().code(),
+        SessionErrorCode::AttachmentDescriptorMismatch
+    );
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert!(handles.closed_b.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn exact_prebound_descriptor_is_accepted_after_authentication() {
+    let (mut initiator, mut responder, handles) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    handles.attachment_mode_a.store(1, Ordering::Release);
+    initiator
+        .send_attachments(vec![engine_attachment(Arc::clone(&closes))])
+        .await
+        .unwrap();
+    let attachments = match responder.receive().await.unwrap() {
+        SessionEvent::Attachments(attachments) => attachments,
+        event => panic!("unexpected event {event:?}"),
+    };
+    assert_eq!(attachments.len(), 1);
+    assert!(attachments[0].descriptor().is_some());
+    drop(attachments);
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn payload_validator_failure_drops_unbound_payload_once() {
+    let (mut initiator, mut responder, handles) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    let attachment =
+        engine_attachment_with_payload(Box::new(RejectingAttachment(Arc::clone(&closes))));
+    initiator.send_attachments(vec![attachment]).await.unwrap();
+    assert_eq!(
+        responder.receive().await.unwrap_err().code(),
+        SessionErrorCode::AttachmentDescriptorMismatch
+    );
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert!(handles.closed_b.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
     let (mut initiator, _, _) = engine_pair().await;
     let closes = Arc::new(AtomicUsize::new(0));
     let descriptor = engine_attachment(Arc::clone(&closes));
     descriptor.close();
     assert_eq!(closes.load(Ordering::Acquire), 1);
+
+    let downcast_closes = Arc::new(AtomicUsize::new(0));
+    let payload =
+        OwnedAttachment::unbound(Box::new(CountingAttachment(Arc::clone(&downcast_closes))))
+            .into_any()
+            .unwrap()
+            .downcast::<CountingAttachment>()
+            .unwrap();
+    AttachmentPayload::close(payload);
+    assert_eq!(downcast_closes.load(Ordering::Acquire), 1);
 
     let rejected = Arc::new(AtomicUsize::new(0));
     let attachment = OwnedAttachment::new(

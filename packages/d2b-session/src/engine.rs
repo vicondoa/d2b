@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fmt,
     time::{Duration, Instant},
 };
@@ -291,24 +291,88 @@ impl<T: OwnedTransport> SessionEngine<T> {
         send_credit: u32,
         receive_credit: u32,
     ) -> Result<()> {
-        self.streams.open(stream, send_credit, receive_credit)?;
-        if let Err(error) = self.scheduler.register_stream(stream, send_credit) {
-            self.streams.reset(stream)?;
-            self.streams.remove_terminal(stream);
-            return Err(error);
+        self.streams.open(stream, send_credit, receive_credit)
+    }
+
+    pub async fn send_named_stream(&mut self, stream: StreamId, bytes: Vec<u8>) -> Result<()> {
+        let fragments = self.fragment_named_stream(stream, bytes)?;
+        let required = fragments.iter().try_fold(0_u32, |total, fragment| {
+            let len = u32::try_from(fragment.as_bytes().len())
+                .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+            total
+                .checked_add(len)
+                .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))
+        })?;
+        if self.named_stream_send_credit(stream).unwrap_or(0) < required {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
+        for fragment in fragments {
+            self.send_named_stream_fragment(stream, fragment).await?;
         }
         Ok(())
     }
 
-    pub async fn send_named_stream(&mut self, stream: StreamId, bytes: Vec<u8>) -> Result<()> {
-        let len = u32::try_from(bytes.len())
+    pub(crate) fn fragment_named_stream(
+        &mut self,
+        stream: StreamId,
+        bytes: Vec<u8>,
+    ) -> Result<VecDeque<Fragment>> {
+        if bytes.is_empty() {
+            return Err(SessionError::new(SessionErrorCode::InvalidChannel));
+        }
+        self.streams.ensure_send_open(stream)?;
+        let message_id = self.next_message_id;
+        self.next_message_id = self
+            .next_message_id
+            .checked_add(1)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::NonceExhausted))?;
+        Ok(Fragmenter::new(
+            self.offer.limits,
+            self.offer.limits.logical_named_stream_bytes,
+        )?
+        .fragment(message_id, &bytes)?
+        .into())
+    }
+
+    pub(crate) fn named_stream_send_credit(&self, stream: StreamId) -> Option<u32> {
+        self.streams.send_credit(stream)
+    }
+
+    pub(crate) fn aggregate_named_stream_limit(&self) -> usize {
+        self.offer.limits.aggregate_named_stream_queue_bytes as usize
+    }
+
+    pub(crate) async fn send_named_stream_fragment(
+        &mut self,
+        stream: StreamId,
+        fragment: Fragment,
+    ) -> Result<()> {
+        let len = u32::try_from(fragment.as_bytes().len())
             .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
-        self.streams.reserve_send(stream, bytes.len())?;
-        if let Err(error) = self.scheduler.enqueue(OutboundFrame::named(stream, bytes)?) {
+        self.streams
+            .reserve_send(stream, fragment.as_bytes().len())?;
+        let logical_limit = self.offer.limits.logical_named_stream_bytes;
+        let mut payload = Vec::with_capacity(FRAGMENT_HEADER_LEN + fragment.as_bytes().len());
+        payload.extend_from_slice(&fragment.header.encode(len, logical_limit)?);
+        payload.extend_from_slice(fragment.as_bytes());
+        let protected =
+            self.protector
+                .protect(RecordKind::NamedStream, stream.channel(), &payload)?;
+        self.next_record_sequence = self
+            .next_record_sequence
+            .checked_add(1)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::NonceExhausted))?;
+        if let Err(error) = self
+            .transport
+            .send(TransportPacket::new(protected.into_bytes()))
+            .await
+        {
             self.streams.refund_send_credit(stream, len)?;
+            let error = SessionError::from(error);
+            self.fail_closed().await;
             return Err(error);
         }
-        self.flush().await
+        Ok(())
     }
 
     pub async fn grant_named_stream_credit(&mut self, stream: StreamId, bytes: u32) -> Result<()> {
@@ -369,18 +433,21 @@ impl<T: OwnedTransport> SessionEngine<T> {
         }
         let sequence = self.next_record_sequence;
         for (index, attachment) in attachments.iter_mut().enumerate() {
-            attachment.bind(index as u16, sequence, self.generation());
-            if attachment.descriptor().service != self.offer.service {
+            let descriptor = attachment
+                .bind_outbound(index as u16, sequence, self.generation())
+                .ok_or_else(|| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?;
+            if descriptor.service != self.offer.service {
                 return Err(SessionError::new(
                     SessionErrorCode::AttachmentDescriptorMismatch,
                 ));
             }
-            attachment.descriptor().validate(index as u16)?;
+            descriptor.validate(index as u16)?;
         }
         let descriptors = attachments
             .iter()
-            .map(|attachment| attachment.descriptor().clone())
-            .collect();
+            .map(|attachment| attachment.descriptor().cloned())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?;
         let packet = AttachmentPacket {
             declared_count: count,
             descriptors: BoundedVec::new(descriptors)?,
@@ -453,18 +520,18 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 .receive_attachment(header, protected_payload, attachments)
                 .await;
         }
+        if header.kind == RecordKind::NamedStream {
+            return self
+                .receive_named_stream_fragment(header, protected_payload)
+                .await;
+        }
         let payload = self.reassemble(header, protected_payload)?;
         let Some(payload) = payload else {
             return Ok(SessionEvent::ControlProcessed);
         };
         match header.kind {
             RecordKind::Ttrpc => Ok(SessionEvent::Ttrpc(payload)),
-            RecordKind::NamedStream => {
-                let stream = StreamId::new(header.channel.value())?;
-                Ok(SessionEvent::NamedStream(
-                    self.streams.receive_data(stream, payload)?,
-                ))
-            }
+            RecordKind::NamedStream => Err(SessionError::new(SessionErrorCode::InternalInvariant)),
             RecordKind::KeepalivePing => {
                 let ping = decode_keepalive(&payload)?;
                 if ping.reconnect_generation != self.generation() {
@@ -529,6 +596,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         if protected_payload.len() < FRAGMENT_HEADER_LEN {
             return Err(SessionError::new(SessionErrorCode::FragmentTruncated));
         }
+
         let fragment_len = protected_payload.len() - FRAGMENT_HEADER_LEN;
         let fragment_header = FragmentHeader::decode(
             &protected_payload[..FRAGMENT_HEADER_LEN],
@@ -555,26 +623,39 @@ impl<T: OwnedTransport> SessionEngine<T> {
                     .map_err(|_| {
                         SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
                     })?;
-                for (index, (declared, actual)) in packet
-                    .descriptors
-                    .iter()
-                    .zip(attachments.iter())
-                    .enumerate()
+                let mut bound = Vec::with_capacity(attachments.len());
+                for (index, (declared, received)) in
+                    packet.descriptors.iter().zip(attachments).enumerate()
                 {
-                    if declared != actual.descriptor()
-                        || declared.packet_sequence != header.sequence
+                    if declared.packet_sequence != header.sequence
                         || declared.reconnect_generation != self.generation()
                         || declared.service != self.offer.service
+                        || received
+                            .descriptor()
+                            .is_some_and(|actual| actual != declared)
                     {
                         return Err(SessionError::new(
                             SessionErrorCode::AttachmentDescriptorMismatch,
                         ));
                     }
                     declared.validate(index as u16)?;
+                    let received = if received.descriptor().is_some() {
+                        received
+                    } else {
+                        received.bind_received(declared.clone()).ok_or_else(|| {
+                            SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
+                        })?
+                    };
+                    received
+                        .validate_payload_descriptor(declared)
+                        .map_err(|_| {
+                            SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
+                        })?;
+                    bound.push(received);
                 }
                 self.send_attachment_ack(header.sequence, packet.declared_count)
                     .await?;
-                Ok(SessionEvent::Attachments(attachments))
+                Ok(SessionEvent::Attachments(bound))
             }
             AttachmentControl::Ack { sequence, count } => {
                 if !attachments.is_empty() {
@@ -597,6 +678,36 @@ impl<T: OwnedTransport> SessionEngine<T> {
         }
     }
 
+    async fn receive_named_stream_fragment(
+        &mut self,
+        header: RecordHeader,
+        protected_payload: Vec<u8>,
+    ) -> Result<SessionEvent> {
+        if protected_payload.len() < FRAGMENT_HEADER_LEN {
+            return Err(SessionError::new(SessionErrorCode::FragmentTruncated));
+        }
+        let stream = StreamId::new(header.channel.value())?;
+        let fragment_len = u32::try_from(protected_payload.len() - FRAGMENT_HEADER_LEN)
+            .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        self.streams
+            .reserve_receive_fragment(stream, fragment_len)?;
+        let complete = self.reassemble(header, protected_payload)?;
+        // Reassembly now owns the bytes, so replenish the fragment window
+        // without exposing protocol fragments to the caller.
+        self.streams.release_receive_credit(stream, fragment_len)?;
+        self.send_logical(
+            RecordKind::SessionControl,
+            ChannelId::SESSION_CONTROL,
+            encode_stream_control(STREAM_CREDIT, stream, fragment_len),
+            Vec::new(),
+        )
+        .await?;
+        Ok(match complete {
+            Some(bytes) => SessionEvent::NamedStream(self.streams.complete_receive(stream, bytes)),
+            None => SessionEvent::ControlProcessed,
+        })
+    }
+
     fn receive_stream_control(&mut self, payload: &[u8]) -> Result<SessionEvent> {
         let (kind, stream, value) = decode_stream_control(payload)?;
         match kind {
@@ -605,7 +716,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
             )),
             STREAM_CREDIT => {
                 self.streams.grant_send_credit(stream, value)?;
-                self.scheduler.grant_stream_credit(stream, value)?;
                 Ok(SessionEvent::ControlProcessed)
             }
             STREAM_RESET => {

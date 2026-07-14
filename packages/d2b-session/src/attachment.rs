@@ -6,37 +6,103 @@ pub trait AttachmentPayload: Any + Send {
     fn close(self: Box<Self>);
 
     fn as_any(&self) -> &dyn Any;
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send>;
+
+    /// Validates transport-observed properties against authenticated metadata.
+    ///
+    /// ComponentSession invokes this only after decrypting and validating the
+    /// complete attachment descriptor packet.
+    fn validate_descriptor(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentValidationError {
+    Kind,
+    ObjectType,
+    Access,
+    CloseOnExec,
+    Other,
 }
 
 pub struct OwnedAttachment {
-    descriptor: AttachmentDescriptor,
+    descriptor: Option<AttachmentDescriptor>,
     payload: Option<Box<dyn AttachmentPayload>>,
 }
 
 impl OwnedAttachment {
     pub fn new(descriptor: AttachmentDescriptor, payload: Box<dyn AttachmentPayload>) -> Self {
         Self {
-            descriptor,
+            descriptor: Some(descriptor),
             payload: Some(payload),
         }
     }
 
-    pub fn descriptor(&self) -> &AttachmentDescriptor {
-        &self.descriptor
+    /// Creates an attachment received from a transport before its encrypted
+    /// descriptor has been decoded and authenticated by ComponentSession.
+    pub fn unbound(payload: Box<dyn AttachmentPayload>) -> Self {
+        Self {
+            descriptor: None,
+            payload: Some(payload),
+        }
+    }
+
+    pub fn descriptor(&self) -> Option<&AttachmentDescriptor> {
+        self.descriptor.as_ref()
     }
 
     pub fn payload(&self) -> Option<&dyn Any> {
         self.payload.as_ref().map(|payload| payload.as_any())
     }
 
+    /// Transfers the opaque payload without closing it.
+    ///
+    /// The recipient becomes the sole close owner. Dropping this attachment
+    /// after extraction does not close the transferred payload.
+    pub fn into_payload(mut self) -> Option<Box<dyn AttachmentPayload>> {
+        self.payload.take()
+    }
+
+    pub fn into_any(mut self) -> Option<Box<dyn Any + Send>> {
+        self.payload.take().map(|payload| payload.into_any())
+    }
+
     pub fn close(mut self) {
         self.close_once();
     }
 
-    pub(crate) fn bind(&mut self, index: u16, packet_sequence: u64, generation: u64) {
-        self.descriptor.index = index;
-        self.descriptor.packet_sequence = packet_sequence;
-        self.descriptor.reconnect_generation = generation;
+    pub(crate) fn bind_outbound(
+        &mut self,
+        index: u16,
+        packet_sequence: u64,
+        generation: u64,
+    ) -> Option<&AttachmentDescriptor> {
+        let descriptor = self.descriptor.as_mut()?;
+        descriptor.index = index;
+        descriptor.packet_sequence = packet_sequence;
+        descriptor.reconnect_generation = generation;
+        Some(descriptor)
+    }
+
+    pub(crate) fn bind_received(mut self, descriptor: AttachmentDescriptor) -> Option<Self> {
+        if self.descriptor.is_some() {
+            return None;
+        }
+        self.descriptor = Some(descriptor);
+        Some(self)
+    }
+
+    pub(crate) fn validate_payload_descriptor(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        self.payload
+            .as_ref()
+            .ok_or(AttachmentValidationError::Other)?
+            .validate_descriptor(descriptor)
     }
 
     fn close_once(&mut self) {
@@ -56,8 +122,20 @@ impl fmt::Debug for OwnedAttachment {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OwnedAttachment")
-            .field("kind", &self.descriptor.kind.as_str())
-            .field("object_type", &self.descriptor.object_type.as_str())
+            .field(
+                "kind",
+                &self
+                    .descriptor
+                    .as_ref()
+                    .map(|descriptor| descriptor.kind.as_str()),
+            )
+            .field(
+                "object_type",
+                &self
+                    .descriptor
+                    .as_ref()
+                    .map(|descriptor| descriptor.object_type.as_str()),
+            )
             .field("payload", &"<opaque>")
             .finish()
     }

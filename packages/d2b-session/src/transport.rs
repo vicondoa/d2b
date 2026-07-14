@@ -83,11 +83,23 @@ impl Error for TransportError {}
 pub trait OwnedTransport: Send {
     fn descriptor(&self) -> TransportDescriptor;
 
+    /// Receives protected bytes and opaque transport-owned payloads.
+    ///
+    /// A transport must construct received attachments with
+    /// [`OwnedAttachment::unbound`]. Their descriptors remain encrypted until
+    /// ComponentSession authenticates and binds them.
     async fn receive(
         &mut self,
         protected_limit: usize,
     ) -> std::result::Result<TransportPacket, TransportError>;
 
+    /// Sends one owned packet.
+    ///
+    /// The transport may borrow attachment payloads for its atomic send. On
+    /// success the peer owns any kernel-created duplicates; local payloads are
+    /// closed when this consumed packet is dropped. On failure they are also
+    /// dropped and closed. A transport that must retain ownership may use
+    /// [`OwnedAttachment::into_payload`] and assumes sole close responsibility.
     async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError>;
 
     async fn close(&mut self) -> std::result::Result<(), TransportError>;

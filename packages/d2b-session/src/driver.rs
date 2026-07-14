@@ -13,7 +13,7 @@ use d2b_contracts::v2_component_session::{CloseReason, Remediation, RequestId, S
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    OwnedAttachment, OwnedTransport, Result, SessionEngine, SessionError, SessionEvent,
+    Fragment, OwnedAttachment, OwnedTransport, Result, SessionEngine, SessionError, SessionEvent,
     StreamEvent, StreamId,
 };
 
@@ -48,6 +48,8 @@ pub trait ComponentSessionDriver: Send + Sync {
         receive_credit: u32,
     ) -> Result<()>;
 
+    /// Sends one logical message, fragmenting internally as stream credit
+    /// becomes available.
     async fn send_named_stream(&self, stream: StreamId, bytes: Vec<u8>) -> Result<()>;
 
     async fn receive_named_stream(&self) -> Result<StreamEvent>;
@@ -280,9 +282,18 @@ struct PendingInvoke {
     reply: Reply<Vec<u8>>,
 }
 
+struct PendingNamedSend {
+    stream: StreamId,
+    fragments: VecDeque<Fragment>,
+    remaining: usize,
+    reply: Reply<()>,
+}
+
 struct DriverQueues {
     invokes: VecDeque<PendingInvoke>,
     active_invoke: Option<PendingInvoke>,
+    named_sends: VecDeque<PendingNamedSend>,
+    named_send_bytes: usize,
     ttrpc: EventQueue<Vec<u8>>,
     attachments: EventQueue<Vec<OwnedAttachment>>,
     streams: EventQueue<StreamEvent>,
@@ -294,6 +305,8 @@ impl DriverQueues {
         Self {
             invokes: VecDeque::new(),
             active_invoke: None,
+            named_sends: VecDeque::new(),
+            named_send_bytes: 0,
             ttrpc: EventQueue::new(),
             attachments: EventQueue::new(),
             streams: EventQueue::new(),
@@ -309,12 +322,55 @@ impl DriverQueues {
         Ok(())
     }
 
+    fn can_enqueue_named_send(
+        &self,
+        stream: StreamId,
+        bytes: usize,
+        aggregate_limit: usize,
+    ) -> Result<()> {
+        let aggregate = self
+            .named_send_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        if bytes == 0
+            || aggregate > aggregate_limit
+            || self
+                .named_sends
+                .iter()
+                .any(|pending| pending.stream == stream)
+        {
+            return Err(backpressure());
+        }
+        Ok(())
+    }
+
+    fn enqueue_named_send(&mut self, pending: PendingNamedSend) {
+        self.named_send_bytes += pending.remaining;
+        self.named_sends.push_back(pending);
+    }
+
+    fn cancel_named_send(&mut self, stream: StreamId, error: SessionError) {
+        let mut retained = VecDeque::with_capacity(self.named_sends.len());
+        while let Some(pending) = self.named_sends.pop_front() {
+            if pending.stream == stream {
+                self.named_send_bytes = self.named_send_bytes.saturating_sub(pending.remaining);
+                let _ = pending.reply.send(Err(error));
+            } else {
+                retained.push_back(pending);
+            }
+        }
+        self.named_sends = retained;
+    }
+
     fn fail(mut self, error: SessionError) {
         if let Some(active) = self.active_invoke.take() {
             let _ = active.reply.send(Err(error));
         }
         for invoke in self.invokes {
             let _ = invoke.reply.send(Err(error));
+        }
+        for pending in self.named_sends {
+            let _ = pending.reply.send(Err(error));
         }
         self.ttrpc.fail(error);
         self.attachments.fail(error);
@@ -386,6 +442,14 @@ async fn run_driver<T: OwnedTransport>(
                     continue;
                 }
             }
+        }
+        match pump_named_stream(&mut engine, &mut queues).await {
+            Ok(true) => {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            Ok(false) => {}
+            Err(error) => break Err(error),
         }
 
         tokio::select! {
@@ -467,8 +531,24 @@ async fn handle_command<T: OwnedTransport>(
             bytes,
             reply,
         } => {
-            let result = engine.send_named_stream(stream, bytes).await;
-            let _ = reply.send(result);
+            let len = bytes.len();
+            if let Err(error) =
+                queues.can_enqueue_named_send(stream, len, engine.aggregate_named_stream_limit())
+            {
+                let _ = reply.send(Err(error));
+            } else {
+                match engine.fragment_named_stream(stream, bytes) {
+                    Ok(fragments) => queues.enqueue_named_send(PendingNamedSend {
+                        stream,
+                        fragments,
+                        remaining: len,
+                        reply,
+                    }),
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                }
+            }
         }
         DriverCommand::ReceiveNamedStream(reply) => queues.streams.receive(reply)?,
         DriverCommand::GrantNamedStreamCredit {
@@ -480,10 +560,12 @@ async fn handle_command<T: OwnedTransport>(
             let _ = reply.send(result);
         }
         DriverCommand::CloseNamedStream { stream, reply } => {
+            queues.cancel_named_send(stream, SessionError::new(SessionErrorCode::Cancelled));
             let result = engine.close_named_stream(stream).await;
             let _ = reply.send(result);
         }
         DriverCommand::ResetNamedStream { stream, reply } => {
+            queues.cancel_named_send(stream, SessionError::new(SessionErrorCode::Cancelled));
             let result = engine.reset_named_stream(stream).await;
             let _ = reply.send(result);
         }
@@ -506,6 +588,55 @@ async fn handle_command<T: OwnedTransport>(
         }
     }
     Ok(DriverAction::Continue)
+}
+
+async fn pump_named_stream<T: OwnedTransport>(
+    engine: &mut SessionEngine<T>,
+    queues: &mut DriverQueues,
+) -> Result<bool> {
+    let attempts = queues.named_sends.len();
+    for _ in 0..attempts {
+        let Some(mut pending) = queues.named_sends.pop_front() else {
+            return Ok(false);
+        };
+        let Some(fragment) = pending.fragments.front() else {
+            let _ = pending.reply.send(Ok(()));
+            continue;
+        };
+        let fragment_len = fragment.as_bytes().len();
+        let fragment_credit = u32::try_from(fragment_len)
+            .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        if engine
+            .named_stream_send_credit(pending.stream)
+            .is_none_or(|credit| credit < fragment_credit)
+        {
+            queues.named_sends.push_back(pending);
+            continue;
+        }
+
+        let fragment = pending
+            .fragments
+            .pop_front()
+            .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
+        engine
+            .send_named_stream_fragment(pending.stream, fragment)
+            .await?;
+        pending.remaining = pending
+            .remaining
+            .checked_sub(fragment_len)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
+        queues.named_send_bytes = queues
+            .named_send_bytes
+            .checked_sub(fragment_len)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
+        if pending.fragments.is_empty() {
+            let _ = pending.reply.send(Ok(()));
+        } else {
+            queues.named_sends.push_back(pending);
+        }
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn route_event<T: OwnedTransport>(
