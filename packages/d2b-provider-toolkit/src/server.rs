@@ -11,7 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::{ServicePackage, SessionErrorCode},
+    v2_component_session::{RequestId, ServicePackage, SessionErrorCode},
     v2_identity::{ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AuthorizedProviderScope, CorrelationId, CredentialLease,
@@ -33,7 +33,8 @@ use d2b_provider::{
     SessionIdentity,
 };
 use d2b_session::{
-    ComponentSessionDriver, DeadlineBudget, OwnedAttachment, SessionDriverHandle, SessionError,
+    Cancellation, ComponentSessionDriver, DeadlineBudget, OwnedAttachment, SessionDriverHandle,
+    SessionError,
 };
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::sync::Notify;
@@ -117,15 +118,13 @@ impl GeneratedProviderServiceServer {
 
     pub async fn shutdown(&self, timeout: Duration) -> bool {
         self.accepting.store(false, Ordering::Release);
-        if self.in_flight.load(Ordering::Acquire) == 0 {
-            return true;
-        }
         tokio::time::timeout(timeout, async {
             loop {
-                self.idle.notified().await;
+                let notified = self.idle.notified();
                 if self.in_flight.load(Ordering::Acquire) == 0 {
                     break;
                 }
+                notified.await;
             }
         })
         .await
@@ -189,18 +188,26 @@ impl GeneratedProviderServiceServer {
             false,
             ttrpc_timeout_nanos,
         )?;
+        let inbound =
+            InboundCallRegistration::register(self.driver.clone(), admitted.request_id.clone())
+                .await?;
         let call_context = admitted.call_context();
-        let response = self
-            .adapter
-            .invoke_session(
+        let response = tokio::select! {
+            biased;
+            () = inbound.cancellation().cancelled() => {
+                inbound.complete().await?;
+                return Err(rpc_status(ttrpc::Code::CANCELLED));
+            }
+            response = self.adapter.invoke_session(
                 RpcCall {
                     operation: RpcOperation::Capabilities,
                     context: &call_context,
                     payload: RpcPayload::None,
                 },
                 &mut [],
-            )
-            .await;
+            ) => response,
+        };
+        inbound.complete().await?;
         match response {
             Ok(RpcResponse::Capabilities(capabilities)) => {
                 let mut wire = common::CapabilityResponse::new();
@@ -258,6 +265,27 @@ impl GeneratedProviderServiceServer {
             requires_idempotency,
             ttrpc_timeout_nanos,
         )?;
+        let inbound =
+            InboundCallRegistration::register(self.driver.clone(), admitted.request_id.clone())
+                .await?;
+        let response = tokio::select! {
+            biased;
+            () = inbound.cancellation().cancelled() => {
+                Err(rpc_status(ttrpc::Code::CANCELLED))
+            }
+            response = self.dispatch_provider_call(operation, method, request, &admitted) => response,
+        };
+        inbound.complete().await?;
+        response
+    }
+
+    async fn dispatch_provider_call(
+        &self,
+        operation: RpcOperation,
+        method: ProviderMethod,
+        request: common::ProviderRequest,
+        admitted: &AdmittedWireContext,
+    ) -> ttrpc::Result<common::ProviderResponse> {
         let mut attachments = if request.attachment_indexes.is_empty() {
             Vec::new()
         } else {
@@ -543,6 +571,8 @@ impl GeneratedProviderServiceServer {
         let remaining_nanos = deadline
             .remaining_nanos(self.clock.now_unix_ms(), now, ttrpc_timeout_nanos)
             .map_err(session_error)?;
+        let request_id = RequestId::new(metadata.request_id.clone())
+            .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
         let scope = scope_from_wire(wire)?;
         if wire.provider_id != self.descriptor.provider_id.as_str()
             || scope.realm_id() != self.descriptor.placement.realm_id()
@@ -556,6 +586,7 @@ impl GeneratedProviderServiceServer {
         let remaining_ms = u32::try_from((remaining_nanos / 1_000_000).max(1)).unwrap_or(u32::MAX);
         Ok(AdmittedWireContext {
             operation,
+            request_id,
             remaining_ms,
             session_generation,
         })
@@ -604,6 +635,7 @@ enum OwnedDispatchPayload {
 
 struct AdmittedWireContext {
     operation: ProviderOperationContext,
+    request_id: RequestId,
     remaining_ms: u32,
     session_generation: u64,
 }
@@ -617,6 +649,63 @@ impl AdmittedWireContext {
             monotonic_deadline_remaining_ms: self.remaining_ms,
             cancelled: false,
         }
+    }
+}
+
+struct InboundCallRegistration {
+    driver: Arc<dyn ComponentSessionDriver>,
+    request_id: Option<RequestId>,
+    cancellation: Cancellation,
+}
+
+impl InboundCallRegistration {
+    async fn register(
+        driver: Arc<dyn ComponentSessionDriver>,
+        request_id: RequestId,
+    ) -> ttrpc::Result<Self> {
+        let cancellation = driver
+            .register_inbound_call(request_id.clone())
+            .await
+            .map_err(session_error)?;
+        Ok(Self {
+            driver,
+            request_id: Some(request_id),
+            cancellation,
+        })
+    }
+
+    fn cancellation(&self) -> &Cancellation {
+        &self.cancellation
+    }
+
+    async fn complete(mut self) -> ttrpc::Result<()> {
+        let request_id = self
+            .request_id
+            .as_ref()
+            .ok_or_else(|| rpc_status(ttrpc::Code::INTERNAL))?;
+        if self
+            .driver
+            .complete_inbound_call(request_id.clone())
+            .await
+            .map_err(session_error)?
+        {
+            self.request_id = None;
+            Ok(())
+        } else {
+            Err(rpc_status(ttrpc::Code::INTERNAL))
+        }
+    }
+}
+
+impl Drop for InboundCallRegistration {
+    fn drop(&mut self) {
+        let Some(request_id) = self.request_id.take() else {
+            return;
+        };
+        let driver = self.driver.clone();
+        tokio::spawn(async move {
+            let _ = driver.remove_inbound_call(request_id).await;
+        });
     }
 }
 

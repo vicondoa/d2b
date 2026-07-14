@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fmt,
+    future::{Future, ready},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicU8, Ordering},
@@ -453,20 +454,8 @@ impl ProviderRegistry {
             .map_err(|_| ProviderRuntimeError::InvalidLifecycleTransition)?;
         self.inner.cancellation.cancel();
 
-        let wait_for_drain = async {
-            loop {
-                let total = self
-                    .inner
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .total;
-                if total == 0 {
-                    break;
-                }
-                self.inner.drained.notified().await;
-            }
-        };
+        let wait_for_drain =
+            wait_until_drained(&self.inner.in_flight, &self.inner.drained, || ready(()));
         let drained = time::timeout(
             Duration::from_millis(u64::from(policy.drain_deadline_ms)),
             wait_for_drain,
@@ -584,20 +573,8 @@ impl ProviderRegistry {
         &self,
         policy: &RegistryDrainPolicy,
     ) -> Result<RegistryShutdownReport, ProviderRuntimeError> {
-        let wait_for_drain = async {
-            loop {
-                let total = self
-                    .inner
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .total;
-                if total == 0 {
-                    break;
-                }
-                self.inner.drained.notified().await;
-            }
-        };
+        let wait_for_drain =
+            wait_until_drained(&self.inner.in_flight, &self.inner.drained, || ready(()));
         let drained = time::timeout(
             Duration::from_millis(u64::from(policy.drain_deadline_ms)),
             wait_for_drain,
@@ -615,5 +592,101 @@ impl ProviderRegistry {
             drained,
             unresolved_in_flight,
         })
+    }
+}
+
+async fn wait_until_drained<F, Fut>(
+    in_flight: &Mutex<InFlightState>,
+    drained: &Notify,
+    mut before_await: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    loop {
+        let notified = drained.notified();
+        let total = in_flight
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .total;
+        if total == 0 {
+            break;
+        }
+        before_await().await;
+        notified.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InFlightState, wait_until_drained};
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::{
+        sync::{Barrier, Notify},
+        time,
+    };
+
+    struct FinalPermit {
+        in_flight: Arc<Mutex<InFlightState>>,
+        drained: Arc<Notify>,
+    }
+
+    impl Drop for FinalPermit {
+        fn drop(&mut self) {
+            self.in_flight
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .total = 0;
+            self.drained.notify_waiters();
+        }
+    }
+
+    async fn prove_final_drop_between_check_and_await_completes() {
+        let in_flight = Arc::new(Mutex::new(InFlightState {
+            total: 1,
+            by_provider: BTreeMap::new(),
+        }));
+        let drained = Arc::new(Notify::new());
+        let barrier = Arc::new(Barrier::new(2));
+        let permit = FinalPermit {
+            in_flight: in_flight.clone(),
+            drained: drained.clone(),
+        };
+
+        let waiter = {
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                wait_until_drained(&in_flight, &drained, move || {
+                    let barrier = barrier.clone();
+                    async move {
+                        barrier.wait().await;
+                        barrier.wait().await;
+                    }
+                })
+                .await;
+            })
+        };
+
+        barrier.wait().await;
+        drop(permit);
+        barrier.wait().await;
+        time::timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("armed drain waiter must observe the final permit notification")
+            .expect("drain waiter must not panic");
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_final_permit_notify_race() {
+        prove_final_drop_between_check_and_await_completes().await;
+    }
+
+    #[tokio::test]
+    async fn finish_drain_closes_final_permit_notify_race() {
+        prove_final_drop_between_check_and_await_completes().await;
     }
 }

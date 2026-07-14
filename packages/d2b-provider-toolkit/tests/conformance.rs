@@ -1,6 +1,9 @@
 use std::{
     any::Any,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 
@@ -25,10 +28,12 @@ use d2b_provider_toolkit::{
     sample_lease_request,
 };
 use d2b_session::{
-    AttachmentPayload, AttachmentValidationError, ComponentSessionDriver, OwnedAttachment,
-    SessionDriverHandle, SessionError, SessionEvent, StreamEvent, StreamId,
+    AttachmentPayload, AttachmentValidationError, Cancellation, ComponentSessionDriver,
+    OwnedAttachment, RequestRegistry, SessionDriverHandle, SessionError, SessionEvent, StreamEvent,
+    StreamId,
 };
 use protobuf::{EnumOrUnknown, MessageField};
+use tokio::sync::Notify;
 
 fn proxy_instance(provider_type: ProviderType, proxy: Arc<RpcProviderProxy>) -> ProviderInstance {
     match provider_type {
@@ -214,6 +219,15 @@ fn redaction_wrappers_do_not_expose_canaries() {
 struct FakeSessionDriver {
     generation: Mutex<u64>,
     attachments: Mutex<Vec<OwnedAttachment>>,
+    requests: Mutex<RequestRegistry>,
+    registrations: AtomicUsize,
+    completions: AtomicUsize,
+    removals: AtomicUsize,
+    registered: Notify,
+    cleaned_up: Notify,
+    block_attachments: AtomicBool,
+    attachments_waiting: AtomicBool,
+    attachments_entered: Notify,
 }
 
 impl FakeSessionDriver {
@@ -221,6 +235,61 @@ impl FakeSessionDriver {
         Self {
             generation: Mutex::new(7),
             attachments: Mutex::new(Vec::new()),
+            requests: Mutex::new(RequestRegistry::new(7).unwrap_or_else(|_| unreachable!())),
+            registrations: AtomicUsize::new(0),
+            completions: AtomicUsize::new(0),
+            removals: AtomicUsize::new(0),
+            registered: Notify::new(),
+            cleaned_up: Notify::new(),
+            block_attachments: AtomicBool::new(false),
+            attachments_waiting: AtomicBool::new(false),
+            attachments_entered: Notify::new(),
+        }
+    }
+
+    async fn wait_for_registrations(&self, expected: usize) {
+        loop {
+            let notified = self.registered.notified();
+            if self.registrations.load(Ordering::Acquire) >= expected {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_for_cleanup(&self, expected: usize) {
+        loop {
+            let notified = self.cleaned_up.notified();
+            if self.completions.load(Ordering::Acquire) + self.removals.load(Ordering::Acquire)
+                >= expected
+            {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn signal(&self, request_id: &RequestId) -> bool {
+        self.requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .signal(request_id)
+    }
+
+    fn active_requests(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active()
+    }
+
+    async fn wait_for_attachment_dispatch(&self) {
+        loop {
+            let notified = self.attachments_entered.notified();
+            if self.attachments_waiting.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
         }
     }
 }
@@ -250,11 +319,56 @@ impl ComponentSessionDriver for FakeSessionDriver {
         Err(unsupported_session_operation())
     }
 
+    async fn register_inbound_call(
+        &self,
+        request_id: RequestId,
+    ) -> d2b_session::Result<Cancellation> {
+        let cancellation = self
+            .requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .register(request_id)?;
+        self.registrations.fetch_add(1, Ordering::AcqRel);
+        self.registered.notify_waiters();
+        Ok(cancellation)
+    }
+
+    async fn complete_inbound_call(&self, request_id: RequestId) -> d2b_session::Result<bool> {
+        let removed = self
+            .requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .complete(&request_id);
+        if removed {
+            self.completions.fetch_add(1, Ordering::AcqRel);
+            self.cleaned_up.notify_waiters();
+        }
+        Ok(removed)
+    }
+
+    async fn remove_inbound_call(&self, request_id: RequestId) -> d2b_session::Result<bool> {
+        let removed = self
+            .requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&request_id);
+        if removed {
+            self.removals.fetch_add(1, Ordering::AcqRel);
+            self.cleaned_up.notify_waiters();
+        }
+        Ok(removed)
+    }
+
     async fn send_attachments(&self, _: Vec<OwnedAttachment>) -> d2b_session::Result<()> {
         Err(unsupported_session_operation())
     }
 
     async fn receive_attachments(&self) -> d2b_session::Result<Vec<OwnedAttachment>> {
+        if self.block_attachments.load(Ordering::Acquire) {
+            self.attachments_waiting.store(true, Ordering::Release);
+            self.attachments_entered.notify_waiters();
+            std::future::pending::<()>().await;
+        }
         Ok(std::mem::take(
             &mut *self
                 .attachments
@@ -518,6 +632,95 @@ async fn canonical_session_attachments_are_owned_and_index_bound() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn session_cancel_reaches_active_generated_handler_and_completes_registration() {
+    let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    driver.block_attachments.store(true, Ordering::Release);
+    driver
+        .attachments
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(owned_bytes(4, vec![0x55; 8]));
+    let server = Arc::new(
+        GeneratedProviderServiceServer::new(
+            Arc::new(FakeProvider::new(fixture.clone())).instance(),
+            driver.clone(),
+            Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+        )
+        .unwrap_or_else(|_| unreachable!()),
+    );
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let mut request = generated_request(&fixture, ProviderMethod::RuntimePlan);
+    request.attachment_indexes = vec![4];
+    let task = tokio::spawn(async move {
+        provider_runtime_ttrpc::RuntimeProviderService::plan(server.as_ref(), &context, request)
+            .await
+    });
+
+    driver.wait_for_registrations(1).await;
+    driver.wait_for_attachment_dispatch().await;
+    let request_id = RequestId::new(vec![0x11; 16]).unwrap_or_else(|_| unreachable!());
+    assert!(driver.signal(&request_id));
+    match task.await.unwrap_or_else(|_| unreachable!()) {
+        Err(ttrpc::Error::RpcStatus(status)) => {
+            assert_eq!(
+                status.code.enum_value().unwrap_or_else(|_| unreachable!()),
+                ttrpc::Code::CANCELLED
+            );
+        }
+        other => panic!("expected cancelled provider call, got {other:?}"),
+    }
+    driver.wait_for_cleanup(1).await;
+    assert_eq!(driver.completions.load(Ordering::Acquire), 1);
+    assert_eq!(driver.removals.load(Ordering::Acquire), 0);
+    assert_eq!(driver.active_requests(), 0);
+}
+
+#[tokio::test]
+async fn dropped_generated_handler_removes_inbound_registration() {
+    let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
+    let driver = Arc::new(FakeSessionDriver::new(&fixture));
+    driver.block_attachments.store(true, Ordering::Release);
+    driver
+        .attachments
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(owned_bytes(4, vec![0x55; 8]));
+    let server = Arc::new(
+        GeneratedProviderServiceServer::new(
+            Arc::new(FakeProvider::new(fixture.clone())).instance(),
+            driver.clone(),
+            Arc::new(DeterministicClock::new(fixture.now_unix_ms)),
+        )
+        .unwrap_or_else(|_| unreachable!()),
+    );
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let mut request = generated_request(&fixture, ProviderMethod::RuntimePlan);
+    request.attachment_indexes = vec![4];
+    let task = tokio::spawn(async move {
+        provider_runtime_ttrpc::RuntimeProviderService::plan(server.as_ref(), &context, request)
+            .await
+    });
+
+    driver.wait_for_registrations(1).await;
+    driver.wait_for_attachment_dispatch().await;
+    task.abort();
+    assert!(task.await.is_err());
+    driver.wait_for_cleanup(1).await;
+    assert_eq!(driver.completions.load(Ordering::Acquire), 0);
+    assert_eq!(driver.removals.load(Ordering::Acquire), 1);
+    assert_eq!(driver.active_requests(), 0);
 }
 
 #[tokio::test]
