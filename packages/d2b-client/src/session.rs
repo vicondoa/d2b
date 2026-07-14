@@ -148,6 +148,12 @@ impl NamedStream {
                 if bytes.is_empty() || bytes.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
                     return Err(ClientError::ContractViolation);
                 }
+                let consumed =
+                    u32::try_from(bytes.len()).map_err(|_| ClientError::ContractViolation)?;
+                self.driver
+                    .grant_named_stream_credit(self.id, consumed)
+                    .await
+                    .map_err(|_| ClientError::TransportFailed)?;
                 Ok(bytes)
             }
             StreamEvent::RemoteClosed { stream } if stream == self.id => {

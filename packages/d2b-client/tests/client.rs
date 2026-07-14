@@ -5,7 +5,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -19,16 +19,17 @@ use d2b_client::{
 use d2b_contracts::{
     v2_component_session::{
         AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
-        AttachmentPolicy, AttachmentPurpose, BoundedVec, EndpointPolicy, EndpointPurpose,
-        EndpointRole, HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile,
-        Locality, NoiseProfile, PurposeClass, RequestId, ServicePackage, TransportBinding,
-        TransportClass,
+        AttachmentPolicy, AttachmentPurpose, BoundedVec, CloseReason, EndpointPolicy,
+        EndpointPurpose, EndpointRole, HandshakeOffer, IdentityEvidenceRequirement,
+        KernelObjectType, LimitProfile, Locality, NoiseProfile, PurposeClass, Remediation,
+        RequestId, ServicePackage, TransportBinding, TransportClass,
     },
     v2_identity::{ProviderId, RealmId, WorkloadId},
     v2_services::{SERVICE_INVENTORY, common, decode_strict, encode_strict},
 };
 use d2b_session::{
-    HandshakeCredentials, SessionEngine, StreamEvent, StreamId, TransportDescriptor, TransportError,
+    Cancellation, HandshakeCredentials, Result as SessionResult, SessionEngine, SessionEvent,
+    StreamEvent, StreamId, TransportDescriptor, TransportError,
 };
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use tokio::{
@@ -185,11 +186,23 @@ struct FakeState {
     stream_id: Mutex<Option<String>>,
     stream_sent: Mutex<Vec<Vec<u8>>>,
     stream_received: Mutex<VecDeque<Vec<u8>>>,
+    stream_send_started: AtomicUsize,
+    stream_send_completed: AtomicUsize,
+    stream_progress: Notify,
+    stream_event: Mutex<Option<RemoteStreamEvent>>,
+    granted_stream_credit: Mutex<Vec<u32>>,
     closed: AtomicUsize,
     stream_cancelled: AtomicUsize,
     block: AtomicBool,
     blocker: Notify,
     fail_connect: AtomicBool,
+}
+
+#[derive(Clone, Copy)]
+enum RemoteStreamEvent {
+    Close,
+    Reset,
+    WrongStream,
 }
 
 #[derive(Debug)]
@@ -226,6 +239,10 @@ impl ComponentSessionConnector for FakeConnector {
             return Err(ClientError::ConnectFailed);
         }
         let (initiator, responder) = drivers().await;
+        let client_driver: SharedDriver = Arc::new(GrantRecordingDriver {
+            inner: Arc::clone(&initiator),
+            state: Arc::clone(&self.0),
+        });
         let (client, peer) = tokio::io::duplex(4 * 1024 * 1024);
         tokio::spawn(ttrpc_bridge(
             peer,
@@ -236,9 +253,102 @@ impl ComponentSessionConnector for FakeConnector {
         tokio::spawn(remote_streams(Arc::clone(&responder), Arc::clone(&self.0)));
         tokio::spawn(remote_controls(responder, Arc::clone(&self.0)));
         Ok(ConnectedSession {
-            driver: initiator,
+            driver: client_driver,
             ttrpc_socket: Socket::new(client),
         })
+    }
+}
+
+struct GrantRecordingDriver {
+    inner: SharedDriver,
+    state: Arc<FakeState>,
+}
+
+#[async_trait]
+impl d2b_session::ComponentSessionDriver for GrantRecordingDriver {
+    fn generation(&self) -> u64 {
+        self.inner.generation()
+    }
+
+    async fn invoke(&self, request_id: RequestId, frame: Vec<u8>) -> SessionResult<Vec<u8>> {
+        self.inner.invoke(request_id, frame).await
+    }
+
+    async fn cancel(&self, generation: u64, request_id: RequestId) -> SessionResult<()> {
+        self.inner.cancel(generation, request_id).await
+    }
+
+    async fn send_ttrpc(&self, frame: Vec<u8>) -> SessionResult<()> {
+        self.inner.send_ttrpc(frame).await
+    }
+
+    async fn receive_ttrpc(&self) -> SessionResult<Vec<u8>> {
+        self.inner.receive_ttrpc().await
+    }
+
+    async fn register_inbound_call(&self, request_id: RequestId) -> SessionResult<Cancellation> {
+        self.inner.register_inbound_call(request_id).await
+    }
+
+    async fn complete_inbound_call(&self, request_id: RequestId) -> SessionResult<bool> {
+        self.inner.complete_inbound_call(request_id).await
+    }
+
+    async fn remove_inbound_call(&self, request_id: RequestId) -> SessionResult<bool> {
+        self.inner.remove_inbound_call(request_id).await
+    }
+
+    async fn send_attachments(&self, attachments: Vec<OwnedAttachment>) -> SessionResult<()> {
+        self.inner.send_attachments(attachments).await
+    }
+
+    async fn receive_attachments(&self) -> SessionResult<Vec<OwnedAttachment>> {
+        self.inner.receive_attachments().await
+    }
+
+    async fn open_named_stream(
+        &self,
+        stream: StreamId,
+        send_credit: u32,
+        receive_credit: u32,
+    ) -> SessionResult<()> {
+        self.inner
+            .open_named_stream(stream, send_credit, receive_credit)
+            .await
+    }
+
+    async fn send_named_stream(&self, stream: StreamId, bytes: Vec<u8>) -> SessionResult<()> {
+        self.inner.send_named_stream(stream, bytes).await
+    }
+
+    async fn receive_named_stream(&self) -> SessionResult<StreamEvent> {
+        self.inner.receive_named_stream().await
+    }
+
+    async fn grant_named_stream_credit(&self, stream: StreamId, bytes: u32) -> SessionResult<()> {
+        self.inner.grant_named_stream_credit(stream, bytes).await?;
+        self.state.granted_stream_credit.lock().unwrap().push(bytes);
+        Ok(())
+    }
+
+    async fn close_named_stream(&self, stream: StreamId) -> SessionResult<()> {
+        self.inner.close_named_stream(stream).await
+    }
+
+    async fn reset_named_stream(&self, stream: StreamId) -> SessionResult<()> {
+        self.inner.reset_named_stream(stream).await
+    }
+
+    async fn drive_keepalive(&self, now: Instant) -> SessionResult<()> {
+        self.inner.drive_keepalive(now).await
+    }
+
+    async fn receive_control(&self) -> SessionResult<SessionEvent> {
+        self.inner.receive_control().await
+    }
+
+    async fn close(&self, reason: CloseReason, remediation: Remediation) -> SessionResult<()> {
+        self.inner.close(reason, remediation).await
     }
 }
 
@@ -357,12 +467,47 @@ async fn remote_streams(driver: SharedDriver, state: Arc<FakeState>) -> Result<(
                 bytes,
             } if received == stream => {
                 state.stream_sent.lock().unwrap().push(bytes.clone());
-                let reply = state.stream_received.lock().unwrap().pop_front();
-                if let Some(reply) = reply {
+                driver
+                    .grant_named_stream_credit(stream, u32::try_from(bytes.len()).map_err(|_| ())?)
+                    .await
+                    .map_err(|_| ())?;
+                let scripted_event = { state.stream_event.lock().unwrap().take() };
+                match scripted_event {
+                    Some(RemoteStreamEvent::Close) => {
+                        driver.close_named_stream(stream).await.map_err(|_| ())?;
+                        return Ok(());
+                    }
+                    Some(RemoteStreamEvent::Reset) => {
+                        driver.reset_named_stream(stream).await.map_err(|_| ())?;
+                        return Ok(());
+                    }
+                    Some(RemoteStreamEvent::WrongStream) => {
+                        let wrong = StreamId::new(0x0101).map_err(|_| ())?;
+                        driver
+                            .open_named_stream(wrong, 256 * 1024, 256 * 1024)
+                            .await
+                            .map_err(|_| ())?;
+                        driver
+                            .send_named_stream(wrong, b"wrong-stream".to_vec())
+                            .await
+                            .map_err(|_| ())?;
+                        return Ok(());
+                    }
+                    None => {}
+                }
+                loop {
+                    let reply = state.stream_received.lock().unwrap().pop_front();
+                    let Some(reply) = reply else {
+                        break;
+                    };
+                    state.stream_send_started.fetch_add(1, Ordering::SeqCst);
+                    state.stream_progress.notify_waiters();
                     driver
                         .send_named_stream(stream, reply)
                         .await
                         .map_err(|_| ())?;
+                    state.stream_send_completed.fetch_add(1, Ordering::SeqCst);
+                    state.stream_progress.notify_waiters();
                 }
             }
             StreamEvent::RemoteClosed { stream: received } if received == stream => {
@@ -438,8 +583,11 @@ fn options(mutating: bool) -> CallOptions {
 }
 
 async fn daemon_client() -> (FakeConnector, ConnectedClient) {
+    daemon_client_with(FakeConnector::new()).await
+}
+
+async fn daemon_client_with(connector: FakeConnector) -> (FakeConnector, ConnectedClient) {
     let (realm, _, _) = ids();
-    let connector = FakeConnector::new();
     let client = Client::with_clock(routes(), connector.clone(), FixedClock);
     let connected = client
         .connect(
@@ -450,6 +598,16 @@ async fn daemon_client() -> (FakeConnector, ConnectedClient) {
         .await
         .unwrap();
     (connector, connected)
+}
+
+async fn wait_for_count(value: &AtomicUsize, expected: usize, notify: &Notify) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while value.load(Ordering::SeqCst) < expected {
+            notify.notified().await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -918,6 +1076,83 @@ async fn named_stream_fragments_over_queue_credit_and_has_terminal_actions() {
         cancel_connector.0.stream_cancelled.load(Ordering::SeqCst),
         1
     );
+}
+
+#[tokio::test]
+async fn named_stream_grants_only_consumed_data_and_releases_blocked_sender() {
+    let connector = FakeConnector::new();
+    connector
+        .0
+        .stream_received
+        .lock()
+        .unwrap()
+        .extend([vec![1; 256 * 1024], vec![2]]);
+    *connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+    let (connector, client) = daemon_client_with(connector).await;
+    let response = client
+        .invoke(
+            client.service().method(3).unwrap(),
+            common::ServiceRequest::new(),
+            options(false),
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+    let stream = client.named_stream(&response).await.unwrap();
+
+    stream.send(b"prime").await.unwrap();
+    wait_for_count(
+        &connector.0.stream_send_started,
+        2,
+        &connector.0.stream_progress,
+    )
+    .await;
+    assert_eq!(connector.0.stream_send_completed.load(Ordering::SeqCst), 1);
+    assert!(connector.0.granted_stream_credit.lock().unwrap().is_empty());
+
+    assert_eq!(stream.receive().await.unwrap().len(), 256 * 1024);
+    assert_eq!(
+        connector.0.granted_stream_credit.lock().unwrap().as_slice(),
+        &[256 * 1024]
+    );
+    wait_for_count(
+        &connector.0.stream_send_completed,
+        2,
+        &connector.0.stream_progress,
+    )
+    .await;
+    assert_eq!(stream.receive().await.unwrap(), vec![2]);
+    assert_eq!(
+        connector.0.granted_stream_credit.lock().unwrap().as_slice(),
+        &[256 * 1024, 1]
+    );
+}
+
+#[tokio::test]
+async fn named_stream_terminal_and_error_events_do_not_grant_credit() {
+    for (event, expected) in [
+        (RemoteStreamEvent::Close, ClientError::StreamClosed),
+        (RemoteStreamEvent::Reset, ClientError::StreamClosed),
+        (RemoteStreamEvent::WrongStream, ClientError::TransportFailed),
+    ] {
+        let connector = FakeConnector::new();
+        *connector.0.stream_event.lock().unwrap() = Some(event);
+        *connector.0.stream_id.lock().unwrap() = Some("stream-256".to_owned());
+        let (connector, client) = daemon_client_with(connector).await;
+        let response = client
+            .invoke(
+                client.service().method(3).unwrap(),
+                common::ServiceRequest::new(),
+                options(false),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap();
+        let stream = client.named_stream(&response).await.unwrap();
+        stream.send(b"prime").await.unwrap();
+        assert_eq!(stream.receive().await.unwrap_err(), expected);
+        assert!(connector.0.granted_stream_credit.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
