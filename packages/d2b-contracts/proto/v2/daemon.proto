@@ -1,0 +1,18 @@
+syntax = "proto3";
+package d2b.daemon.v2;
+import "common.proto";
+service DaemonService {
+  rpc Resolve(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ListRealms(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ListWorkloads(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Inspect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Apply(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Start(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Stop(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Restart(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Exec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Shell(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc OpenConsole(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ExportAudit(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

@@ -1,0 +1,9 @@
+syntax = "proto3";
+package d2b.clipboard.picker.v2;
+import "common.proto";
+service ClipboardPickerService {
+  rpc ListOffers(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc SelectOffer(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc CancelSelection(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

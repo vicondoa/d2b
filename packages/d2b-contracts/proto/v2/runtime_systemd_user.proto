@@ -1,0 +1,14 @@
+syntax = "proto3";
+// Protobuf identifiers cannot contain '-'. The generated ttrpc dispatch path
+// is rewritten to the ComponentSession package d2b.runtime.systemd-user.v2.
+package d2b.runtime.systemd_user.v2;
+import "common.proto";
+service RuntimeSystemdUserService {
+  rpc EnsureScope(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc StartProcess(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc InspectProcess(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc AdoptProcess(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc StopProcess(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc OpenTerminal(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

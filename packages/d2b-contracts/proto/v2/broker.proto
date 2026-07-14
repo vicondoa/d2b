@@ -1,0 +1,15 @@
+syntax = "proto3";
+package d2b.broker.v2;
+import "common.proto";
+service BrokerService {
+  rpc ValidateLease(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Allocate(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Delegate(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Spawn(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc OpenResource(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Apply(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Observe(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc RevokeLease(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc ExportAudit(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}
