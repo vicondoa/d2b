@@ -14,7 +14,7 @@ use d2b_client::{
     ClientError, ComponentSessionConnector, ConnectedClient, ConnectedSession, MetadataInput,
     OwnedAttachment, OwnedTransport, RemoteErrorKind, RetryClass, RetryPolicy, RouteRecord,
     RouteTable, ServiceKind, ServiceOwner, SessionFailure, SharedDriver, TargetInput,
-    TransportKind, TransportPacket, TransportSelection, WallClock,
+    TargetResolver, TransportKind, TransportPacket, TransportSelection, WallClock,
 };
 use d2b_contracts::{
     v2_component_session::{
@@ -491,6 +491,111 @@ async fn typed_routes_select_exact_transport_without_fallback() {
         ClientError::ConnectFailed
     );
     assert_eq!(connector.0.attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn exact_selection_disambiguates_multiple_owner_transports() {
+    let realm = ids().0;
+    let owner = ServiceOwner::LocalRoot(realm.clone());
+    let table = RouteTable::new(vec![
+        RouteRecord {
+            owner: owner.clone(),
+            transport: TransportKind::LocalUnix,
+        },
+        RouteRecord {
+            owner,
+            transport: TransportKind::NativeVsock,
+        },
+    ]);
+
+    for transport in [TransportKind::LocalUnix, TransportKind::NativeVsock] {
+        let resolved = table
+            .resolve(
+                &TargetInput::LocalRoot(realm.clone()),
+                ServiceKind::Daemon,
+                TransportSelection::exact(transport),
+            )
+            .unwrap();
+        assert_eq!(resolved.transport(), transport);
+    }
+    assert_eq!(
+        table
+            .resolve(
+                &TargetInput::LocalRoot(realm),
+                ServiceKind::Daemon,
+                TransportSelection::exact(TransportKind::Provider),
+            )
+            .unwrap_err(),
+        ClientError::TransportPolicyMismatch
+    );
+}
+
+#[test]
+fn unspecified_transport_never_selects_a_route() {
+    let realm = ids().0;
+    let table = RouteTable::new(vec![
+        RouteRecord {
+            owner: ServiceOwner::LocalRoot(realm.clone()),
+            transport: TransportKind::LocalUnix,
+        },
+        RouteRecord {
+            owner: ServiceOwner::LocalRoot(realm.clone()),
+            transport: TransportKind::NativeVsock,
+        },
+    ]);
+
+    assert_eq!(
+        table
+            .resolve(
+                &TargetInput::LocalRoot(realm),
+                ServiceKind::Daemon,
+                TransportSelection::unspecified(),
+            )
+            .unwrap_err(),
+        ClientError::TransportPolicyMismatch
+    );
+}
+
+#[test]
+fn duplicate_records_fail_only_the_selected_transport() {
+    let realm = ids().0;
+    let owner = ServiceOwner::LocalRoot(realm.clone());
+    let table = RouteTable::new(vec![
+        RouteRecord {
+            owner: owner.clone(),
+            transport: TransportKind::LocalUnix,
+        },
+        RouteRecord {
+            owner: owner.clone(),
+            transport: TransportKind::LocalUnix,
+        },
+        RouteRecord {
+            owner,
+            transport: TransportKind::NativeVsock,
+        },
+    ]);
+
+    assert_eq!(
+        table
+            .resolve(
+                &TargetInput::LocalRoot(realm.clone()),
+                ServiceKind::Daemon,
+                TransportSelection::exact(TransportKind::LocalUnix),
+            )
+            .unwrap_err(),
+        ClientError::InvalidTarget
+    );
+    assert_eq!(
+        table
+            .resolve(
+                &TargetInput::LocalRoot(realm),
+                ServiceKind::Daemon,
+                TransportSelection::exact(TransportKind::NativeVsock),
+            )
+            .unwrap()
+            .transport(),
+        TransportKind::NativeVsock
+    );
 }
 
 #[tokio::test]

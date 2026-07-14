@@ -95,15 +95,19 @@ pub enum TransportKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportSelection {
-    exact: TransportKind,
+    exact: Option<TransportKind>,
 }
 
 impl TransportSelection {
     pub const fn exact(kind: TransportKind) -> Self {
-        Self { exact: kind }
+        Self { exact: Some(kind) }
     }
 
-    pub const fn kind(self) -> TransportKind {
+    pub const fn unspecified() -> Self {
+        Self { exact: None }
+    }
+
+    pub const fn kind(self) -> Option<TransportKind> {
         self.exact
     }
 }
@@ -190,13 +194,22 @@ impl TargetResolver for RouteTable {
             return Err(ClientError::InvalidService);
         }
         let owner = target.owner();
-        let mut candidates = self.records.iter().filter(|record| record.owner == owner);
-        let record = candidates.next().ok_or(ClientError::RouteUnavailable)?;
+        let selected = selection
+            .kind()
+            .ok_or(ClientError::TransportPolicyMismatch)?;
+        let mut candidates = self
+            .records
+            .iter()
+            .filter(|record| record.owner == owner && record.transport == selected);
+        let Some(record) = candidates.next() else {
+            return Err(if self.records.iter().any(|record| record.owner == owner) {
+                ClientError::TransportPolicyMismatch
+            } else {
+                ClientError::RouteUnavailable
+            });
+        };
         if candidates.next().is_some() {
             return Err(ClientError::InvalidTarget);
-        }
-        if record.transport != selection.kind() {
-            return Err(ClientError::TransportPolicyMismatch);
         }
         Ok(ResolvedTarget {
             owner,
