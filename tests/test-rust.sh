@@ -196,6 +196,10 @@ cleanup_cargo_special_files() {
 
 cleanup_package_test_scratch() {
   local label="$1" dir="$2"
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    log "$label leaves package-local scratch to validation checkout cleanup"
+    return 0
+  fi
   if [ -d "$dir" ]; then
     rm -rf -- "$dir"
     ok "$label removed package-local test scratch $dir"

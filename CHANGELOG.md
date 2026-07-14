@@ -113,6 +113,8 @@ deprecations ship one minor release before removal.
   output and kept signal-test diagnostics independently bounded.
 - Routed broker media and guest-control signing tempdirs through validation
   output instead of the read-only crate root.
+- Deferred package-local target-island removal to validation checkout cleanup
+  when the target's source parent is intentionally read-only.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
