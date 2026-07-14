@@ -80,9 +80,9 @@ deprecations ship one minor release before removal.
   validation errors, making role scopes and audit actors workload-bound,
   keeping schema and serde enum-field casing identical, and distinguishing
   `SCM_CREDENTIALS` records from pidfds.
-- Made identity rejection vectors portable to Nix implementations that cannot
-  materialize NUL-containing JSON strings, and corrected generated tuple-struct
-  API documentation.
+- Made pure-Nix identity checks and rejection vectors portable to
+  implementations that cannot materialize NUL-containing JSON strings, and
+  corrected generated tuple-struct API documentation.
 - Moved the async ttrpc API-fit socket fixture to the validation-owned socket
   root so canonical read-only source checks can execute it.
 - Made W2 delivery authority fingerprint each generated service binding and

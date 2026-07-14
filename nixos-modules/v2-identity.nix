@@ -5,7 +5,16 @@ let
   hexAlphabet = "0123456789abcdef";
   printable =
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-  nul = builtins.fromJSON ''"\u0000"'';
+
+  contains = needle: value:
+    let
+      needleLength = builtins.stringLength needle;
+      valueLength = builtins.stringLength value;
+    in
+      needleLength <= valueLength
+      && builtins.any
+        (index: builtins.substring index needleLength value == needle)
+        (builtins.genList (index: index) (valueLength - needleLength + 1));
 
   domains = {
     realm = "d2b-v2:realm";
@@ -333,9 +342,7 @@ let
     builtins.deepSeq checkedProviders (builtins.deepSeq checkedAll true);
 
   hasNul = value:
-    builtins.any
-      (index: builtins.substring index 1 value == nul)
-      (builtins.genList (index: index) (builtins.stringLength value));
+    contains "\\u0000" (builtins.toJSON value);
 
   unixPathHeadroom = path:
     if hasNul path then throw "v2 identity: Unix pathname contains NUL"
