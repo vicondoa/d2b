@@ -30,8 +30,6 @@ use super::{
     },
 };
 
-const VALIDATION_NIX_CONFIG: &str =
-    "experimental-features = nix-command flakes\nmin-free = 0\nmax-free = 0";
 use rustix::{
     fs::{Mode, OFlags, fchmod, openat},
     io::Errno,
@@ -356,10 +354,6 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         (
             OsString::from("HOME"),
             output_root.join("home").into_os_string(),
-        ),
-        (
-            OsString::from("NIX_CONFIG"),
-            OsString::from(VALIDATION_NIX_CONFIG),
         ),
     ]);
     let output = runner.output_with_environment(
@@ -1275,13 +1269,6 @@ mod tests {
             retained_output_payload(b"ab", b"c").expect("payload"),
             retained_output_payload(b"a", b"bc").expect("payload")
         );
-    }
-
-    #[test]
-    fn validation_nix_config_disables_destructive_auto_gc() {
-        assert!(VALIDATION_NIX_CONFIG.contains("experimental-features = nix-command flakes"));
-        assert!(VALIDATION_NIX_CONFIG.contains("min-free = 0"));
-        assert!(VALIDATION_NIX_CONFIG.contains("max-free = 0"));
     }
 
     #[test]
