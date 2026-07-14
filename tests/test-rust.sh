@@ -398,11 +398,7 @@ cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebacke
 cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
 
-schema_out="$ROOT/packages/xtask/out"
-schema_out_preexisting=0
-if [ -e "$schema_out" ]; then
-  schema_out_preexisting=1
-fi
+schema_out=$(d2b_mktemp ".d2b-schema-repro.XXXXXX")
 snapshot_schema_out() {
   if [ ! -d "$schema_out" ]; then
     return 0
@@ -417,9 +413,11 @@ snapshot_schema_out() {
 
 log "--> schema generation reproducibility"
 (cd "$ROOT/packages" && \
+  D2B_XTASK_SCHEMA_OUTPUT_DIR="$schema_out" \
   CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
 (cd "$ROOT/packages" && \
+  D2B_XTASK_SCHEMA_OUTPUT_DIR="$schema_out" \
   CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
@@ -428,9 +426,6 @@ if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
     <(printf '%s\n' "$schema_snapshot_1") \
     <(printf '%s\n' "$schema_snapshot_2") >&2 || true
   exit 1
-fi
-if [ "$schema_out_preexisting" = "0" ]; then
-  rm -rf -- "$schema_out"
 fi
 ok "schema generation reproducibility"
 

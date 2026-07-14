@@ -515,9 +515,18 @@ fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
 
 fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let out_dir = repo_root
-        .join("docs/reference/schemas")
-        .join(SCHEMA_VERSION);
+    let out_dir = match env::var_os("D2B_XTASK_SCHEMA_OUTPUT_DIR") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err("D2B_XTASK_SCHEMA_OUTPUT_DIR must be absolute".into());
+            }
+            path
+        }
+        None => repo_root
+            .join("docs/reference/schemas")
+            .join(SCHEMA_VERSION),
+    };
     fs::create_dir_all(&out_dir)?;
 
     let schemas: [(&str, RootSchema); 20] = [

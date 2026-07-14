@@ -115,6 +115,8 @@ deprecations ship one minor release before removal.
   output instead of the read-only crate root.
 - Deferred package-local target-island removal to validation checkout cleanup
   when the target's source parent is intentionally read-only.
+- Made schema reproducibility generate twice into validation-owned scratch
+  instead of rewriting committed schema paths.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
