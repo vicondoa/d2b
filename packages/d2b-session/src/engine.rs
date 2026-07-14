@@ -369,18 +369,21 @@ impl<T: OwnedTransport> SessionEngine<T> {
         }
         let sequence = self.next_record_sequence;
         for (index, attachment) in attachments.iter_mut().enumerate() {
-            attachment.bind(index as u16, sequence, self.generation());
-            if attachment.descriptor().service != self.offer.service {
+            let descriptor = attachment
+                .bind_outbound(index as u16, sequence, self.generation())
+                .ok_or_else(|| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?;
+            if descriptor.service != self.offer.service {
                 return Err(SessionError::new(
                     SessionErrorCode::AttachmentDescriptorMismatch,
                 ));
             }
-            attachment.descriptor().validate(index as u16)?;
+            descriptor.validate(index as u16)?;
         }
         let descriptors = attachments
             .iter()
-            .map(|attachment| attachment.descriptor().clone())
-            .collect();
+            .map(|attachment| attachment.descriptor().cloned())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?;
         let packet = AttachmentPacket {
             declared_count: count,
             descriptors: BoundedVec::new(descriptors)?,
@@ -555,13 +558,11 @@ impl<T: OwnedTransport> SessionEngine<T> {
                     .map_err(|_| {
                         SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
                     })?;
-                for (index, (declared, actual)) in packet
-                    .descriptors
-                    .iter()
-                    .zip(attachments.iter())
-                    .enumerate()
+                let mut bound = Vec::with_capacity(attachments.len());
+                for (index, (declared, received)) in
+                    packet.descriptors.iter().zip(attachments).enumerate()
                 {
-                    if declared != actual.descriptor()
+                    if received.descriptor().is_some()
                         || declared.packet_sequence != header.sequence
                         || declared.reconnect_generation != self.generation()
                         || declared.service != self.offer.service
@@ -571,10 +572,13 @@ impl<T: OwnedTransport> SessionEngine<T> {
                         ));
                     }
                     declared.validate(index as u16)?;
+                    bound.push(received.bind_received(declared.clone()).ok_or_else(|| {
+                        SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch)
+                    })?);
                 }
                 self.send_attachment_ack(header.sequence, packet.declared_count)
                     .await?;
-                Ok(SessionEvent::Attachments(attachments))
+                Ok(SessionEvent::Attachments(bound))
             }
             AttachmentControl::Ack { sequence, count } => {
                 if !attachments.is_empty() {

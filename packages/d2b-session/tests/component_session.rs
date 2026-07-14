@@ -761,6 +761,15 @@ impl OwnedTransport for FakeTransport {
             let last = bytes.last_mut().ok_or(TransportError::Truncated)?;
             *last ^= 1;
         }
+        let attachments = attachments
+            .into_iter()
+            .map(|attachment| {
+                attachment
+                    .into_payload()
+                    .map(OwnedAttachment::received)
+                    .ok_or(TransportError::InvalidAttachment)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         self.sender
             .send(TransportPacket::with_attachments(bytes, attachments))
             .await
@@ -1038,6 +1047,7 @@ async fn engine_binds_acknowledges_and_releases_owned_attachments() {
         event => panic!("unexpected event {event:?}"),
     };
     assert_eq!(attachments.len(), 1);
+    assert!(attachments[0].descriptor().is_some());
     assert_eq!(closes.load(Ordering::Acquire), 0);
     drop(attachments);
     assert_eq!(closes.load(Ordering::Acquire), 1);
