@@ -20,7 +20,10 @@ mod pidfd;
 mod socket;
 
 #[cfg(feature = "host-socket")]
-pub use adapter::{OwnedUnixAttachment, UnixSeqpacketTransport, UnixStreamTransport};
+pub use adapter::{
+    DescriptorPolicyResolver, OwnedUnixAttachment, UnixAttachmentPayload, UnixSeqpacketTransport,
+    UnixStreamTransport,
+};
 #[cfg(feature = "host-socket")]
 pub use credit::{
     CreditBundle, CreditError, CreditPool, CreditScope, CreditScopeSet, ProcessCreditLimit,

@@ -1,14 +1,19 @@
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
-    KernelObjectType, LimitProfile, RequestId, ServicePackage,
+    EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, KernelObjectType,
+    LimitProfile, Locality, NoiseProfile, PurposeClass, RequestId, ServicePackage,
+    TransportBinding, TransportClass,
 };
-use d2b_session::{OwnedTransport, TransportPacket};
+use d2b_session::{
+    AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
+    OwnedTransport, SessionEngine, SessionEvent, TransportPacket,
+};
 use d2b_unix_session::{
-    AcceptedAttachment, AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy,
-    ObjectIdentity, OutboundPacket, OwnedUnixAttachment, PidfdEvidence, PidfdIdentityPolicy,
-    PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
-    SentPacket, SeqpacketSocket, StreamSocket, UnixSeqpacketTransport, UnixSessionError,
+    AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
+    OutboundPacket, OwnedUnixAttachment, PidfdEvidence, PidfdIdentityPolicy, PidfdInfoSource,
+    ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit, SentPacket,
+    SeqpacketSocket, StreamSocket, UnixAttachmentPayload, UnixSeqpacketTransport, UnixSessionError,
     UnixStreamTransport, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
 };
 use rustix::{
@@ -20,9 +25,14 @@ use rustix::{
     process::{PidfdFlags, getpid, getppid, pidfd_open},
 };
 use std::{
+    any::Any,
     collections::VecDeque,
     fs,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
 };
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -379,6 +389,22 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let policy = attachment_policy(1, false);
     let (sender_scopes, sender_pools) = scopes(8);
     let (receiver_scopes, receiver_pools) = scopes(8);
+    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let pipe_inode = fstat(&read_end).unwrap().st_ino;
+    let identity = ObjectIdentity::from_trusted(
+        &read_end,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+    )
+    .unwrap();
+    let sender_identity = identity.clone();
+    let sender_resolver = Arc::new(move |_: &AttachmentDescriptor| {
+        Ok(DescriptorPolicy::File(sender_identity.clone()))
+    });
+    let receiver_identity = identity.clone();
+    let receiver_resolver = Arc::new(move |_: &AttachmentDescriptor| {
+        Ok(DescriptorPolicy::File(receiver_identity.clone()))
+    });
     let mut sender = UnixSeqpacketTransport::new(
         sender_socket,
         d2b_contracts::v2_component_session::TransportClass::UnixSeqpacket,
@@ -386,6 +412,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
         LimitProfile::local_default(),
         policy,
         sender_scopes,
+        sender_resolver,
     )
     .unwrap();
     let mut receiver = UnixSeqpacketTransport::new(
@@ -395,61 +422,68 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
         LimitProfile::local_default(),
         policy,
         receiver_scopes,
+        receiver_resolver,
     )
     .unwrap();
 
-    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
-    let pipe_inode = fstat(&read_end).unwrap().st_ino;
-    let identity = ObjectIdentity::from_trusted(
-        &read_end,
-        KernelObjectType::PipeRead,
-        AttachmentAccess::ReadOnly,
-    )
-    .unwrap();
-    let metadata = descriptor(
+    let mut metadata = descriptor(
         0,
         KernelObjectType::PipeRead,
         AttachmentAccess::ReadOnly,
         false,
     );
-    let attachment = OwnedUnixAttachment::file(
-        metadata.clone(),
-        read_end,
-        &DescriptorPolicy::File(identity.clone()),
-    )
-    .unwrap();
-    let sent = sender
-        .send_owned(
-            TransportPacket::new(b"protected-record".to_vec()),
+    metadata.service = ServicePackage::BrokerV2;
+    let attachment =
+        OwnedUnixAttachment::file(metadata.clone(), read_end, DescriptorPolicy::File(identity))
+            .unwrap();
+    sender
+        .send(TransportPacket::with_attachments(
+            b"protected-record".to_vec(),
             vec![attachment],
-        )
+        ))
         .await
         .unwrap();
-    assert!(sender_pools.iter().all(|pool| pool.used() == 1));
+    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    let received = receiver
+        .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
+        .await
+        .unwrap();
+    let (payload, attachments) = received.into_parts();
+    assert_eq!(payload, b"protected-record");
+    assert_eq!(attachments.len(), 1);
+    assert!(attachments[0].descriptor().is_none());
+    let unix_payload = attachments[0]
+        .payload()
+        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+        .unwrap();
+    AttachmentPayload::validate_descriptor(unix_payload, &metadata).unwrap();
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 1));
     assert_eq!(pipe_handle_count(pipe_inode), 2);
-    let verified = receiver
-        .receive_owned(
-            LimitProfile::local_default().protected_ciphertext_bytes as usize,
-            &packet(vec![metadata]),
-            &[DescriptorPolicy::File(identity)],
-        )
-        .await
-        .unwrap();
-    assert_eq!(pipe_handle_count(pipe_inode), 3);
-    assert_eq!(verified.payload(), b"protected-record");
-    let AcceptedAttachment::File(received_read_end) = &verified.attachments()[0] else {
-        panic!("expected owned file");
-    };
+    let received_read_end = unix_payload.file().unwrap();
     rustix::io::write(&write_end, b"x").unwrap();
     let mut byte = [0_u8; 1];
     assert_eq!(rustix::io::read(received_read_end, &mut byte).unwrap(), 1);
     assert_eq!(byte, *b"x");
-    drop(verified);
+    drop(attachments);
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
-    assert_eq!(pipe_handle_count(pipe_inode), 2);
-    sent.acknowledge();
-    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
     assert_eq!(pipe_handle_count(pipe_inode), 1);
+
+    let foreign_closes = Arc::new(AtomicUsize::new(0));
+    let foreign = OwnedAttachment::new(
+        metadata.clone(),
+        Box::new(CountingPayload(foreign_closes.clone())),
+    );
+    assert_eq!(
+        sender
+            .send(TransportPacket::with_attachments(
+                b"rejected".to_vec(),
+                vec![foreign],
+            ))
+            .await,
+        Err(d2b_session::TransportError::InvalidAttachment)
+    );
+    assert_eq!(foreign_closes.load(Ordering::Acquire), 1);
 
     let (left, right) = socketpair(
         AddressFamily::UNIX,
@@ -472,8 +506,247 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
         .unwrap();
     let stream_packet = stream_receiver.receive(64).await.unwrap();
     assert_eq!(stream_packet.as_bytes(), b"stream-record");
+    let (stream_read, _stream_write) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let stream_identity = ObjectIdentity::from_trusted(
+        &stream_read,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+    )
+    .unwrap();
+    let stream_attachment = OwnedUnixAttachment::file(
+        metadata,
+        stream_read,
+        DescriptorPolicy::File(stream_identity),
+    )
+    .unwrap();
+    assert_eq!(
+        stream_sender
+            .send(TransportPacket::with_attachments(
+                b"rejected".to_vec(),
+                vec![stream_attachment],
+            ))
+            .await,
+        Err(d2b_session::TransportError::InvalidAttachment)
+    );
     stream_sender.close().await.unwrap();
     stream_receiver.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn owned_transport_binds_kernel_credentials_after_authentication() {
+    let _serial = serialize_fd_test().await;
+    let (left, right) = prearmed_seqpacket_pair().unwrap();
+    let sender_socket = SeqpacketSocket::from_parent_prearmed(left).unwrap();
+    let receiver_socket = SeqpacketSocket::from_parent_prearmed(right).unwrap();
+    let expected = receiver_socket.acceptor_peer_credentials().unwrap();
+    let attachment_policy = attachment_policy(1, true);
+    let (sender_scopes, sender_pools) = scopes(8);
+    let (receiver_scopes, receiver_pools) = scopes(8);
+    let sender_resolver =
+        Arc::new(move |_: &AttachmentDescriptor| Ok(DescriptorPolicy::Credentials(expected)));
+    let receiver_resolver = sender_resolver.clone();
+    let mut sender = UnixSeqpacketTransport::new(
+        sender_socket,
+        TransportClass::InheritedSocketpair,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        attachment_policy,
+        sender_scopes,
+        sender_resolver,
+    )
+    .unwrap();
+    let mut receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        TransportClass::InheritedSocketpair,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        attachment_policy,
+        receiver_scopes,
+        receiver_resolver,
+    )
+    .unwrap();
+    let metadata = AttachmentDescriptor {
+        index: 0,
+        kind: AttachmentKind::Credentials,
+        object_type: KernelObjectType::ProcessCredentials,
+        access: AttachmentAccess::ReadOnly,
+        purpose: AttachmentPurpose::ProcessIdentity,
+        service: ServicePackage::BrokerV2,
+        method_id: 1,
+        request_id: RequestId::new([9_u8; 16]).unwrap(),
+        operation_id: None,
+        packet_sequence: 1,
+        reconnect_generation: 1,
+        duplicate_object_allowed: false,
+        cloexec_required: false,
+        credit_classes: BoundedVec::new(vec![
+            AttachmentCreditClass::Packet,
+            AttachmentCreditClass::Request,
+            AttachmentCreditClass::Operation,
+            AttachmentCreditClass::Session,
+            AttachmentCreditClass::Process,
+            AttachmentCreditClass::Host,
+        ])
+        .unwrap(),
+    };
+    let attachment = OwnedUnixAttachment::credentials(
+        metadata.clone(),
+        expected,
+        DescriptorPolicy::Credentials(expected),
+    )
+    .unwrap();
+    sender
+        .send(TransportPacket::with_attachments(
+            b"credential-record".to_vec(),
+            vec![attachment],
+        ))
+        .await
+        .unwrap();
+    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    let received = receiver
+        .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
+        .await
+        .unwrap();
+    let (_, attachments) = received.into_parts();
+    assert_eq!(attachments.len(), 1);
+    let unix_payload = attachments[0]
+        .payload()
+        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+        .unwrap();
+    AttachmentPayload::validate_descriptor(unix_payload, &metadata).unwrap();
+    assert_eq!(unix_payload.credentials(), Some(expected));
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 1));
+    drop(attachments);
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
+    let _serial = serialize_fd_test().await;
+    let (sender_socket, receiver_socket) = seqpacket_pair();
+    let attachment_policy = attachment_policy(1, false);
+    let (sender_scopes, sender_pools) = scopes(8);
+    let (receiver_scopes, receiver_pools) = scopes(8);
+    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let pipe_inode = fstat(&read_end).unwrap().st_ino;
+    let identity = ObjectIdentity::from_trusted(
+        &read_end,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+    )
+    .unwrap();
+    let sender_identity = identity.clone();
+    let sender_resolver = Arc::new(move |_: &AttachmentDescriptor| {
+        Ok(DescriptorPolicy::File(sender_identity.clone()))
+    });
+    let receiver_identity = identity.clone();
+    let receiver_resolver = Arc::new(move |_: &AttachmentDescriptor| {
+        Ok(DescriptorPolicy::File(receiver_identity.clone()))
+    });
+    let sender = UnixSeqpacketTransport::new(
+        sender_socket,
+        TransportClass::UnixSeqpacket,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        attachment_policy,
+        sender_scopes,
+        sender_resolver,
+    )
+    .unwrap();
+    let receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        TransportClass::UnixSeqpacket,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        attachment_policy,
+        receiver_scopes,
+        receiver_resolver,
+    )
+    .unwrap();
+    let endpoint = EndpointPolicy {
+        purpose: EndpointPurpose::PrivilegedBroker,
+        purpose_class: PurposeClass::Local,
+        initiator_role: EndpointRole::LocalRootController,
+        responder_role: EndpointRole::LocalRootBroker,
+        service: ServicePackage::BrokerV2,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        reconnect_generation: 7,
+        attachment_policy,
+    };
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(sender, endpoint.clone(), HandshakeCredentials::Nn, now,),
+        SessionEngine::establish_responder(receiver, endpoint, HandshakeCredentials::Nn, now,),
+    );
+    let mut initiator = initiator.unwrap();
+    let mut responder = responder.unwrap();
+    let mut metadata = descriptor(
+        0,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+        false,
+    );
+    metadata.service = ServicePackage::BrokerV2;
+    let attachment =
+        OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)).unwrap();
+    initiator.send_attachments(vec![attachment]).await.unwrap();
+    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    assert_eq!(pipe_handle_count(pipe_inode), 1);
+
+    let attachments = match responder.receive().await.unwrap() {
+        SessionEvent::Attachments(attachments) => attachments,
+        event => panic!("unexpected event {event:?}"),
+    };
+    assert_eq!(attachments.len(), 1);
+    assert!(attachments[0].descriptor().is_some());
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 1));
+    let unix_payload = attachments[0]
+        .payload()
+        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+        .unwrap();
+    let received_read_end = unix_payload.file().unwrap();
+    rustix::io::write(&write_end, b"y").unwrap();
+    let mut byte = [0_u8; 1];
+    assert_eq!(rustix::io::read(received_read_end, &mut byte).unwrap(), 1);
+    assert_eq!(byte, *b"y");
+    drop(attachments);
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+    assert_eq!(pipe_handle_count(pipe_inode), 1);
+    assert!(matches!(
+        initiator.receive().await.unwrap(),
+        SessionEvent::AttachmentAcknowledged { count: 1 }
+    ));
+}
+
+struct CountingPayload(Arc<AtomicUsize>);
+
+impl AttachmentPayload for CountingPayload {
+    fn close(self: Box<Self>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        _descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        Ok(())
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

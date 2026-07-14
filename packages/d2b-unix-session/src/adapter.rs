@@ -1,71 +1,254 @@
 use crate::{
-    AncillaryCapacity, CreditScopeSet, DescriptorPolicy, PeerCredentials, ReceivedPacket,
-    SentPacket, SeqpacketSocket, StreamSocket, UnixSessionError, VerifiedPacket,
-    descriptor::validate_owned_file,
+    AncillaryCapacity, CreditBundle, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
+    PeerCredentials, ReceivedPacket, SeqpacketSocket, StreamSocket, UnixSessionError,
+    descriptor::{ReceivedControl, validate_owned_file, validate_owned_file_identity},
 };
 use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{
-    AttachmentDescriptor, AttachmentKind, AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind,
-    LimitProfile, Locality, TransportClass,
+    AttachmentDescriptor, AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, LimitProfile,
+    Locality, TransportClass,
 };
-use d2b_session::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
-use rustix::fd::OwnedFd;
-use std::{collections::VecDeque, fmt, sync::Arc};
+use d2b_session::{
+    AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport,
+    TransportDescriptor, TransportError, TransportPacket,
+};
+use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::{
+    any::Any,
+    collections::VecDeque,
+    fmt,
+    sync::{Arc, Mutex},
+};
 
-enum OwnedUnixAttachmentValue {
+pub type DescriptorPolicyResolver =
+    Arc<dyn Fn(&AttachmentDescriptor) -> Result<DescriptorPolicy, UnixSessionError> + Send + Sync>;
+
+enum UnixAttachmentValue {
     File(OwnedFd),
     Credentials(PeerCredentials),
 }
 
-pub struct OwnedUnixAttachment {
-    descriptor: AttachmentDescriptor,
-    value: OwnedUnixAttachmentValue,
+enum UnixAttachmentPolicy {
+    Bound {
+        descriptor: Box<AttachmentDescriptor>,
+        policy: Box<DescriptorPolicy>,
+    },
+    Received {
+        resolver: DescriptorPolicyResolver,
+        packet: Arc<ReceivedPacketState>,
+    },
 }
 
-impl fmt::Debug for OwnedUnixAttachment {
+pub struct UnixAttachmentPayload {
+    value: UnixAttachmentValue,
+    policy: UnixAttachmentPolicy,
+    validation: Mutex<Option<(AttachmentDescriptor, Option<ObjectIdentity>)>>,
+}
+
+impl fmt::Debug for UnixAttachmentPayload {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("OwnedUnixAttachment")
-            .field("kind", &self.descriptor.kind)
-            .field("value", &"REDACTED")
-            .finish_non_exhaustive()
+        formatter.write_str("UnixAttachmentPayload(REDACTED)")
     }
 }
+
+impl UnixAttachmentPayload {
+    pub fn file(&self) -> Option<BorrowedFd<'_>> {
+        match &self.value {
+            UnixAttachmentValue::File(fd) => Some(fd.as_fd()),
+            UnixAttachmentValue::Credentials(_) => None,
+        }
+    }
+
+    pub fn credentials(&self) -> Option<PeerCredentials> {
+        match self.value {
+            UnixAttachmentValue::Credentials(credentials) => Some(credentials),
+            UnixAttachmentValue::File(_) => None,
+        }
+    }
+
+    fn received(
+        value: UnixAttachmentValue,
+        resolver: DescriptorPolicyResolver,
+        packet: Arc<ReceivedPacketState>,
+    ) -> Self {
+        Self {
+            value,
+            policy: UnixAttachmentPolicy::Received { resolver, packet },
+            validation: Mutex::new(None),
+        }
+    }
+
+    fn validate(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<Option<ObjectIdentity>, UnixSessionError> {
+        let mut validation = self
+            .validation
+            .lock()
+            .map_err(|_| UnixSessionError::DescriptorMismatch)?;
+        if let Some((bound, identity)) = validation.as_ref() {
+            return if bound == descriptor {
+                Ok(identity.clone())
+            } else {
+                Err(UnixSessionError::DescriptorMismatch)
+            };
+        }
+        descriptor
+            .validate(descriptor.index)
+            .map_err(|_| UnixSessionError::DescriptorMismatch)?;
+        let identity = match &self.policy {
+            UnixAttachmentPolicy::Bound {
+                descriptor: expected,
+                policy,
+            } => {
+                if !same_descriptor_binding(expected, descriptor) {
+                    return Err(UnixSessionError::DescriptorMismatch);
+                }
+                validate_value(&self.value, descriptor, policy)?
+            }
+            UnixAttachmentPolicy::Received { resolver, packet } => {
+                let policy = resolver(descriptor)?;
+                let identity = validate_value(&self.value, descriptor, &policy)?;
+                packet.accept(identity.clone(), descriptor.duplicate_object_allowed)?;
+                identity
+            }
+        };
+        *validation = Some((descriptor.clone(), identity.clone()));
+        Ok(identity)
+    }
+
+    fn into_send_parts(self) -> (UnixAttachmentValue, Option<Arc<ReceivedPacketState>>) {
+        let retained = match self.policy {
+            UnixAttachmentPolicy::Received { packet, .. } => Some(packet),
+            UnixAttachmentPolicy::Bound { .. } => None,
+        };
+        (self.value, retained)
+    }
+}
+
+impl AttachmentPayload for UnixAttachmentPayload {
+    fn close(self: Box<Self>) {}
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        self.validate(descriptor)
+            .map(|_| ())
+            .map_err(map_validation_error)
+    }
+}
+
+pub struct OwnedUnixAttachment;
 
 impl OwnedUnixAttachment {
     pub fn file(
         descriptor: AttachmentDescriptor,
         fd: OwnedFd,
-        policy: &DescriptorPolicy,
-    ) -> Result<Self, UnixSessionError> {
+        policy: DescriptorPolicy,
+    ) -> Result<OwnedAttachment, UnixSessionError> {
         descriptor
             .validate(descriptor.index)
             .map_err(|_| UnixSessionError::DescriptorMismatch)?;
-        validate_owned_file(&fd, &descriptor, policy)?;
-        Ok(Self {
-            descriptor,
-            value: OwnedUnixAttachmentValue::File(fd),
-        })
+        validate_owned_file(&fd, &descriptor, &policy)?;
+        Ok(OwnedAttachment::new(
+            descriptor.clone(),
+            Box::new(UnixAttachmentPayload {
+                value: UnixAttachmentValue::File(fd),
+                policy: UnixAttachmentPolicy::Bound {
+                    descriptor: Box::new(descriptor),
+                    policy: Box::new(policy),
+                },
+                validation: Mutex::new(None),
+            }),
+        ))
     }
 
     pub fn credentials(
         descriptor: AttachmentDescriptor,
         credentials: PeerCredentials,
-    ) -> Result<Self, UnixSessionError> {
+        policy: DescriptorPolicy,
+    ) -> Result<OwnedAttachment, UnixSessionError> {
         descriptor
             .validate(descriptor.index)
             .map_err(|_| UnixSessionError::DescriptorMismatch)?;
-        if descriptor.kind != AttachmentKind::Credentials {
-            return Err(UnixSessionError::DescriptorMismatch);
+        validate_value(
+            &UnixAttachmentValue::Credentials(credentials),
+            &descriptor,
+            &policy,
+        )?;
+        Ok(OwnedAttachment::new(
+            descriptor.clone(),
+            Box::new(UnixAttachmentPayload {
+                value: UnixAttachmentValue::Credentials(credentials),
+                policy: UnixAttachmentPolicy::Bound {
+                    descriptor: Box::new(descriptor),
+                    policy: Box::new(policy),
+                },
+                validation: Mutex::new(None),
+            }),
+        ))
+    }
+}
+
+struct ReceivedPacketState {
+    scopes: CreditScopeSet,
+    count: usize,
+    inner: Mutex<ReceivedPacketStateInner>,
+}
+
+struct ReceivedPacketStateInner {
+    credits: CreditBundle,
+    dispatch_acquired: bool,
+    identities: Vec<(ObjectIdentity, bool)>,
+}
+
+impl ReceivedPacketState {
+    fn new(credits: CreditBundle, scopes: CreditScopeSet, count: usize) -> Self {
+        Self {
+            scopes,
+            count,
+            inner: Mutex::new(ReceivedPacketStateInner {
+                credits,
+                dispatch_acquired: false,
+                identities: Vec::new(),
+            }),
         }
-        Ok(Self {
-            descriptor,
-            value: OwnedUnixAttachmentValue::Credentials(credentials),
-        })
     }
 
-    pub fn descriptor(&self) -> &AttachmentDescriptor {
-        &self.descriptor
+    fn accept(
+        &self,
+        identity: Option<ObjectIdentity>,
+        duplicate_allowed: bool,
+    ) -> Result<(), UnixSessionError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| UnixSessionError::CreditExceeded)?;
+        if let Some(actual) = identity {
+            if inner.identities.iter().any(|(prior, prior_allows)| {
+                prior.same_kernel_object(&actual) && (!duplicate_allowed || !prior_allows)
+            }) {
+                return Err(UnixSessionError::DuplicateObject);
+            }
+            inner.identities.push((actual, duplicate_allowed));
+        }
+        if !inner.dispatch_acquired {
+            inner
+                .credits
+                .acquire_dispatch(&self.scopes, self.count)
+                .map_err(|_| UnixSessionError::CreditExceeded)?;
+            inner.dispatch_acquired = true;
+        }
+        Ok(())
     }
 }
 
@@ -77,8 +260,8 @@ pub struct UnixSeqpacketTransport {
     policy: AttachmentPolicy,
     capacity: AncillaryCapacity,
     credits: CreditScopeSet,
+    resolver: DescriptorPolicyResolver,
     received: VecDeque<ReceivedPacket>,
-    pending_trait_packet: Option<ReceivedPacket>,
     closed: bool,
 }
 
@@ -101,6 +284,7 @@ impl UnixSeqpacketTransport {
         limits: LimitProfile,
         policy: AttachmentPolicy,
         credits: CreditScopeSet,
+        resolver: DescriptorPolicyResolver,
     ) -> Result<Self, UnixSessionError> {
         if !matches!(
             class,
@@ -121,81 +305,10 @@ impl UnixSeqpacketTransport {
             policy,
             capacity,
             credits,
+            resolver,
             received: VecDeque::new(),
-            pending_trait_packet: None,
             closed: false,
         })
-    }
-
-    pub async fn receive_owned(
-        &mut self,
-        protected_limit: usize,
-        metadata: &AttachmentPacket,
-        policies: &[DescriptorPolicy],
-    ) -> Result<VerifiedPacket, UnixSessionError> {
-        if self.pending_trait_packet.is_some() {
-            return Err(UnixSessionError::ControlMismatch);
-        }
-        let packet = self.receive_raw(protected_limit).await?;
-        packet.verify(metadata, self.policy, policies, &self.credits)
-    }
-
-    pub fn accept_trait_packet(
-        &mut self,
-        metadata: &AttachmentPacket,
-        policies: &[DescriptorPolicy],
-    ) -> Result<VerifiedPacket, UnixSessionError> {
-        self.pending_trait_packet
-            .take()
-            .ok_or(UnixSessionError::ControlMismatch)?
-            .verify(metadata, self.policy, policies, &self.credits)
-    }
-
-    pub async fn send_owned(
-        &mut self,
-        packet: TransportPacket,
-        attachments: Vec<OwnedUnixAttachment>,
-    ) -> Result<SentPacket, UnixSessionError> {
-        if self.closed {
-            return Err(UnixSessionError::Closed);
-        }
-        if attachments.len() > usize::from(self.policy.max_per_packet) {
-            return Err(UnixSessionError::CreditExceeded);
-        }
-        let mut files = Vec::new();
-        let mut credentials = None;
-        for (index, attachment) in attachments.into_iter().enumerate() {
-            attachment
-                .descriptor
-                .validate(u16::try_from(index).map_err(|_| UnixSessionError::DescriptorMismatch)?)
-                .map_err(|_| UnixSessionError::DescriptorMismatch)?;
-            match attachment.value {
-                OwnedUnixAttachmentValue::File(fd) if credentials.is_none() => {
-                    files.push(Arc::new(fd));
-                }
-                OwnedUnixAttachmentValue::Credentials(value) if credentials.is_none() => {
-                    credentials = Some(value);
-                }
-                OwnedUnixAttachmentValue::File(_) | OwnedUnixAttachmentValue::Credentials(_) => {
-                    return Err(UnixSessionError::ControlMismatch);
-                }
-            }
-        }
-        let outbound = crate::OutboundPacket::new(
-            packet.into_bytes(),
-            files,
-            credentials,
-            self.limits,
-            self.capacity,
-            &self.credits,
-        )?;
-        let mut queue = VecDeque::from([outbound]);
-        loop {
-            let mut burst = self.socket.send_burst(&mut queue, self.capacity, 1).await?;
-            if let Some(sent) = burst.sent.pop() {
-                return Ok(sent);
-            }
-        }
     }
 
     async fn receive_raw(
@@ -205,10 +318,14 @@ impl UnixSeqpacketTransport {
         if self.closed {
             return Err(UnixSessionError::Closed);
         }
+        let transport_limit = self
+            .limits
+            .protected_ciphertext_bytes
+            .checked_add(2)
+            .ok_or(UnixSessionError::PayloadLimit)?;
         if protected_limit == 0
             || protected_limit
-                > usize::try_from(self.limits.protected_ciphertext_bytes)
-                    .map_err(|_| UnixSessionError::PayloadLimit)?
+                > usize::try_from(transport_limit).map_err(|_| UnixSessionError::PayloadLimit)?
         {
             return Err(UnixSessionError::PayloadLimit);
         }
@@ -225,6 +342,116 @@ impl UnixSeqpacketTransport {
         self.received.extend(burst.packets);
         self.received.pop_front().ok_or(UnixSessionError::Closed)
     }
+
+    fn received_transport_packet(&self, packet: ReceivedPacket) -> TransportPacket {
+        let ReceivedPacket {
+            payload,
+            controls,
+            unknown_control: _,
+            first_on_socket: _,
+            credits,
+        } = packet;
+        let packet_state = Arc::new(ReceivedPacketState::new(
+            credits,
+            self.credits.clone(),
+            controls.len(),
+        ));
+        let attachments = controls
+            .into_iter()
+            .map(|control| {
+                let value = match control {
+                    ReceivedControl::File(fd) => UnixAttachmentValue::File(fd),
+                    ReceivedControl::Credentials(credentials) => {
+                        UnixAttachmentValue::Credentials(credentials)
+                    }
+                };
+                OwnedAttachment::unbound(Box::new(UnixAttachmentPayload::received(
+                    value,
+                    self.resolver.clone(),
+                    packet_state.clone(),
+                )))
+            })
+            .collect();
+        TransportPacket::with_attachments(payload, attachments)
+    }
+
+    async fn send_packet(
+        &self,
+        bytes: Vec<u8>,
+        attachments: Vec<OwnedAttachment>,
+    ) -> Result<(), UnixSessionError> {
+        if attachments.len() > usize::from(self.policy.max_per_packet) {
+            return Err(UnixSessionError::CreditExceeded);
+        }
+        let mut files = Vec::new();
+        let mut credentials = None;
+        let mut identities: Vec<(ObjectIdentity, bool)> = Vec::new();
+        let mut retained_receive_credits = Vec::new();
+        for attachment in attachments {
+            let descriptor = attachment
+                .descriptor()
+                .cloned()
+                .ok_or(UnixSessionError::DescriptorMismatch)?;
+            if attachment
+                .payload()
+                .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
+                .is_none()
+            {
+                return Err(UnixSessionError::DescriptorMismatch);
+            }
+            let payload = attachment
+                .into_any()
+                .ok_or(UnixSessionError::DescriptorMismatch)?
+                .downcast::<UnixAttachmentPayload>()
+                .map_err(|_| UnixSessionError::DescriptorMismatch)?;
+            if let Some(identity) = payload.validate(&descriptor)? {
+                if identities.iter().any(|(prior, prior_allows)| {
+                    prior.same_kernel_object(&identity)
+                        && (!descriptor.duplicate_object_allowed || !prior_allows)
+                }) {
+                    return Err(UnixSessionError::DuplicateObject);
+                }
+                identities.push((identity, descriptor.duplicate_object_allowed));
+            }
+            let (value, retained) = payload.into_send_parts();
+            if let Some(retained) = retained {
+                retained_receive_credits.push(retained);
+            }
+            match value {
+                UnixAttachmentValue::File(fd) if credentials.is_none() => {
+                    files.push(Arc::new(fd));
+                }
+                UnixAttachmentValue::Credentials(value) if credentials.is_none() => {
+                    credentials = Some(value);
+                }
+                UnixAttachmentValue::File(_) | UnixAttachmentValue::Credentials(_) => {
+                    return Err(UnixSessionError::ControlMismatch);
+                }
+            }
+        }
+        let mut transport_limits = self.limits;
+        transport_limits.protected_ciphertext_bytes = transport_limits
+            .protected_ciphertext_bytes
+            .checked_add(2)
+            .ok_or(UnixSessionError::PayloadLimit)?;
+        let outbound = crate::OutboundPacket::new(
+            bytes,
+            files,
+            credentials,
+            transport_limits,
+            self.capacity,
+            &self.credits,
+        )?;
+        drop(retained_receive_credits);
+        let mut queue = VecDeque::from([outbound]);
+        loop {
+            let burst = self.socket.send_burst(&mut queue, self.capacity, 1).await?;
+            if let Some(sent) = burst.sent.into_iter().next() {
+                sent.acknowledge();
+                return Ok(());
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -239,26 +466,20 @@ impl OwnedTransport for UnixSeqpacketTransport {
     }
 
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
-        if self.pending_trait_packet.is_some() {
-            return Err(TransportError::InvalidAttachment);
-        }
         let packet = self
             .receive_raw(protected_limit)
             .await
             .map_err(map_transport_error)?;
-        let bytes = packet.payload().to_vec();
-        if packet.control_count() == 0 {
-            drop(packet);
-        } else {
-            self.pending_trait_packet = Some(packet);
-        }
-        Ok(TransportPacket::new(bytes))
+        Ok(self.received_transport_packet(packet))
     }
 
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
-        self.send_owned(packet, Vec::new())
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        let (bytes, attachments) = packet.into_parts();
+        self.send_packet(bytes, attachments)
             .await
-            .map(SentPacket::acknowledge)
             .map_err(map_transport_error)
     }
 
@@ -268,7 +489,6 @@ impl OwnedTransport for UnixSeqpacketTransport {
             self.closed = true;
         }
         self.received.clear();
-        self.pending_trait_packet = None;
         Ok(())
     }
 }
@@ -333,8 +553,12 @@ impl OwnedTransport for UnixStreamTransport {
         if self.closed {
             return Err(TransportError::Disconnected);
         }
+        let (bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            return Err(TransportError::InvalidAttachment);
+        }
         self.socket
-            .write_all(packet.as_bytes())
+            .write_all(&bytes)
             .await
             .map_err(map_transport_error)
     }
@@ -345,6 +569,62 @@ impl OwnedTransport for UnixStreamTransport {
             self.closed = true;
         }
         Ok(())
+    }
+}
+
+fn validate_value(
+    value: &UnixAttachmentValue,
+    descriptor: &AttachmentDescriptor,
+    policy: &DescriptorPolicy,
+) -> Result<Option<ObjectIdentity>, UnixSessionError> {
+    match (value, descriptor.kind, policy) {
+        (
+            UnixAttachmentValue::File(fd),
+            AttachmentKind::FileDescriptor,
+            DescriptorPolicy::File(_) | DescriptorPolicy::Pidfd(_),
+        ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),
+        (
+            UnixAttachmentValue::Credentials(actual),
+            AttachmentKind::Credentials,
+            DescriptorPolicy::Credentials(expected),
+        ) if actual == expected => Ok(None),
+        (UnixAttachmentValue::File(_), _, _) | (UnixAttachmentValue::Credentials(_), _, _) => {
+            Err(UnixSessionError::DescriptorMismatch)
+        }
+    }
+}
+
+fn same_descriptor_binding(expected: &AttachmentDescriptor, actual: &AttachmentDescriptor) -> bool {
+    let mut expected = expected.clone();
+    expected.index = actual.index;
+    expected.packet_sequence = actual.packet_sequence;
+    expected.reconnect_generation = actual.reconnect_generation;
+    expected == *actual
+}
+
+fn map_validation_error(error: UnixSessionError) -> AttachmentValidationError {
+    match error {
+        UnixSessionError::MissingCloexec => AttachmentValidationError::CloseOnExec,
+        UnixSessionError::DescriptorMismatch => AttachmentValidationError::Other,
+        UnixSessionError::CredentialMismatch
+        | UnixSessionError::DuplicateObject
+        | UnixSessionError::PidfdEvidenceUnavailable
+        | UnixSessionError::PidfdIdentityMismatch
+        | UnixSessionError::CreditExceeded => AttachmentValidationError::Other,
+        UnixSessionError::Io
+        | UnixSessionError::Closed
+        | UnixSessionError::InvalidSocket
+        | UnixSessionError::BlockingSocket
+        | UnixSessionError::PasscredNotPrearmed
+        | UnixSessionError::EmptyPacket
+        | UnixSessionError::PayloadLimit
+        | UnixSessionError::AncillaryCapacity
+        | UnixSessionError::MessageTruncated
+        | UnixSessionError::ControlTruncated
+        | UnixSessionError::UnknownControl
+        | UnixSessionError::ControlMismatch
+        | UnixSessionError::PacketNotAtomic
+        | UnixSessionError::FairnessBudget => AttachmentValidationError::Other,
     }
 }
 
