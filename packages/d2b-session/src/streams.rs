@@ -130,6 +130,10 @@ impl NamedStreamMux {
         Ok(())
     }
 
+    pub(crate) fn refund_send_credit(&mut self, stream: StreamId, bytes: u32) -> Result<()> {
+        self.grant_send_credit(stream, bytes)
+    }
+
     pub fn receive_data(&mut self, stream: StreamId, bytes: Vec<u8>) -> Result<StreamEvent> {
         let len = checked_message_len(bytes.len(), self.limits.logical_named_stream_bytes)?;
         let state = self.stream_mut(stream)?;

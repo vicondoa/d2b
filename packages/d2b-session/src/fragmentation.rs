@@ -16,6 +16,10 @@ impl Fragment {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    pub(crate) fn from_parts(header: FragmentHeader, bytes: Vec<u8>) -> Self {
+        Self { header, bytes }
+    }
 }
 
 impl fmt::Debug for Fragment {

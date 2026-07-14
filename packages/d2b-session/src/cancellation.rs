@@ -167,6 +167,12 @@ impl RequestRegistry {
         self.requests.remove(request_id).is_some()
     }
 
+    pub fn signal(&self, request_id: &RequestId) -> bool {
+        self.requests
+            .get(request_id)
+            .is_some_and(|state| state.cancellation.cancel())
+    }
+
     pub fn cancel_all(&mut self) {
         for state in self.requests.values() {
             state.cancellation.cancel();
