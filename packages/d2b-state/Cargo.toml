@@ -17,6 +17,7 @@ host-fs = [
     "dep:serde_json",
     "dep:sha2",
 ]
+tokio = ["host-fs", "dep:tokio"]
 
 [dependencies]
 d2b-contracts = { workspace = true, features = ["v2-state"], optional = true }
@@ -25,6 +26,10 @@ rustix = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["raw_value"], optional = true }
 sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
@@ -32,3 +37,7 @@ workspace = true
 [[test]]
 name = "state"
 required-features = ["host-fs"]
+
+[[test]]
+name = "async_state"
+required-features = ["tokio"]

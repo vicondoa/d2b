@@ -200,10 +200,10 @@ impl LockSet {
     pub fn acquire(
         &mut self,
         spec: &LockSpec,
-        resource: &AnchoredResource<'_>,
+        resource: &AnchoredResource,
         metadata: MetadataExpectation,
         ownership_epoch: OwnershipEpoch,
-        cancellation: &impl Cancellation,
+        cancellation: &(impl Cancellation + ?Sized),
     ) -> Result<&LockGuard> {
         self.acquire_with_clock(
             spec,
@@ -215,13 +215,13 @@ impl LockSet {
         )
     }
 
-    pub fn acquire_with_clock<C: Clock>(
+    pub fn acquire_with_clock<C: Clock + ?Sized>(
         &mut self,
         spec: &LockSpec,
-        resource: &AnchoredResource<'_>,
+        resource: &AnchoredResource,
         metadata: MetadataExpectation,
         ownership_epoch: OwnershipEpoch,
-        cancellation: &impl Cancellation,
+        cancellation: &(impl Cancellation + ?Sized),
         clock: &C,
     ) -> Result<&LockGuard> {
         validate_lock_spec(spec, resource, metadata)?;
@@ -320,7 +320,7 @@ impl LockSet {
 
 fn validate_lock_spec(
     spec: &LockSpec,
-    resource: &AnchoredResource<'_>,
+    resource: &AnchoredResource,
     metadata: MetadataExpectation,
 ) -> Result<()> {
     metadata.validate()?;

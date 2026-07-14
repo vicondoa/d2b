@@ -17,6 +17,8 @@ mod lease;
 mod lock;
 #[cfg(feature = "host-fs")]
 mod path;
+#[cfg(feature = "tokio")]
+mod tokio_api;
 
 #[cfg(feature = "host-fs")]
 pub use atomic::{
@@ -36,3 +38,9 @@ pub use lease::{LeaseStatus, grant_lease, revoke_lease, validate_lease};
 pub use lock::{Cancellation, Clock, LockGuard, LockSet, NeverCancelled, OfdTransfer, SystemClock};
 #[cfg(feature = "host-fs")]
 pub use path::{AnchoredDir, AnchoredResource, LeafName, RelativePath};
+#[cfg(feature = "tokio")]
+pub use tokio_api::{
+    async_anchored_dir_from_fd, async_atomic_quarantine, async_atomic_read, async_atomic_write,
+    async_audit_append, async_audit_create, async_audit_resume, async_ofd_lock_acquire,
+    async_ofd_lock_acquire_with_clock, async_ofd_lock_release, async_open_anchored_dir,
+};
