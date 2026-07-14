@@ -31,6 +31,12 @@ members = [
     "d2b-ttrpc-api-fit-spike",
     "d2b-priv-broker",
     "d2b-guest-shell-runner",
+    "d2b-client",
+    "d2b-provider",
+    "d2b-provider-toolkit",
+    "d2b-session",
+    "d2b-state",
+    "d2b-unix-session",
     "xtask",
 ]
 
@@ -59,6 +65,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 [workspace.dependencies]
 d2b = { path = "d2b", version = "2.0.0" }
 d2b-clipd = { path = "d2b-clipd", version = "2.0.0" }
+d2b-client = { path = "d2b-client", version = "2.0.0", default-features = false }
 d2b-contracts = { path = "d2b-contracts", version = "2.0.0", default-features = false }
 d2b-core = { path = "d2b-core", version = "2.0.0" }
 d2b-daemon-access = { path = "d2b-daemon-access", version = "2.0.0" }
@@ -70,11 +77,16 @@ d2b-host = { path = "d2b-host", version = "2.0.0" }
 d2b-host-providers = { path = "d2b-host-providers", version = "2.0.0" }
 d2b-provider-aca = { path = "d2b-provider-aca", version = "2.0.0" }
 d2b-provider-relay = { path = "d2b-provider-relay", version = "2.0.0" }
+d2b-provider = { path = "d2b-provider", version = "2.0.0", default-features = false }
+d2b-provider-toolkit = { path = "d2b-provider-toolkit", version = "2.0.0", default-features = false }
 d2b-realm-codec-protobuf = { path = "d2b-realm-codec-protobuf", version = "2.0.0" }
 d2b-realm-core = { path = "d2b-realm-core", version = "2.0.0" }
 d2b-realm-provider = { path = "d2b-realm-provider", version = "2.0.0" }
 d2b-realm-router = { path = "d2b-realm-router", version = "2.0.0" }
 d2b-realm-transport = { path = "d2b-realm-transport", version = "2.0.0" }
+d2b-session = { path = "d2b-session", version = "2.0.0", default-features = false }
+d2b-state = { path = "d2b-state", version = "2.0.0", default-features = false }
+d2b-unix-session = { path = "d2b-unix-session", version = "2.0.0", default-features = false }
 d2b-wayland-proxy = { path = "d2b-wayland-proxy", version = "2.0.0" }
 async-trait = "0.1"
 protobuf = "=3.7.2"
