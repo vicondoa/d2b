@@ -119,6 +119,8 @@ deprecations ship one minor release before removal.
   instead of rewriting committed schema paths.
 - Made broker nextest inventory use the committed lock fail-closed instead of
   backing it up and restoring it through the source tree.
+- Made canonical drift generation run in a writable detached clone while
+  preserving the in-place developer path and sccache wrapper.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
