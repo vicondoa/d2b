@@ -683,24 +683,38 @@ fn write_immutable_in(
         None => {}
     }
 
-    let temporary_name = OsString::from(format!(
-        ".{}.{}.{}.part",
-        destination_name.to_string_lossy(),
-        std::process::id(),
-        NEXT_PRIVATE_FILE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let fd = openat(
-        parent.as_fd(),
-        &temporary_name,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
-    )
-    .map_err(|error| {
-        DeliveryError::new(format!(
-            "cannot create private immutable artifact {}: {error}",
-            display_path.display()
-        ))
-    })?;
+    let (temporary_name, fd) = (0..1024)
+        .find_map(|_| {
+            let temporary_name = OsString::from(format!(
+                ".{}.{}.{}.part",
+                destination_name.to_string_lossy(),
+                std::process::id(),
+                NEXT_PRIVATE_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            match openat(
+                parent.as_fd(),
+                &temporary_name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            ) {
+                Ok(fd) => Some(Ok((temporary_name, fd))),
+                Err(Errno::EXIST) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .transpose()
+        .map_err(|error| {
+            DeliveryError::new(format!(
+                "cannot create private immutable artifact {}: {error}",
+                display_path.display()
+            ))
+        })?
+        .ok_or_else(|| {
+            DeliveryError::new(format!(
+                "cannot reserve private immutable artifact {}",
+                display_path.display()
+            ))
+        })?;
     secure_private_file_fd(&fd, "private immutable artifact")?;
     let mut file = File::from(fd);
     let write_result = file.write_all(bytes).and_then(|()| file.sync_all());

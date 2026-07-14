@@ -2965,11 +2965,11 @@ observability
 kernel
 ```
 
-Every role uses Gemini 3.1 Pro and returns `signoff: true` with an empty
-recommendation list. `xtask wave seal` succeeds only with all required
-validation evidence plus 10/10 panel signoff bound to the same tree hash,
-heads, base, dependency graph, generated artifacts, dependency diff and
-contract fingerprints, and repository set.
+Every role uses the provider and model version bound by the candidate's panel
+request and returns `signoff: true` with an empty recommendation list. `xtask
+wave seal` succeeds only with all required validation evidence plus 10/10 panel
+signoff bound to the same tree hash, heads, base, dependency graph, generated
+artifacts, dependency diff and contract fingerprints, and repository set.
 
 Any content change, including source, documentation, generated output,
 dependency metadata, contract/index content, or repository-set membership,

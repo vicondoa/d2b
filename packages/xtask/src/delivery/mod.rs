@@ -104,7 +104,11 @@ struct WorkflowCommandHelp {
 }
 
 pub fn run_cli(args: &[String]) -> std::process::ExitCode {
-    match run_cli_inner(args) {
+    let result = command::DeliverySignalScope::new().and_then(|mut signals| {
+        let result = run_cli_inner(args);
+        signals.finish(result)
+    });
+    match result {
         Ok(output) => match serde_json::to_string(&output) {
             Ok(json) => {
                 println!("{json}");

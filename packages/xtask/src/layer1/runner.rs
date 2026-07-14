@@ -168,12 +168,17 @@ impl ProcessJobRunner {
         println!("==> {target} ({})", job.display_name);
         flush_stdout();
 
-        let log = File::create(&log_path).map_err(|error| {
-            Layer1Error::new(format!(
-                "cannot create job log {}: {error}",
-                log_path.display()
-            ))
-        })?;
+        let log = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&log_path)
+            .map_err(|error| {
+                Layer1Error::new(format!(
+                    "cannot create job log {}: {error}",
+                    log_path.display()
+                ))
+            })?;
         let stderr_log = log.try_clone().map_err(|error| {
             Layer1Error::new(format!(
                 "cannot clone job log {}: {error}",
@@ -193,10 +198,7 @@ impl ProcessJobRunner {
             println!("ok: {target}");
             flush_stdout();
             self.record_summary(job_id, Vec::new());
-            if env::var("D2B_CHECK_KEEP_LOGS").as_deref() != Ok("1") {
-                let _ = fs::remove_file(&log_path);
-                let _ = fs::remove_dir(&log_dir);
-            }
+            remove_log_unless_retained(&log_path, &log_dir);
             return Ok(JobResult::ExitCode(0));
         }
 
@@ -234,6 +236,7 @@ impl ProcessJobRunner {
                 self.record_summary(job_id, vec![message]);
             }
         }
+        remove_log_unless_retained(&log_path, &log_dir);
         Ok(result)
     }
 
@@ -471,17 +474,40 @@ fn render_step_summary(
     truncate_step_summary(redactor.redact(&rendered))
 }
 
-fn truncate_step_summary(mut summary: String) -> String {
+fn remove_log_unless_retained(log_path: &Path, log_dir: &Path) {
+    if env::var("D2B_CHECK_KEEP_LOGS").as_deref() != Ok("1") {
+        let _ = fs::remove_file(log_path);
+        let _ = fs::remove_dir(log_dir);
+    }
+}
+
+fn truncate_step_summary(summary: String) -> String {
     if summary.len() <= STEP_SUMMARY_MAX_BYTES {
         return summary;
     }
-    let mut keep = STEP_SUMMARY_MAX_BYTES - STEP_SUMMARY_TRUNCATED.len();
-    while !summary.is_char_boundary(keep) {
-        keep -= 1;
+    let details_start = summary.find("\n<details>").unwrap_or(summary.len());
+    let mut rendered = summary[..details_start].to_owned();
+    if rendered.len() + STEP_SUMMARY_TRUNCATED.len() > STEP_SUMMARY_MAX_BYTES {
+        let mut keep = STEP_SUMMARY_MAX_BYTES - STEP_SUMMARY_TRUNCATED.len();
+        while !rendered.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        rendered.truncate(keep);
+    } else {
+        let mut remaining = &summary[details_start..];
+        while let Some(end) = remaining.find("</details>\n") {
+            let block_end = end + "</details>\n".len();
+            let block = &remaining[..block_end];
+            if rendered.len() + block.len() + STEP_SUMMARY_TRUNCATED.len() > STEP_SUMMARY_MAX_BYTES
+            {
+                break;
+            }
+            rendered.push_str(block);
+            remaining = &remaining[block_end..];
+        }
     }
-    summary.truncate(keep);
-    summary.push_str(STEP_SUMMARY_TRUNCATED);
-    summary
+    rendered.push_str(STEP_SUMMARY_TRUNCATED);
+    rendered
 }
 
 impl LocalJobRunner for ProcessJobRunner {
@@ -1356,9 +1382,13 @@ mod tests {
         }];
         let summary = render_step_summary(&report, &entries, &redactor);
 
-        assert_eq!(summary.len(), STEP_SUMMARY_MAX_BYTES);
+        assert!(summary.len() <= STEP_SUMMARY_MAX_BYTES);
         assert!(summary.ends_with(STEP_SUMMARY_TRUNCATED));
         assert!(!summary.contains("/secret/checkout"));
+        assert_eq!(
+            summary.matches("<details>").count(),
+            summary.matches("</details>").count()
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
     fs,
-    os::unix::fs::symlink,
+    os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -957,6 +957,53 @@ impl CiAttestationVerifier for CountingClaimsVerifier {
 }
 
 #[test]
+fn seal_rejects_extra_panel_json() {
+    let fixture = Fixture::new("panel-extra-json", ValidationAuthority::LocalRunner);
+    let snapshot = fixture.snapshot();
+    let probe = GitProbe::new(ProcessCommandOutput);
+    run_validation(
+        &probe,
+        &ProcessCommandOutput,
+        &fixture.roots,
+        &snapshot,
+        "unit",
+    )
+    .expect("validation evidence");
+    let (panel, trust_root) = fixture.panel_source(&snapshot);
+    validate_and_store_panel(
+        &probe,
+        &FixturePanelVerifier,
+        &fixture.roots,
+        &snapshot,
+        &panel,
+        &trust_root,
+    )
+    .expect("panel");
+    let extra = snapshot
+        .parent()
+        .expect("candidate directory")
+        .join("panel/extra.json");
+    fs::write(&extra, b"{}\n").expect("extra panel JSON");
+    fs::set_permissions(&extra, fs::Permissions::from_mode(0o600))
+        .expect("private extra panel JSON");
+    let error = construct_seal(
+        &probe,
+        &StaticStatus {
+            status: fixture.status.clone(),
+        },
+        &RejectVerifier,
+        &FixturePanelVerifier,
+        &fixture.roots,
+        &snapshot,
+    )
+    .expect_err("extra panel JSON must fail closed");
+    assert!(
+        error.to_string().contains("panel evidence"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn forged_and_delivery_artifact_evidence_are_rejected() {
     let fixture = Fixture::new("evidence", ValidationAuthority::GithubAttestation);
     let snapshot_path = fixture.snapshot();
@@ -1757,7 +1804,7 @@ fn history_proof_rejects_fabrication_and_requires_fresh_ci() {
         "xtask",
     )
     .expect_err("reused CI run IDs");
-    assert!(error.to_string().contains("fresh GitHub run"));
+    assert!(error.to_string().contains("fresh"));
 
     let mut stale_timestamps = fixture.status.clone();
     stale_timestamps.checks[0].started_at_unix_seconds = sealed_check.started_at_unix_seconds;
@@ -1780,7 +1827,7 @@ fn history_proof_rejects_fabrication_and_requires_fresh_ci() {
         "xtask",
     )
     .expect_err("reused CI timestamps");
-    assert!(error.to_string().contains("fresh GitHub run"));
+    assert!(error.to_string().contains("fresh"));
 
     let mut missing_ci = fixture.status.clone();
     missing_ci.checks.clear();
@@ -1813,6 +1860,34 @@ fn history_proof_rejects_fabrication_and_requires_fresh_ci() {
     )
     .expect("fresh CI on new head");
 
+    let mut rerun = fixture.status.clone();
+    rerun.checks[0].workflow_run_id = sealed_check.workflow_run_id;
+    rerun.checks[0].workflow_created_at_unix_seconds =
+        sealed_check.workflow_created_at_unix_seconds;
+    rerun.checks[0].workflow_updated_at_unix_seconds = Some(
+        rerun.checks[0]
+            .completed_at_unix_seconds
+            .expect("rerun completion")
+            .max(
+                sealed_check
+                    .workflow_updated_at_unix_seconds
+                    .expect("sealed workflow update")
+                    + 1,
+            ),
+    );
+    check_history_merge_eligibility(
+        &probe,
+        &StaticStatus { status: rerun },
+        &RejectVerifier,
+        &FixturePanelVerifier,
+        &fixture.roots,
+        &old_seal,
+        &new_snapshot,
+        &proof_path,
+        "xtask",
+    )
+    .expect("fresh check attempt in the same workflow run");
+
     let fabricated_id = "9".repeat(64);
     let fabricated_dir = fixture.state.join("w1").join(&fabricated_id);
     fs::create_dir_all(&fabricated_dir).expect("fabricated dir");
@@ -1831,5 +1906,3 @@ fn history_proof_rejects_fabrication_and_requires_fresh_ci() {
     .expect_err("fabricated snapshot");
     assert!(error.to_string().contains("candidate ID"));
 }
-
-use std::os::unix::fs::PermissionsExt;

@@ -9,10 +9,10 @@ use super::{
     DeliveryError, Result,
     command::{PullRequestMerger, PullRequestStatus, PullRequestStatusSource, RepositoryProbe},
     evidence::CiAttestationVerifier,
-    model::{PullRequestState, StackNode, WaveSnapshot},
+    model::{CheckPublisherKind, PullRequestState, StackNode, WaveSnapshot},
     panel::PanelReceiptVerifier,
-    seal::{verify_history_proof_context, verify_required_checks, verify_seal},
-    snapshot::verify_pr_identity,
+    seal::{WaveSeal, verify_history_proof_context, verify_required_checks, verify_seal_context},
+    snapshot::{SnapshotContext, verify_pr_identity},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -34,7 +34,29 @@ pub fn check_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
     seal_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
-    let seal = verify_seal(
+    check_merge_eligibility_context(
+        probe,
+        status_source,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        seal_path,
+        target_node,
+    )
+    .map(|(_, eligibility)| eligibility)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_merge_eligibility_context<P: RepositoryProbe, S: PullRequestStatusSource>(
+    probe: &P,
+    status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    seal_path: &Path,
+    target_node: &str,
+) -> Result<(SnapshotContext, MergeEligibility)> {
+    let (context, seal) = verify_seal_context(
         probe,
         status_source,
         ci_verifier,
@@ -42,18 +64,14 @@ pub fn check_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusSource>(
         repository_roots,
         seal_path,
     )?;
-    let snapshot_path = seal_path
-        .parent()
-        .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
-        .join("snapshot.json");
-    let snapshot = super::snapshot::read_snapshot(&snapshot_path)?;
-    evaluate_merge_eligibility(
-        &snapshot,
+    let eligibility = evaluate_merge_eligibility(
+        &context.snapshot,
         Some(&seal.live_pull_requests),
         status_source,
         target_node,
         false,
-    )
+    )?;
+    Ok((context, eligibility))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -68,6 +86,32 @@ pub fn check_history_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusS
     proof_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
+    check_history_merge_eligibility_context(
+        probe,
+        status_source,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        old_seal_path,
+        new_snapshot_path,
+        proof_path,
+        target_node,
+    )
+    .map(|(_, _, eligibility)| eligibility)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_history_merge_eligibility_context<P: RepositoryProbe, S: PullRequestStatusSource>(
+    probe: &P,
+    status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    old_seal_path: &Path,
+    new_snapshot_path: &Path,
+    proof_path: &Path,
+    target_node: &str,
+) -> Result<(SnapshotContext, WaveSeal, MergeEligibility)> {
     let (context, old_seal, proof) = verify_history_proof_context(
         probe,
         ci_verifier,
@@ -82,13 +126,14 @@ pub fn check_history_merge_eligibility<P: RepositoryProbe, S: PullRequestStatusS
             "history proof does not require fresh CI",
         ));
     }
-    evaluate_merge_eligibility(
+    let eligibility = evaluate_merge_eligibility(
         &context.snapshot,
         Some(&old_seal.live_pull_requests),
         status_source,
         target_node,
         true,
-    )
+    )?;
+    Ok((context, old_seal, eligibility))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -102,7 +147,7 @@ pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullReque
     seal_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
-    let eligibility = check_merge_eligibility(
+    let (context, eligibility) = check_merge_eligibility_context(
         probe,
         status_source,
         ci_verifier,
@@ -111,12 +156,7 @@ pub fn atomic_merge<P: RepositoryProbe, S: PullRequestStatusSource, M: PullReque
         seal_path,
         target_node,
     )?;
-    let snapshot_path = seal_path
-        .parent()
-        .ok_or_else(|| DeliveryError::new("seal path has no candidate directory"))?
-        .join("snapshot.json");
-    let snapshot = super::snapshot::read_snapshot(&snapshot_path)?;
-    consume_atomic_merge(&snapshot, status_source, merger, &eligibility, None)?;
+    consume_atomic_merge(&context.snapshot, status_source, merger, &eligibility, None)?;
     Ok(eligibility)
 }
 
@@ -137,7 +177,7 @@ pub fn atomic_history_merge<
     proof_path: &Path,
     target_node: &str,
 ) -> Result<MergeEligibility> {
-    let eligibility = check_history_merge_eligibility(
+    let (context, old_seal, eligibility) = check_history_merge_eligibility_context(
         probe,
         status_source,
         ci_verifier,
@@ -147,15 +187,6 @@ pub fn atomic_history_merge<
         new_snapshot_path,
         proof_path,
         target_node,
-    )?;
-    let (context, old_seal, _) = verify_history_proof_context(
-        probe,
-        ci_verifier,
-        panel_verifier,
-        repository_roots,
-        old_seal_path,
-        new_snapshot_path,
-        proof_path,
     )?;
     consume_atomic_merge(
         &context.snapshot,
@@ -360,42 +391,74 @@ fn verify_fresh_ci(
                     required.name
                 ))
             })?;
+        let (Some(old_completed), Some(new_completed)) =
+            (old.completed_at_unix_seconds, new.completed_at_unix_seconds)
+        else {
+            return Err(DeliveryError::new(format!(
+                "required check {} has no verifiable completion timestamps for fresh CI",
+                required.name
+            )));
+        };
+        if new.started_at_unix_seconds <= old_completed
+            || new_completed < new.started_at_unix_seconds
+        {
+            return Err(DeliveryError::new(format!(
+                "required check {} did not advance to a fresh GitHub run after the sealed CI",
+                required.name
+            )));
+        }
+        if required.publisher.kind == CheckPublisherKind::StatusContext {
+            continue;
+        }
+        let (Some(old_check_run), Some(new_check_run)) = (old.check_run_id, new.check_run_id)
+        else {
+            return Err(DeliveryError::new(format!(
+                "required check {} has no verifiable check-run IDs for fresh CI",
+                required.name
+            )));
+        };
+        if new_check_run <= old_check_run {
+            return Err(DeliveryError::new(format!(
+                "required check {} did not advance to a fresh check run",
+                required.name
+            )));
+        }
+        if required.publisher.workflow == "none" {
+            continue;
+        }
         let (
-            Some(old_check_run),
-            Some(new_check_run),
             Some(old_workflow_run),
             Some(new_workflow_run),
-            Some(old_completed),
-            Some(new_completed),
-            Some(old_workflow_updated),
+            Some(old_workflow_created),
             Some(new_workflow_created),
+            Some(old_workflow_updated),
             Some(new_workflow_updated),
         ) = (
-            old.check_run_id,
-            new.check_run_id,
             old.workflow_run_id,
             new.workflow_run_id,
-            old.completed_at_unix_seconds,
-            new.completed_at_unix_seconds,
-            old.workflow_updated_at_unix_seconds,
+            old.workflow_created_at_unix_seconds,
             new.workflow_created_at_unix_seconds,
+            old.workflow_updated_at_unix_seconds,
             new.workflow_updated_at_unix_seconds,
         )
         else {
             return Err(DeliveryError::new(format!(
-                "required check {} has no verifiable GitHub run IDs and timestamps for fresh CI",
+                "required check {} has no verifiable workflow-run authority for fresh CI",
                 required.name
             )));
         };
-        if new_check_run <= old_check_run
-            || new_workflow_run <= old_workflow_run
-            || new.started_at_unix_seconds <= old_completed
-            || new_completed < new.started_at_unix_seconds
-            || new_workflow_created <= old_workflow_updated
-            || new_workflow_updated < new_workflow_created
-        {
+        let workflow_advanced = if new_workflow_run > old_workflow_run {
+            new_workflow_created > old_workflow_updated
+                && new_workflow_updated >= new_workflow_created
+        } else if new_workflow_run == old_workflow_run {
+            new_workflow_created == old_workflow_created
+                && new_workflow_updated > old_workflow_updated
+        } else {
+            false
+        };
+        if !workflow_advanced {
             return Err(DeliveryError::new(format!(
-                "required check {} did not advance to a fresh GitHub run after the sealed CI",
+                "required check {} did not advance to a fresh workflow attempt",
                 required.name
             )));
         }

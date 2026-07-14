@@ -492,7 +492,7 @@ exactly one record for every required role. Supply one
 The request binds the candidate/content identities, snapshot digest, exact
 ten-role roster, and required model.
 
-Each role then supplies one strict 12-field attestation shaped like:
+Each role then supplies one strict 13-field attestation shaped like:
 
 ```json
 {
@@ -505,6 +505,7 @@ Each role then supplies one strict 12-field attestation shaped like:
   "model_version": "gemini-3.1-pro-preview",
   "provider": "google",
   "run_id": "run-001",
+  "receipt_locator": "github-copilot://runs/run-001/software",
   "output_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "signoff": true,
   "recommendations": []
@@ -524,7 +525,8 @@ small waves, requires unanimous 10/10 signoff before merge.
 
 ### Required ten-role panel
 
-Every role uses Gemini 3.1 Pro:
+Every role uses the provider and model version bound by the candidate's
+`panel-request.json`:
 
 | Role              | Focus |
 |-------------------|-------|

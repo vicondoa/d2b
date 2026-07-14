@@ -83,6 +83,22 @@ deprecations ship one minor release before removal.
   evaluator/daemon disconnect, and fail explicitly if discovery still fails.
 - Updated flake-matrix drift enforcement to require cache-preserving discovery
   instead of the retired Rust wrapper-clearing command.
+- Routed unsafe-local runtime, readiness, and supervisor-socket fixtures through
+  the short validation socket root when the source checkout is read-only.
+- Hardened delivery evidence and summaries by reporting output truncation,
+  removing private job logs unless explicitly retained, preserving complete
+  Markdown detail blocks, rejecting extra panel JSON, and recovering from stale
+  immutable-write temporary names.
+- Corrected the panel attestation example to include its required receipt
+  locator.
+- Kept anchored snapshot state alive through eligibility and atomic merge,
+  closing a snapshot replacement race, and recognized fresh status contexts,
+  third-party check runs, and same-workflow GitHub reruns without weakening
+  timestamp or run-identity checks.
+- Made terminal signals operation-scoped so interrupts between supervised
+  subprocesses unwind normally and remove read-only validation checkouts.
+- Described panel model enforcement as a candidate-bound contract rather than
+  embedding a provider-specific review attribution in process prose.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

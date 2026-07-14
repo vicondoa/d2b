@@ -14,8 +14,8 @@ use std::{
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
     command::{
-        CommandLimits, CommandOutputAdapter, DEFAULT_COMMAND_OUTPUT_BYTES, GitProbe,
-        RepositoryProbe,
+        CommandFailure, CommandLimits, CommandOutputAdapter, DEFAULT_COMMAND_OUTPUT_BYTES,
+        GitProbe, RepositoryProbe,
     },
     model::{
         EVIDENCE_ARTIFACT_KIND, EvidenceResult, LogicalPath, RepositoryBinding,
@@ -384,8 +384,14 @@ pub fn run_validation<P: RepositoryProbe, A: CommandOutputAdapter>(
         stderr_bytes: output.stderr.len() as u64,
         stdout_sha256: super::storage::sha256_bytes(&output.stdout),
         stderr_sha256: super::storage::sha256_bytes(&output.stderr),
-        stdout_truncated: false,
-        stderr_truncated: false,
+        stdout_truncated: matches!(
+            output.failure(),
+            Some(CommandFailure::StdoutOverflow | CommandFailure::OutputOverflow)
+        ),
+        stderr_truncated: matches!(
+            output.failure(),
+            Some(CommandFailure::StderrOverflow | CommandFailure::OutputOverflow)
+        ),
     };
     let record = EvidenceRecord {
         artifact_kind: EVIDENCE_ARTIFACT_KIND.to_owned(),

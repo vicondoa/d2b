@@ -174,6 +174,25 @@ pub fn verify_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
     repository_roots: &BTreeMap<String, PathBuf>,
     seal_path: &Path,
 ) -> Result<WaveSeal> {
+    verify_seal_context(
+        probe,
+        status_source,
+        ci_verifier,
+        panel_verifier,
+        repository_roots,
+        seal_path,
+    )
+    .map(|(_, seal)| seal)
+}
+
+pub(crate) fn verify_seal_context<P: RepositoryProbe, S: PullRequestStatusSource>(
+    probe: &P,
+    status_source: &S,
+    ci_verifier: &dyn CiAttestationVerifier,
+    panel_verifier: &dyn PanelReceiptVerifier,
+    repository_roots: &BTreeMap<String, PathBuf>,
+    seal_path: &Path,
+) -> Result<(SnapshotContext, WaveSeal)> {
     let (context, seal) = load_seal_context(
         probe,
         repository_roots,
@@ -188,7 +207,7 @@ pub fn verify_seal<P: RepositoryProbe, S: PullRequestStatusSource>(
     }
     verify_seal_payloads(&context, &seal, ci_verifier, panel_verifier)?;
     context.layout.verify_candidate_digest("seal.json")?;
-    Ok(seal)
+    Ok((context, seal))
 }
 
 pub(crate) fn verify_seal_recorded<P: RepositoryProbe>(
@@ -1146,6 +1165,12 @@ fn collect_panel_payloads(
     context: &SnapshotContext,
     verifier: &dyn PanelReceiptVerifier,
 ) -> Result<Vec<PanelPayloadBinding>> {
+    ensure_exact_candidate_json_set(
+        context,
+        Path::new("panel"),
+        PANEL_ROLES.iter().map(|role| role.as_str()),
+        "panel evidence",
+    )?;
     let records = read_stored_panel(context, verifier)?;
     let mut payloads = Vec::new();
     for record in records {
@@ -1177,7 +1202,7 @@ fn ensure_exact_candidate_json_set<'a>(
     let mut entries = 0_usize;
     for name in context.layout.list_candidate_directory(directory)? {
         entries += 1;
-        if entries > expected.len().saturating_mul(3).saturating_add(10) {
+        if entries > expected.len().saturating_mul(4).saturating_add(16) {
             return Err(DeliveryError::new(format!(
                 "{label} directory contains too many entries"
             )));

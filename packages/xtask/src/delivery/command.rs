@@ -345,7 +345,6 @@ trait TerminalSignalSource {
 struct GlobalTerminalSignals {
     interrupt: Arc<AtomicBool>,
     terminate: Arc<AtomicBool>,
-    inactive: Arc<AtomicBool>,
 }
 
 static TERMINAL_SIGNAL_FLAGS: OnceLock<std::result::Result<GlobalTerminalSignals, String>> =
@@ -357,28 +356,18 @@ static TERMINAL_SIGNAL_INITIALIZATIONS: std::sync::atomic::AtomicU64 =
 
 struct TerminalSignals {
     flags: &'static GlobalTerminalSignals,
-    _owner: MutexGuard<'static, ()>,
 }
 
-impl TerminalSignals {
-    fn new() -> Result<Self> {
-        let flags = TERMINAL_SIGNAL_FLAGS.get_or_init(|| {
+fn global_terminal_signals() -> Result<&'static GlobalTerminalSignals> {
+    TERMINAL_SIGNAL_FLAGS
+        .get_or_init(|| {
             #[cfg(test)]
             TERMINAL_SIGNAL_INITIALIZATIONS.fetch_add(1, Ordering::Relaxed);
             let interrupt = Arc::new(AtomicBool::new(false));
             let terminate = Arc::new(AtomicBool::new(false));
-            let inactive = Arc::new(AtomicBool::new(true));
             let mut registrations = Vec::new();
             let installed = (|| {
-                registrations.push(flag::register_conditional_default(
-                    SIGINT,
-                    Arc::clone(&inactive),
-                )?);
                 registrations.push(flag::register(SIGINT, Arc::clone(&interrupt))?);
-                registrations.push(flag::register_conditional_default(
-                    SIGTERM,
-                    Arc::clone(&inactive),
-                )?);
                 registrations.push(flag::register(SIGTERM, Arc::clone(&terminate))?);
                 std::io::Result::Ok(())
             })();
@@ -391,44 +380,69 @@ impl TerminalSignals {
             Ok(GlobalTerminalSignals {
                 interrupt,
                 terminate,
-                inactive,
             })
-        });
-        let flags = flags.as_ref().map_err(|error| {
+        })
+        .as_ref()
+        .map_err(|error| {
             DeliveryError::new(format!(
                 "cannot install terminal signal forwarding: {error}"
             ))
-        })?;
+        })
+}
+
+fn take_pending_terminal_signal(flags: &GlobalTerminalSignals) -> Option<TerminalSignal> {
+    if flags.interrupt.swap(false, Ordering::AcqRel) {
+        Some(TerminalSignal::Interrupt)
+    } else if flags.terminate.swap(false, Ordering::AcqRel) {
+        Some(TerminalSignal::Terminate)
+    } else {
+        None
+    }
+}
+
+pub(crate) struct DeliverySignalScope {
+    flags: &'static GlobalTerminalSignals,
+    _owner: MutexGuard<'static, ()>,
+}
+
+impl DeliverySignalScope {
+    pub(crate) fn new() -> Result<Self> {
+        let flags = global_terminal_signals()?;
         let owner = TERMINAL_SIGNAL_OWNER
             .lock()
             .map_err(|_| DeliveryError::new("terminal signal forwarding owner was poisoned"))?;
         flags.interrupt.store(false, Ordering::Release);
         flags.terminate.store(false, Ordering::Release);
-        flags.inactive.store(false, Ordering::Release);
         Ok(Self {
             flags,
             _owner: owner,
+        })
+    }
+
+    pub(crate) fn finish<T>(&mut self, result: Result<T>) -> Result<T> {
+        match take_pending_terminal_signal(self.flags) {
+            Some(TerminalSignal::Interrupt) => {
+                Err(DeliveryError::new("delivery was interrupted by SIGINT"))
+            }
+            Some(TerminalSignal::Terminate) => {
+                Err(DeliveryError::new("delivery was terminated by SIGTERM"))
+            }
+            None => result,
+        }
+    }
+}
+
+impl TerminalSignals {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            flags: global_terminal_signals()?,
         })
     }
 }
 
 impl TerminalSignalSource for TerminalSignals {
     fn pending(&mut self) -> Option<TerminalSignal> {
-        if self.flags.interrupt.swap(false, Ordering::AcqRel) {
-            Some(TerminalSignal::Interrupt)
-        } else if self.flags.terminate.swap(false, Ordering::AcqRel) {
-            Some(TerminalSignal::Terminate)
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for TerminalSignals {
-    fn drop(&mut self) {
-        self.flags.interrupt.store(false, Ordering::Release);
-        self.flags.terminate.store(false, Ordering::Release);
-        self.flags.inactive.store(true, Ordering::Release);
+        take_pending_terminal_signal(self.flags)
     }
 }
 
@@ -459,6 +473,17 @@ fn run_process<S: TerminalSignalSource>(
         return Err(DeliveryError::new(
             "command limits are zero or exceed hard process bounds",
         ));
+    }
+    if let Some(signal) = terminal_signals.pending() {
+        return Ok(CommandOutput {
+            success: false,
+            exit_code: Some(match signal {
+                TerminalSignal::Interrupt => EXIT_INTERRUPTED,
+                TerminalSignal::Terminate => EXIT_TERMINATED,
+            }),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        });
     }
     let mut command = Command::new(program);
     command
@@ -3287,15 +3312,20 @@ mod tests {
             assert!(output.success);
         }
         assert_eq!(TERMINAL_SIGNAL_INITIALIZATIONS.load(Ordering::Acquire), 1);
-        assert!(
-            TERMINAL_SIGNAL_FLAGS
-                .get()
-                .and_then(|signals| signals.as_ref().ok())
-                .expect("global signal dispatcher")
-                .inactive
-                .load(Ordering::Acquire),
-            "completed commands must deregister active signal ownership"
-        );
+        let signals = TERMINAL_SIGNAL_FLAGS
+            .get()
+            .and_then(|signals| signals.as_ref().ok())
+            .expect("global signal dispatcher");
+        assert!(!signals.interrupt.load(Ordering::Acquire));
+        assert!(!signals.terminate.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn operation_signal_scope_returns_through_normal_unwinding() {
+        let mut scope = DeliverySignalScope::new().expect("signal scope");
+        scope.flags.interrupt.store(true, Ordering::Release);
+        let error = scope.finish(Ok(())).expect_err("interrupt");
+        assert!(error.to_string().contains("SIGINT"));
     }
 
     #[test]
