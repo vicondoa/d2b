@@ -57,6 +57,11 @@ impl RuntimeProviderServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.RuntimeProviderService", "Stop", cres);
     }
 
+    pub async fn execute(&self, ctx: ttrpc::context::Context, req: &super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
+        let mut cres = super::common::ProviderResponse::new();
+        ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.RuntimeProviderService", "Execute", cres);
+    }
+
     pub async fn inspect(&self, ctx: ttrpc::context::Context, req: &super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         let mut cres = super::common::ProviderResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.RuntimeProviderService", "Inspect", cres);
@@ -139,6 +144,17 @@ impl ::ttrpc::r#async::MethodHandler for StopMethod {
     }
 }
 
+struct ExecuteMethod {
+    service: Arc<dyn RuntimeProviderService + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ExecuteMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, common, ProviderRequest, execute);
+    }
+}
+
 struct InspectMethod {
     service: Arc<dyn RuntimeProviderService + Send + Sync>,
 }
@@ -192,6 +208,9 @@ pub trait RuntimeProviderService: Sync {
     async fn stop(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.RuntimeProviderService/Stop is not supported".to_string())))
     }
+    async fn execute(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.RuntimeProviderService/Execute is not supported".to_string())))
+    }
     async fn inspect(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.RuntimeProviderService/Inspect is not supported".to_string())))
     }
@@ -225,6 +244,9 @@ pub fn create_runtime_provider_service(service: Arc<dyn RuntimeProviderService +
 
     methods.insert("Stop".to_string(),
                     Box::new(StopMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("Execute".to_string(),
+                    Box::new(ExecuteMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     methods.insert("Inspect".to_string(),
                     Box::new(InspectMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);

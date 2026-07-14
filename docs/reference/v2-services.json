@@ -273,7 +273,7 @@
     {
       "package": "d2b.provider.v2",
       "service": "RuntimeProviderService",
-      "schemaFingerprint": "97fa98d9d483e10f11d26d505ec5ab0140c89668a46b55c365b7100fe6bf357e",
+      "schemaFingerprint": "1b016d2f54285f00ad63a3998c1823c2d224252d11f2d9f1763b41de7fca06d1",
       "methods": [
         {
           "name": "Health",
@@ -318,6 +318,14 @@
         {
           "name": "Stop",
           "methodId": 2366763378,
+          "mutating": true,
+          "requiresIdempotency": true,
+          "maxRequestBytes": 1048576,
+          "maxLifetimeMs": 900000
+        },
+        {
+          "name": "Execute",
+          "methodId": 3258384169,
           "mutating": true,
           "requiresIdempotency": true,
           "maxRequestBytes": 1048576,
@@ -541,11 +549,19 @@
     {
       "package": "d2b.provider.v2",
       "service": "CredentialProviderService",
-      "schemaFingerprint": "4efca199fed69bc85153baf39258b7124b14be8f0a271160eda847323c4f72a9",
+      "schemaFingerprint": "1bb7ee3da13e36b19dec350147bcd2978749634cff4e2f48ef726bcad7cef7d5",
       "methods": [
         {
           "name": "Health",
           "methodId": 1145840723,
+          "mutating": false,
+          "requiresIdempotency": false,
+          "maxRequestBytes": 1048576,
+          "maxLifetimeMs": 900000
+        },
+        {
+          "name": "Capabilities",
+          "methodId": 1694300307,
           "mutating": false,
           "requiresIdempotency": false,
           "maxRequestBytes": 1048576,

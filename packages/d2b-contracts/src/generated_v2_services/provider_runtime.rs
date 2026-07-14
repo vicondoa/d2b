@@ -30,7 +30,7 @@ const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_7_2;
 
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x16provider_runtime.proto\x12\x0fd2b.provider.v2\x1a\x0ccommon.proto2\
-    \xc1\x05\n\x16RuntimeProviderService\x12I\n\x06Health\x12\x1e.d2b.common\
+    \x8d\x06\n\x16RuntimeProviderService\x12I\n\x06Health\x12\x1e.d2b.common\
     .v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12S\n\x0cCap\
     abilities\x12\x20.d2b.common.v2.CapabilityRequest\x1a!.d2b.common.v2.Cap\
     abilityResponse\x12G\n\x04Plan\x12\x1e.d2b.common.v2.ProviderRequest\x1a\
@@ -38,11 +38,12 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12H\n\x05Star\
     t\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderRe\
     sponse\x12G\n\x04Stop\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.\
-    common.v2.ProviderResponse\x12J\n\x07Inspect\x12\x1e.d2b.common.v2.Provi\
-    derRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12H\n\x05Adopt\x12\
+    common.v2.ProviderResponse\x12J\n\x07Execute\x12\x1e.d2b.common.v2.Provi\
+    derRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12J\n\x07Inspect\x12\
     \x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderRespons\
-    e\x12J\n\x07Destroy\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.co\
-    mmon.v2.ProviderResponseb\x06proto3\
+    e\x12H\n\x05Adopt\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.comm\
+    on.v2.ProviderResponse\x12J\n\x07Destroy\x12\x1e.d2b.common.v2.ProviderR\
+    equest\x1a\x1f.d2b.common.v2.ProviderResponseb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

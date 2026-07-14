@@ -32,6 +32,11 @@ impl CredentialProviderServiceClient {
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.CredentialProviderService", "Health", cres);
     }
 
+    pub async fn capabilities(&self, ctx: ttrpc::context::Context, req: &super::common::CapabilityRequest) -> ::ttrpc::Result<super::common::CapabilityResponse> {
+        let mut cres = super::common::CapabilityResponse::new();
+        ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.CredentialProviderService", "Capabilities", cres);
+    }
+
     pub async fn status(&self, ctx: ttrpc::context::Context, req: &super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         let mut cres = super::common::ProviderResponse::new();
         ::ttrpc::async_client_request!(self, ctx, req, "d2b.provider.v2.CredentialProviderService", "Status", cres);
@@ -61,6 +66,17 @@ struct HealthMethod {
 impl ::ttrpc::r#async::MethodHandler for HealthMethod {
     async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
         ::ttrpc::async_request_handler!(self, ctx, req, common, ProviderRequest, health);
+    }
+}
+
+struct CapabilitiesMethod {
+    service: Arc<dyn CredentialProviderService + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for CapabilitiesMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, common, CapabilityRequest, capabilities);
     }
 }
 
@@ -113,6 +129,9 @@ pub trait CredentialProviderService: Sync {
     async fn health(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.CredentialProviderService/Health is not supported".to_string())))
     }
+    async fn capabilities(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::CapabilityRequest) -> ::ttrpc::Result<super::common::CapabilityResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.CredentialProviderService/Capabilities is not supported".to_string())))
+    }
     async fn status(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::common::ProviderRequest) -> ::ttrpc::Result<super::common::ProviderResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/d2b.provider.v2.CredentialProviderService/Status is not supported".to_string())))
     }
@@ -134,6 +153,9 @@ pub fn create_credential_provider_service(service: Arc<dyn CredentialProviderSer
 
     methods.insert("Health".to_string(),
                     Box::new(HealthMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("Capabilities".to_string(),
+                    Box::new(CapabilitiesMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     methods.insert("Status".to_string(),
                     Box::new(StatusMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);

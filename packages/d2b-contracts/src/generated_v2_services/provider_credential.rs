@@ -30,14 +30,15 @@ const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_7_2;
 
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x19provider_credential.proto\x12\x0fd2b.provider.v2\x1a\x0ccommon.pro\
-    to2\xa3\x03\n\x19CredentialProviderService\x12I\n\x06Health\x12\x1e.d2b.\
-    common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12I\n\
-    \x06Status\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.P\
-    roviderResponse\x12O\n\x0cAcquireLease\x12\x1e.d2b.common.v2.ProviderReq\
-    uest\x1a\x1f.d2b.common.v2.ProviderResponse\x12O\n\x0cRefreshLease\x12\
+    to2\xf8\x03\n\x19CredentialProviderService\x12I\n\x06Health\x12\x1e.d2b.\
+    common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderResponse\x12S\n\
+    \x0cCapabilities\x12\x20.d2b.common.v2.CapabilityRequest\x1a!.d2b.common\
+    .v2.CapabilityResponse\x12I\n\x06Status\x12\x1e.d2b.common.v2.ProviderRe\
+    quest\x1a\x1f.d2b.common.v2.ProviderResponse\x12O\n\x0cAcquireLease\x12\
     \x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderRespons\
-    e\x12N\n\x0bRevokeLease\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d2\
-    b.common.v2.ProviderResponseb\x06proto3\
+    e\x12O\n\x0cRefreshLease\x12\x1e.d2b.common.v2.ProviderRequest\x1a\x1f.d\
+    2b.common.v2.ProviderResponse\x12N\n\x0bRevokeLease\x12\x1e.d2b.common.v\
+    2.ProviderRequest\x1a\x1f.d2b.common.v2.ProviderResponseb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

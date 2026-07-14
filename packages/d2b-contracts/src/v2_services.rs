@@ -18,6 +18,7 @@ use crate::{
         MAX_REQUEST_LIFETIME_MS, RequestEnvelope, RequestId, TraceId,
     },
     v2_identity::{ProviderId, ProviderType as IdentityProviderType, RealmId, RoleId, WorkloadId},
+    v2_provider::{MAX_PROVIDER_CAPABILITIES, ProviderMethod},
     v2_state::Generation,
 };
 
@@ -225,7 +226,7 @@ pub const SERVICE_INVENTORY: &[ServiceSpec] = &[
         service: "RuntimeProviderService",
         methods: methods![
             "Health" => false, "Capabilities" => false, "Plan" => false, "Ensure" => true,
-            "Start" => true, "Stop" => true, "Inspect" => false, "Adopt" => true,
+            "Start" => true, "Stop" => true, "Execute" => true, "Inspect" => false, "Adopt" => true,
             "Destroy" => true,
         ],
     },
@@ -258,7 +259,7 @@ pub const SERVICE_INVENTORY: &[ServiceSpec] = &[
         package: "d2b.provider.v2",
         service: "CredentialProviderService",
         methods: methods![
-            "Health" => false, "Status" => false, "AcquireLease" => true,
+            "Health" => false, "Capabilities" => false, "Status" => false, "AcquireLease" => true,
             "RefreshLease" => true, "RevokeLease" => true,
         ],
     },
@@ -530,6 +531,7 @@ pub enum ServiceContractError {
     MissingIdempotency,
     BoundExceeded,
     DuplicateAttachment,
+    InconsistentResponse,
     Encode,
     Decode,
 }
@@ -548,6 +550,7 @@ impl fmt::Display for ServiceContractError {
             Self::MissingIdempotency => "v2-service-missing-idempotency",
             Self::BoundExceeded => "v2-service-bound-exceeded",
             Self::DuplicateAttachment => "v2-service-duplicate-attachment",
+            Self::InconsistentResponse => "v2-service-inconsistent-response",
             Self::Encode => "v2-service-encode-failed",
             Self::Decode => "v2-service-decode-failed",
         })
@@ -614,7 +617,7 @@ fn required_digest(value: &[u8]) -> bool {
     value.len() == DIGEST_BYTES && value.iter().any(|byte| *byte != 0)
 }
 
-fn required_message<'a, T>(value: &'a MessageField<T>) -> Result<&'a T, ServiceContractError> {
+fn required_message<T>(value: &MessageField<T>) -> Result<&T, ServiceContractError> {
     value.as_ref().ok_or(ServiceContractError::MissingMetadata)
 }
 
@@ -719,16 +722,23 @@ fn validate_scope(value: &common::IdentityScope) -> Result<(), ServiceContractEr
             .map_err(|_| ServiceContractError::InvalidIdentity)?;
     }
     if !value.role_id.is_empty() {
-        if value.workload_id.is_empty() {
+        if value.workload_id.is_empty() || !value.provider_id.is_empty() {
             return Err(ServiceContractError::InvalidIdentity);
         }
         RoleId::parse(value.role_id.clone()).map_err(|_| ServiceContractError::InvalidIdentity)?;
+    }
+    if !value.provider_id.is_empty() && !value.workload_id.is_empty() {
+        return Err(ServiceContractError::InvalidIdentity);
     }
     Ok(())
 }
 
 fn validate_attachments(values: &[u32]) -> Result<(), ServiceContractError> {
-    if values.len() > MAX_REQUEST_ATTACHMENTS as usize {
+    if values.len() > MAX_REQUEST_ATTACHMENTS as usize
+        || values
+            .iter()
+            .any(|index| *index >= u32::from(MAX_REQUEST_ATTACHMENTS))
+    {
         return Err(ServiceContractError::BoundExceeded);
     }
     let unique: BTreeSet<_> = values.iter().copied().collect();
@@ -820,6 +830,8 @@ impl StrictWireMessage for common::ProviderRequest {
             && !bounded_opaque(&self.resource_id, MAX_SERVICE_STRING_BYTES))
             || (!self.binding_id.is_empty()
                 && !bounded_opaque(&self.binding_id, MAX_SERVICE_STRING_BYTES))
+            || (!self.stream_id.is_empty()
+                && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
             || !optional_digest(&self.plan_digest)
             || self.desired_state.enum_value().is_err()
         {
@@ -860,6 +872,207 @@ fn validate_error(value: &common::ErrorEnvelope) -> Result<(), ServiceContractEr
     Ok(())
 }
 
+fn validate_outcome_error(
+    outcome: common::Outcome,
+    error: Option<&common::ErrorEnvelope>,
+) -> Result<(), ServiceContractError> {
+    let required = matches!(
+        outcome,
+        common::Outcome::OUTCOME_DENIED
+            | common::Outcome::OUTCOME_CANCELLED
+            | common::Outcome::OUTCOME_FAILED
+    );
+    let forbidden = matches!(
+        outcome,
+        common::Outcome::OUTCOME_ACCEPTED
+            | common::Outcome::OUTCOME_SUCCEEDED
+            | common::Outcome::OUTCOME_NOT_APPLICABLE
+    );
+    if (required && error.is_none()) || (forbidden && error.is_some()) {
+        return Err(ServiceContractError::InconsistentResponse);
+    }
+    if let Some(error) = error {
+        validate_error(error)?;
+    }
+    Ok(())
+}
+
+pub fn provider_method_for_capability(
+    capability: common::ProviderCapability,
+) -> Result<ProviderMethod, ServiceContractError> {
+    match capability {
+        common::ProviderCapability::PROVIDER_CAPABILITY_UNSPECIFIED => {
+            Err(ServiceContractError::InvalidEnum)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_PLAN => {
+            Ok(ProviderMethod::RuntimePlan)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ENSURE => {
+            Ok(ProviderMethod::RuntimeEnsure)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_START => {
+            Ok(ProviderMethod::RuntimeStart)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_STOP => {
+            Ok(ProviderMethod::RuntimeStop)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_EXECUTE => {
+            Ok(ProviderMethod::RuntimeExecute)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_INSPECT => {
+            Ok(ProviderMethod::RuntimeInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ADOPT => {
+            Ok(ProviderMethod::RuntimeAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_DESTROY => {
+            Ok(ProviderMethod::RuntimeDestroy)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN => {
+            Ok(ProviderMethod::InfrastructurePlan)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY => {
+            Ok(ProviderMethod::InfrastructureApply)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE => {
+            Ok(ProviderMethod::InfrastructureSetPowerState)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT => {
+            Ok(ProviderMethod::InfrastructureInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT => {
+            Ok(ProviderMethod::InfrastructureAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING => {
+            Ok(ProviderMethod::InfrastructureBootstrapBinding)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY => {
+            Ok(ProviderMethod::InfrastructureDestroy)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_CONNECT => {
+            Ok(ProviderMethod::TransportConnect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_LISTEN => {
+            Ok(ProviderMethod::TransportListen)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING => {
+            Ok(ProviderMethod::TransportIssueBinding)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING => {
+            Ok(ProviderMethod::TransportRevokeBinding)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_INSPECT => {
+            Ok(ProviderMethod::TransportInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_CHECK => {
+            Ok(ProviderMethod::SubstrateCheck)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION => {
+            Ok(ProviderMethod::SubstratePlanRemediation)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_APPLY => {
+            Ok(ProviderMethod::SubstrateApply)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_STATUS => {
+            Ok(ProviderMethod::CredentialStatus)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE => {
+            Ok(ProviderMethod::CredentialAcquireLease)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE => {
+            Ok(ProviderMethod::CredentialRefreshLease)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE => {
+            Ok(ProviderMethod::CredentialRevokeLease)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_OPEN => {
+            Ok(ProviderMethod::DisplayOpen)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_INSPECT => {
+            Ok(ProviderMethod::DisplayInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_ADOPT => {
+            Ok(ProviderMethod::DisplayAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_CLOSE => {
+            Ok(ProviderMethod::DisplayClose)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_NETWORK_PLAN => {
+            Ok(ProviderMethod::NetworkPlan)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ENSURE => {
+            Ok(ProviderMethod::NetworkEnsure)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_NETWORK_INSPECT => {
+            Ok(ProviderMethod::NetworkInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ADOPT => {
+            Ok(ProviderMethod::NetworkAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_NETWORK_RELEASE => {
+            Ok(ProviderMethod::NetworkRelease)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_PLAN => {
+            Ok(ProviderMethod::StoragePlan)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ENSURE => {
+            Ok(ProviderMethod::StorageEnsure)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_INSPECT => {
+            Ok(ProviderMethod::StorageInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ADOPT => {
+            Ok(ProviderMethod::StorageAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_SNAPSHOT => {
+            Ok(ProviderMethod::StorageSnapshot)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_STORAGE_DESTROY => {
+            Ok(ProviderMethod::StorageDestroy)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH => {
+            Ok(ProviderMethod::DevicePlanAttach)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ATTACH => {
+            Ok(ProviderMethod::DeviceAttach)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DEVICE_INSPECT => {
+            Ok(ProviderMethod::DeviceInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ADOPT => {
+            Ok(ProviderMethod::DeviceAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_DEVICE_DETACH => {
+            Ok(ProviderMethod::DeviceDetach)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_AUDIO_OPEN => Ok(ProviderMethod::AudioOpen),
+        common::ProviderCapability::PROVIDER_CAPABILITY_AUDIO_SET_STATE => {
+            Ok(ProviderMethod::AudioSetState)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_AUDIO_INSPECT => {
+            Ok(ProviderMethod::AudioInspect)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_AUDIO_ADOPT => {
+            Ok(ProviderMethod::AudioAdopt)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_AUDIO_CLOSE => {
+            Ok(ProviderMethod::AudioClose)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_STATUS => {
+            Ok(ProviderMethod::ObservabilityStatus)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_QUERY => {
+            Ok(ProviderMethod::ObservabilityQuery)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE => {
+            Ok(ProviderMethod::ObservabilitySubscribe)
+        }
+        common::ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT => {
+            Ok(ProviderMethod::ObservabilityExport)
+        }
+    }
+}
+
 fn validate_observations(values: &[common::Observation]) -> Result<(), ServiceContractError> {
     if values.len() > MAX_OBSERVATIONS {
         return Err(ServiceContractError::BoundExceeded);
@@ -897,10 +1110,13 @@ impl StrictWireMessage for common::ServiceResponse {
             return Err(ServiceContractError::BoundExceeded);
         }
         validate_observations(&self.observations)?;
-        if let Some(error) = self.error.as_ref() {
-            validate_error(error)?;
-        }
-        Ok(())
+        validate_attachments(&self.attachment_indexes)?;
+        validate_outcome_error(
+            self.outcome
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?,
+            self.error.as_ref(),
+        )
     }
 }
 
@@ -912,23 +1128,39 @@ impl StrictWireMessage for common::ProviderResponse {
             || !bounded_opaque(&self.operation_id, MAX_SERVICE_STRING_BYTES)
             || (!self.resource_handle.is_empty()
                 && !bounded_opaque(&self.resource_handle, MAX_SERVICE_STRING_BYTES))
+            || (!self.stream_id.is_empty()
+                && !bounded_opaque(&self.stream_id, MAX_SERVICE_STRING_BYTES))
             || !optional_digest(&self.result_digest)
         {
             return Err(ServiceContractError::BoundExceeded);
         }
         validate_observations(&self.observations)?;
-        if let Some(error) = self.error.as_ref() {
-            validate_error(error)?;
-        }
-        Ok(())
+        validate_attachments(&self.attachment_indexes)?;
+        validate_outcome_error(
+            self.outcome
+                .enum_value()
+                .map_err(|_| ServiceContractError::InvalidEnum)?,
+            self.error.as_ref(),
+        )
     }
 }
 
 impl StrictWireMessage for common::CapabilityResponse {
     fn validate_wire(&self, _: bool) -> Result<(), ServiceContractError> {
         reject_unknown(self)?;
+        if let Some(error) = self.error.as_ref() {
+            validate_error(error)?;
+            return if self.capabilities.is_empty()
+                && self.provider_generation == 0
+                && self.descriptor_digest.is_empty()
+            {
+                Ok(())
+            } else {
+                Err(ServiceContractError::InconsistentResponse)
+            };
+        }
         if self.capabilities.is_empty()
-            || self.capabilities.len() > 26
+            || self.capabilities.len() > MAX_PROVIDER_CAPABILITIES
             || self.provider_generation == 0
             || !required_digest(&self.descriptor_digest)
         {
@@ -939,14 +1171,10 @@ impl StrictWireMessage for common::CapabilityResponse {
             let value = capability
                 .enum_value()
                 .map_err(|_| ServiceContractError::InvalidEnum)?;
-            if value == common::ProviderCapability::PROVIDER_CAPABILITY_UNSPECIFIED
-                || !unique.insert(value.value())
-            {
+            provider_method_for_capability(value)?;
+            if !unique.insert(value.value()) {
                 return Err(ServiceContractError::InvalidEnum);
             }
-        }
-        if let Some(error) = self.error.as_ref() {
-            validate_error(error)?;
         }
         Ok(())
     }

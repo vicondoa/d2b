@@ -1003,6 +1003,8 @@ pub struct ProviderRequest {
     pub attachment_indexes: ::std::vec::Vec<u32>,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.desired_state)
     pub desired_state: ::protobuf::EnumOrUnknown<DesiredState>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderRequest.stream_id)
+    pub stream_id: ::std::string::String,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1020,7 +1022,7 @@ impl ProviderRequest {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut fields = ::std::vec::Vec::with_capacity(7);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, ProviderOperationContext>(
             "context",
@@ -1051,6 +1053,11 @@ impl ProviderRequest {
             "desired_state",
             |m: &ProviderRequest| { &m.desired_state },
             |m: &mut ProviderRequest| { &mut m.desired_state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stream_id",
+            |m: &ProviderRequest| { &m.stream_id },
+            |m: &mut ProviderRequest| { &mut m.stream_id },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderRequest>(
             "ProviderRequest",
@@ -1091,6 +1098,9 @@ impl ::protobuf::Message for ProviderRequest {
                 56 => {
                     self.desired_state = is.read_enum_or_unknown()?;
                 },
+                66 => {
+                    self.stream_id = is.read_string()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1120,6 +1130,9 @@ impl ::protobuf::Message for ProviderRequest {
         if self.desired_state != ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED) {
             my_size += ::protobuf::rt::int32_size(7, self.desired_state.value());
         }
+        if !self.stream_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(8, &self.stream_id);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1141,6 +1154,9 @@ impl ::protobuf::Message for ProviderRequest {
         os.write_repeated_packed_uint32(6, &self.attachment_indexes)?;
         if self.desired_state != ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED) {
             os.write_enum(7, ::protobuf::EnumOrUnknown::value(&self.desired_state))?;
+        }
+        if !self.stream_id.is_empty() {
+            os.write_string(8, &self.stream_id)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1165,6 +1181,7 @@ impl ::protobuf::Message for ProviderRequest {
         self.binding_id.clear();
         self.attachment_indexes.clear();
         self.desired_state = ::protobuf::EnumOrUnknown::new(DesiredState::DESIRED_STATE_UNSPECIFIED);
+        self.stream_id.clear();
         self.special_fields.clear();
     }
 
@@ -1176,6 +1193,7 @@ impl ::protobuf::Message for ProviderRequest {
             binding_id: ::std::string::String::new(),
             attachment_indexes: ::std::vec::Vec::new(),
             desired_state: ::protobuf::EnumOrUnknown::from_i32(0),
+            stream_id: ::std::string::String::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1676,6 +1694,8 @@ pub struct ServiceResponse {
     pub next_page_cursor: ::std::string::String,
     // @@protoc_insertion_point(field:d2b.common.v2.ServiceResponse.error)
     pub error: ::protobuf::MessageField<ErrorEnvelope>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ServiceResponse.attachment_indexes)
+    pub attachment_indexes: ::std::vec::Vec<u32>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ServiceResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1693,7 +1713,7 @@ impl ServiceResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(9);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -1734,6 +1754,11 @@ impl ServiceResponse {
             "error",
             |m: &ServiceResponse| { &m.error },
             |m: &mut ServiceResponse| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "attachment_indexes",
+            |m: &ServiceResponse| { &m.attachment_indexes },
+            |m: &mut ServiceResponse| { &mut m.attachment_indexes },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ServiceResponse>(
             "ServiceResponse",
@@ -1777,6 +1802,12 @@ impl ::protobuf::Message for ServiceResponse {
                 66 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
                 },
+                74 => {
+                    is.read_repeated_packed_uint32_into(&mut self.attachment_indexes)?;
+                },
+                72 => {
+                    self.attachment_indexes.push(is.read_uint32()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1815,6 +1846,7 @@ impl ::protobuf::Message for ServiceResponse {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
+        my_size += ::protobuf::rt::vec_packed_uint32_size(9, &self.attachment_indexes);
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1845,6 +1877,7 @@ impl ::protobuf::Message for ServiceResponse {
         if let Some(v) = self.error.as_ref() {
             ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
         }
+        os.write_repeated_packed_uint32(9, &self.attachment_indexes)?;
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1870,6 +1903,7 @@ impl ::protobuf::Message for ServiceResponse {
         self.observations.clear();
         self.next_page_cursor.clear();
         self.error.clear();
+        self.attachment_indexes.clear();
         self.special_fields.clear();
     }
 
@@ -1883,6 +1917,7 @@ impl ::protobuf::Message for ServiceResponse {
             observations: ::std::vec::Vec::new(),
             next_page_cursor: ::std::string::String::new(),
             error: ::protobuf::MessageField::none(),
+            attachment_indexes: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1922,6 +1957,10 @@ pub struct ProviderResponse {
     pub observations: ::std::vec::Vec<Observation>,
     // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.error)
     pub error: ::protobuf::MessageField<ErrorEnvelope>,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.stream_id)
+    pub stream_id: ::std::string::String,
+    // @@protoc_insertion_point(field:d2b.common.v2.ProviderResponse.attachment_indexes)
+    pub attachment_indexes: ::std::vec::Vec<u32>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.common.v2.ProviderResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1939,7 +1978,7 @@ impl ProviderResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut fields = ::std::vec::Vec::with_capacity(8);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "outcome",
@@ -1970,6 +2009,16 @@ impl ProviderResponse {
             "error",
             |m: &ProviderResponse| { &m.error },
             |m: &mut ProviderResponse| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stream_id",
+            |m: &ProviderResponse| { &m.stream_id },
+            |m: &mut ProviderResponse| { &mut m.stream_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "attachment_indexes",
+            |m: &ProviderResponse| { &m.attachment_indexes },
+            |m: &mut ProviderResponse| { &mut m.attachment_indexes },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ProviderResponse>(
             "ProviderResponse",
@@ -2007,6 +2056,15 @@ impl ::protobuf::Message for ProviderResponse {
                 50 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
                 },
+                58 => {
+                    self.stream_id = is.read_string()?;
+                },
+                66 => {
+                    is.read_repeated_packed_uint32_into(&mut self.attachment_indexes)?;
+                },
+                64 => {
+                    self.attachment_indexes.push(is.read_uint32()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2039,6 +2097,10 @@ impl ::protobuf::Message for ProviderResponse {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
+        if !self.stream_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(7, &self.stream_id);
+        }
+        my_size += ::protobuf::rt::vec_packed_uint32_size(8, &self.attachment_indexes);
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2063,6 +2125,10 @@ impl ::protobuf::Message for ProviderResponse {
         if let Some(v) = self.error.as_ref() {
             ::protobuf::rt::write_message_field_with_cached_size(6, v, os)?;
         }
+        if !self.stream_id.is_empty() {
+            os.write_string(7, &self.stream_id)?;
+        }
+        os.write_repeated_packed_uint32(8, &self.attachment_indexes)?;
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2086,6 +2152,8 @@ impl ::protobuf::Message for ProviderResponse {
         self.result_digest.clear();
         self.observations.clear();
         self.error.clear();
+        self.stream_id.clear();
+        self.attachment_indexes.clear();
         self.special_fields.clear();
     }
 
@@ -2097,6 +2165,8 @@ impl ::protobuf::Message for ProviderResponse {
             result_digest: ::std::vec::Vec::new(),
             observations: ::std::vec::Vec::new(),
             error: ::protobuf::MessageField::none(),
+            stream_id: ::std::string::String::new(),
+            attachment_indexes: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -3170,58 +3240,118 @@ impl ObservationState {
 pub enum ProviderCapability {
     // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_UNSPECIFIED)
     PROVIDER_CAPABILITY_UNSPECIFIED = 0,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_PLAN)
-    PROVIDER_CAPABILITY_PLAN = 1,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_ENSURE)
-    PROVIDER_CAPABILITY_ENSURE = 2,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_START)
-    PROVIDER_CAPABILITY_START = 3,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STOP)
-    PROVIDER_CAPABILITY_STOP = 4,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INSPECT)
-    PROVIDER_CAPABILITY_INSPECT = 5,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_ADOPT)
-    PROVIDER_CAPABILITY_ADOPT = 6,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DESTROY)
-    PROVIDER_CAPABILITY_DESTROY = 7,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_APPLY)
-    PROVIDER_CAPABILITY_APPLY = 8,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_POWER_STATE)
-    PROVIDER_CAPABILITY_POWER_STATE = 9,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_BOOTSTRAP_BINDING)
-    PROVIDER_CAPABILITY_BOOTSTRAP_BINDING = 10,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CONNECT)
-    PROVIDER_CAPABILITY_CONNECT = 11,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_LISTEN)
-    PROVIDER_CAPABILITY_LISTEN = 12,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_ISSUE_BINDING)
-    PROVIDER_CAPABILITY_ISSUE_BINDING = 13,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_REVOKE_BINDING)
-    PROVIDER_CAPABILITY_REVOKE_BINDING = 14,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_REMEDIATE)
-    PROVIDER_CAPABILITY_REMEDIATE = 15,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CREDENTIAL_LEASE)
-    PROVIDER_CAPABILITY_CREDENTIAL_LEASE = 16,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_OPEN)
-    PROVIDER_CAPABILITY_OPEN = 17,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CLOSE)
-    PROVIDER_CAPABILITY_CLOSE = 18,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RELEASE)
-    PROVIDER_CAPABILITY_RELEASE = 19,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SNAPSHOT)
-    PROVIDER_CAPABILITY_SNAPSHOT = 20,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_ATTACH)
-    PROVIDER_CAPABILITY_ATTACH = 21,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DETACH)
-    PROVIDER_CAPABILITY_DETACH = 22,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SET_STATE)
-    PROVIDER_CAPABILITY_SET_STATE = 23,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_QUERY)
-    PROVIDER_CAPABILITY_QUERY = 24,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SUBSCRIBE)
-    PROVIDER_CAPABILITY_SUBSCRIBE = 25,
-    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_EXPORT)
-    PROVIDER_CAPABILITY_EXPORT = 26,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_PLAN)
+    PROVIDER_CAPABILITY_RUNTIME_PLAN = 1,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_ENSURE)
+    PROVIDER_CAPABILITY_RUNTIME_ENSURE = 2,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_START)
+    PROVIDER_CAPABILITY_RUNTIME_START = 3,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_STOP)
+    PROVIDER_CAPABILITY_RUNTIME_STOP = 4,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_EXECUTE)
+    PROVIDER_CAPABILITY_RUNTIME_EXECUTE = 5,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_INSPECT)
+    PROVIDER_CAPABILITY_RUNTIME_INSPECT = 6,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_ADOPT)
+    PROVIDER_CAPABILITY_RUNTIME_ADOPT = 7,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_RUNTIME_DESTROY)
+    PROVIDER_CAPABILITY_RUNTIME_DESTROY = 8,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN = 9,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY = 10,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE = 11,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT = 12,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT = 13,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING = 14,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY)
+    PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY = 15,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_TRANSPORT_CONNECT)
+    PROVIDER_CAPABILITY_TRANSPORT_CONNECT = 16,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_TRANSPORT_LISTEN)
+    PROVIDER_CAPABILITY_TRANSPORT_LISTEN = 17,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING)
+    PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING = 18,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING)
+    PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING = 19,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_TRANSPORT_INSPECT)
+    PROVIDER_CAPABILITY_TRANSPORT_INSPECT = 20,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SUBSTRATE_CHECK)
+    PROVIDER_CAPABILITY_SUBSTRATE_CHECK = 21,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION)
+    PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION = 22,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_SUBSTRATE_APPLY)
+    PROVIDER_CAPABILITY_SUBSTRATE_APPLY = 23,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CREDENTIAL_STATUS)
+    PROVIDER_CAPABILITY_CREDENTIAL_STATUS = 24,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE)
+    PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE = 25,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE)
+    PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE = 26,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE)
+    PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE = 27,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DISPLAY_OPEN)
+    PROVIDER_CAPABILITY_DISPLAY_OPEN = 28,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DISPLAY_INSPECT)
+    PROVIDER_CAPABILITY_DISPLAY_INSPECT = 29,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DISPLAY_ADOPT)
+    PROVIDER_CAPABILITY_DISPLAY_ADOPT = 30,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DISPLAY_CLOSE)
+    PROVIDER_CAPABILITY_DISPLAY_CLOSE = 31,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_NETWORK_PLAN)
+    PROVIDER_CAPABILITY_NETWORK_PLAN = 32,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_NETWORK_ENSURE)
+    PROVIDER_CAPABILITY_NETWORK_ENSURE = 33,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_NETWORK_INSPECT)
+    PROVIDER_CAPABILITY_NETWORK_INSPECT = 34,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_NETWORK_ADOPT)
+    PROVIDER_CAPABILITY_NETWORK_ADOPT = 35,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_NETWORK_RELEASE)
+    PROVIDER_CAPABILITY_NETWORK_RELEASE = 36,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_PLAN)
+    PROVIDER_CAPABILITY_STORAGE_PLAN = 37,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_ENSURE)
+    PROVIDER_CAPABILITY_STORAGE_ENSURE = 38,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_INSPECT)
+    PROVIDER_CAPABILITY_STORAGE_INSPECT = 39,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_ADOPT)
+    PROVIDER_CAPABILITY_STORAGE_ADOPT = 40,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_SNAPSHOT)
+    PROVIDER_CAPABILITY_STORAGE_SNAPSHOT = 41,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_STORAGE_DESTROY)
+    PROVIDER_CAPABILITY_STORAGE_DESTROY = 42,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH)
+    PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH = 43,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DEVICE_ATTACH)
+    PROVIDER_CAPABILITY_DEVICE_ATTACH = 44,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DEVICE_INSPECT)
+    PROVIDER_CAPABILITY_DEVICE_INSPECT = 45,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DEVICE_ADOPT)
+    PROVIDER_CAPABILITY_DEVICE_ADOPT = 46,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_DEVICE_DETACH)
+    PROVIDER_CAPABILITY_DEVICE_DETACH = 47,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_AUDIO_OPEN)
+    PROVIDER_CAPABILITY_AUDIO_OPEN = 48,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_AUDIO_SET_STATE)
+    PROVIDER_CAPABILITY_AUDIO_SET_STATE = 49,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_AUDIO_INSPECT)
+    PROVIDER_CAPABILITY_AUDIO_INSPECT = 50,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_AUDIO_ADOPT)
+    PROVIDER_CAPABILITY_AUDIO_ADOPT = 51,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_AUDIO_CLOSE)
+    PROVIDER_CAPABILITY_AUDIO_CLOSE = 52,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_OBSERVABILITY_STATUS)
+    PROVIDER_CAPABILITY_OBSERVABILITY_STATUS = 53,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_OBSERVABILITY_QUERY)
+    PROVIDER_CAPABILITY_OBSERVABILITY_QUERY = 54,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE)
+    PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE = 55,
+    // @@protoc_insertion_point(enum_value:d2b.common.v2.ProviderCapability.PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT)
+    PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT = 56,
 }
 
 impl ::protobuf::Enum for ProviderCapability {
@@ -3234,32 +3364,62 @@ impl ::protobuf::Enum for ProviderCapability {
     fn from_i32(value: i32) -> ::std::option::Option<ProviderCapability> {
         match value {
             0 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_UNSPECIFIED),
-            1 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_PLAN),
-            2 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ENSURE),
-            3 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_START),
-            4 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STOP),
-            5 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INSPECT),
-            6 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ADOPT),
-            7 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DESTROY),
-            8 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_APPLY),
-            9 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_POWER_STATE),
-            10 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_BOOTSTRAP_BINDING),
-            11 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CONNECT),
-            12 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_LISTEN),
-            13 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ISSUE_BINDING),
-            14 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_REVOKE_BINDING),
-            15 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_REMEDIATE),
-            16 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_LEASE),
-            17 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OPEN),
-            18 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CLOSE),
-            19 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RELEASE),
-            20 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SNAPSHOT),
-            21 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ATTACH),
-            22 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DETACH),
-            23 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SET_STATE),
-            24 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_QUERY),
-            25 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSCRIBE),
-            26 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_EXPORT),
+            1 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_PLAN),
+            2 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ENSURE),
+            3 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_START),
+            4 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_STOP),
+            5 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_EXECUTE),
+            6 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_INSPECT),
+            7 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ADOPT),
+            8 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_DESTROY),
+            9 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN),
+            10 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY),
+            11 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE),
+            12 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT),
+            13 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT),
+            14 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING),
+            15 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY),
+            16 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_CONNECT),
+            17 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_LISTEN),
+            18 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING),
+            19 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING),
+            20 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_INSPECT),
+            21 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_CHECK),
+            22 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION),
+            23 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_APPLY),
+            24 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_STATUS),
+            25 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE),
+            26 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE),
+            27 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE),
+            28 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_OPEN),
+            29 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_INSPECT),
+            30 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_ADOPT),
+            31 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_CLOSE),
+            32 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_PLAN),
+            33 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ENSURE),
+            34 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_INSPECT),
+            35 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ADOPT),
+            36 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_RELEASE),
+            37 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_PLAN),
+            38 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ENSURE),
+            39 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_INSPECT),
+            40 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ADOPT),
+            41 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_SNAPSHOT),
+            42 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_DESTROY),
+            43 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH),
+            44 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ATTACH),
+            45 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_INSPECT),
+            46 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ADOPT),
+            47 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_DETACH),
+            48 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_OPEN),
+            49 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_SET_STATE),
+            50 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_INSPECT),
+            51 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_ADOPT),
+            52 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_CLOSE),
+            53 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_STATUS),
+            54 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_QUERY),
+            55 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE),
+            56 => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT),
             _ => ::std::option::Option::None
         }
     }
@@ -3267,64 +3427,124 @@ impl ::protobuf::Enum for ProviderCapability {
     fn from_str(str: &str) -> ::std::option::Option<ProviderCapability> {
         match str {
             "PROVIDER_CAPABILITY_UNSPECIFIED" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_UNSPECIFIED),
-            "PROVIDER_CAPABILITY_PLAN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_PLAN),
-            "PROVIDER_CAPABILITY_ENSURE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ENSURE),
-            "PROVIDER_CAPABILITY_START" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_START),
-            "PROVIDER_CAPABILITY_STOP" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STOP),
-            "PROVIDER_CAPABILITY_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INSPECT),
-            "PROVIDER_CAPABILITY_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ADOPT),
-            "PROVIDER_CAPABILITY_DESTROY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DESTROY),
-            "PROVIDER_CAPABILITY_APPLY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_APPLY),
-            "PROVIDER_CAPABILITY_POWER_STATE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_POWER_STATE),
-            "PROVIDER_CAPABILITY_BOOTSTRAP_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_BOOTSTRAP_BINDING),
-            "PROVIDER_CAPABILITY_CONNECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CONNECT),
-            "PROVIDER_CAPABILITY_LISTEN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_LISTEN),
-            "PROVIDER_CAPABILITY_ISSUE_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ISSUE_BINDING),
-            "PROVIDER_CAPABILITY_REVOKE_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_REVOKE_BINDING),
-            "PROVIDER_CAPABILITY_REMEDIATE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_REMEDIATE),
-            "PROVIDER_CAPABILITY_CREDENTIAL_LEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_LEASE),
-            "PROVIDER_CAPABILITY_OPEN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OPEN),
-            "PROVIDER_CAPABILITY_CLOSE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CLOSE),
-            "PROVIDER_CAPABILITY_RELEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RELEASE),
-            "PROVIDER_CAPABILITY_SNAPSHOT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SNAPSHOT),
-            "PROVIDER_CAPABILITY_ATTACH" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_ATTACH),
-            "PROVIDER_CAPABILITY_DETACH" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DETACH),
-            "PROVIDER_CAPABILITY_SET_STATE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SET_STATE),
-            "PROVIDER_CAPABILITY_QUERY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_QUERY),
-            "PROVIDER_CAPABILITY_SUBSCRIBE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSCRIBE),
-            "PROVIDER_CAPABILITY_EXPORT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_EXPORT),
+            "PROVIDER_CAPABILITY_RUNTIME_PLAN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_PLAN),
+            "PROVIDER_CAPABILITY_RUNTIME_ENSURE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ENSURE),
+            "PROVIDER_CAPABILITY_RUNTIME_START" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_START),
+            "PROVIDER_CAPABILITY_RUNTIME_STOP" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_STOP),
+            "PROVIDER_CAPABILITY_RUNTIME_EXECUTE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_EXECUTE),
+            "PROVIDER_CAPABILITY_RUNTIME_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_INSPECT),
+            "PROVIDER_CAPABILITY_RUNTIME_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ADOPT),
+            "PROVIDER_CAPABILITY_RUNTIME_DESTROY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_DESTROY),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING),
+            "PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY),
+            "PROVIDER_CAPABILITY_TRANSPORT_CONNECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_CONNECT),
+            "PROVIDER_CAPABILITY_TRANSPORT_LISTEN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_LISTEN),
+            "PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING),
+            "PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING),
+            "PROVIDER_CAPABILITY_TRANSPORT_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_INSPECT),
+            "PROVIDER_CAPABILITY_SUBSTRATE_CHECK" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_CHECK),
+            "PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION),
+            "PROVIDER_CAPABILITY_SUBSTRATE_APPLY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_APPLY),
+            "PROVIDER_CAPABILITY_CREDENTIAL_STATUS" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_STATUS),
+            "PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE),
+            "PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE),
+            "PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE),
+            "PROVIDER_CAPABILITY_DISPLAY_OPEN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_OPEN),
+            "PROVIDER_CAPABILITY_DISPLAY_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_INSPECT),
+            "PROVIDER_CAPABILITY_DISPLAY_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_ADOPT),
+            "PROVIDER_CAPABILITY_DISPLAY_CLOSE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_CLOSE),
+            "PROVIDER_CAPABILITY_NETWORK_PLAN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_PLAN),
+            "PROVIDER_CAPABILITY_NETWORK_ENSURE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ENSURE),
+            "PROVIDER_CAPABILITY_NETWORK_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_INSPECT),
+            "PROVIDER_CAPABILITY_NETWORK_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ADOPT),
+            "PROVIDER_CAPABILITY_NETWORK_RELEASE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_NETWORK_RELEASE),
+            "PROVIDER_CAPABILITY_STORAGE_PLAN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_PLAN),
+            "PROVIDER_CAPABILITY_STORAGE_ENSURE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ENSURE),
+            "PROVIDER_CAPABILITY_STORAGE_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_INSPECT),
+            "PROVIDER_CAPABILITY_STORAGE_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ADOPT),
+            "PROVIDER_CAPABILITY_STORAGE_SNAPSHOT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_SNAPSHOT),
+            "PROVIDER_CAPABILITY_STORAGE_DESTROY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_STORAGE_DESTROY),
+            "PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH),
+            "PROVIDER_CAPABILITY_DEVICE_ATTACH" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ATTACH),
+            "PROVIDER_CAPABILITY_DEVICE_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_INSPECT),
+            "PROVIDER_CAPABILITY_DEVICE_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ADOPT),
+            "PROVIDER_CAPABILITY_DEVICE_DETACH" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_DEVICE_DETACH),
+            "PROVIDER_CAPABILITY_AUDIO_OPEN" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_OPEN),
+            "PROVIDER_CAPABILITY_AUDIO_SET_STATE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_SET_STATE),
+            "PROVIDER_CAPABILITY_AUDIO_INSPECT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_INSPECT),
+            "PROVIDER_CAPABILITY_AUDIO_ADOPT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_ADOPT),
+            "PROVIDER_CAPABILITY_AUDIO_CLOSE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_AUDIO_CLOSE),
+            "PROVIDER_CAPABILITY_OBSERVABILITY_STATUS" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_STATUS),
+            "PROVIDER_CAPABILITY_OBSERVABILITY_QUERY" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_QUERY),
+            "PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE),
+            "PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT" => ::std::option::Option::Some(ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT),
             _ => ::std::option::Option::None
         }
     }
 
     const VALUES: &'static [ProviderCapability] = &[
         ProviderCapability::PROVIDER_CAPABILITY_UNSPECIFIED,
-        ProviderCapability::PROVIDER_CAPABILITY_PLAN,
-        ProviderCapability::PROVIDER_CAPABILITY_ENSURE,
-        ProviderCapability::PROVIDER_CAPABILITY_START,
-        ProviderCapability::PROVIDER_CAPABILITY_STOP,
-        ProviderCapability::PROVIDER_CAPABILITY_INSPECT,
-        ProviderCapability::PROVIDER_CAPABILITY_ADOPT,
-        ProviderCapability::PROVIDER_CAPABILITY_DESTROY,
-        ProviderCapability::PROVIDER_CAPABILITY_APPLY,
-        ProviderCapability::PROVIDER_CAPABILITY_POWER_STATE,
-        ProviderCapability::PROVIDER_CAPABILITY_BOOTSTRAP_BINDING,
-        ProviderCapability::PROVIDER_CAPABILITY_CONNECT,
-        ProviderCapability::PROVIDER_CAPABILITY_LISTEN,
-        ProviderCapability::PROVIDER_CAPABILITY_ISSUE_BINDING,
-        ProviderCapability::PROVIDER_CAPABILITY_REVOKE_BINDING,
-        ProviderCapability::PROVIDER_CAPABILITY_REMEDIATE,
-        ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_LEASE,
-        ProviderCapability::PROVIDER_CAPABILITY_OPEN,
-        ProviderCapability::PROVIDER_CAPABILITY_CLOSE,
-        ProviderCapability::PROVIDER_CAPABILITY_RELEASE,
-        ProviderCapability::PROVIDER_CAPABILITY_SNAPSHOT,
-        ProviderCapability::PROVIDER_CAPABILITY_ATTACH,
-        ProviderCapability::PROVIDER_CAPABILITY_DETACH,
-        ProviderCapability::PROVIDER_CAPABILITY_SET_STATE,
-        ProviderCapability::PROVIDER_CAPABILITY_QUERY,
-        ProviderCapability::PROVIDER_CAPABILITY_SUBSCRIBE,
-        ProviderCapability::PROVIDER_CAPABILITY_EXPORT,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_PLAN,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ENSURE,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_START,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_STOP,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_EXECUTE,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_RUNTIME_DESTROY,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_PLAN,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_APPLY,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_BOOTSTRAP_BINDING,
+        ProviderCapability::PROVIDER_CAPABILITY_INFRASTRUCTURE_DESTROY,
+        ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_CONNECT,
+        ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_LISTEN,
+        ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_ISSUE_BINDING,
+        ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_REVOKE_BINDING,
+        ProviderCapability::PROVIDER_CAPABILITY_TRANSPORT_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_CHECK,
+        ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION,
+        ProviderCapability::PROVIDER_CAPABILITY_SUBSTRATE_APPLY,
+        ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_STATUS,
+        ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE,
+        ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE,
+        ProviderCapability::PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE,
+        ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_OPEN,
+        ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_DISPLAY_CLOSE,
+        ProviderCapability::PROVIDER_CAPABILITY_NETWORK_PLAN,
+        ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ENSURE,
+        ProviderCapability::PROVIDER_CAPABILITY_NETWORK_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_NETWORK_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_NETWORK_RELEASE,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_PLAN,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ENSURE,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_SNAPSHOT,
+        ProviderCapability::PROVIDER_CAPABILITY_STORAGE_DESTROY,
+        ProviderCapability::PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH,
+        ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ATTACH,
+        ProviderCapability::PROVIDER_CAPABILITY_DEVICE_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_DEVICE_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_DEVICE_DETACH,
+        ProviderCapability::PROVIDER_CAPABILITY_AUDIO_OPEN,
+        ProviderCapability::PROVIDER_CAPABILITY_AUDIO_SET_STATE,
+        ProviderCapability::PROVIDER_CAPABILITY_AUDIO_INSPECT,
+        ProviderCapability::PROVIDER_CAPABILITY_AUDIO_ADOPT,
+        ProviderCapability::PROVIDER_CAPABILITY_AUDIO_CLOSE,
+        ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_STATUS,
+        ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_QUERY,
+        ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE,
+        ProviderCapability::PROVIDER_CAPABILITY_OBSERVABILITY_EXPORT,
     ];
 }
 
@@ -3465,107 +3685,134 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     R\x11attachmentIndexes\x12\x1b\n\tpage_size\x18\t\x20\x01(\rR\x08pageSiz\
     e\x12\x1f\n\x0bpage_cursor\x18\n\x20\x01(\tR\npageCursor\x12@\n\rdesired\
     _state\x18\x0b\x20\x01(\x0e2\x1b.d2b.common.v2.DesiredStateR\x0cdesiredS\
-    tateJ\x04\x08\x05\x10\x06\"\xac\x02\n\x0fProviderRequest\x12A\n\x07conte\
+    tateJ\x04\x08\x05\x10\x06\"\xc9\x02\n\x0fProviderRequest\x12A\n\x07conte\
     xt\x18\x01\x20\x01(\x0b2'.d2b.common.v2.ProviderOperationContextR\x07con\
     text\x12\x1f\n\x0bresource_id\x18\x02\x20\x01(\tR\nresourceId\x12\x1f\n\
     \x0bplan_digest\x18\x04\x20\x01(\x0cR\nplanDigest\x12\x1d\n\nbinding_id\
     \x18\x05\x20\x01(\tR\tbindingId\x12-\n\x12attachment_indexes\x18\x06\x20\
     \x03(\rR\x11attachmentIndexes\x12@\n\rdesired_state\x18\x07\x20\x01(\x0e\
-    2\x1b.d2b.common.v2.DesiredStateR\x0cdesiredStateJ\x04\x08\x03\x10\x04\"\
-    V\n\x11CapabilityRequest\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.co\
-    mmon.v2.ProviderOperationContextR\x07context\"\x95\x01\n\rErrorEnvelope\
-    \x12,\n\x04kind\x18\x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04ki\
-    nd\x12/\n\x05retry\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\
-    \x05retry\x12%\n\x0ecorrelation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\
-    \x9d\x01\n\x0bObservation\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\n\
-    resourceId\x125\n\x05state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.Obser\
-    vationStateR\x05state\x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngener\
-    ation\x12\x16\n\x06digest\x18\x04\x20\x01(\x0cR\x06digest\"\xef\x02\n\
-    \x0fServiceResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.comm\
-    on.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0b\
-    operationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHan\
-    dle\x12\x1b\n\tstream_id\x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_\
-    digest\x18\x05\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\
-    \x06\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservations\x12(\n\
-    \x10next_page_cursor\x18\x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05err\
-    or\x18\x08\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"\xa9\
-    \x02\n\x10ProviderResponse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d\
-    2b.common.v2.OutcomeR\x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\
-    \tR\x0boperationId\x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0ereso\
-    urceHandle\x12#\n\rresult_digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\
-    \x12>\n\x0cobservations\x18\x05\x20\x03(\x0b2\x1a.d2b.common.v2.Observat\
-    ionR\x0cobservations\x122\n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.commo\
-    n.v2.ErrorEnvelopeR\x05error\"\xed\x01\n\x12CapabilityResponse\x12E\n\
-    \x0ccapabilities\x18\x01\x20\x03(\x0e2!.d2b.common.v2.ProviderCapability\
-    R\x0ccapabilities\x12/\n\x13provider_generation\x18\x02\x20\x01(\x04R\
-    \x12providerGeneration\x12+\n\x11descriptor_digest\x18\x03\x20\x01(\x0cR\
-    \x10descriptorDigest\x122\n\x05error\x18\x04\x20\x01(\x0b2\x1c.d2b.commo\
-    n.v2.ErrorEnvelopeR\x05error\"]\n\rCancelRequest\x12-\n\x12session_gener\
-    ation\x18\x01\x20\x01(\x04R\x11sessionGeneration\x12\x1d\n\nrequest_id\
-    \x18\x02\x20\x01(\x0cR\trequestId\"H\n\x0eCancelResponse\x126\n\x07outco\
-    me\x18\x01\x20\x01(\x0e2\x1c.d2b.common.v2.CancelOutcomeR\x07outcome*\
-    \xe7\x02\n\x0cProviderType\x12\x1d\n\x19PROVIDER_TYPE_UNSPECIFIED\x10\0\
-    \x12\x19\n\x15PROVIDER_TYPE_RUNTIME\x10\x01\x12\x20\n\x1cPROVIDER_TYPE_I\
-    NFRASTRUCTURE\x10\x02\x12\x1b\n\x17PROVIDER_TYPE_TRANSPORT\x10\x03\x12\
-    \x1b\n\x17PROVIDER_TYPE_SUBSTRATE\x10\x04\x12\x1c\n\x18PROVIDER_TYPE_CRE\
-    DENTIAL\x10\x05\x12\x19\n\x15PROVIDER_TYPE_DISPLAY\x10\x06\x12\x19\n\x15\
-    PROVIDER_TYPE_NETWORK\x10\x07\x12\x19\n\x15PROVIDER_TYPE_STORAGE\x10\x08\
-    \x12\x18\n\x14PROVIDER_TYPE_DEVICE\x10\t\x12\x17\n\x13PROVIDER_TYPE_AUDI\
-    O\x10\n\x12\x1f\n\x1bPROVIDER_TYPE_OBSERVABILITY\x10\x0b*\xa6\x01\n\nRet\
-    ryClass\x12\x1b\n\x17RETRY_CLASS_UNSPECIFIED\x10\0\x12\x15\n\x11RETRY_CL\
-    ASS_NEVER\x10\x01\x12\x1e\n\x1aRETRY_CLASS_SAME_OPERATION\x10\x02\x12!\n\
-    \x1dRETRY_CLASS_AFTER_OBSERVATION\x10\x03\x12!\n\x1dRETRY_CLASS_AFTER_IN\
-    TERACTION\x10\x04*\xc0\x01\n\x07Outcome\x12\x17\n\x13OUTCOME_UNSPECIFIED\
-    \x10\0\x12\x14\n\x10OUTCOME_ACCEPTED\x10\x01\x12\x15\n\x11OUTCOME_SUCCEE\
-    DED\x10\x02\x12\x1a\n\x16OUTCOME_NOT_APPLICABLE\x10\x03\x12\x12\n\x0eOUT\
-    COME_DENIED\x10\x04\x12\x15\n\x11OUTCOME_CANCELLED\x10\x05\x12\x14\n\x10\
-    OUTCOME_DEGRADED\x10\x06\x12\x12\n\x0eOUTCOME_FAILED\x10\x07*\xb5\x03\n\
-    \tErrorKind\x12\x1a\n\x16ERROR_KIND_UNSPECIFIED\x10\0\x12\x1e\n\x1aERROR\
-    _KIND_INVALID_REQUEST\x10\x01\x12\x1e\n\x1aERROR_KIND_UNAUTHENTICATED\
-    \x10\x02\x12\x1b\n\x17ERROR_KIND_UNAUTHORIZED\x10\x03\x12\x18\n\x14ERROR\
-    _KIND_NOT_FOUND\x10\x04\x12\x17\n\x13ERROR_KIND_CONFLICT\x10\x05\x12\x20\
-    \n\x1cERROR_KIND_CAPABILITY_DENIED\x10\x06\x12\x20\n\x1cERROR_KIND_DEADL\
-    INE_EXCEEDED\x10\x07\x12\x18\n\x14ERROR_KIND_CANCELLED\x10\x08\x12\"\n\
-    \x1eERROR_KIND_GENERATION_MISMATCH\x10\t\x12!\n\x1dERROR_KIND_RESOURCE_E\
-    XHAUSTED\x10\n\x12\x1a\n\x16ERROR_KIND_UNAVAILABLE\x10\x0b\x12\"\n\x1eER\
-    ROR_KIND_INVARIANT_VIOLATION\x10\x0c\x12\x17\n\x13ERROR_KIND_INTERNAL\
-    \x10\r*\xb9\x02\n\x0cDesiredState\x12\x1d\n\x19DESIRED_STATE_UNSPECIFIED\
-    \x10\0\x12\x19\n\x15DESIRED_STATE_PRESENT\x10\x01\x12\x18\n\x14DESIRED_S\
-    TATE_ABSENT\x10\x02\x12\x19\n\x15DESIRED_STATE_RUNNING\x10\x03\x12\x19\n\
-    \x15DESIRED_STATE_STOPPED\x10\x04\x12\x19\n\x15DESIRED_STATE_ENABLED\x10\
-    \x05\x12\x1a\n\x16DESIRED_STATE_DISABLED\x10\x06\x12\x16\n\x12DESIRED_ST\
-    ATE_OPEN\x10\x07\x12\x18\n\x14DESIRED_STATE_CLOSED\x10\x08\x12\x1a\n\x16\
-    DESIRED_STATE_ATTACHED\x10\t\x12\x1a\n\x16DESIRED_STATE_DETACHED\x10\n*\
-    \xae\x02\n\x10ObservationState\x12!\n\x1dOBSERVATION_STATE_UNSPECIFIED\
-    \x10\0\x12\x1c\n\x18OBSERVATION_STATE_ABSENT\x10\x01\x12\x1d\n\x19OBSERV\
-    ATION_STATE_PENDING\x10\x02\x12\x1b\n\x17OBSERVATION_STATE_READY\x10\x03\
-    \x12\x1d\n\x19OBSERVATION_STATE_RUNNING\x10\x04\x12\x1d\n\x19OBSERVATION\
-    _STATE_STOPPED\x10\x05\x12\x1e\n\x1aOBSERVATION_STATE_DEGRADED\x10\x06\
-    \x12!\n\x1dOBSERVATION_STATE_UNAVAILABLE\x10\x07\x12\x1c\n\x18OBSERVATIO\
-    N_STATE_FAILED\x10\x08*\xa6\x07\n\x12ProviderCapability\x12#\n\x1fPROVID\
-    ER_CAPABILITY_UNSPECIFIED\x10\0\x12\x1c\n\x18PROVIDER_CAPABILITY_PLAN\
-    \x10\x01\x12\x1e\n\x1aPROVIDER_CAPABILITY_ENSURE\x10\x02\x12\x1d\n\x19PR\
-    OVIDER_CAPABILITY_START\x10\x03\x12\x1c\n\x18PROVIDER_CAPABILITY_STOP\
-    \x10\x04\x12\x1f\n\x1bPROVIDER_CAPABILITY_INSPECT\x10\x05\x12\x1d\n\x19P\
-    ROVIDER_CAPABILITY_ADOPT\x10\x06\x12\x1f\n\x1bPROVIDER_CAPABILITY_DESTRO\
-    Y\x10\x07\x12\x1d\n\x19PROVIDER_CAPABILITY_APPLY\x10\x08\x12#\n\x1fPROVI\
-    DER_CAPABILITY_POWER_STATE\x10\t\x12)\n%PROVIDER_CAPABILITY_BOOTSTRAP_BI\
-    NDING\x10\n\x12\x1f\n\x1bPROVIDER_CAPABILITY_CONNECT\x10\x0b\x12\x1e\n\
-    \x1aPROVIDER_CAPABILITY_LISTEN\x10\x0c\x12%\n!PROVIDER_CAPABILITY_ISSUE_\
-    BINDING\x10\r\x12&\n\"PROVIDER_CAPABILITY_REVOKE_BINDING\x10\x0e\x12!\n\
-    \x1dPROVIDER_CAPABILITY_REMEDIATE\x10\x0f\x12(\n$PROVIDER_CAPABILITY_CRE\
-    DENTIAL_LEASE\x10\x10\x12\x1c\n\x18PROVIDER_CAPABILITY_OPEN\x10\x11\x12\
-    \x1d\n\x19PROVIDER_CAPABILITY_CLOSE\x10\x12\x12\x1f\n\x1bPROVIDER_CAPABI\
-    LITY_RELEASE\x10\x13\x12\x20\n\x1cPROVIDER_CAPABILITY_SNAPSHOT\x10\x14\
-    \x12\x1e\n\x1aPROVIDER_CAPABILITY_ATTACH\x10\x15\x12\x1e\n\x1aPROVIDER_C\
-    APABILITY_DETACH\x10\x16\x12!\n\x1dPROVIDER_CAPABILITY_SET_STATE\x10\x17\
-    \x12\x1d\n\x19PROVIDER_CAPABILITY_QUERY\x10\x18\x12!\n\x1dPROVIDER_CAPAB\
-    ILITY_SUBSCRIBE\x10\x19\x12\x1e\n\x1aPROVIDER_CAPABILITY_EXPORT\x10\x1a*\
-    \xf9\x01\n\rCancelOutcome\x12\x1e\n\x1aCANCEL_OUTCOME_UNSPECIFIED\x10\0\
-    \x12,\n(CANCEL_OUTCOME_CANCELLED_BEFORE_DISPATCH\x10\x01\x12)\n%CANCEL_O\
-    UTCOME_CANCELLATION_SIGNALLED\x10\x02\x12#\n\x1fCANCEL_OUTCOME_ALREADY_T\
-    ERMINAL\x10\x03\x12\"\n\x1eCANCEL_OUTCOME_UNKNOWN_REQUEST\x10\x04\x12&\n\
-    \"CANCEL_OUTCOME_GENERATION_MISMATCH\x10\x05b\x06proto3\
+    2\x1b.d2b.common.v2.DesiredStateR\x0cdesiredState\x12\x1b\n\tstream_id\
+    \x18\x08\x20\x01(\tR\x08streamIdJ\x04\x08\x03\x10\x04\"V\n\x11Capability\
+    Request\x12A\n\x07context\x18\x01\x20\x01(\x0b2'.d2b.common.v2.ProviderO\
+    perationContextR\x07context\"\x95\x01\n\rErrorEnvelope\x12,\n\x04kind\
+    \x18\x01\x20\x01(\x0e2\x18.d2b.common.v2.ErrorKindR\x04kind\x12/\n\x05re\
+    try\x18\x02\x20\x01(\x0e2\x19.d2b.common.v2.RetryClassR\x05retry\x12%\n\
+    \x0ecorrelation_id\x18\x03\x20\x01(\tR\rcorrelationId\"\x9d\x01\n\x0bObs\
+    ervation\x12\x1f\n\x0bresource_id\x18\x01\x20\x01(\tR\nresourceId\x125\n\
+    \x05state\x18\x02\x20\x01(\x0e2\x1f.d2b.common.v2.ObservationStateR\x05s\
+    tate\x12\x1e\n\ngeneration\x18\x03\x20\x01(\x04R\ngeneration\x12\x16\n\
+    \x06digest\x18\x04\x20\x01(\x0cR\x06digest\"\x9e\x03\n\x0fServiceRespons\
+    e\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\x07\
+    outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\x12'\n\
+    \x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12\x1b\n\tstr\
+    eam_id\x18\x04\x20\x01(\tR\x08streamId\x12#\n\rresult_digest\x18\x05\x20\
+    \x01(\x0cR\x0cresultDigest\x12>\n\x0cobservations\x18\x06\x20\x03(\x0b2\
+    \x1a.d2b.common.v2.ObservationR\x0cobservations\x12(\n\x10next_page_curs\
+    or\x18\x07\x20\x01(\tR\x0enextPageCursor\x122\n\x05error\x18\x08\x20\x01\
+    (\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\x12-\n\x12attachment_in\
+    dexes\x18\t\x20\x03(\rR\x11attachmentIndexes\"\xf5\x02\n\x10ProviderResp\
+    onse\x120\n\x07outcome\x18\x01\x20\x01(\x0e2\x16.d2b.common.v2.OutcomeR\
+    \x07outcome\x12!\n\x0coperation_id\x18\x02\x20\x01(\tR\x0boperationId\
+    \x12'\n\x0fresource_handle\x18\x03\x20\x01(\tR\x0eresourceHandle\x12#\n\
+    \rresult_digest\x18\x04\x20\x01(\x0cR\x0cresultDigest\x12>\n\x0cobservat\
+    ions\x18\x05\x20\x03(\x0b2\x1a.d2b.common.v2.ObservationR\x0cobservation\
+    s\x122\n\x05error\x18\x06\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\
+    \x05error\x12\x1b\n\tstream_id\x18\x07\x20\x01(\tR\x08streamId\x12-\n\
+    \x12attachment_indexes\x18\x08\x20\x03(\rR\x11attachmentIndexes\"\xed\
+    \x01\n\x12CapabilityResponse\x12E\n\x0ccapabilities\x18\x01\x20\x03(\x0e\
+    2!.d2b.common.v2.ProviderCapabilityR\x0ccapabilities\x12/\n\x13provider_\
+    generation\x18\x02\x20\x01(\x04R\x12providerGeneration\x12+\n\x11descrip\
+    tor_digest\x18\x03\x20\x01(\x0cR\x10descriptorDigest\x122\n\x05error\x18\
+    \x04\x20\x01(\x0b2\x1c.d2b.common.v2.ErrorEnvelopeR\x05error\"]\n\rCance\
+    lRequest\x12-\n\x12session_generation\x18\x01\x20\x01(\x04R\x11sessionGe\
+    neration\x12\x1d\n\nrequest_id\x18\x02\x20\x01(\x0cR\trequestId\"H\n\x0e\
+    CancelResponse\x126\n\x07outcome\x18\x01\x20\x01(\x0e2\x1c.d2b.common.v2\
+    .CancelOutcomeR\x07outcome*\xe7\x02\n\x0cProviderType\x12\x1d\n\x19PROVI\
+    DER_TYPE_UNSPECIFIED\x10\0\x12\x19\n\x15PROVIDER_TYPE_RUNTIME\x10\x01\
+    \x12\x20\n\x1cPROVIDER_TYPE_INFRASTRUCTURE\x10\x02\x12\x1b\n\x17PROVIDER\
+    _TYPE_TRANSPORT\x10\x03\x12\x1b\n\x17PROVIDER_TYPE_SUBSTRATE\x10\x04\x12\
+    \x1c\n\x18PROVIDER_TYPE_CREDENTIAL\x10\x05\x12\x19\n\x15PROVIDER_TYPE_DI\
+    SPLAY\x10\x06\x12\x19\n\x15PROVIDER_TYPE_NETWORK\x10\x07\x12\x19\n\x15PR\
+    OVIDER_TYPE_STORAGE\x10\x08\x12\x18\n\x14PROVIDER_TYPE_DEVICE\x10\t\x12\
+    \x17\n\x13PROVIDER_TYPE_AUDIO\x10\n\x12\x1f\n\x1bPROVIDER_TYPE_OBSERVABI\
+    LITY\x10\x0b*\xa6\x01\n\nRetryClass\x12\x1b\n\x17RETRY_CLASS_UNSPECIFIED\
+    \x10\0\x12\x15\n\x11RETRY_CLASS_NEVER\x10\x01\x12\x1e\n\x1aRETRY_CLASS_S\
+    AME_OPERATION\x10\x02\x12!\n\x1dRETRY_CLASS_AFTER_OBSERVATION\x10\x03\
+    \x12!\n\x1dRETRY_CLASS_AFTER_INTERACTION\x10\x04*\xc0\x01\n\x07Outcome\
+    \x12\x17\n\x13OUTCOME_UNSPECIFIED\x10\0\x12\x14\n\x10OUTCOME_ACCEPTED\
+    \x10\x01\x12\x15\n\x11OUTCOME_SUCCEEDED\x10\x02\x12\x1a\n\x16OUTCOME_NOT\
+    _APPLICABLE\x10\x03\x12\x12\n\x0eOUTCOME_DENIED\x10\x04\x12\x15\n\x11OUT\
+    COME_CANCELLED\x10\x05\x12\x14\n\x10OUTCOME_DEGRADED\x10\x06\x12\x12\n\
+    \x0eOUTCOME_FAILED\x10\x07*\xb5\x03\n\tErrorKind\x12\x1a\n\x16ERROR_KIND\
+    _UNSPECIFIED\x10\0\x12\x1e\n\x1aERROR_KIND_INVALID_REQUEST\x10\x01\x12\
+    \x1e\n\x1aERROR_KIND_UNAUTHENTICATED\x10\x02\x12\x1b\n\x17ERROR_KIND_UNA\
+    UTHORIZED\x10\x03\x12\x18\n\x14ERROR_KIND_NOT_FOUND\x10\x04\x12\x17\n\
+    \x13ERROR_KIND_CONFLICT\x10\x05\x12\x20\n\x1cERROR_KIND_CAPABILITY_DENIE\
+    D\x10\x06\x12\x20\n\x1cERROR_KIND_DEADLINE_EXCEEDED\x10\x07\x12\x18\n\
+    \x14ERROR_KIND_CANCELLED\x10\x08\x12\"\n\x1eERROR_KIND_GENERATION_MISMAT\
+    CH\x10\t\x12!\n\x1dERROR_KIND_RESOURCE_EXHAUSTED\x10\n\x12\x1a\n\x16ERRO\
+    R_KIND_UNAVAILABLE\x10\x0b\x12\"\n\x1eERROR_KIND_INVARIANT_VIOLATION\x10\
+    \x0c\x12\x17\n\x13ERROR_KIND_INTERNAL\x10\r*\xb9\x02\n\x0cDesiredState\
+    \x12\x1d\n\x19DESIRED_STATE_UNSPECIFIED\x10\0\x12\x19\n\x15DESIRED_STATE\
+    _PRESENT\x10\x01\x12\x18\n\x14DESIRED_STATE_ABSENT\x10\x02\x12\x19\n\x15\
+    DESIRED_STATE_RUNNING\x10\x03\x12\x19\n\x15DESIRED_STATE_STOPPED\x10\x04\
+    \x12\x19\n\x15DESIRED_STATE_ENABLED\x10\x05\x12\x1a\n\x16DESIRED_STATE_D\
+    ISABLED\x10\x06\x12\x16\n\x12DESIRED_STATE_OPEN\x10\x07\x12\x18\n\x14DES\
+    IRED_STATE_CLOSED\x10\x08\x12\x1a\n\x16DESIRED_STATE_ATTACHED\x10\t\x12\
+    \x1a\n\x16DESIRED_STATE_DETACHED\x10\n*\xae\x02\n\x10ObservationState\
+    \x12!\n\x1dOBSERVATION_STATE_UNSPECIFIED\x10\0\x12\x1c\n\x18OBSERVATION_\
+    STATE_ABSENT\x10\x01\x12\x1d\n\x19OBSERVATION_STATE_PENDING\x10\x02\x12\
+    \x1b\n\x17OBSERVATION_STATE_READY\x10\x03\x12\x1d\n\x19OBSERVATION_STATE\
+    _RUNNING\x10\x04\x12\x1d\n\x19OBSERVATION_STATE_STOPPED\x10\x05\x12\x1e\
+    \n\x1aOBSERVATION_STATE_DEGRADED\x10\x06\x12!\n\x1dOBSERVATION_STATE_UNA\
+    VAILABLE\x10\x07\x12\x1c\n\x18OBSERVATION_STATE_FAILED\x10\x08*\x8f\x13\
+    \n\x12ProviderCapability\x12#\n\x1fPROVIDER_CAPABILITY_UNSPECIFIED\x10\0\
+    \x12$\n\x20PROVIDER_CAPABILITY_RUNTIME_PLAN\x10\x01\x12&\n\"PROVIDER_CAP\
+    ABILITY_RUNTIME_ENSURE\x10\x02\x12%\n!PROVIDER_CAPABILITY_RUNTIME_START\
+    \x10\x03\x12$\n\x20PROVIDER_CAPABILITY_RUNTIME_STOP\x10\x04\x12'\n#PROVI\
+    DER_CAPABILITY_RUNTIME_EXECUTE\x10\x05\x12'\n#PROVIDER_CAPABILITY_RUNTIM\
+    E_INSPECT\x10\x06\x12%\n!PROVIDER_CAPABILITY_RUNTIME_ADOPT\x10\x07\x12'\
+    \n#PROVIDER_CAPABILITY_RUNTIME_DESTROY\x10\x08\x12+\n'PROVIDER_CAPABILIT\
+    Y_INFRASTRUCTURE_PLAN\x10\t\x12,\n(PROVIDER_CAPABILITY_INFRASTRUCTURE_AP\
+    PLY\x10\n\x126\n2PROVIDER_CAPABILITY_INFRASTRUCTURE_SET_POWER_STATE\x10\
+    \x0b\x12.\n*PROVIDER_CAPABILITY_INFRASTRUCTURE_INSPECT\x10\x0c\x12,\n(PR\
+    OVIDER_CAPABILITY_INFRASTRUCTURE_ADOPT\x10\r\x128\n4PROVIDER_CAPABILITY_\
+    INFRASTRUCTURE_BOOTSTRAP_BINDING\x10\x0e\x12.\n*PROVIDER_CAPABILITY_INFR\
+    ASTRUCTURE_DESTROY\x10\x0f\x12)\n%PROVIDER_CAPABILITY_TRANSPORT_CONNECT\
+    \x10\x10\x12(\n$PROVIDER_CAPABILITY_TRANSPORT_LISTEN\x10\x11\x12/\n+PROV\
+    IDER_CAPABILITY_TRANSPORT_ISSUE_BINDING\x10\x12\x120\n,PROVIDER_CAPABILI\
+    TY_TRANSPORT_REVOKE_BINDING\x10\x13\x12)\n%PROVIDER_CAPABILITY_TRANSPORT\
+    _INSPECT\x10\x14\x12'\n#PROVIDER_CAPABILITY_SUBSTRATE_CHECK\x10\x15\x122\
+    \n.PROVIDER_CAPABILITY_SUBSTRATE_PLAN_REMEDIATION\x10\x16\x12'\n#PROVIDE\
+    R_CAPABILITY_SUBSTRATE_APPLY\x10\x17\x12)\n%PROVIDER_CAPABILITY_CREDENTI\
+    AL_STATUS\x10\x18\x120\n,PROVIDER_CAPABILITY_CREDENTIAL_ACQUIRE_LEASE\
+    \x10\x19\x120\n,PROVIDER_CAPABILITY_CREDENTIAL_REFRESH_LEASE\x10\x1a\x12\
+    /\n+PROVIDER_CAPABILITY_CREDENTIAL_REVOKE_LEASE\x10\x1b\x12$\n\x20PROVID\
+    ER_CAPABILITY_DISPLAY_OPEN\x10\x1c\x12'\n#PROVIDER_CAPABILITY_DISPLAY_IN\
+    SPECT\x10\x1d\x12%\n!PROVIDER_CAPABILITY_DISPLAY_ADOPT\x10\x1e\x12%\n!PR\
+    OVIDER_CAPABILITY_DISPLAY_CLOSE\x10\x1f\x12$\n\x20PROVIDER_CAPABILITY_NE\
+    TWORK_PLAN\x10\x20\x12&\n\"PROVIDER_CAPABILITY_NETWORK_ENSURE\x10!\x12'\
+    \n#PROVIDER_CAPABILITY_NETWORK_INSPECT\x10\"\x12%\n!PROVIDER_CAPABILITY_\
+    NETWORK_ADOPT\x10#\x12'\n#PROVIDER_CAPABILITY_NETWORK_RELEASE\x10$\x12$\
+    \n\x20PROVIDER_CAPABILITY_STORAGE_PLAN\x10%\x12&\n\"PROVIDER_CAPABILITY_\
+    STORAGE_ENSURE\x10&\x12'\n#PROVIDER_CAPABILITY_STORAGE_INSPECT\x10'\x12%\
+    \n!PROVIDER_CAPABILITY_STORAGE_ADOPT\x10(\x12(\n$PROVIDER_CAPABILITY_STO\
+    RAGE_SNAPSHOT\x10)\x12'\n#PROVIDER_CAPABILITY_STORAGE_DESTROY\x10*\x12*\
+    \n&PROVIDER_CAPABILITY_DEVICE_PLAN_ATTACH\x10+\x12%\n!PROVIDER_CAPABILIT\
+    Y_DEVICE_ATTACH\x10,\x12&\n\"PROVIDER_CAPABILITY_DEVICE_INSPECT\x10-\x12\
+    $\n\x20PROVIDER_CAPABILITY_DEVICE_ADOPT\x10.\x12%\n!PROVIDER_CAPABILITY_\
+    DEVICE_DETACH\x10/\x12\"\n\x1ePROVIDER_CAPABILITY_AUDIO_OPEN\x100\x12'\n\
+    #PROVIDER_CAPABILITY_AUDIO_SET_STATE\x101\x12%\n!PROVIDER_CAPABILITY_AUD\
+    IO_INSPECT\x102\x12#\n\x1fPROVIDER_CAPABILITY_AUDIO_ADOPT\x103\x12#\n\
+    \x1fPROVIDER_CAPABILITY_AUDIO_CLOSE\x104\x12,\n(PROVIDER_CAPABILITY_OBSE\
+    RVABILITY_STATUS\x105\x12+\n'PROVIDER_CAPABILITY_OBSERVABILITY_QUERY\x10\
+    6\x12/\n+PROVIDER_CAPABILITY_OBSERVABILITY_SUBSCRIBE\x107\x12,\n(PROVIDE\
+    R_CAPABILITY_OBSERVABILITY_EXPORT\x108*\xf9\x01\n\rCancelOutcome\x12\x1e\
+    \n\x1aCANCEL_OUTCOME_UNSPECIFIED\x10\0\x12,\n(CANCEL_OUTCOME_CANCELLED_B\
+    EFORE_DISPATCH\x10\x01\x12)\n%CANCEL_OUTCOME_CANCELLATION_SIGNALLED\x10\
+    \x02\x12#\n\x1fCANCEL_OUTCOME_ALREADY_TERMINAL\x10\x03\x12\"\n\x1eCANCEL\
+    _OUTCOME_UNKNOWN_REQUEST\x10\x04\x12&\n\"CANCEL_OUTCOME_GENERATION_MISMA\
+    TCH\x10\x05b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

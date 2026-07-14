@@ -2,11 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use d2b_contracts::v2_provider::ProviderMethod;
 use d2b_contracts::v2_services::{
     SERVICE_INVENTORY, SERVICE_PACKAGES, ServiceContractError, ServiceInventoryDocument,
-    StrictWireMessage, common, decode_strict, encode_strict, service_inventory_document,
+    StrictWireMessage, common, decode_strict, encode_strict, provider_method_for_capability,
+    service_inventory_document,
 };
-use protobuf::MessageField;
+use protobuf::{Enum, MessageField};
 
 const TTRPC_SOURCES: &[(&str, &str, &str)] = &[
     (
@@ -320,11 +322,118 @@ fn strict_wire_rejects_unknown_over_limit_and_missing_idempotency() {
         attachments.validate_wire(true),
         Err(ServiceContractError::DuplicateAttachment)
     );
+    attachments.attachment_indexes = vec![u32::from(
+        d2b_contracts::v2_component_session::MAX_REQUEST_ATTACHMENTS,
+    )];
+    assert_eq!(
+        attachments.validate_wire(true),
+        Err(ServiceContractError::BoundExceeded)
+    );
 
     let oversized = vec![0_u8; d2b_contracts::v2_services::MAX_PROTOBUF_MESSAGE_BYTES + 1];
     assert_eq!(
         decode_strict::<common::ServiceRequest>(&oversized, true),
         Err(ServiceContractError::MessageTooLarge)
+    );
+}
+
+#[test]
+fn identity_scope_is_unambiguous() {
+    let mut request = valid_request();
+    let scope = request.scope.as_mut().unwrap();
+    scope.workload_id = "baaaaaaaaaaaaaaaaaaq".to_owned();
+    scope.provider_id = "caaaaaaaaaaaaaaaaaaq".to_owned();
+    assert_eq!(
+        request.validate_wire(true),
+        Err(ServiceContractError::InvalidIdentity)
+    );
+
+    let scope = request.scope.as_mut().unwrap();
+    scope.provider_id.clear();
+    scope.role_id = "daaaaaaaaaaaaaaaaaaq".to_owned();
+    request.validate_wire(true).unwrap();
+
+    request.scope.as_mut().unwrap().provider_id = "caaaaaaaaaaaaaaaaaaq".to_owned();
+    assert_eq!(
+        request.validate_wire(true),
+        Err(ServiceContractError::InvalidIdentity)
+    );
+}
+
+fn valid_error() -> common::ErrorEnvelope {
+    let mut error = common::ErrorEnvelope::new();
+    error.kind = common::ErrorKind::ERROR_KIND_INTERNAL.into();
+    error.retry = common::RetryClass::RETRY_CLASS_NEVER.into();
+    error.correlation_id = "correlation-1".to_owned();
+    error
+}
+
+#[test]
+fn responses_bind_attachments_streams_and_error_outcomes() {
+    let mut response = common::ServiceResponse::new();
+    response.outcome = common::Outcome::OUTCOME_SUCCEEDED.into();
+    response.stream_id = "stream-1".to_owned();
+    response.attachment_indexes = vec![0, 1];
+    response.validate_wire(false).unwrap();
+
+    response.attachment_indexes = vec![1, 1];
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::DuplicateAttachment)
+    );
+    response.attachment_indexes = vec![0];
+    response.error = MessageField::some(valid_error());
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    response.outcome = common::Outcome::OUTCOME_FAILED.into();
+    response.validate_wire(false).unwrap();
+    response.error = MessageField::none();
+    assert_eq!(
+        response.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
+    );
+
+    let mut provider = common::ProviderResponse::new();
+    provider.outcome = common::Outcome::OUTCOME_SUCCEEDED.into();
+    provider.operation_id = "operation-1".to_owned();
+    provider.stream_id = "stream-1".to_owned();
+    provider.attachment_indexes = vec![0];
+    provider.validate_wire(false).unwrap();
+    provider.stream_id = "x".repeat(65);
+    assert_eq!(
+        provider.validate_wire(false),
+        Err(ServiceContractError::BoundExceeded)
+    );
+}
+
+#[test]
+fn wire_provider_capabilities_are_bijective_with_provider_methods() {
+    let wire = &common::ProviderCapability::VALUES[1..];
+    assert_eq!(wire.len(), ProviderMethod::ALL.len());
+    let mapped = wire
+        .iter()
+        .copied()
+        .map(provider_method_for_capability)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(mapped, ProviderMethod::ALL);
+
+    let mut response = common::CapabilityResponse::new();
+    response.capabilities = wire.iter().copied().map(Into::into).collect();
+    response.provider_generation = 1;
+    response.descriptor_digest = vec![0x44; 32];
+    response.validate_wire(false).unwrap();
+
+    let mut failed = common::CapabilityResponse::new();
+    failed.error = MessageField::some(valid_error());
+    failed.validate_wire(false).unwrap();
+    failed.provider_generation = 1;
+    assert_eq!(
+        failed.validate_wire(false),
+        Err(ServiceContractError::InconsistentResponse)
     );
 }
 
