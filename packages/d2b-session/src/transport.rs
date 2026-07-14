@@ -3,6 +3,8 @@ use std::{error::Error, fmt};
 use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{Locality, TransportClass};
 
+use crate::OwnedAttachment;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportDescriptor {
     pub class: TransportClass,
@@ -13,19 +15,31 @@ pub struct TransportDescriptor {
 
 pub struct TransportPacket {
     bytes: Vec<u8>,
+    attachments: Vec<OwnedAttachment>,
 }
 
 impl TransportPacket {
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn with_attachments(bytes: Vec<u8>, attachments: Vec<OwnedAttachment>) -> Self {
+        Self { bytes, attachments }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
+    pub fn attachments(&self) -> &[OwnedAttachment] {
+        &self.attachments
+    }
+
+    pub fn into_parts(self) -> (Vec<u8>, Vec<OwnedAttachment>) {
+        (self.bytes, self.attachments)
     }
 }
 
@@ -35,6 +49,7 @@ impl fmt::Debug for TransportPacket {
             .debug_struct("TransportPacket")
             .field("bytes", &"<redacted>")
             .field("len", &self.bytes.len())
+            .field("attachments", &self.attachments.len())
             .finish()
     }
 }

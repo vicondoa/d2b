@@ -5,9 +5,11 @@
 
 #![forbid(unsafe_code)]
 
+mod attachment;
 mod bootstrap;
 mod cancellation;
 mod deadline;
+mod engine;
 mod error;
 mod fragmentation;
 mod handshake;
@@ -21,6 +23,7 @@ mod transport;
 pub use bootstrap::{AdmittedBootstrapPsk, BootstrapAdmission, BootstrapPsk, Secret32};
 pub use cancellation::{Cancellation, RequestRegistry};
 pub use deadline::DeadlineBudget;
+pub use engine::{ComponentSessionDriver, SessionEngine, SessionEvent};
 pub use error::{Result, SessionError};
 pub use fragmentation::{Fragment, Fragmenter, Reassembler};
 pub use handshake::{
@@ -34,4 +37,5 @@ pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 
+pub use attachment::{AttachmentPayload, OwnedAttachment};
 pub use d2b_contracts::v2_component_session as contract;

@@ -1,29 +1,35 @@
 use std::{
+    any::Any,
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use d2b_contracts::v2_component_session::{
-    AttachmentPolicy, BootstrapPskBinding, CancelRequest, CancelResult, ChannelId, CloseReason,
-    EndpointPolicy, EndpointPurpose, EndpointRole, HandshakeOffer, IdentityEvidenceRequirement,
-    LimitProfile, Locality, MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels,
-    MetricReason, MetricResult, NoiseProfile, OperationId, ProviderTypeLabel, PurposeClass,
-    RecordKind, Remediation, RequestEnvelope, RequestId, ServicePackage, SessionErrorCode,
-    TransportBinding, TransportClass,
+    AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
+    AttachmentPolicy, AttachmentPurpose, BootstrapPskBinding, BoundedVec, CancelAck, CancelRequest,
+    CancelResult, ChannelId, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole,
+    HandshakeOffer, IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality,
+    MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason, MetricResult,
+    NoiseProfile, OperationId, ProviderTypeLabel, PurposeClass, RecordKind, Remediation,
+    RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
 };
 use d2b_session::{
-    BootstrapAdmission, BootstrapPsk, DeadlineBudget, FairScheduler, Fragmenter,
+    AttachmentPayload, BootstrapAdmission, BootstrapPsk, DeadlineBudget, FairScheduler, Fragmenter,
     HandshakeCredentials, HandshakeRole, KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux,
-    NoiseHandshake, OutboundFrame, OwnedTransport, QueueClass, Reassembler, RecordProtector,
-    Secret32, SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportDescriptor,
-    TransportError, TransportPacket, negotiate_offer,
+    NoiseHandshake, OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler,
+    RecordProtector, Secret32, SessionEngine, SessionEvent, SessionLifecycle, StreamEvent,
+    StreamId, StreamPhase, TransportDescriptor, TransportError, TransportPacket, negotiate_offer,
 };
 use snow::{
     params::DHChoice,
     resolvers::{CryptoResolver, DefaultResolver},
 };
+use tokio::sync::mpsc;
 
 fn offer(profile: NoiseProfile) -> HandshakeOffer {
     let (purpose, class, transport, locality, evidence, initiator, responder, service) =
@@ -713,4 +719,363 @@ fn metrics_accept_only_closed_low_cardinality_labels() {
         1,
     );
     assert_eq!(sink.0.lock().unwrap().len(), 1);
+}
+
+struct FakeTransport {
+    sender: mpsc::Sender<TransportPacket>,
+    receiver: mpsc::Receiver<TransportPacket>,
+    corrupt_attachment: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl OwnedTransport for FakeTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        TransportDescriptor {
+            class: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: true,
+        }
+    }
+
+    async fn receive(
+        &mut self,
+        protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
+        let (mut bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() && self.corrupt_attachment.swap(false, Ordering::AcqRel) {
+            let last = bytes.last_mut().ok_or(TransportError::Truncated)?;
+            *last ^= 1;
+        }
+        self.sender
+            .send(TransportPacket::with_attachments(bytes, attachments))
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> std::result::Result<(), TransportError> {
+        self.closed.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+struct FakeHandles {
+    corrupt_a: Arc<AtomicBool>,
+    closed_a: Arc<AtomicBool>,
+    closed_b: Arc<AtomicBool>,
+}
+
+fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
+    let (a_to_b_tx, a_to_b_rx) = mpsc::channel(128);
+    let (b_to_a_tx, b_to_a_rx) = mpsc::channel(128);
+    let corrupt_a = Arc::new(AtomicBool::new(false));
+    let closed_a = Arc::new(AtomicBool::new(false));
+    let closed_b = Arc::new(AtomicBool::new(false));
+    (
+        FakeTransport {
+            sender: a_to_b_tx,
+            receiver: b_to_a_rx,
+            corrupt_attachment: Arc::clone(&corrupt_a),
+            closed: Arc::clone(&closed_a),
+        },
+        FakeTransport {
+            sender: b_to_a_tx,
+            receiver: a_to_b_rx,
+            corrupt_attachment: Arc::new(AtomicBool::new(false)),
+            closed: Arc::clone(&closed_b),
+        },
+        FakeHandles {
+            corrupt_a,
+            closed_a,
+            closed_b,
+        },
+    )
+}
+
+async fn engine_pair() -> (
+    SessionEngine<FakeTransport>,
+    SessionEngine<FakeTransport>,
+    FakeHandles,
+) {
+    let (initiator_transport, responder_transport, handles) = fake_transport_pair();
+    let session_offer = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    let initiator_policy = policy(&session_offer);
+    let responder_policy = policy(&session_offer);
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            initiator_policy,
+            HandshakeCredentials::Nn,
+            now
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            responder_policy,
+            HandshakeCredentials::Nn,
+            now
+        )
+    );
+    (initiator.unwrap(), responder.unwrap(), handles)
+}
+
+async fn receive_ttrpc(engine: &mut SessionEngine<FakeTransport>) -> Vec<u8> {
+    loop {
+        match engine.receive().await.unwrap() {
+            SessionEvent::Ttrpc(bytes) => return bytes,
+            SessionEvent::ControlProcessed => {}
+            event => panic!("unexpected event {event:?}"),
+        }
+    }
+}
+
+struct CountingAttachment(Arc<AtomicUsize>);
+
+impl AttachmentPayload for CountingAttachment {
+    fn close(self: Box<Self>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn engine_attachment(counter: Arc<AtomicUsize>) -> OwnedAttachment {
+    OwnedAttachment::new(
+        AttachmentDescriptor {
+            index: 0,
+            kind: AttachmentKind::FileDescriptor,
+            object_type: KernelObjectType::Pidfd,
+            access: AttachmentAccess::ReadOnly,
+            purpose: AttachmentPurpose::ProcessIdentity,
+            service: ServicePackage::BrokerV2,
+            method_id: 7,
+            request_id: RequestId::new(vec![0x71; 16]).unwrap(),
+            operation_id: Some(OperationId::new(vec![0x72; 16]).unwrap()),
+            packet_sequence: 0,
+            reconnect_generation: 1,
+            duplicate_object_allowed: false,
+            cloexec_required: true,
+            credit_classes: BoundedVec::new(vec![
+                AttachmentCreditClass::Packet,
+                AttachmentCreditClass::Request,
+                AttachmentCreditClass::Operation,
+                AttachmentCreditClass::Session,
+                AttachmentCreditClass::Process,
+                AttachmentCreditClass::Host,
+            ])
+            .unwrap(),
+        },
+        Box::new(CountingAttachment(counter)),
+    )
+}
+
+#[tokio::test]
+async fn engine_drives_fragmented_ttrpc_and_request_cancellation() {
+    let (mut initiator, mut responder, _) = engine_pair().await;
+    let request_id = RequestId::new(vec![0x61; 16]).unwrap();
+    let payload = vec![0x5a; 200_000];
+    let cancelled = initiator
+        .call(request_id.clone(), payload.clone())
+        .await
+        .unwrap();
+    assert_eq!(receive_ttrpc(&mut responder).await, payload);
+
+    let inbound = responder.register_inbound_call(request_id.clone()).unwrap();
+    initiator.cancel_call(&request_id).await.unwrap();
+    let event = responder.receive().await.unwrap();
+    assert!(matches!(
+        event,
+        SessionEvent::CancelRequest(CancelAck {
+            result: CancelResult::CancelledBeforeDispatch,
+            ..
+        })
+    ));
+    assert!(inbound.is_cancelled());
+    assert!(matches!(
+        initiator.receive().await.unwrap(),
+        SessionEvent::CancelAck(CancelAck {
+            result: CancelResult::CancelledBeforeDispatch,
+            ..
+        })
+    ));
+    assert!(cancelled.is_cancelled());
+}
+
+#[tokio::test]
+async fn engine_enforces_named_stream_backpressure_and_credit() {
+    let (mut initiator, mut responder, _) = engine_pair().await;
+    let stream = StreamId::new(0x100).unwrap();
+    initiator.open_named_stream(stream, 4, 4).unwrap();
+    responder.open_named_stream(stream, 4, 4).unwrap();
+    initiator
+        .send_named_stream(stream, b"data".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(
+        initiator
+            .send_named_stream(stream, b"x".to_vec())
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::QueueBackpressure
+    );
+    match responder.receive().await.unwrap() {
+        SessionEvent::NamedStream(StreamEvent::Data { bytes, .. }) => {
+            assert_eq!(bytes, b"data")
+        }
+        event => panic!("unexpected event {event:?}"),
+    }
+    responder
+        .grant_named_stream_credit(stream, 4)
+        .await
+        .unwrap();
+    assert!(matches!(
+        initiator.receive().await.unwrap(),
+        SessionEvent::ControlProcessed
+    ));
+    initiator
+        .send_named_stream(stream, b"more".to_vec())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn engine_binds_acknowledges_and_releases_owned_attachments() {
+    let (mut initiator, mut responder, _) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    initiator
+        .send_attachments(vec![engine_attachment(Arc::clone(&closes))])
+        .await
+        .unwrap();
+    assert_eq!(initiator.outstanding_attachment_credits(), 1);
+    let attachments = match responder.receive().await.unwrap() {
+        SessionEvent::Attachments(attachments) => attachments,
+        event => panic!("unexpected event {event:?}"),
+    };
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(closes.load(Ordering::Acquire), 0);
+    drop(attachments);
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert!(matches!(
+        initiator.receive().await.unwrap(),
+        SessionEvent::AttachmentAcknowledged { count: 1 }
+    ));
+    assert_eq!(initiator.outstanding_attachment_credits(), 0);
+}
+
+#[tokio::test]
+async fn invalid_protected_attachment_drops_payload_once_and_closes_session() {
+    let (mut initiator, mut responder, handles) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    handles.corrupt_a.store(true, Ordering::Release);
+    initiator
+        .send_attachments(vec![engine_attachment(Arc::clone(&closes))])
+        .await
+        .unwrap();
+    assert_eq!(
+        responder.receive().await.unwrap_err().code(),
+        SessionErrorCode::AuthenticationFailed
+    );
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+    assert!(handles.closed_b.load(Ordering::Acquire));
+    assert!(!handles.closed_a.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn attachment_local_validation_and_explicit_close_are_exactly_once() {
+    let (mut initiator, _, _) = engine_pair().await;
+    let closes = Arc::new(AtomicUsize::new(0));
+    let descriptor = engine_attachment(Arc::clone(&closes));
+    descriptor.close();
+    assert_eq!(closes.load(Ordering::Acquire), 1);
+
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let attachment = OwnedAttachment::new(
+        AttachmentDescriptor {
+            index: 0,
+            kind: AttachmentKind::FileDescriptor,
+            object_type: KernelObjectType::Pidfd,
+            access: AttachmentAccess::ReadOnly,
+            purpose: AttachmentPurpose::ProcessIdentity,
+            service: ServicePackage::DaemonV2,
+            method_id: 7,
+            request_id: RequestId::new(vec![0x73; 16]).unwrap(),
+            operation_id: None,
+            packet_sequence: 0,
+            reconnect_generation: 1,
+            duplicate_object_allowed: false,
+            cloexec_required: true,
+            credit_classes: BoundedVec::new(vec![
+                AttachmentCreditClass::Packet,
+                AttachmentCreditClass::Request,
+                AttachmentCreditClass::Operation,
+                AttachmentCreditClass::Session,
+                AttachmentCreditClass::Process,
+                AttachmentCreditClass::Host,
+            ])
+            .unwrap(),
+        },
+        Box::new(CountingAttachment(Arc::clone(&rejected))),
+    );
+    assert_eq!(
+        initiator
+            .send_attachments(vec![attachment])
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::AttachmentDescriptorMismatch
+    );
+    assert_eq!(rejected.load(Ordering::Acquire), 1);
+    assert_eq!(initiator.outstanding_attachment_credits(), 0);
+}
+
+#[tokio::test]
+async fn engine_reconnect_rehandshakes_with_the_next_generation() {
+    let (initiator, responder, old_handles) = engine_pair().await;
+    let (new_initiator_transport, new_responder_transport, _) = fake_transport_pair();
+    let mut reconnect_offer = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    reconnect_offer.reconnect_generation = 8;
+    let initiator_policy = policy(&reconnect_offer);
+    let responder_policy = policy(&reconnect_offer);
+    let now = Instant::now();
+    let (initiator, mut responder) = tokio::join!(
+        initiator.reconnect_initiator(
+            new_initiator_transport,
+            initiator_policy,
+            HandshakeCredentials::Nn,
+            now
+        ),
+        responder.reconnect_responder(
+            new_responder_transport,
+            responder_policy,
+            HandshakeCredentials::Nn,
+            now
+        )
+    );
+    let mut initiator = initiator.unwrap();
+    let responder = responder.as_mut().unwrap();
+    assert_eq!(initiator.generation(), 8);
+    assert_eq!(responder.generation(), 8);
+    assert!(old_handles.closed_a.load(Ordering::Acquire));
+    assert!(old_handles.closed_b.load(Ordering::Acquire));
+    initiator
+        .send_ttrpc(b"after-reconnect".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(receive_ttrpc(responder).await, b"after-reconnect");
 }

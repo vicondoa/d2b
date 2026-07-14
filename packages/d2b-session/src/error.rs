@@ -5,6 +5,8 @@ use d2b_contracts::v2_component_session::{
     SessionErrorCode,
 };
 
+use crate::TransportError;
+
 pub type Result<T> = std::result::Result<T, SessionError>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,6 +124,20 @@ impl From<HandshakeRejectReason> for SessionError {
             H::BootstrapExpired => S::BootstrapExpired,
             H::BootstrapReplayed => S::BootstrapReplayed,
             H::BootstrapOperationMismatch => S::BootstrapOperationMismatch,
+        })
+    }
+}
+
+impl From<TransportError> for SessionError {
+    fn from(error: TransportError) -> Self {
+        use SessionErrorCode as S;
+        use TransportError as T;
+        Self::new(match error {
+            T::Disconnected | T::WouldBlock => S::SessionDisconnected,
+            T::Truncated => S::RecordTruncated,
+            T::LimitExceeded => S::ReassemblyLimitExceeded,
+            T::InvalidAttachment => S::AttachmentDescriptorMismatch,
+            T::Other => S::InternalInvariant,
         })
     }
 }
