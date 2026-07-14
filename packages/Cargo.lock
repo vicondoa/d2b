@@ -983,6 +983,13 @@ dependencies = [
 [[package]]
 name = "d2b-client"
 version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "protobuf",
+ "tokio",
+ "ttrpc",
+]
 
 [[package]]
 name = "d2b-clipd"
@@ -1226,6 +1233,11 @@ dependencies = [
 [[package]]
 name = "d2b-provider"
 version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-provider-aca"
@@ -1270,6 +1282,12 @@ dependencies = [
 [[package]]
 name = "d2b-provider-toolkit"
 version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-provider",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-realm-codec-protobuf"
@@ -1335,6 +1353,16 @@ dependencies = [
 [[package]]
 name = "d2b-session"
 version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "protobuf",
+ "serde_json",
+ "sha2",
+ "snow",
+ "tokio",
+ "ttrpc",
+]
 
 [[package]]
 name = "d2b-sk-frontend"
@@ -1348,6 +1376,14 @@ dependencies = [
 [[package]]
 name = "d2b-state"
 version = "2.0.0"
+dependencies = [
+ "d2b-contracts",
+ "nix 0.29.0",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-ttrpc-api-fit-spike"
@@ -1362,6 +1398,11 @@ dependencies = [
 [[package]]
 name = "d2b-unix-session"
 version = "2.0.0"
+dependencies = [
+ "d2b-contracts",
+ "rustix 0.38.44",
+ "tokio",
+]
 
 [[package]]
 name = "d2b-unsafe-local-helper"
