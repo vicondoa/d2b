@@ -14,6 +14,9 @@ deprecations ship one minor release before removal.
 
 - Added canonical d2b 2.0 implementations for Unix sessions, authenticated
   sessions, providers, provider tooling, state persistence, and clients.
+- Added Tokio-async client/session/provider APIs and explicit `spawn_blocking`
+  state adapters so synchronous filesystem and lock calls do not block runtime
+  workers.
 - Added independent Rust and pure-Nix canonical v2 identity derivation with
   shared vectors, plus generated schemas and references for identity,
   ComponentSession, providers, services, and state/storage/sync/audit.

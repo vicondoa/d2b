@@ -203,3 +203,52 @@ fn v2_foundation_delivery_fingerprints_cover_every_tracked_file() {
 
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn v2_foundation_io_surfaces_are_async_first() {
+    let client = read_repo_file("packages/d2b-client/src/client.rs");
+    let connector = read_repo_file("packages/d2b-client/src/session.rs");
+    let session_driver = read_repo_file("packages/d2b-session/src/driver.rs");
+    let provider_rpc = read_repo_file("packages/d2b-provider/src/rpc.rs");
+    for required in [
+        "pub async fn connect",
+        "pub async fn invoke",
+        "pub async fn invoke_with_attachments",
+        "pub async fn named_stream",
+    ] {
+        assert!(client.contains(required), "client is missing {required}");
+    }
+    assert!(
+        connector.contains("#[async_trait]")
+            && connector.contains("pub trait ComponentSessionConnector")
+            && connector.contains("async fn connect"),
+        "client connector must be async"
+    );
+    assert!(
+        session_driver.contains("#[async_trait]")
+            && session_driver.contains("pub trait ComponentSessionDriver")
+            && session_driver.contains("async fn invoke"),
+        "canonical session driver must be async"
+    );
+    assert!(
+        provider_rpc.contains("#[async_trait]")
+            && provider_rpc.contains("pub trait AuthenticatedProviderRpc")
+            && provider_rpc.contains("async fn invoke"),
+        "provider RPC must be async"
+    );
+
+    let state_manifest = read_repo_file("packages/d2b-state/Cargo.toml");
+    let state_async = read_repo_file("packages/d2b-state/src/tokio_api.rs");
+    assert!(
+        state_manifest.contains("tokio = [\"host-fs\", \"dep:tokio\"]")
+            && state_manifest
+                .contains("tokio = { workspace = true, features = [\"rt\"], optional = true }"),
+        "state Tokio adapters must remain explicit and optional"
+    );
+    assert!(
+        state_async.contains("tokio::task::spawn_blocking")
+            && !state_async.contains("std::fs::")
+            && !state_async.contains("thread::sleep"),
+        "sync kernel state APIs must be isolated behind spawn_blocking"
+    );
+}

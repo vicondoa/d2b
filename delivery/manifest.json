@@ -879,6 +879,16 @@
       "path": "packages/d2b-session/tests/noise_vectors.rs"
     },
     {
+      "name": "w3-state-async-api",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/src/tokio_api.rs"
+    },
+    {
+      "name": "w3-state-async-tests",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/d2b-state/tests/async_state.rs"
+    },
+    {
       "name": "w3-state-atomic",
       "repository": "github.com/vicondoa/d2b",
       "path": "packages/d2b-state/src/atomic.rs"

@@ -10,7 +10,7 @@ six are versioned with the workspace, use the workspace lockfile, set
 | `d2b-session` | Portable authenticated ComponentSession handshake, record, lifecycle, cancellation, and named-stream runtime | none |
 | `d2b-provider` | Provider traits, registry generations, operation admission, lifecycle, and authenticated RPC proxy | none |
 | `d2b-provider-toolkit` | Provider-agent adapter, exact registration, fixtures, redaction, and shared conformance | none |
-| `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs` |
+| `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs`, `tokio` |
 | `d2b-client` | Typed target resolution, session connection, generated service clients, retries, cancellation, attachments, and named streams | none |
 
 ## Dependency and authority boundaries
@@ -83,14 +83,22 @@ only validated relative components. OFD locks are ordered, deadline-bound, and
 `CLOEXEC`; leases and audit segments retain the exact typed identity and
 generation bindings from `d2b-contracts`.
 
+The `tokio` feature adds async atomic-state, lock, and audit adapters. Blocking
+filesystem and kernel lock operations run only through
+`tokio::task::spawn_blocking`; they are never executed directly on a Tokio
+worker. The `host-fs` feature remains usable without Tokio for synchronous
+broker-side composition.
+
 ## Client invariants
 
-The client resolves a typed target through an explicit route table, selects one
-declared transport, and never retries through another transport. Mutating
-retries reuse one bounded idempotency identity. Response outcomes, remote
-errors, attachment indexes, cancellation, and named-stream transitions are
-validated before being exposed to a caller. Debug and error output omits target
-values, endpoints, payloads, credentials, and attachment contents.
+The client exposes async Tokio-compatible connect, invoke, cancellation,
+attachment, and named-stream APIs. It resolves a typed target through an
+explicit route table, selects one declared transport, and never retries through
+another transport. Mutating retries reuse one bounded idempotency identity.
+Response outcomes, remote errors, attachment indexes, cancellation, and
+named-stream transitions are validated before being exposed to a caller. Debug
+and error output omits target values, endpoints, payloads, credentials, and
+attachment contents.
 
 These crates provide foundations, not compatibility adapters. Concrete
 first-party providers and control-plane service migration are separate runtime
