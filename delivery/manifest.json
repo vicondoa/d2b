@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "program": "adr0045",
+  "wave": "w1",
+  "authority_repository": "github.com/vicondoa/d2b",
+  "panel_trust_root_sha256": "ce93b41c335753cbc98033b5011955967795cd1df90c903d30b8ac0be1f351d3",
+  "repositories": [
+    {
+      "id": "github.com/vicondoa/d2b",
+      "object_format": "sha1",
+      "trunk_ref": "main",
+      "integration_ref": "adr0045-w1-integrated"
+    }
+  ],
+  "stack_nodes": [
+    {
+      "id": "d2b-w1",
+      "repository": "github.com/vicondoa/d2b",
+      "branch": "adr0045-w1-integrated",
+      "pr_number": 307,
+      "external_dependencies": []
+    }
+  ],
+  "required_validations": [
+    {
+      "id": "make-check",
+      "argv": [
+        "make",
+        "check"
+      ],
+      "cwd": {
+        "repository": "github.com/vicondoa/d2b",
+        "path": "."
+      },
+      "authority": "local_runner",
+      "ci_publisher": null,
+      "ci_signer_workflow": null,
+      "timeout_seconds": 7200
+    }
+  ],
+  "required_checks": [
+    {
+      "node": "d2b-w1",
+      "name": "check",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-l1-static-fast",
+        "workflow_id": 286033206
+      }
+    },
+    {
+      "node": "d2b-w1",
+      "name": "eval",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "eval-with-entra-id",
+        "workflow_id": 283041463
+      }
+    },
+    {
+      "node": "d2b-w1",
+      "name": "eval-shell-tests",
+      "publisher": {
+        "kind": "check_run",
+        "app_slug": "github-actions",
+        "app_id": 15368,
+        "workflow": "pr-eval-shell-tests",
+        "workflow_id": 289704928
+      }
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "name": "layer1-workflow",
+      "repository": "github.com/vicondoa/d2b",
+      "path": ".github/workflows/pr-l1-static-fast.yml"
+    }
+  ],
+  "dependency_fingerprints": [
+    {
+      "name": "cargo-lock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/Cargo.lock"
+    },
+    {
+      "name": "delivery-tools",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "pkgs/delivery-tools.nix"
+    },
+    {
+      "name": "flake-lock",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "flake.lock"
+    }
+  ],
+  "contract_fingerprints": [
+    {
+      "name": "delivery-authority",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "delivery/manifest.json"
+    },
+    {
+      "name": "delivery-command",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/command.rs"
+    },
+    {
+      "name": "delivery-eligibility",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/eligibility.rs"
+    },
+    {
+      "name": "delivery-evidence",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/evidence.rs"
+    },
+    {
+      "name": "delivery-model",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/model.rs"
+    },
+    {
+      "name": "delivery-module",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/mod.rs"
+    },
+    {
+      "name": "delivery-panel",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/panel.rs"
+    },
+    {
+      "name": "delivery-policy",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "AGENTS.md"
+    },
+    {
+      "name": "delivery-seal",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/seal.rs"
+    },
+    {
+      "name": "delivery-snapshot",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/snapshot.rs"
+    },
+    {
+      "name": "delivery-storage",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/delivery/storage.rs"
+    },
+    {
+      "name": "layer1-checks",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/checks.rs"
+    },
+    {
+      "name": "layer1-manifest",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "tests/layer1-jobs.json"
+    },
+    {
+      "name": "layer1-model",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/model.rs"
+    },
+    {
+      "name": "layer1-module",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/mod.rs"
+    },
+    {
+      "name": "layer1-runner",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/runner.rs"
+    },
+    {
+      "name": "layer1-workflow",
+      "repository": "github.com/vicondoa/d2b",
+      "path": "packages/xtask/src/layer1/workflow.rs"
+    }
+  ]
+}

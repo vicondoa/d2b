@@ -2049,8 +2049,11 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        // cwd-relative scratch (never /tmp); cleaned up at the end.
-        let dir = std::path::PathBuf::from(".").join(unique);
+        let base = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+            .map(std::path::PathBuf::from)
+            .map(|root| root.join("rust-test-scratch/d2b-guestd"))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dir = base.join(unique);
         std::fs::create_dir_all(&dir).unwrap();
         let data = dir.join("stdout");
         let side = dir.join("stdout.meta");

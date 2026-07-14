@@ -886,7 +886,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_daemon_only_end_state (AGENTS.md daemon-only end-state invariant: positive — '## Daemon-only end-state (P6 onward)' section + ADR 0015 cross-ref + d2bd / d2b-priv-broker.socket / SpawnRunner mentions; negative — per-line forbidden legacy-as-live scan exempting lines that carry an explicit historical/retired marker, forbidden_re + allowed_marker_re ported verbatim); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_realm_local_control_plane (AGENTS.md accepted ADR 0045 invariant: realm-local parent-spawned/pidfd-supervised controller and broker processes, concurrent validator/panel lanes, reviewer/validator separation, plus historical ADR 0015 no-bash/no-per-workload-unit invariants and the retired-surface scan); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1111,7 +1111,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_lints.rs (gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) — adr_0015_present_with_header_and_cross_references (ADR 0015 file/header/section invariants + AGENTS.md & docs/adr/README.md cross-refs)"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_lints.rs (gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh) — adr_0015_superseded_with_historical_invariants (ADR 0015 superseded header plus retained sections/cross-references) and adr_0045_accepted_with_realm_and_delivery_contracts (accepted ADR 0045 parent-spawned realm-process and concurrent-lane invariants)"]
 exercised_today = "yes"
 
 [[script]]

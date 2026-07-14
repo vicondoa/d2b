@@ -10,9 +10,43 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added the checked-in W1 delivery authority manifest so the wave is validated
+  and sealed by the same immutable workflow introduced for later waves.
+- Added Rust delivery tooling for validated stack graphs, immutable
+  candidate-addressed snapshots, authority-captured validation evidence,
+  exact-role panel attestations, non-circular wave seals, history-only reuse
+  proofs, and fail-closed merge eligibility.
+- Added reproducible delivery packages and a default development shell with
+  Git Town, GitHub CLI, pinned-nightly `cargo-udeps`, and
+  `cargo-semver-checks`; stacked-base PR workflows now emit tree-bound check
+  summaries.
+
 ### Changed
 
-- Expanded proposed ADR 0045 into the d2b 2.0 clean-break contract: destructive
+- Kept sccache enabled throughout generated CI and persisted its local cache
+  without exposing cache-service credentials to compiled code.
+- Replaced the unavailable GitHub stack preview dependency with locked Git
+  Town 23.0.1, ordinary GitHub PR authority, recursive parent-graph
+  verification, and a typed fail-closed capability check.
+- Bound delivery snapshots and seals to checked-in manifests, Git Town parent
+  graphs, exact GitHub PR/check publishers and OIDs, verified
+  validation and panel provenance, portable multi-repository content IDs,
+  private XDG state, history-only proofs, and fail-closed merge authority.
+- Hardened delivery sealing with real nested GitHub check-suite metadata,
+  retained offline CI attestation bundles, provider-rooted signed panel
+  receipts, fresh history CI run identities, base-relative diff bindings,
+  squash/rebase/merge stack progression, immutable validation checkouts, and
+  exact base-and-head merge compare-and-swap requirements.
+- Moved Layer-1 manifest validation, bounded local orchestration, flake-check
+  discovery, and generated workflow ownership from Python and Bash into Rust
+  `xtask`, and enabled the generated PR workflow for stacked non-main bases.
+- Replaced serial phase gating and the three-unit process assumption with
+  speculative Git Town PR stacks, exact-tree concurrent CI/validator/panel lanes,
+  external `xtask` evidence and seals, full ten-role end-of-wave review, and the
+  accepted local-root plus parent-spawned per-realm controller/broker model.
+- Expanded and accepted ADR 0045 as the d2b 2.0 clean-break contract: destructive
   no-backup reset, universal authenticated ComponentSession IPC, eleven typed
   provider authorities, literal per-realm controller/broker boundaries,
   short-ID state ownership, scoped secret/key lifecycles, one Cargo workspace,
@@ -20,6 +54,103 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Hardened final delivery authority with secret-free validation environments,
+  authenticated merged-prefix topology, tolerant external GraphQL decoding,
+  shared signal forwarding, and kernel-backed child-output polling.
+- Isolated Cargo state for validation commands and normalized newly created
+  private directories before restrictive umasks can prevent fd anchoring.
+- Preserved controlled HOME/XDG configuration only for trusted Git Town
+  authority probes after clearing ambient validation environments.
+- Made delivery state use true open-file-description locks and exact
+  post-creation private modes independent of the caller's umask.
+- Preserved Unix signal termination in Layer-1 results and required canonical,
+  duplicate-free fingerprint declarations.
+- Kept signal and umask regression coverage Rust-native so the no-shell AST gate
+  remains closed.
+- Routed Layer-1 logs and shell-test scratch state to the private validation
+  output root when the reviewed checkout is read-only.
+- Routed pinned Cargo gate targets and proof sockets through writable,
+  validation-owned paths while keeping Unix socket names short.
+- Kept tracked validation sources read-only while allowing only private,
+  ignored Cargo target directories to remain writable.
+- Added ShellCheck to the delivery environment and routed the remaining short
+  CLI socket fixture through the validation socket root.
+- Routed guestd credential, activation, guest-file, and output-ring fixtures
+  through validation-owned scratch when the checkout is read-only.
+- Made deliverable regression-gate discovery deterministic under `pipefail`
+  instead of relying on a SIGPIPE-prone `grep | head` pipeline.
+- Made local flake-shard discovery retain command failure, retry one transient
+  evaluator/daemon disconnect, and fail explicitly if discovery still fails.
+- Updated flake-matrix drift enforcement to require cache-preserving discovery
+  instead of the retired Rust wrapper-clearing command.
+- Routed unsafe-local runtime, readiness, and supervisor-socket fixtures through
+  the short validation socket root when the source checkout is read-only.
+- Hardened delivery evidence and summaries by reporting output truncation,
+  removing private job logs unless explicitly retained, preserving complete
+  Markdown detail blocks, rejecting extra panel JSON, and recovering from stale
+  immutable-write temporary names.
+- Corrected the panel attestation example to include its required receipt
+  locator.
+- Kept anchored snapshot state alive through eligibility and atomic merge,
+  closing a snapshot replacement race, and recognized fresh status contexts,
+  third-party check runs, and same-workflow GitHub reruns without weakening
+  timestamp or run-identity checks.
+- Made terminal signals operation-scoped so interrupts between supervised
+  subprocesses unwind normally and remove read-only validation checkouts.
+- Described panel model enforcement as a candidate-bound contract rather than
+  embedding a provider-specific review attribution in process prose.
+- Corrected the strict panel receipt example to use the implemented artifact
+  kind and provider identifiers.
+- Synchronized the independent documentation policy test with the 13-field
+  panel receipt contract.
+- Added pinned OpenSSL to the delivery app runtime so panel receipt signature
+  verification works outside the development shell.
+- Corrected the unsafe-local graphical readiness test to exercise its declared
+  runtime-directory socket instead of a checkout-relative shadow path.
+- Routed d2bd config, broker-dispatch, and security-key test fixtures through
+  validation-owned output and short socket roots.
+- Routed xtask signal-marker and dangling-symlink fixtures through validation
+  output and kept signal-test diagnostics independently bounded.
+- Routed broker media and guest-control signing tempdirs through validation
+  output instead of the read-only crate root.
+- Deferred package-local target-island removal to validation checkout cleanup
+  when the target's source parent is intentionally read-only.
+- Made schema reproducibility generate twice into validation-owned scratch
+  instead of rewriting committed schema paths.
+- Made broker nextest inventory use the committed lock fail-closed instead of
+  backing it up and restoring it through the source tree.
+- Made canonical drift generation run in a writable detached clone while
+  preserving the in-place developer path and sccache wrapper.
+- Installed pinned sccache in the non-generated Rust eval workflow and enforced
+  its cache environment in policy tests.
+- Quoted generated workflow display names, percent-encoded local flake URIs,
+  and made fresh-CI ordering robust to later updates of an older workflow run.
+- Made terminal-signal cleanup coverage use explicit same-group Rust children,
+  eliminating shell job-control races.
+- Pinned Git Town and GitHub CLI source builds and separated stacked-wave
+  procedures from the delivery contract reference.
+- Reconstructed merged stack prefixes from historical GitHub merge authority
+  and authoritative manifest order after Git Town removes merged lineage,
+  while requiring exact retargeted local lineage for every remaining active
+  branch.
+- Expanded W1 delivery fingerprints into explicit tracked source blobs so the
+  immutable snapshot covers the complete delivery and Layer-1 implementations.
+- Hardened delivery subprocess supervision against PID reuse, orphaned process
+  groups, descendant-held pipes, dangling symlinks, ambiguous Git remotes, and
+  lost bounded diagnostics.
+- Staged external attestations and panel receipts into private immutable state
+  before verification, retained bounded validation output, and made delivery
+  state access fd-relative with nonblocking OFD locks.
+- Made generated Layer-1 CI evaluate exact pull-request heads, redact workspace
+  paths from failure tails, and publish bounded failure summaries to GitHub.
+- Aligned delivery command documentation, Nix tool pinning, and the flake-check
+  matrix with the implemented fail-closed workflow.
+- Hardened Layer-1 scheduling and generated CI rollups against slot underfill,
+  skippable-only dependency coverage, invalid workflow job IDs, option-like Make
+  targets, and clean environments without `sccache`.
+- Aligned delivery documentation and fail-closed policy checks with the
+  hardened candidate/content identifiers, external panel attestations,
+  manifest-driven Layer-1 commands, and PR-before-final-gates order.
 - Delayed host-terminal first-client readiness until the terminal child remains
   alive through a bounded stabilization window, preventing desktop launchers
   from reporting success when WezTerm immediately rejects its configured
@@ -47,6 +178,10 @@ deprecations ship one minor release before removal.
   bootstrap.
 - Made broker audit tests reserve exclusive process-local scratch directories
   before opening their logs.
+- Hardened the delivery environment with native build tools and `sccache`,
+  built the delivery app with pinned Rust 1.94.1 on both supported systems,
+  kept delivery evidence outside Git metadata, and bound non-generated PR
+  workflow summaries to the exact checked-out candidate commit.
 
 ## [1.4.1] - 2026-07-12
 

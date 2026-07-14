@@ -104,7 +104,7 @@ D2b 2.0 has the following fixed decisions:
 11. All host and guest Rust crates use one Cargo workspace, one lockfile, and
     workspace version `2.0.0`. Canonical client and provider toolkit crates live
     in this repository.
-12. Delivery uses `gh-stack`, Rust `xtask`, immutable tree snapshots, concurrent
+12. Delivery uses Git Town ordinary PR stacks, Rust `xtask`, immutable tree snapshots, concurrent
     validation and panel lanes, and a tree-bound mechanical seal. W0 bootstraps
     equivalent evidence before `xtask` exists and requires one panel on the
     Proposed tree plus a second full panel on the Accepted/index candidate.
@@ -2585,7 +2585,7 @@ tree loses its prior seal.
 Implement Rust `xtask` commands for:
 
 - Layer-1 manifest validation, parallel local execution, and workflow rendering;
-- official `gh-stack` graph validation and integration;
+- Git Town parent-graph validation and ordinary GitHub PR integration;
 - immutable wave snapshots;
 - test evidence import and command/result hashing;
 - panel JSON validation;
@@ -2596,7 +2596,7 @@ Implement Rust `xtask` commands for:
 Retire replaced Python/Bash orchestration. Update AGENTS process rules, the old
 three-unit invariant, tests/AGENTS reviewer/validator rules, Make targets,
 Layer-1 manifests/workflows, stacked-PR base triggering, PR dependency/evidence
-fields without AI attribution, and Nix dev tooling for `gh-stack`, pinned
+fields without AI attribution, and Nix dev tooling for Git Town, pinned
 nightly `cargo-udeps`, and `cargo-semver-checks`.
 
 AGENTS must require the integrator to open or update the wave PR immediately
@@ -2859,7 +2859,8 @@ Before implementation PRs merge:
 ### Worktrees, stacks, and immutable evidence
 
 All implementation uses dedicated worktrees and private feature branches.
-Official `gh-stack` owns stack creation, restacking, and retargeting. Changes
+Git Town owns stack topology, proposing ordinary PRs, synchronization,
+restacking, and retargeting. Changes
 merge through GitHub only, root to leaf; no implementation branch pushes or
 merges directly to `main`.
 
@@ -2964,11 +2965,11 @@ observability
 kernel
 ```
 
-Every role uses Gemini 3.1 Pro and returns `signoff: true` with an empty
-recommendation list. `xtask wave seal` succeeds only with all required
-validation evidence plus 10/10 panel signoff bound to the same tree hash,
-heads, base, dependency graph, generated artifacts, dependency diff and
-contract fingerprints, and repository set.
+Every role uses the provider and model version bound by the candidate's panel
+request and returns `signoff: true` with an empty recommendation list. `xtask
+wave seal` succeeds only with all required validation evidence plus 10/10 panel
+signoff bound to the same tree hash, heads, base, dependency graph, generated
+artifacts, dependency diff and contract fingerprints, and repository set.
 
 Any content change, including source, documentation, generated output,
 dependency metadata, contract/index content, or repository-set membership,

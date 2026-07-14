@@ -86,6 +86,12 @@ d2b_cargo_config_path() {
 
 d2b_cargo_target_dir() {
   local scope="${1:-workspace}" config target_dir base
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    base="${CARGO_TARGET_DIR:-$D2B_VALIDATION_OUTPUT_DIR/cargo-target}/$scope"
+    mkdir -p "$base" || return 1
+    printf '%s\n' "$base"
+    return 0
+  fi
   config=$(d2b_cargo_config_path "$scope") || return 1
   if [ ! -f "$config" ]; then
     fail "missing cargo config: $config"
@@ -130,6 +136,10 @@ d2b_cargo_gate_target_dir() {
       return 1
       ;;
   esac
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    printf '%s\n' "$D2B_VALIDATION_OUTPUT_DIR/cargo-gate-targets/$toolchain/$scope"
+    return 0
+  fi
   printf '%s\n' "$(d2b_repo_root)/packages/.d2b-gate-targets/$toolchain/$scope"
 }
 
@@ -480,7 +490,12 @@ _d2b_cleanup_scratch() {
 
 d2b_mktemp() {
   local pattern="${1:?d2b_mktemp: missing pattern}" root scratch registry quoted_path
-  root=$(d2b_repo_root)
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    root="$D2B_VALIDATION_OUTPUT_DIR/test-scratch"
+    mkdir -p "$root" || return 1
+  else
+    root=$(d2b_repo_root)
+  fi
   scratch=$(mktemp -d -p "$root" "$pattern") || return 1
   registry=$(d2b_scratch_registry_path)
   : >> "$registry"

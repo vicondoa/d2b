@@ -1,14 +1,13 @@
 # How to add a test
 
-d2b tests are invoked through **`make` targets** (one per test type). The
-single rule:
+d2b tests are invoked through **`make` targets** backed by the checked
+Layer-1 manifest. The delivery rule is:
 
-> **`make check` is the Layer-1 done-gate.** A change is not finished until
-> `make check` passes. Agent-owned PRs also run `make test-integration` and
-> `make test-host-integration` on the host before PR creation; those manual
-> integration targets are not replaced by the PR pipeline. New tests must be
-> classified in `tests/migration-ledger.toml` (`make check-inventory` fails
-> closed otherwise).
+> Run focused preflight, open the PR, and then run the final CI, validator, and
+> panel lanes concurrently against one immutable delivery snapshot. A change is
+> not mergeable until every manifest-required result and the tree-bound seal
+> pass. Reviewers inspect the test and external status; they do not execute
+> tests.
 
 ## Decision tree — which kind of test?
 
@@ -23,9 +22,9 @@ target and where the test lives.
 | A **pure-Nix value / option / internal-config** fact | **D** | `test-nix-unit` | `nix-unit` over an introspection fixture |
 | That a **misconfig is rejected** at eval | **E** | `test-nix-unit` | `nix-unit` (Bucket-A value over `config.assertions`; Bucket-B `expectedError`) |
 | That a config **builds** / a schema is strict | **F** | `test-flake` | `flake.checks` (realized via `nix build`) |
-| A **source/doc cross-reference** or structural-policy invariant | **H** | `test-policy` | the policy scanner / a focused gate |
-| Foreign-userland portability for static binaries | **G-container** | `test-integration` | `tests/integration/containers/*.sh` under rootless podman; local host/manual pre-PR, not the PR pipeline |
-| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
+| A **source/doc cross-reference** or structural-policy invariant | **H** | `test-policy` | the existing Rust policy scanner or closed meta-gate set |
+| Foreign-userland portability for static binaries | **G-container** | `test-integration` | `tests/integration/containers/*.sh` under rootless podman; final validator lane after the PR opens, not GitHub CI |
+| Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; final local NixOS/KVM validator lane after the PR opens, not GitHub CI |
 | Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** — **not runnable in CI** |
 
 ### Group F hosted-runner caveat
@@ -61,24 +60,44 @@ D2B_FIXTURES=<that path> cargo nextest run -p d2b-contract-tests -E 'test(my_new
 # Nix value (D/E): add a case to the nix-unit suite and run `make test-nix-unit`
 ```
 
-No ledger/mutation ceremony is required for a *new* test — that machinery is
-migration-scoped. You only must: (1) put the test behind a `make` target, and
-(2) keep `make check-inventory` green (add a ledger row if you add a script).
+No ledger/mutation ceremony is required for a new Rust, nix-unit, contract, or
+flake test; that machinery is migration-scoped. Do not add a standalone
+`tests/*.sh` gate. Follow the closed taxonomy in
+[`tests/AGENTS.md`](../../tests/AGENTS.md), keep `make check-inventory` green,
+and edit `tests/layer1-jobs.json` only when Layer-1 job membership changes.
 
-## Before you open a PR
+Validate and regenerate that graph through Rust `xtask`:
 
-The PR template checklist is mandatory:
+```bash
+cd packages
+cargo xtask layer1 validate
+cargo xtask layer1 workflow write
+cargo xtask layer1 workflow check
+```
 
-- `make check` passes.
-- `make test-integration` passes on the host before PR creation.
-- `make test-host-integration` passes on the host before PR creation.
-- If you touched GPU/YubiKey/hardware-TPM or a full microVM boot, run
-  `make test-hardware` on a NixOS host **with the devices** and paste results
-  (CI cannot — hosted runners have KVM but no devices).
-- New/changed tests are wired into a `make` target and `make check-inventory`
-  is green.
-- Docs (`docs/**`, `AGENTS.md`, `tests/README.md`) and `.github/workflows/*`
-  updated in lockstep.
+## Open the PR before final gates
+
+The PR template checklist is mandatory. Use this order:
+
+1. Commit the candidate and run the smallest focused test that can reject an
+   obviously broken change.
+2. Open or update the PR and stack, then create the immutable delivery snapshot
+   for that exact open PR state.
+3. Run `make check` in the required CI or validator lane. Run applicable
+   `make test-integration`, `make test-host-integration`, and
+   `make test-hardware` commands in the final validator lane after the PR opens.
+   GitHub CI, validators, and the panel proceed concurrently.
+4. Import validator and panel attestations into external delivery state and
+   seal the candidate before merge.
+
+Run `cd packages && cargo xtask delivery wave help` for the canonical
+machine-readable delivery command and option index.
+
+Summarize pass/fail/pending status in the PR and link external status when
+useful. Never paste raw command output, evidence payloads, panel records,
+seals, or run/model provenance into the PR or repository. New/changed tests
+must remain in the closed taxonomy; generated workflow and docs changes land
+in lockstep.
 
 See [`AGENTS.md` → "Build & validate"](../../AGENTS.md) for the full target
 table and [`tests/AGENTS.md`](../../tests/AGENTS.md) for the placement rules.

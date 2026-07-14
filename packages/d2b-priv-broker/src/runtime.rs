@@ -2759,9 +2759,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            let outcome =
-                crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let outcome = crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -5075,11 +5074,9 @@ fn prepare_runner_preopened_fds(
     if req.role == d2b_contracts::broker_wire::RunnerRole::CloudHypervisor {
         let runner_intent = resolver
             .find_runner_intent(req.bundle_runner_intent_ref.as_str())
-            .ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
-                    kind: "runner",
-                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
-                }
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "runner",
+                intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
             })?;
         let intents = resolver
             .resolve_macvtap_intents(req.vm_id.as_str(), runner_intent.role_id.as_str())
@@ -10481,7 +10478,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_returns_only_fixed_tag() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = crate::test_tempdir("guest-control-sign");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
@@ -10499,7 +10496,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = crate::test_tempdir("guest-control-sign");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
@@ -11470,7 +11467,7 @@ mod tests {
 
         let spawn_runner = assert_dispatch(
             BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
-            workload_identity: None,
+                workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,

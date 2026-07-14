@@ -196,6 +196,10 @@ cleanup_cargo_special_files() {
 
 cleanup_package_test_scratch() {
   local label="$1" dir="$2"
+  if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+    log "$label leaves package-local scratch to validation checkout cleanup"
+    return 0
+  fi
   if [ -d "$dir" ]; then
     rm -rf -- "$dir"
     ok "$label removed package-local test scratch $dir"
@@ -205,17 +209,14 @@ cleanup_package_test_scratch() {
 # sccache: a per-crate compilation cache (keyed on source + flags), shared
 # across the main + broker workspaces and all feature passes — so the broker's
 # rebuilds of crates the main workspace already compiled (d2b-core/host/ipc)
-# and its three separate-target-dir feature passes become cache hits. Used
-# locally by default. In CI it is OFF unless D2B_CI_SCCACHE=1 is set, because it
-# only helps when a persistent backend survives across runs. CI opts in by
-# pointing SCCACHE_DIR at a directory it restores/saves via actions/cache — we
+# and its three separate-target-dir feature passes become cache hits. CI points
+# SCCACHE_DIR at a directory restored/saved via actions/cache — we
 # deliberately use sccache's LOCAL-DISK backend (NOT SCCACHE_GHA_ENABLED): the
 # native GHA backend needs ACTIONS_RUNTIME_TOKEN exported into this process's
 # environment, where the untrusted crate code this gate compiles and runs
 # (build scripts, proc-macros, `cargo test`) could read and exfiltrate it.
 # actions/cache performs its I/O in its own action process and never exposes
-# that token to `run:` steps. The per-command `RUSTC_WRAPPER=""` overrides below
-# (xtask gen-schemas) intentionally opt out regardless of this mode.
+# that token to `run:` steps.
 _ci_active=0
 if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
   _ci_active=1
@@ -223,9 +224,6 @@ fi
 if [ "${D2B_NO_SCCACHE:-0}" = 1 ] || ! command -v sccache >/dev/null 2>&1; then
   export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
   log "sccache: disabled (forced off or unavailable)"
-elif [ "$_ci_active" = 1 ] && [ "${D2B_CI_SCCACHE:-0}" != 1 ]; then
-  export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
-  log "sccache: disabled (CI without D2B_CI_SCCACHE opt-in)"
 else
   _sccache_bin=$(command -v sccache)
   export RUSTC_WRAPPER="$_sccache_bin" CARGO_BUILD_RUSTC_WRAPPER="$_sccache_bin"
@@ -400,11 +398,7 @@ cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebacke
 cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
 
-schema_out="$ROOT/packages/xtask/out"
-schema_out_preexisting=0
-if [ -e "$schema_out" ]; then
-  schema_out_preexisting=1
-fi
+schema_out=$(d2b_mktemp ".d2b-schema-repro.XXXXXX")
 snapshot_schema_out() {
   if [ ! -d "$schema_out" ]; then
     return 0
@@ -419,11 +413,11 @@ snapshot_schema_out() {
 
 log "--> schema generation reproducibility"
 (cd "$ROOT/packages" && \
-  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  D2B_XTASK_SCHEMA_OUTPUT_DIR="$schema_out" \
   CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
 (cd "$ROOT/packages" && \
-  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+  D2B_XTASK_SCHEMA_OUTPUT_DIR="$schema_out" \
   CARGO_TARGET_DIR="$workspace_target_dir" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
@@ -433,23 +427,18 @@ if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
     <(printf '%s\n' "$schema_snapshot_2") >&2 || true
   exit 1
 fi
-if [ "$schema_out_preexisting" = "0" ]; then
-  rm -rf -- "$schema_out"
-fi
 ok "schema generation reproducibility"
 
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-        cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
@@ -472,13 +461,13 @@ cargo_audit_check() {
     log "  attempt $attempt/$attempts"
     if command -v cargo-audit >/dev/null 2>&1; then
       set +e
-      RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+      cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
       rc=$?
       set -e
     else
       set +e
       nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-        env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+        cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
       rc=$?
       set -e
     fi

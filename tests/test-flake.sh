@@ -111,10 +111,19 @@ if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
     exit 2
   fi
 
-  mapfile -t shard_checks < <(
-    nix eval --raw "${flake_ref}#checks.${native}" --apply \
+  discover_flake_checks() {
+    nix eval --quiet --no-warn-dirty --raw "${flake_ref}#checks.${native}" --apply \
       'checks: builtins.concatStringsSep "\n" (builtins.attrNames checks)'
-  )
+  }
+
+  if ! shard_output=$(discover_flake_checks); then
+    log "  WARN: flake check discovery failed; retrying once"
+    if ! shard_output=$(discover_flake_checks); then
+      fail "flake local shards: check discovery failed for $native"
+      exit 1
+    fi
+  fi
+  mapfile -t shard_checks < <(printf '%s' "$shard_output")
   if [ "${#shard_checks[@]}" -eq 0 ]; then
     fail "flake local shards: no checks discovered for $native"
     exit 1

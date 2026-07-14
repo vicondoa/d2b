@@ -27,24 +27,30 @@ if [ -z "${D2B_DRIFT_CHECK_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2
     --command bash "$0" "$@"
 fi
 
+generator_root="$ROOT"
 workspace_target_dir="${CARGO_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}"
+if [ -n "${D2B_VALIDATION_OUTPUT_DIR:-}" ]; then
+  generator_root=$(d2b_mktemp ".d2b-drift-source.XXXXXX")
+  git clone --no-hardlinks --quiet -- "$ROOT" "$generator_root"
+  git -C "$generator_root" checkout --detach --quiet "$(git -C "$ROOT" rev-parse HEAD)"
+  workspace_target_dir="$D2B_VALIDATION_OUTPUT_DIR/drift-cargo-target"
+fi
 xtask_bin="$workspace_target_dir/debug/xtask"
 (
-  cd "$ROOT/packages"
+  cd "$generator_root/packages"
   # Always ask Cargo to refresh xtask in the selected target dir. Cargo reuses
   # cached artifacts when fresh, but this prevents an old repo-local
   # packages/target/debug/xtask from masking generated schema/docs drift.
-  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-    CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo build -q --manifest-path "$generator_root/packages/Cargo.toml" -p xtask --bin xtask
 )
 
 run_xtask() {
   local subcommand="$1"
   log "--> drift-check: cargo xtask $subcommand"
   (
-    cd "$ROOT/packages"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" "$xtask_bin" "$subcommand"
+    cd "$generator_root/packages"
+    "$xtask_bin" "$subcommand"
   )
 }
 
@@ -67,19 +73,19 @@ drift_paths=(
   packages/d2b-guestd/src/generated
 )
 
-if git -C "$ROOT" --no-pager diff --exit-code -- "${drift_paths[@]}" >/dev/null; then
+if git -C "$generator_root" --no-pager diff --exit-code -- "${drift_paths[@]}" >/dev/null; then
   ok "drift-check: generated artifacts match committed outputs"
 else
-  git -C "$ROOT" --no-pager diff -- "${drift_paths[@]}" | head -120 >&2 || true
+  git -C "$generator_root" --no-pager diff -- "${drift_paths[@]}" | head -120 >&2 || true
   fail "drift-check: generated artifacts drifted; rerun tests/unit/gates/drift-check.sh and commit the generated outputs"
 fi
 
-grep -Fq '<!-- BEGIN AUTO-GENERATED: error-table -->' "$ROOT/docs/reference/error-codes.md" \
+grep -Fq '<!-- BEGIN AUTO-GENERATED: error-table -->' "$generator_root/docs/reference/error-codes.md" \
   || fail "docs/reference/error-codes.md is missing the generated error-table begin marker"
-grep -Fq '<!-- END AUTO-GENERATED: error-table -->' "$ROOT/docs/reference/error-codes.md" \
+grep -Fq '<!-- END AUTO-GENERATED: error-table -->' "$generator_root/docs/reference/error-codes.md" \
   || fail "docs/reference/error-codes.md is missing the generated error-table end marker"
 # shellcheck disable=SC2016
-grep -Eq '^\| <a id="[a-z0-9-]+"></a>`#[a-z0-9-]+` \| `[a-z0-9-]+` \| `[0-9]+` \|' "$ROOT/docs/reference/error-codes.md" \
+grep -Eq '^\| <a id="[a-z0-9-]+"></a>`#[a-z0-9-]+` \| `[a-z0-9-]+` \| `[0-9]+` \|' "$generator_root/docs/reference/error-codes.md" \
   || fail "docs/reference/error-codes.md is missing generated per-kind rows"
 
 ok "drift-check: generated error-code table markers and rows are present"

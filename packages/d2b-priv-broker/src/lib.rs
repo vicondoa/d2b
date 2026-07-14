@@ -47,6 +47,23 @@ pub mod protocol;
 pub mod runtime;
 pub mod sys;
 
+#[cfg(test)]
+pub(crate) fn test_tempdir(component: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+        .map(std::path::PathBuf::from)
+        .map(|root| root.join("rust-test-scratch/d2b-priv-broker"))
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-scratch")
+        })
+        .join(component);
+    std::fs::create_dir_all(&root).expect("create broker test output root");
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .expect("harden broker test output root");
+    tempfile::tempdir_in(root).expect("create broker test tempdir")
+}
+
 // Behavioral + regression seccomp BPF tests.
 #[cfg(test)]
 mod seccomp_compile_tests;
