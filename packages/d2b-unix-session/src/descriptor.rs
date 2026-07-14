@@ -91,7 +91,7 @@ impl ObjectIdentity {
         inspect_identity(fd, object_type, access, false)
     }
 
-    fn same_kernel_object(&self, other: &Self) -> bool {
+    pub(crate) fn same_kernel_object(&self, other: &Self) -> bool {
         self.device == other.device
             && self.inode == other.inode
             && self.file_type == other.file_type
@@ -453,6 +453,14 @@ pub(crate) fn validate_owned_file(
     descriptor: &d2b_contracts::v2_component_session::AttachmentDescriptor,
     policy: &DescriptorPolicy,
 ) -> Result<(), UnixSessionError> {
+    validate_owned_file_identity(fd, descriptor, policy).map(|_| ())
+}
+
+pub(crate) fn validate_owned_file_identity(
+    fd: impl AsFd,
+    descriptor: &d2b_contracts::v2_component_session::AttachmentDescriptor,
+    policy: &DescriptorPolicy,
+) -> Result<ObjectIdentity, UnixSessionError> {
     if descriptor.kind != AttachmentKind::FileDescriptor {
         return Err(UnixSessionError::DescriptorMismatch);
     }
@@ -460,13 +468,13 @@ pub(crate) fn validate_owned_file(
         DescriptorPolicy::File(expected) if descriptor.object_type != KernelObjectType::Pidfd => {
             let actual = inspect_identity(fd, descriptor.object_type, descriptor.access, false)?;
             if actual == *expected {
-                Ok(())
+                Ok(actual)
             } else {
                 Err(UnixSessionError::DescriptorMismatch)
             }
         }
         DescriptorPolicy::Pidfd(policy) if descriptor.object_type == KernelObjectType::Pidfd => {
-            policy.validate(fd, descriptor.access).map(|_| ())
+            policy.validate(fd, descriptor.access)
         }
         DescriptorPolicy::File(_)
         | DescriptorPolicy::Pidfd(_)
