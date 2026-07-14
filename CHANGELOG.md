@@ -64,7 +64,6 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-<<<<<<< HEAD
 - Hardened final delivery authority with secret-free validation environments,
   authenticated merged-prefix topology, tolerant external GraphQL decoding,
   shared signal forwarding, and kernel-backed child-output polling.
