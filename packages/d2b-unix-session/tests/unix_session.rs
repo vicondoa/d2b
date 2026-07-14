@@ -11,10 +11,10 @@ use d2b_session::{
 };
 use d2b_unix_session::{
     AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
-    OutboundPacket, OwnedUnixAttachment, PidfdEvidence, PidfdIdentityPolicy, PidfdInfoSource,
-    ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit, SentPacket,
-    SeqpacketSocket, StreamSocket, UnixAttachmentPayload, UnixSeqpacketTransport, UnixSessionError,
-    UnixStreamTransport, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
+    OutboundPacket, OwnedUnixAttachment, PeerIdentityPolicy, PidfdEvidence, PidfdIdentityPolicy,
+    PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
+    SentPacket, SeqpacketSocket, StreamSocket, UnixAttachmentPayload, UnixSeqpacketTransport,
+    UnixSessionError, UnixStreamTransport, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
 };
 use rustix::{
     fd::BorrowedFd,
@@ -30,7 +30,7 @@ use std::{
     fs,
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Instant,
 };
@@ -405,24 +405,26 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let receiver_resolver = Arc::new(move |_: &AttachmentDescriptor| {
         Ok(DescriptorPolicy::File(receiver_identity.clone()))
     });
+    let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+    let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
     let mut sender = UnixSeqpacketTransport::new(
         sender_socket,
-        d2b_contracts::v2_component_session::TransportClass::UnixSeqpacket,
         d2b_contracts::v2_component_session::Locality::HostLocal,
         LimitProfile::local_default(),
         policy,
         sender_scopes,
         sender_resolver,
+        PeerIdentityPolicy::accepted(sender_peer),
     )
     .unwrap();
     let mut receiver = UnixSeqpacketTransport::new(
         receiver_socket,
-        d2b_contracts::v2_component_session::TransportClass::UnixSeqpacket,
         d2b_contracts::v2_component_session::Locality::HostLocal,
         LimitProfile::local_default(),
         policy,
         receiver_scopes,
         receiver_resolver,
+        PeerIdentityPolicy::accepted(receiver_peer),
     )
     .unwrap();
 
@@ -533,97 +535,140 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn owned_transport_binds_kernel_credentials_after_authentication() {
+async fn inherited_transport_consumes_stable_credentials_as_identity_evidence() {
     let _serial = serialize_fd_test().await;
     let (left, right) = prearmed_seqpacket_pair().unwrap();
     let sender_socket = SeqpacketSocket::from_parent_prearmed(left).unwrap();
     let receiver_socket = SeqpacketSocket::from_parent_prearmed(right).unwrap();
-    let expected = receiver_socket.acceptor_peer_credentials().unwrap();
-    let attachment_policy = attachment_policy(1, true);
+    let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+    let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
+    let attachment_policy = attachment_policy(1, false);
     let (sender_scopes, sender_pools) = scopes(8);
     let (receiver_scopes, receiver_pools) = scopes(8);
-    let sender_resolver =
-        Arc::new(move |_: &AttachmentDescriptor| Ok(DescriptorPolicy::Credentials(expected)));
-    let receiver_resolver = sender_resolver.clone();
+    let resolver =
+        Arc::new(move |_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch));
     let mut sender = UnixSeqpacketTransport::new(
         sender_socket,
-        TransportClass::InheritedSocketpair,
         Locality::HostLocal,
         LimitProfile::local_default(),
         attachment_policy,
         sender_scopes,
-        sender_resolver,
+        resolver.clone(),
+        PeerIdentityPolicy::inherited_socketpair(sender_peer),
     )
     .unwrap();
     let mut receiver = UnixSeqpacketTransport::new(
         receiver_socket,
-        TransportClass::InheritedSocketpair,
         Locality::HostLocal,
         LimitProfile::local_default(),
         attachment_policy,
         receiver_scopes,
-        receiver_resolver,
+        resolver,
+        PeerIdentityPolicy::inherited_socketpair(receiver_peer),
     )
     .unwrap();
-    let metadata = AttachmentDescriptor {
-        index: 0,
-        kind: AttachmentKind::Credentials,
-        object_type: KernelObjectType::ProcessCredentials,
-        access: AttachmentAccess::ReadOnly,
-        purpose: AttachmentPurpose::ProcessIdentity,
-        service: ServicePackage::BrokerV2,
-        method_id: 1,
-        request_id: RequestId::new([9_u8; 16]).unwrap(),
-        operation_id: None,
-        packet_sequence: 1,
-        reconnect_generation: 1,
-        duplicate_object_allowed: false,
-        cloexec_required: false,
-        credit_classes: BoundedVec::new(vec![
-            AttachmentCreditClass::Packet,
-            AttachmentCreditClass::Request,
-            AttachmentCreditClass::Operation,
-            AttachmentCreditClass::Session,
-            AttachmentCreditClass::Process,
-            AttachmentCreditClass::Host,
-        ])
-        .unwrap(),
-    };
-    let attachment = OwnedUnixAttachment::credentials(
-        metadata.clone(),
-        expected,
-        DescriptorPolicy::Credentials(expected),
-    )
-    .unwrap();
-    sender
-        .send(TransportPacket::with_attachments(
-            b"credential-record".to_vec(),
-            vec![attachment],
-        ))
-        .await
-        .unwrap();
+    for payload in [b"preface".as_slice(), b"subsequent".as_slice()] {
+        sender
+            .send(TransportPacket::new(payload.to_vec()))
+            .await
+            .unwrap();
+        let received = receiver
+            .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
+            .await
+            .unwrap();
+        let (actual, attachments) = received.into_parts();
+        assert_eq!(actual, payload);
+        assert!(attachments.is_empty());
+    }
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pathname_transport_verifies_provenance_and_accepts_attachment_free_preface() {
+    let _serial = serialize_fd_test().await;
+    let (sender, receiver_socket) = seqpacket_pair();
+    let expected = receiver_socket.acceptor_peer_credentials().unwrap();
+    let verified = Arc::new(AtomicBool::new(false));
+    let verifier_called = verified.clone();
+    let verifier = Arc::new(move |socket: &SeqpacketSocket| {
+        if socket.acceptor_peer_credentials()? != expected {
+            return Err(UnixSessionError::CredentialMismatch);
+        }
+        verifier_called.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let policy = attachment_policy(1, false);
+    let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, receiver_pools) = scopes(8);
+    let resolver =
+        Arc::new(move |_: &AttachmentDescriptor| Err(UnixSessionError::DescriptorMismatch));
+    let mut receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+        policy,
+        receiver_scopes,
+        resolver,
+        PeerIdentityPolicy::pathname(verifier),
+    )
+    .unwrap();
+    assert!(verified.load(Ordering::SeqCst));
+
+    let outbound = OutboundPacket::new(
+        b"preface".to_vec(),
+        Vec::new(),
+        None,
+        LimitProfile::local_default(),
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap();
+    let mut queue = VecDeque::from([outbound]);
+    sender.send_burst(&mut queue, capacity, 8).await.unwrap();
     let received = receiver
         .receive(LimitProfile::local_default().protected_ciphertext_bytes as usize)
         .await
         .unwrap();
-    let (_, attachments) = received.into_parts();
-    assert_eq!(attachments.len(), 1);
-    let unix_payload = attachments[0]
-        .payload()
-        .and_then(|payload| payload.downcast_ref::<UnixAttachmentPayload>())
-        .unwrap();
-    AttachmentPayload::validate_descriptor(unix_payload, &metadata).unwrap();
-    assert_eq!(unix_payload.credentials(), Some(expected));
-    assert!(receiver_pools.iter().all(|pool| pool.used() == 1));
-    drop(attachments);
+    let (bytes, attachments) = received.into_parts();
+    assert_eq!(bytes, b"preface");
+    assert!(attachments.is_empty());
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unix_semantic_credential_descriptor_is_rejected_and_closed() {
+    let _serial = serialize_fd_test().await;
+    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let inode = fstat(&read_end).unwrap().st_ino;
+    let identity = ObjectIdentity::from_trusted(
+        &read_end,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+    )
+    .unwrap();
+    let mut metadata = descriptor(
+        0,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+        false,
+    );
+    metadata.kind = AttachmentKind::Credentials;
+    assert!(matches!(
+        OwnedUnixAttachment::file(metadata, read_end, DescriptorPolicy::File(identity)),
+        Err(UnixSessionError::DescriptorMismatch)
+    ));
+    assert_eq!(pipe_handle_count(inode), 1);
+    drop(write_end);
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
     let _serial = serialize_fd_test().await;
     let (sender_socket, receiver_socket) = seqpacket_pair();
+    let sender_peer = sender_socket.acceptor_peer_credentials().unwrap();
+    let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
     let attachment_policy = attachment_policy(1, false);
     let (sender_scopes, sender_pools) = scopes(8);
     let (receiver_scopes, receiver_pools) = scopes(8);
@@ -645,22 +690,22 @@ async fn session_engine_transfers_and_binds_seqpacket_attachments_end_to_end() {
     });
     let sender = UnixSeqpacketTransport::new(
         sender_socket,
-        TransportClass::UnixSeqpacket,
         Locality::HostLocal,
         LimitProfile::local_default(),
         attachment_policy,
         sender_scopes,
         sender_resolver,
+        PeerIdentityPolicy::accepted(sender_peer),
     )
     .unwrap();
     let receiver = UnixSeqpacketTransport::new(
         receiver_socket,
-        TransportClass::UnixSeqpacket,
         Locality::HostLocal,
         LimitProfile::local_default(),
         attachment_policy,
         receiver_scopes,
         receiver_resolver,
+        PeerIdentityPolicy::accepted(receiver_peer),
     )
     .unwrap();
     let endpoint = EndpointPolicy {

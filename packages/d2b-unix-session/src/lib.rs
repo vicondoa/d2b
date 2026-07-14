@@ -21,8 +21,8 @@ mod socket;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
-    DescriptorPolicyResolver, OwnedUnixAttachment, UnixAttachmentPayload, UnixSeqpacketTransport,
-    UnixStreamTransport,
+    DescriptorPolicyResolver, OwnedUnixAttachment, PathnamePeerVerifier, PeerIdentityPolicy,
+    UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
 };
 #[cfg(feature = "host-socket")]
 pub use credit::{

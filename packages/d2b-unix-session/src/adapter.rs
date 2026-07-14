@@ -23,9 +23,63 @@ use std::{
 pub type DescriptorPolicyResolver =
     Arc<dyn Fn(&AttachmentDescriptor) -> Result<DescriptorPolicy, UnixSessionError> + Send + Sync>;
 
+pub type PathnamePeerVerifier =
+    Arc<dyn Fn(&SeqpacketSocket) -> Result<(), UnixSessionError> + Send + Sync>;
+
+pub enum PeerIdentityPolicy {
+    Pathname { verifier: PathnamePeerVerifier },
+    InheritedSocketpair { expected_peer: PeerCredentials },
+}
+
+impl fmt::Debug for PeerIdentityPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PeerIdentityPolicy(REDACTED)")
+    }
+}
+
+impl PeerIdentityPolicy {
+    fn transport_class(&self) -> TransportClass {
+        match self {
+            Self::Pathname { .. } => TransportClass::UnixSeqpacket,
+            Self::InheritedSocketpair { .. } => TransportClass::InheritedSocketpair,
+        }
+    }
+
+    pub fn accepted(expected_peer: PeerCredentials) -> Self {
+        Self::Pathname {
+            verifier: Arc::new(move |socket| {
+                if socket.acceptor_peer_credentials()? == expected_peer {
+                    Ok(())
+                } else {
+                    Err(UnixSessionError::CredentialMismatch)
+                }
+            }),
+        }
+    }
+
+    pub fn pathname(verifier: PathnamePeerVerifier) -> Self {
+        Self::Pathname { verifier }
+    }
+
+    pub fn inherited_socketpair(expected_peer: PeerCredentials) -> Self {
+        Self::InheritedSocketpair { expected_peer }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ActivePeerIdentityPolicy {
+    Pathname,
+    InheritedSocketpair { expected_peer: PeerCredentials },
+}
+
+#[derive(Clone, Copy)]
+enum PeerPacketPhase {
+    FirstPreface,
+    Established,
+}
+
 enum UnixAttachmentValue {
     File(OwnedFd),
-    Credentials(PeerCredentials),
 }
 
 enum UnixAttachmentPolicy {
@@ -55,14 +109,6 @@ impl UnixAttachmentPayload {
     pub fn file(&self) -> Option<BorrowedFd<'_>> {
         match &self.value {
             UnixAttachmentValue::File(fd) => Some(fd.as_fd()),
-            UnixAttachmentValue::Credentials(_) => None,
-        }
-    }
-
-    pub fn credentials(&self) -> Option<PeerCredentials> {
-        match self.value {
-            UnixAttachmentValue::Credentials(credentials) => Some(credentials),
-            UnixAttachmentValue::File(_) => None,
         }
     }
 
@@ -171,32 +217,6 @@ impl OwnedUnixAttachment {
             }),
         ))
     }
-
-    pub fn credentials(
-        descriptor: AttachmentDescriptor,
-        credentials: PeerCredentials,
-        policy: DescriptorPolicy,
-    ) -> Result<OwnedAttachment, UnixSessionError> {
-        descriptor
-            .validate(descriptor.index)
-            .map_err(|_| UnixSessionError::DescriptorMismatch)?;
-        validate_value(
-            &UnixAttachmentValue::Credentials(credentials),
-            &descriptor,
-            &policy,
-        )?;
-        Ok(OwnedAttachment::new(
-            descriptor.clone(),
-            Box::new(UnixAttachmentPayload {
-                value: UnixAttachmentValue::Credentials(credentials),
-                policy: UnixAttachmentPolicy::Bound {
-                    descriptor: Box::new(descriptor),
-                    policy: Box::new(policy),
-                },
-                validation: Mutex::new(None),
-            }),
-        ))
-    }
 }
 
 struct ReceivedPacketState {
@@ -261,6 +281,7 @@ pub struct UnixSeqpacketTransport {
     capacity: AncillaryCapacity,
     credits: CreditScopeSet,
     resolver: DescriptorPolicyResolver,
+    peer_identity: ActivePeerIdentityPolicy,
     received: VecDeque<ReceivedPacket>,
     closed: bool,
 }
@@ -279,24 +300,38 @@ impl fmt::Debug for UnixSeqpacketTransport {
 impl UnixSeqpacketTransport {
     pub fn new(
         socket: SeqpacketSocket,
-        class: TransportClass,
         locality: Locality,
         limits: LimitProfile,
         policy: AttachmentPolicy,
         credits: CreditScopeSet,
         resolver: DescriptorPolicyResolver,
+        peer_identity: PeerIdentityPolicy,
     ) -> Result<Self, UnixSessionError> {
-        if !matches!(
-            class,
-            TransportClass::UnixSeqpacket | TransportClass::InheritedSocketpair
-        ) || policy.kind != AttachmentPolicyKind::PacketAtomic
-        {
+        let class = peer_identity.transport_class();
+        if policy.kind != AttachmentPolicyKind::PacketAtomic {
             return Err(UnixSessionError::InvalidSocket);
         }
         policy
             .validate(class)
             .map_err(|_| UnixSessionError::AncillaryCapacity)?;
-        let capacity = AncillaryCapacity::from_policy(policy)?;
+        let peer_identity = match peer_identity {
+            PeerIdentityPolicy::Pathname { verifier } => {
+                verifier(&socket)?;
+                ActivePeerIdentityPolicy::Pathname
+            }
+            PeerIdentityPolicy::InheritedSocketpair { expected_peer } => {
+                socket.verify_parent_prearmed()?;
+                ActivePeerIdentityPolicy::InheritedSocketpair { expected_peer }
+            }
+        };
+        let mut ancillary_policy = policy;
+        if matches!(
+            peer_identity,
+            ActivePeerIdentityPolicy::InheritedSocketpair { .. }
+        ) {
+            ancillary_policy.credentials_allowed = true;
+        }
+        let capacity = AncillaryCapacity::from_policy(ancillary_policy)?;
         Ok(Self {
             socket,
             class,
@@ -306,6 +341,7 @@ impl UnixSeqpacketTransport {
             capacity,
             credits,
             resolver,
+            peer_identity,
             received: VecDeque::new(),
             closed: false,
         })
@@ -332,6 +368,12 @@ impl UnixSeqpacketTransport {
         if let Some(packet) = self.received.pop_front() {
             return Ok(packet);
         }
+        if matches!(
+            self.peer_identity,
+            ActivePeerIdentityPolicy::InheritedSocketpair { .. }
+        ) {
+            self.socket.verify_parent_prearmed()?;
+        }
         let mut active_limits = self.limits;
         active_limits.protected_ciphertext_bytes =
             u32::try_from(protected_limit).map_err(|_| UnixSessionError::PayloadLimit)?;
@@ -343,14 +385,23 @@ impl UnixSeqpacketTransport {
         self.received.pop_front().ok_or(UnixSessionError::Closed)
     }
 
-    fn received_transport_packet(&self, packet: ReceivedPacket) -> TransportPacket {
+    fn received_transport_packet(
+        &self,
+        packet: ReceivedPacket,
+    ) -> Result<TransportPacket, UnixSessionError> {
         let ReceivedPacket {
             payload,
-            controls,
+            mut controls,
             unknown_control: _,
-            first_on_socket: _,
+            first_on_socket,
             credits,
         } = packet;
+        let phase = if first_on_socket {
+            PeerPacketPhase::FirstPreface
+        } else {
+            PeerPacketPhase::Established
+        };
+        consume_peer_credentials(self.peer_identity, phase, &mut controls)?;
         let packet_state = Arc::new(ReceivedPacketState::new(
             credits,
             self.credits.clone(),
@@ -358,21 +409,20 @@ impl UnixSeqpacketTransport {
         ));
         let attachments = controls
             .into_iter()
-            .map(|control| {
-                let value = match control {
-                    ReceivedControl::File(fd) => UnixAttachmentValue::File(fd),
-                    ReceivedControl::Credentials(credentials) => {
-                        UnixAttachmentValue::Credentials(credentials)
-                    }
+            .filter_map(|control| {
+                let ReceivedControl::File(fd) = control else {
+                    return None;
                 };
-                OwnedAttachment::unbound(Box::new(UnixAttachmentPayload::received(
-                    value,
-                    self.resolver.clone(),
-                    packet_state.clone(),
+                Some(OwnedAttachment::unbound(Box::new(
+                    UnixAttachmentPayload::received(
+                        UnixAttachmentValue::File(fd),
+                        self.resolver.clone(),
+                        packet_state.clone(),
+                    ),
                 )))
             })
             .collect();
-        TransportPacket::with_attachments(payload, attachments)
+        Ok(TransportPacket::with_attachments(payload, attachments))
     }
 
     async fn send_packet(
@@ -384,7 +434,6 @@ impl UnixSeqpacketTransport {
             return Err(UnixSessionError::CreditExceeded);
         }
         let mut files = Vec::new();
-        let mut credentials = None;
         let mut identities: Vec<(ObjectIdentity, bool)> = Vec::new();
         let mut retained_receive_credits = Vec::new();
         for attachment in attachments {
@@ -418,15 +467,7 @@ impl UnixSeqpacketTransport {
                 retained_receive_credits.push(retained);
             }
             match value {
-                UnixAttachmentValue::File(fd) if credentials.is_none() => {
-                    files.push(Arc::new(fd));
-                }
-                UnixAttachmentValue::Credentials(value) if credentials.is_none() => {
-                    credentials = Some(value);
-                }
-                UnixAttachmentValue::File(_) | UnixAttachmentValue::Credentials(_) => {
-                    return Err(UnixSessionError::ControlMismatch);
-                }
+                UnixAttachmentValue::File(fd) => files.push(Arc::new(fd)),
             }
         }
         let mut transport_limits = self.limits;
@@ -437,7 +478,7 @@ impl UnixSeqpacketTransport {
         let outbound = crate::OutboundPacket::new(
             bytes,
             files,
-            credentials,
+            None,
             transport_limits,
             self.capacity,
             &self.credits,
@@ -470,7 +511,8 @@ impl OwnedTransport for UnixSeqpacketTransport {
             .receive_raw(protected_limit)
             .await
             .map_err(map_transport_error)?;
-        Ok(self.received_transport_packet(packet))
+        self.received_transport_packet(packet)
+            .map_err(map_transport_error)
     }
 
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
@@ -583,13 +625,42 @@ fn validate_value(
             AttachmentKind::FileDescriptor,
             DescriptorPolicy::File(_) | DescriptorPolicy::Pidfd(_),
         ) => validate_owned_file_identity(fd, descriptor, policy).map(Some),
+        (UnixAttachmentValue::File(_), _, _) => Err(UnixSessionError::DescriptorMismatch),
+    }
+}
+
+fn consume_peer_credentials(
+    policy: ActivePeerIdentityPolicy,
+    phase: PeerPacketPhase,
+    controls: &mut Vec<ReceivedControl>,
+) -> Result<(), UnixSessionError> {
+    let mut observed = None;
+    let mut duplicate = false;
+    controls.retain(|control| match control {
+        ReceivedControl::File(_) => true,
+        ReceivedControl::Credentials(credentials) => {
+            if observed.replace(*credentials).is_some() {
+                duplicate = true;
+            }
+            false
+        }
+    });
+    if duplicate {
+        return Err(UnixSessionError::ControlMismatch);
+    }
+    match (policy, phase, observed) {
+        (ActivePeerIdentityPolicy::Pathname, _, None) => Ok(()),
         (
-            UnixAttachmentValue::Credentials(actual),
-            AttachmentKind::Credentials,
-            DescriptorPolicy::Credentials(expected),
-        ) if actual == expected => Ok(None),
-        (UnixAttachmentValue::File(_), _, _) | (UnixAttachmentValue::Credentials(_), _, _) => {
-            Err(UnixSessionError::DescriptorMismatch)
+            ActivePeerIdentityPolicy::InheritedSocketpair { expected_peer },
+            PeerPacketPhase::FirstPreface | PeerPacketPhase::Established,
+            Some(actual),
+        ) if actual == expected_peer => Ok(()),
+        (ActivePeerIdentityPolicy::InheritedSocketpair { .. }, _, Some(_)) => {
+            Err(UnixSessionError::CredentialMismatch)
+        }
+        (ActivePeerIdentityPolicy::InheritedSocketpair { .. }, _, None)
+        | (ActivePeerIdentityPolicy::Pathname, _, Some(_)) => {
+            Err(UnixSessionError::ControlMismatch)
         }
     }
 }
@@ -652,5 +723,61 @@ fn map_transport_error(error: UnixSessionError) -> TransportError {
         | UnixSessionError::EmptyPacket
         | UnixSessionError::PacketNotAtomic
         | UnixSessionError::FairnessBudget => TransportError::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustix::{
+        net::UCred,
+        process::{getgid, getpid, getppid, getuid},
+    };
+
+    fn current_credentials() -> PeerCredentials {
+        PeerCredentials::from_ucred(UCred {
+            pid: getpid(),
+            uid: getuid(),
+            gid: getgid(),
+        })
+    }
+
+    #[test]
+    fn inherited_first_packet_requires_credentials() {
+        let expected = current_credentials();
+        let mut controls = Vec::new();
+        assert_eq!(
+            consume_peer_credentials(
+                ActivePeerIdentityPolicy::InheritedSocketpair {
+                    expected_peer: expected,
+                },
+                PeerPacketPhase::FirstPreface,
+                &mut controls,
+            ),
+            Err(UnixSessionError::ControlMismatch)
+        );
+    }
+
+    #[test]
+    fn inherited_first_packet_rejects_wrong_credentials() {
+        let expected = current_credentials();
+        let wrong_pid = getppid().expect("test process has a parent");
+        let wrong = PeerCredentials::from_ucred(UCred {
+            pid: wrong_pid,
+            uid: expected.uid(),
+            gid: expected.gid(),
+        });
+        let mut controls = vec![ReceivedControl::Credentials(wrong)];
+        assert_eq!(
+            consume_peer_credentials(
+                ActivePeerIdentityPolicy::InheritedSocketpair {
+                    expected_peer: expected,
+                },
+                PeerPacketPhase::FirstPreface,
+                &mut controls,
+            ),
+            Err(UnixSessionError::CredentialMismatch)
+        );
+        assert!(controls.is_empty());
     }
 }
