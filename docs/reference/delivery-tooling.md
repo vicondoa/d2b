@@ -124,6 +124,12 @@ Git metadata is never delivery state, and these artifacts must never be added
 to the reviewed tree. The app bundles pinned `git`, `gh`, and `git-town`
 executables so status inspection does not depend on an ambient command version.
 
+`validation-run` disables Nix auto-GC inside its controlled child environment
+while preserving `nix-command` and flakes. Concurrent evaluation shards may
+share pinned store inputs, so host auto-GC must not delete those inputs during
+the authoritative run. The existing Layer-1 disk-space preflight remains the
+fail-closed capacity guard.
+
 The non-generated pull-request workflows emit a small GitHub step summary bound
 to the exact candidate SHA reported by `git rev-parse HEAD` and to step
 outcomes. A summary is status metadata, not validation or panel evidence, and

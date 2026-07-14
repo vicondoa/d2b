@@ -85,6 +85,9 @@ deprecations ship one minor release before removal.
   corrected generated tuple-struct API documentation.
 - Moved the async ttrpc API-fit socket fixture to the validation-owned socket
   root so canonical read-only source checks can execute it.
+- Disabled Nix auto-GC inside authoritative validation children so concurrent
+  shards cannot lose pinned store inputs mid-evaluation; the disk preflight
+  remains the capacity guard.
 - Made W2 delivery authority fingerprint each generated service binding and
   source protobuf as a tracked blob instead of using unsupported directories.
 - Kept unified toolchain-scoped Cargo gate targets out of CI caches while
