@@ -86,28 +86,6 @@ collect_present < <(
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
 # pinned gate must enumerate it too — otherwise those retirements would be
 # silently unguarded against deletion.
-#
-# `cargo metadata --all-features` (run by `nextest list`) can add a
-# transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
-# full feature set), which would dirty the working tree. Snapshot + restore
-# the broker lock so listing is non-mutating by construction.
-broker_lock="$ROOT/packages/d2b-priv-broker/Cargo.lock"
-broker_lock_backup=""
-restore_broker_lock() {
-  if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
-    cp "$broker_lock_backup" "$broker_lock"
-    rm -f "$broker_lock_backup"
-  fi
-}
-if [ -f "$broker_lock" ]; then
-  broker_lock_backup="$ROOT/tests/.assert-pinned-broker-lock.${BASHPID:-$$}"
-  if [ -e "$broker_lock_backup" ]; then
-    echo "assert-pinned-tests: scratch path already exists: $broker_lock_backup" >&2
-    exit 1
-  fi
-  cp "$broker_lock" "$broker_lock_backup"
-  trap restore_broker_lock EXIT
-fi
 collect_present < <(
   cd "$ROOT/packages/d2b-priv-broker"
   # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
@@ -118,13 +96,9 @@ collect_present < <(
   # default, layer1-bootstrap, AND fake-backends broker test passes, so every
   # listed test is actually executed and can be guarded by the pinned gate.
   CARGO_TARGET_DIR="$broker_target_dir" \
-    cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
+    cargo nextest list --locked --workspace \
+      --features layer1-bootstrap,fake-backends --message-format oneline
 )
-if [ -n "$broker_lock_backup" ]; then
-  restore_broker_lock
-  broker_lock_backup=""
-  trap - EXIT
-fi
 
 declare -A seen
 total=0

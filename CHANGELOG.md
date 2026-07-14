@@ -117,6 +117,8 @@ deprecations ship one minor release before removal.
   when the target's source parent is intentionally read-only.
 - Made schema reproducibility generate twice into validation-owned scratch
   instead of rewriting committed schema paths.
+- Made broker nextest inventory use the committed lock fail-closed instead of
+  backing it up and restoring it through the source tree.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
