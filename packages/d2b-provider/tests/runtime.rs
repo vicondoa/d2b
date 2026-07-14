@@ -37,6 +37,7 @@ fn runtime_capabilities() -> ProviderCapabilitySet {
         ProviderMethod::ALL
             .iter()
             .filter(|method| method.provider_type() == ProviderType::Runtime)
+            .filter(|method| **method != ProviderMethod::RuntimeExecute)
             .copied()
             .map(ProviderCapability)
             .collect(),

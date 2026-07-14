@@ -288,6 +288,9 @@ impl ProviderRegistryBuilder {
         if instance.capabilities() != descriptor.capabilities {
             return Err(RegistryBuildError::CapabilityMismatch);
         }
+        if !instance.validate_capability_dispatch() {
+            return Err(RegistryBuildError::CapabilityMismatch);
+        }
         Ok(())
     }
 

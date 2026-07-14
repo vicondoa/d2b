@@ -14,7 +14,11 @@ default = []
 async-trait.workspace = true
 d2b-contracts = { workspace = true, default-features = false, features = ["v2-services"] }
 d2b-provider = { workspace = true, default-features = false }
+d2b-session = { workspace = true, default-features = false }
+protobuf = { version = "=3.7.2", default-features = false }
+serde_json = { version = "=1.0.150", default-features = false, features = ["std"] }
 tokio = { workspace = true, features = ["sync", "time"] }
+ttrpc = { workspace = true, default-features = false, features = ["async"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

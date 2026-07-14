@@ -67,6 +67,9 @@ pub fn register_exact_instances(
         if instance.capabilities() != descriptor.capabilities {
             return Err(ToolkitError::CapabilityMismatch);
         }
+        if !instance.validate_capability_dispatch() {
+            return Err(ToolkitError::CapabilityMismatch);
+        }
         let key = ProviderFactoryKey {
             provider_type: descriptor.provider_type(),
             implementation_id: descriptor.implementation_id.clone(),

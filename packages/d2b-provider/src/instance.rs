@@ -84,6 +84,12 @@ impl ProviderInstance {
         }
     }
 
+    pub fn validate_capability_dispatch(&self) -> bool {
+        !self
+            .capabilities()
+            .contains_method(d2b_contracts::v2_provider::ProviderMethod::RuntimeExecute)
+    }
+
     pub fn provider(&self) -> &dyn Provider {
         match self {
             Self::Runtime(provider) => provider.as_ref(),
