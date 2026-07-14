@@ -16,6 +16,9 @@ deprecations ship one minor release before removal.
   axes, bounded descriptors and registries, shared in-process/agent traits,
   explicit lifecycle and adoption bindings, and co-located opaque credential
   leases.
+- Added the complete internal ComponentSession v2 protobuf/ttrpc service
+  inventory, strict bounded wire validation, schema fingerprints, reference
+  artifacts, and generated asynchronous client/server bindings.
 - Added a hermetic async ttrpc API-fit contract that pins the selected runtime
   and generator versions, commits drift-checked test bindings, and proves a
   yielding Unix-socket round trip without freezing a production service schema.

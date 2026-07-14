@@ -1,0 +1,15 @@
+syntax = "proto3";
+package d2b.guest.v2;
+import "common.proto";
+service GuestService {
+  rpc Bootstrap(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Reconnect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Exec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc CancelExec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc InspectExec(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc OpenShell(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc FileTransfer(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc SecurityKey(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Shutdown(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

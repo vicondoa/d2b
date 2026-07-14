@@ -21,6 +21,7 @@ use d2b_contracts::{
         VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
+    v2_services::{ServiceInventoryDocument, service_inventory_document},
 };
 use d2b_core::{
     allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
@@ -354,6 +355,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-ttrpc-api-fit-spike" => {
             run_task("gen-ttrpc-api-fit-spike", gen_ttrpc_api_fit_spike)
         }
+        [command] if command == "gen-v2-services" => run_task("gen-v2-services", gen_v2_services),
         [command] if command == "gen-daemon-api" => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -368,7 +370,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-ttrpc-api-fit-spike|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
+                "usage: cargo xtask <layer1 ...|delivery ...|gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-ttrpc-api-fit-spike|gen-v2-services|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -463,6 +465,145 @@ fn gen_ttrpc_api_fit_spike() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
             fs::copy(staging_dir.join(name), output)?;
         }
         Ok(outputs.into())
+    })();
+
+    let cleanup = fs::remove_dir_all(&staging_dir);
+    if let Err(error) = cleanup
+        && generation.is_ok()
+    {
+        return Err(error.into());
+    }
+    generation
+}
+
+fn gen_v2_services() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let crate_dir = repo_root.join("packages/d2b-contracts");
+    let proto_dir = crate_dir.join("proto/v2");
+    let out_dir = crate_dir.join("src/generated_v2_services");
+    let staging_dir = crate_dir.join(".codegen-v2-services");
+    let stems = [
+        "common",
+        "activation",
+        "broker",
+        "clipboard",
+        "clipboard_picker",
+        "daemon",
+        "guest",
+        "notify",
+        "provider_audio",
+        "provider_credential",
+        "provider_device",
+        "provider_display",
+        "provider_infrastructure",
+        "provider_network",
+        "provider_observability",
+        "provider_runtime",
+        "provider_storage",
+        "provider_substrate",
+        "provider_transport",
+        "realm",
+        "runtime_systemd_user",
+        "security_key",
+        "shell",
+        "tty",
+        "user",
+        "wayland",
+    ];
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
+    fs::create_dir(&staging_dir)?;
+
+    let generation = (|| {
+        let inputs: Vec<PathBuf> = stems
+            .iter()
+            .map(|stem| proto_dir.join(format!("{stem}.proto")))
+            .collect();
+        let mut codegen = ttrpc_codegen::Codegen::new();
+        codegen
+            .out_dir(&staging_dir)
+            .include(&proto_dir)
+            .rust_protobuf()
+            .rust_protobuf_customize(ttrpc_codegen::ProtobufCustomize::default().gen_mod_rs(false))
+            .customize(ttrpc_codegen::Customize {
+                async_all: true,
+                ..Default::default()
+            });
+        for input in &inputs {
+            codegen.input(input);
+        }
+        codegen.run()?;
+
+        let mut outputs = Vec::new();
+        for entry in fs::read_dir(&staging_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                || entry.path().extension().and_then(|value| value.to_str()) != Some("rs")
+            {
+                return Err("v2 service codegen emitted an unexpected output".into());
+            }
+            sanitize_generated_rust(&entry.path())?;
+            if entry.file_name() == "runtime_systemd_user_ttrpc.rs" {
+                let source = fs::read_to_string(entry.path())?;
+                let rewritten =
+                    source.replace("d2b.runtime.systemd_user.v2", "d2b.runtime.systemd-user.v2");
+                if source == rewritten {
+                    return Err("systemd-user ttrpc package rewrite found no dispatch paths".into());
+                }
+                fs::write(entry.path(), rewritten)?;
+            }
+            if entry.file_name() == "security_key_ttrpc.rs" {
+                let source = fs::read_to_string(entry.path())?;
+                let rewritten = source.replace("d2b.security_key.v2", "d2b.security-key.v2");
+                if source == rewritten {
+                    return Err("security-key ttrpc package rewrite found no dispatch paths".into());
+                }
+                fs::write(entry.path(), rewritten)?;
+            }
+            outputs.push(entry.path());
+        }
+        outputs.sort();
+        if outputs.len() != stems.len() * 2 - 1 {
+            return Err(format!(
+                "v2 service codegen emitted {} files, expected {}",
+                outputs.len(),
+                stems.len() * 2 - 1
+            )
+            .into());
+        }
+
+        fs::create_dir_all(&out_dir)?;
+        for entry in fs::read_dir(&out_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?;
+            } else {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        let mut installed = Vec::with_capacity(outputs.len());
+        for source in outputs {
+            let destination = out_dir.join(source.file_name().ok_or("generated file has no name")?);
+            fs::copy(source, &destination)?;
+            installed.push(destination);
+        }
+        let reference_dir = repo_root.join("docs/reference");
+        let inventory_path = reference_dir.join("v2-services.json");
+        let schema_path = reference_dir.join("v2-services-schema.json");
+        let inventory = service_inventory_document();
+        fs::write(
+            &inventory_path,
+            format!("{}\n", serde_json::to_string_pretty(&inventory)?),
+        )?;
+        let schema = schemars::schema_for!(ServiceInventoryDocument);
+        fs::write(
+            &schema_path,
+            format!("{}\n", serde_json::to_string_pretty(&schema)?),
+        )?;
+        installed.push(inventory_path);
+        installed.push(schema_path);
+        Ok(installed)
     })();
 
     let cleanup = fs::remove_dir_all(&staging_dir);

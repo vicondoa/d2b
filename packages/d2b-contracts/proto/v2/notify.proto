@@ -1,0 +1,9 @@
+syntax = "proto3";
+package d2b.notify.v2;
+import "common.proto";
+service NotifyService {
+  rpc Subscribe(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Acknowledge(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc InvokeAction(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}

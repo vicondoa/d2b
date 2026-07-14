@@ -1,0 +1,12 @@
+syntax = "proto3";
+package d2b.user.v2;
+import "common.proto";
+service UserService {
+  rpc Prompt(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc PollPrompt(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc CancelPrompt(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc DeleteCredential(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc RevokeExport(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Inspect(d2b.common.v2.ServiceRequest) returns (d2b.common.v2.ServiceResponse);
+  rpc Cancel(d2b.common.v2.CancelRequest) returns (d2b.common.v2.CancelResponse);
+}
