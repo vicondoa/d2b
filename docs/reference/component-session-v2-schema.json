@@ -1,0 +1,1593 @@
+{
+  "contract": "d2b-component-session-v2",
+  "formatVersion": 1,
+  "schemas": {
+    "attachmentPacket": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "AttachmentAccess": {
+          "enum": [
+            "read-only",
+            "write-only",
+            "read-write",
+            "ioctl-restricted"
+          ],
+          "type": "string"
+        },
+        "AttachmentCreditClass": {
+          "enum": [
+            "packet",
+            "request",
+            "operation",
+            "session",
+            "process",
+            "host"
+          ],
+          "type": "string"
+        },
+        "AttachmentDescriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/definitions/AttachmentAccess"
+            },
+            "cloexecRequired": {
+              "type": "boolean"
+            },
+            "creditClasses": {
+              "$ref": "#/definitions/BoundedVec_6_6_AttachmentCreditClass"
+            },
+            "duplicateObjectAllowed": {
+              "type": "boolean"
+            },
+            "index": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/definitions/AttachmentKind"
+            },
+            "methodId": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "objectType": {
+              "$ref": "#/definitions/KernelObjectType"
+            },
+            "operationId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoundedVec_16_16_uint8"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "packetSequence": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "purpose": {
+              "$ref": "#/definitions/AttachmentPurpose"
+            },
+            "reconnectGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "requestId": {
+              "$ref": "#/definitions/BoundedVec_16_16_uint8"
+            },
+            "service": {
+              "$ref": "#/definitions/ServicePackage"
+            }
+          },
+          "required": [
+            "access",
+            "cloexecRequired",
+            "creditClasses",
+            "duplicateObjectAllowed",
+            "index",
+            "kind",
+            "methodId",
+            "objectType",
+            "packetSequence",
+            "purpose",
+            "reconnectGeneration",
+            "requestId",
+            "service"
+          ],
+          "type": "object"
+        },
+        "AttachmentKind": {
+          "enum": [
+            "file-descriptor",
+            "credentials"
+          ],
+          "type": "string"
+        },
+        "AttachmentPurpose": {
+          "enum": [
+            "request-input",
+            "response-output",
+            "terminal",
+            "wayland",
+            "clipboard-transfer",
+            "listener",
+            "process-identity",
+            "device-lease",
+            "runtime-handle"
+          ],
+          "type": "string"
+        },
+        "BoundedVec_0_32_AttachmentDescriptor": {
+          "items": {
+            "$ref": "#/definitions/AttachmentDescriptor"
+          },
+          "maxItems": 32,
+          "minItems": 0,
+          "type": "array"
+        },
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        },
+        "BoundedVec_6_6_AttachmentCreditClass": {
+          "items": {
+            "$ref": "#/definitions/AttachmentCreditClass"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        },
+        "KernelObjectType": {
+          "enum": [
+            "pidfd",
+            "unix-stream-socket",
+            "unix-seqpacket-socket",
+            "pipe-read",
+            "pipe-write",
+            "memfd",
+            "regular-file",
+            "directory",
+            "device",
+            "tap",
+            "kvm",
+            "vhost",
+            "fuse",
+            "hidraw",
+            "pty-master",
+            "pty-slave",
+            "wayland-socket"
+          ],
+          "type": "string"
+        },
+        "ServicePackage": {
+          "enum": [
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "declaredCount": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "descriptors": {
+          "$ref": "#/definitions/BoundedVec_0_32_AttachmentDescriptor"
+        }
+      },
+      "required": [
+        "declaredCount",
+        "descriptors"
+      ],
+      "title": "AttachmentPacket",
+      "type": "object"
+    },
+    "bootstrapPskBinding": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        }
+      },
+      "properties": {
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "operationId": {
+          "$ref": "#/definitions/BoundedVec_16_16_uint8"
+        },
+        "replayNonce": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "expiresAtUnixMs",
+        "operationId",
+        "replayNonce"
+      ],
+      "title": "BootstrapPskBinding",
+      "type": "object"
+    },
+    "cancelAck": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        },
+        "CancelResult": {
+          "enum": [
+            "cancelled-before-dispatch",
+            "cancellation-signalled",
+            "already-terminal",
+            "unknown-request",
+            "generation-mismatch"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/definitions/BoundedVec_16_16_uint8"
+        },
+        "result": {
+          "$ref": "#/definitions/CancelResult"
+        }
+      },
+      "required": [
+        "reconnectGeneration",
+        "requestId",
+        "result"
+      ],
+      "title": "CancelAck",
+      "type": "object"
+    },
+    "cancelRequest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        }
+      },
+      "properties": {
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/definitions/BoundedVec_16_16_uint8"
+        }
+      },
+      "required": [
+        "reconnectGeneration",
+        "requestId"
+      ],
+      "title": "CancelRequest",
+      "type": "object"
+    },
+    "closeRecord": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "CloseReason": {
+          "enum": [
+            "normal",
+            "peer-requested",
+            "authentication-failed",
+            "purpose-mismatch",
+            "role-mismatch",
+            "schema-mismatch",
+            "limit-mismatch",
+            "channel-binding-mismatch",
+            "replay",
+            "record-truncated",
+            "fragment-invalid",
+            "nonce-exhausted",
+            "deadline-expired",
+            "cancelled",
+            "attachment-invalid",
+            "attachment-truncated",
+            "unknown-control",
+            "credit-exhausted",
+            "control-resource-exhausted",
+            "scheduler-stalled",
+            "keepalive-timeout",
+            "session-lost",
+            "internal-invariant"
+          ],
+          "type": "string"
+        },
+        "Remediation": {
+          "enum": [
+            "none",
+            "retry-bounded",
+            "inspect-provider",
+            "restart-agent",
+            "replace-generation",
+            "re-enroll-peer",
+            "repair-configuration",
+            "reduce-load"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/CloseReason"
+        },
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "remediation": {
+          "$ref": "#/definitions/Remediation"
+        }
+      },
+      "required": [
+        "reason",
+        "reconnectGeneration",
+        "remediation"
+      ],
+      "title": "CloseRecord",
+      "type": "object"
+    },
+    "fragmentHeader": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "messageId": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "offset": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "totalPlaintextLen": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "index",
+        "messageId",
+        "offset",
+        "totalPlaintextLen"
+      ],
+      "title": "FragmentHeader",
+      "type": "object"
+    },
+    "handshakeAccept": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "AttachmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "credentialsAllowed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "$ref": "#/definitions/AttachmentPolicyKind"
+            },
+            "maxPerOperation": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerPacket": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerRequest": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerSession": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "credentialsAllowed",
+            "kind",
+            "maxPerOperation",
+            "maxPerPacket",
+            "maxPerRequest",
+            "maxPerSession"
+          ],
+          "type": "object"
+        },
+        "AttachmentPolicyKind": {
+          "enum": [
+            "disabled",
+            "packet-atomic"
+          ],
+          "type": "string"
+        },
+        "EndpointPurpose": {
+          "enum": [
+            "daemon-local",
+            "daemon-remote",
+            "realm-peer",
+            "realm-bootstrap",
+            "guest-control",
+            "guest-bootstrap",
+            "provider-agent",
+            "privileged-broker",
+            "user-agent",
+            "runtime-systemd-user",
+            "shell-supervisor",
+            "clipboard-control",
+            "clipboard-picker",
+            "clipboard-bridge",
+            "desktop-observer",
+            "security-key",
+            "activation-helper",
+            "tty-helper",
+            "wayland-proxy"
+          ],
+          "type": "string"
+        },
+        "EndpointRole": {
+          "enum": [
+            "command-client",
+            "local-root-controller",
+            "realm-controller",
+            "local-root-broker",
+            "realm-broker",
+            "guest-agent",
+            "provider-agent",
+            "user-agent",
+            "runtime-systemd-user-agent",
+            "shell-supervisor",
+            "clipboard-daemon",
+            "clipboard-picker",
+            "wayland-proxy",
+            "desktop-observer",
+            "security-key-frontend",
+            "security-key-controller",
+            "activation-helper",
+            "tty-helper",
+            "remote-peer"
+          ],
+          "type": "string"
+        },
+        "HandshakeOffer": {
+          "additionalProperties": false,
+          "properties": {
+            "attachmentPolicy": {
+              "$ref": "#/definitions/AttachmentPolicy"
+            },
+            "initiatorRole": {
+              "$ref": "#/definitions/EndpointRole"
+            },
+            "limits": {
+              "$ref": "#/definitions/LimitProfile"
+            },
+            "noiseProfile": {
+              "$ref": "#/definitions/NoiseProfile"
+            },
+            "purpose": {
+              "$ref": "#/definitions/EndpointPurpose"
+            },
+            "purposeClass": {
+              "$ref": "#/definitions/PurposeClass"
+            },
+            "reconnectGeneration": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "responderRole": {
+              "$ref": "#/definitions/EndpointRole"
+            },
+            "schemaFingerprint": {
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "maxItems": 32,
+              "minItems": 32,
+              "type": "array"
+            },
+            "service": {
+              "$ref": "#/definitions/ServicePackage"
+            },
+            "transportBinding": {
+              "$ref": "#/definitions/TransportBinding"
+            }
+          },
+          "required": [
+            "attachmentPolicy",
+            "initiatorRole",
+            "limits",
+            "noiseProfile",
+            "purpose",
+            "purposeClass",
+            "reconnectGeneration",
+            "responderRole",
+            "schemaFingerprint",
+            "service",
+            "transportBinding"
+          ],
+          "type": "object"
+        },
+        "IdentityEvidenceRequirement": {
+          "enum": [
+            "directional-unix",
+            "enrolled-static-keys",
+            "parent-static-and-single-use-psk"
+          ],
+          "type": "string"
+        },
+        "LimitProfile": {
+          "additionalProperties": false,
+          "properties": {
+            "activeNamedStreams": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "aggregateNamedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeOfferBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveIntervalMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveTimeoutMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalNamedStreamBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalTtrpcBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "namedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "protectedCiphertextBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectAttempts": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectWindowMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "sessionControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "ttrpcControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "activeNamedStreams",
+            "aggregateNamedStreamQueueBytes",
+            "handshakeDeadlineMs",
+            "handshakeOfferBytes",
+            "keepaliveIntervalMs",
+            "keepaliveTimeoutMs",
+            "logicalNamedStreamBytes",
+            "logicalTtrpcBytes",
+            "namedStreamQueueBytes",
+            "protectedCiphertextBytes",
+            "reconnectAttempts",
+            "reconnectDeadlineMs",
+            "reconnectWindowMs",
+            "sessionControlQueueBytes",
+            "ttrpcControlQueueBytes"
+          ],
+          "type": "object"
+        },
+        "Locality": {
+          "enum": [
+            "process-local",
+            "host-local",
+            "guest-local",
+            "remote"
+          ],
+          "type": "string"
+        },
+        "NoiseProfile": {
+          "enum": [
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
+          ],
+          "type": "string"
+        },
+        "PurposeClass": {
+          "enum": [
+            "local",
+            "enrolled",
+            "bootstrap"
+          ],
+          "type": "string"
+        },
+        "ServicePackage": {
+          "enum": [
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
+          ],
+          "type": "string"
+        },
+        "TransportBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "channelBinding": {
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "maxItems": 32,
+              "minItems": 32,
+              "type": "array"
+            },
+            "identityEvidence": {
+              "$ref": "#/definitions/IdentityEvidenceRequirement"
+            },
+            "locality": {
+              "$ref": "#/definitions/Locality"
+            },
+            "transport": {
+              "$ref": "#/definitions/TransportClass"
+            }
+          },
+          "required": [
+            "channelBinding",
+            "identityEvidence",
+            "locality",
+            "transport"
+          ],
+          "type": "object"
+        },
+        "TransportClass": {
+          "enum": [
+            "unix-stream",
+            "unix-seqpacket",
+            "inherited-socketpair",
+            "native-vsock",
+            "cloud-hypervisor-vsock",
+            "provider-stream",
+            "direct-configured"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "offer": {
+          "$ref": "#/definitions/HandshakeOffer"
+        },
+        "transcriptBinding": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "offer",
+        "transcriptBinding"
+      ],
+      "title": "HandshakeAccept",
+      "type": "object"
+    },
+    "handshakeOffer": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "AttachmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "credentialsAllowed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "$ref": "#/definitions/AttachmentPolicyKind"
+            },
+            "maxPerOperation": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerPacket": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerRequest": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxPerSession": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "credentialsAllowed",
+            "kind",
+            "maxPerOperation",
+            "maxPerPacket",
+            "maxPerRequest",
+            "maxPerSession"
+          ],
+          "type": "object"
+        },
+        "AttachmentPolicyKind": {
+          "enum": [
+            "disabled",
+            "packet-atomic"
+          ],
+          "type": "string"
+        },
+        "EndpointPurpose": {
+          "enum": [
+            "daemon-local",
+            "daemon-remote",
+            "realm-peer",
+            "realm-bootstrap",
+            "guest-control",
+            "guest-bootstrap",
+            "provider-agent",
+            "privileged-broker",
+            "user-agent",
+            "runtime-systemd-user",
+            "shell-supervisor",
+            "clipboard-control",
+            "clipboard-picker",
+            "clipboard-bridge",
+            "desktop-observer",
+            "security-key",
+            "activation-helper",
+            "tty-helper",
+            "wayland-proxy"
+          ],
+          "type": "string"
+        },
+        "EndpointRole": {
+          "enum": [
+            "command-client",
+            "local-root-controller",
+            "realm-controller",
+            "local-root-broker",
+            "realm-broker",
+            "guest-agent",
+            "provider-agent",
+            "user-agent",
+            "runtime-systemd-user-agent",
+            "shell-supervisor",
+            "clipboard-daemon",
+            "clipboard-picker",
+            "wayland-proxy",
+            "desktop-observer",
+            "security-key-frontend",
+            "security-key-controller",
+            "activation-helper",
+            "tty-helper",
+            "remote-peer"
+          ],
+          "type": "string"
+        },
+        "IdentityEvidenceRequirement": {
+          "enum": [
+            "directional-unix",
+            "enrolled-static-keys",
+            "parent-static-and-single-use-psk"
+          ],
+          "type": "string"
+        },
+        "LimitProfile": {
+          "additionalProperties": false,
+          "properties": {
+            "activeNamedStreams": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "aggregateNamedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "handshakeOfferBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveIntervalMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "keepaliveTimeoutMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalNamedStreamBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "logicalTtrpcBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "namedStreamQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "protectedCiphertextBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectAttempts": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectDeadlineMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "reconnectWindowMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "sessionControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "ttrpcControlQueueBytes": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "activeNamedStreams",
+            "aggregateNamedStreamQueueBytes",
+            "handshakeDeadlineMs",
+            "handshakeOfferBytes",
+            "keepaliveIntervalMs",
+            "keepaliveTimeoutMs",
+            "logicalNamedStreamBytes",
+            "logicalTtrpcBytes",
+            "namedStreamQueueBytes",
+            "protectedCiphertextBytes",
+            "reconnectAttempts",
+            "reconnectDeadlineMs",
+            "reconnectWindowMs",
+            "sessionControlQueueBytes",
+            "ttrpcControlQueueBytes"
+          ],
+          "type": "object"
+        },
+        "Locality": {
+          "enum": [
+            "process-local",
+            "host-local",
+            "guest-local",
+            "remote"
+          ],
+          "type": "string"
+        },
+        "NoiseProfile": {
+          "enum": [
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
+          ],
+          "type": "string"
+        },
+        "PurposeClass": {
+          "enum": [
+            "local",
+            "enrolled",
+            "bootstrap"
+          ],
+          "type": "string"
+        },
+        "ServicePackage": {
+          "enum": [
+            "d2b.daemon.v2",
+            "d2b.realm.v2",
+            "d2b.guest.v2",
+            "d2b.provider.v2",
+            "d2b.broker.v2",
+            "d2b.user.v2",
+            "d2b.runtime.systemd-user.v2",
+            "d2b.shell.v2",
+            "d2b.clipboard.v2",
+            "d2b.clipboard.picker.v2",
+            "d2b.notify.v2",
+            "d2b.security-key.v2",
+            "d2b.wayland.v2",
+            "d2b.activation.v2",
+            "d2b.tty.v2"
+          ],
+          "type": "string"
+        },
+        "TransportBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "channelBinding": {
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "maxItems": 32,
+              "minItems": 32,
+              "type": "array"
+            },
+            "identityEvidence": {
+              "$ref": "#/definitions/IdentityEvidenceRequirement"
+            },
+            "locality": {
+              "$ref": "#/definitions/Locality"
+            },
+            "transport": {
+              "$ref": "#/definitions/TransportClass"
+            }
+          },
+          "required": [
+            "channelBinding",
+            "identityEvidence",
+            "locality",
+            "transport"
+          ],
+          "type": "object"
+        },
+        "TransportClass": {
+          "enum": [
+            "unix-stream",
+            "unix-seqpacket",
+            "inherited-socketpair",
+            "native-vsock",
+            "cloud-hypervisor-vsock",
+            "provider-stream",
+            "direct-configured"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "attachmentPolicy": {
+          "$ref": "#/definitions/AttachmentPolicy"
+        },
+        "initiatorRole": {
+          "$ref": "#/definitions/EndpointRole"
+        },
+        "limits": {
+          "$ref": "#/definitions/LimitProfile"
+        },
+        "noiseProfile": {
+          "$ref": "#/definitions/NoiseProfile"
+        },
+        "purpose": {
+          "$ref": "#/definitions/EndpointPurpose"
+        },
+        "purposeClass": {
+          "$ref": "#/definitions/PurposeClass"
+        },
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "responderRole": {
+          "$ref": "#/definitions/EndpointRole"
+        },
+        "schemaFingerprint": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        },
+        "service": {
+          "$ref": "#/definitions/ServicePackage"
+        },
+        "transportBinding": {
+          "$ref": "#/definitions/TransportBinding"
+        }
+      },
+      "required": [
+        "attachmentPolicy",
+        "initiatorRole",
+        "limits",
+        "noiseProfile",
+        "purpose",
+        "purposeClass",
+        "reconnectGeneration",
+        "responderRole",
+        "schemaFingerprint",
+        "service",
+        "transportBinding"
+      ],
+      "title": "HandshakeOffer",
+      "type": "object"
+    },
+    "handshakeReject": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "HandshakeRejectReason": {
+          "enum": [
+            "malformed-preface",
+            "unsupported-version",
+            "offer-too-large",
+            "malformed-offer",
+            "purpose-mismatch",
+            "purpose-class-mismatch",
+            "role-mismatch",
+            "service-mismatch",
+            "schema-mismatch",
+            "noise-profile-mismatch",
+            "limit-profile-mismatch",
+            "channel-binding-mismatch",
+            "generation-mismatch",
+            "attachment-policy-mismatch",
+            "identity-evidence-mismatch",
+            "authentication-failed",
+            "handshake-timeout",
+            "bootstrap-expired",
+            "bootstrap-replayed",
+            "bootstrap-operation-mismatch",
+            "resource-exhausted"
+          ],
+          "type": "string"
+        },
+        "Remediation": {
+          "enum": [
+            "none",
+            "retry-bounded",
+            "inspect-provider",
+            "restart-agent",
+            "replace-generation",
+            "re-enroll-peer",
+            "repair-configuration",
+            "reduce-load"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/HandshakeRejectReason"
+        },
+        "remediation": {
+          "$ref": "#/definitions/Remediation"
+        }
+      },
+      "required": [
+        "reason",
+        "remediation"
+      ],
+      "title": "HandshakeReject",
+      "type": "object"
+    },
+    "keepaliveRecord": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "nonce": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "nonce",
+        "reconnectGeneration"
+      ],
+      "title": "KeepaliveRecord",
+      "type": "object"
+    },
+    "metricLabels": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "ChannelClass": {
+          "enum": [
+            "session-control",
+            "ttrpc-control",
+            "attachment-control",
+            "named-stream"
+          ],
+          "type": "string"
+        },
+        "EndpointPurpose": {
+          "enum": [
+            "daemon-local",
+            "daemon-remote",
+            "realm-peer",
+            "realm-bootstrap",
+            "guest-control",
+            "guest-bootstrap",
+            "provider-agent",
+            "privileged-broker",
+            "user-agent",
+            "runtime-systemd-user",
+            "shell-supervisor",
+            "clipboard-control",
+            "clipboard-picker",
+            "clipboard-bridge",
+            "desktop-observer",
+            "security-key",
+            "activation-helper",
+            "tty-helper",
+            "wayland-proxy"
+          ],
+          "type": "string"
+        },
+        "HealthState": {
+          "enum": [
+            "starting",
+            "healthy",
+            "degraded",
+            "unavailable",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "Locality": {
+          "enum": [
+            "process-local",
+            "host-local",
+            "guest-local",
+            "remote"
+          ],
+          "type": "string"
+        },
+        "MetricReason": {
+          "enum": [
+            "none",
+            "policy-denied",
+            "authentication",
+            "transcript-mismatch",
+            "purpose-mismatch",
+            "role-mismatch",
+            "schema-mismatch",
+            "limit-mismatch",
+            "channel-binding-mismatch",
+            "replay",
+            "truncation",
+            "malformed",
+            "deadline",
+            "cancellation",
+            "backpressure",
+            "credit-exhausted",
+            "keepalive-timeout",
+            "transport",
+            "internal-invariant"
+          ],
+          "type": "string"
+        },
+        "MetricResult": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "cancelled",
+            "expired",
+            "closed",
+            "retrying",
+            "exhausted"
+          ],
+          "type": "string"
+        },
+        "NoiseProfile": {
+          "enum": [
+            "Noise_NN_25519_ChaChaPoly_SHA256",
+            "Noise_KK_25519_ChaChaPoly_SHA256",
+            "Noise_IKpsk2_25519_ChaChaPoly_SHA256"
+          ],
+          "type": "string"
+        },
+        "ProviderTypeLabel": {
+          "enum": [
+            "runtime",
+            "infrastructure",
+            "transport",
+            "substrate",
+            "credential",
+            "display",
+            "network",
+            "storage",
+            "device",
+            "audio",
+            "observability"
+          ],
+          "type": "string"
+        },
+        "TransportClass": {
+          "enum": [
+            "unix-stream",
+            "unix-seqpacket",
+            "inherited-socketpair",
+            "native-vsock",
+            "cloud-hypervisor-vsock",
+            "provider-stream",
+            "direct-configured"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "channelClass": {
+          "$ref": "#/definitions/ChannelClass"
+        },
+        "healthState": {
+          "$ref": "#/definitions/HealthState"
+        },
+        "locality": {
+          "$ref": "#/definitions/Locality"
+        },
+        "noise": {
+          "$ref": "#/definitions/NoiseProfile"
+        },
+        "providerType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProviderTypeLabel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "$ref": "#/definitions/EndpointPurpose"
+        },
+        "reason": {
+          "$ref": "#/definitions/MetricReason"
+        },
+        "result": {
+          "$ref": "#/definitions/MetricResult"
+        },
+        "transport": {
+          "$ref": "#/definitions/TransportClass"
+        }
+      },
+      "required": [
+        "channelClass",
+        "healthState",
+        "locality",
+        "noise",
+        "purpose",
+        "reason",
+        "result",
+        "transport"
+      ],
+      "title": "MetricLabels",
+      "type": "object"
+    },
+    "recordHeader": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "ChannelId": {
+          "anyOf": [
+            {
+              "maximum": 0.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 1.0,
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 2.0,
+              "minimum": 2.0,
+              "type": "integer"
+            },
+            {
+              "maximum": 65535.0,
+              "minimum": 256.0,
+              "type": "integer"
+            }
+          ]
+        },
+        "RecordKind": {
+          "enum": [
+            "session-control",
+            "ttrpc",
+            "named-stream",
+            "attachment",
+            "keepalive-ping",
+            "keepalive-pong",
+            "close",
+            "cancel-request",
+            "cancel-ack"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "channel": {
+          "$ref": "#/definitions/ChannelId"
+        },
+        "flags": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/definitions/RecordKind"
+        },
+        "payloadLen": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reconnectGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel",
+        "flags",
+        "kind",
+        "payloadLen",
+        "reconnectGeneration",
+        "sequence"
+      ],
+      "title": "RecordHeader",
+      "type": "object"
+    },
+    "requestEnvelope": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BoundedVec_16_16_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        },
+        "BoundedVec_1_64_uint8": {
+          "items": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "properties": {
+        "correlationId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedVec_1_64_uint8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedVec_1_64_uint8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuedAtUnixMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/definitions/BoundedVec_16_16_uint8"
+        },
+        "traceId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedVec_16_16_uint8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "expiresAtUnixMs",
+        "issuedAtUnixMs",
+        "requestId"
+      ],
+      "title": "RequestEnvelope",
+      "type": "object"
+    }
+  }
+}

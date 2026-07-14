@@ -19,3 +19,4 @@ serde_json.workspace = true
 d2b-contracts = { workspace = true, features = ["schema"] }
 d2b-host = { workspace = true }
 regex = "1"
+snow.workspace = true
