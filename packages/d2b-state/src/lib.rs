@@ -1,2 +1,38 @@
-//! Atomic JSON, quarantine, generation, path-safe I/O, lock, and audit
-//! persistence helpers for d2b 2.0.
+//! Durable state primitives for d2b 2.0.
+//!
+//! The crate deliberately has no default feature. Host filesystem access is
+//! available only with `host-fs`.
+
+#![forbid(unsafe_code)]
+
+#[cfg(feature = "host-fs")]
+mod atomic;
+#[cfg(feature = "host-fs")]
+mod audit;
+#[cfg(feature = "host-fs")]
+mod error;
+#[cfg(feature = "host-fs")]
+mod lease;
+#[cfg(feature = "host-fs")]
+mod lock;
+#[cfg(feature = "host-fs")]
+mod path;
+
+#[cfg(feature = "host-fs")]
+pub use atomic::{
+    AtomicFilesystem, AtomicWrite, CanonicalJson, DurableState, GenerationPolicy,
+    MetadataExpectation, QuarantineRecord, ReadPolicy, RealAtomicFilesystem, WritePolicy,
+};
+#[cfg(feature = "host-fs")]
+pub use audit::{
+    AuditAppender, AuditRecordInput, SegmentBuilder, checkpoint, decide_retention, detect_gap,
+    read_audit_segment,
+};
+#[cfg(feature = "host-fs")]
+pub use error::{Error, ErrorCode, Result};
+#[cfg(feature = "host-fs")]
+pub use lease::{LeaseStatus, grant_lease, revoke_lease, validate_lease};
+#[cfg(feature = "host-fs")]
+pub use lock::{Cancellation, Clock, LockGuard, LockSet, NeverCancelled, OfdTransfer, SystemClock};
+#[cfg(feature = "host-fs")]
+pub use path::{AnchoredDir, AnchoredResource, LeafName, RelativePath};
