@@ -17,7 +17,7 @@
 SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
 NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
-CARGO_XTASK := cd packages && RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= cargo xtask
+CARGO_XTASK := cd packages && cargo xtask
 
 # ===========================================================================
 # Test-rearchitecture interface. The targets are the stable contract; the

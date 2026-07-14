@@ -10,7 +10,8 @@ pub const CHECKOUT_REF: &str = "${{ github.event.pull_request.head.sha || github
 pub const INSTALL_NIX_ACTION: &str =
     "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077";
 pub const RUST_CACHE_ACTION: &str = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32";
-const CLEAR_RUSTC_WRAPPERS: &str = r#"RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="""#;
+pub const SCCACHE_ACTION: &str =
+    "mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696";
 
 pub fn render_workflow(manifest: &Layer1Manifest, template: &str) -> Result<String> {
     manifest.validate()?;
@@ -132,11 +133,11 @@ fn make_target(job: &JobSpec) -> &str {
 }
 
 fn ci_make_command(target: &str) -> String {
-    format!("{CLEAR_RUSTC_WRAPPERS} make -- {target}")
+    format!("make -- {target}")
 }
 
 fn ci_silent_make_command(target: &str) -> String {
-    format!("{CLEAR_RUSTC_WRAPPERS} make -s -- {target}")
+    format!("make -s -- {target}")
 }
 
 fn nix_setup_step() -> String {
@@ -145,7 +146,11 @@ fn nix_setup_step() -> String {
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            experimental-features = nix-command flakes"#
+            experimental-features = nix-command flakes
+      - name: Install pinned sccache
+        uses: {SCCACHE_ACTION}
+        with:
+          version: "v0.10.0""#
     )
 }
 
@@ -231,19 +236,14 @@ fn rust_job(job: &JobSpec) -> String {
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: {}
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # sccache remains enabled in CI and uses its local-disk backend. The
+      # existing cache action persists that directory without exposing cache
+      # credentials to build scripts, proc-macros, or tests.
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: ${{{{ github.workspace }}}}/.sccache
+      # Incremental compilation artifacts are non-deterministic and bloat the
+      # target cache without benefiting independent PR runs.
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      RUSTC_WRAPPER: ""
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: {}
         with:
@@ -281,6 +281,7 @@ fn rust_job(job: &JobSpec) -> String {
             packages -> target
             packages/d2b-priv-broker -> target
           cache-directories: |
+            .sccache
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
           prefix-key: "v0-rust"
@@ -566,16 +567,15 @@ mod tests {
         assert!(first.contains(RUST_CACHE_ACTION));
         assert!(first.contains("  pull_request:\n  push:\n    branches: [main]"));
         assert!(!first.contains("  pull_request:\n    branches: [main]"));
-        assert!(
-            first.contains(
-                r#"run: RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -- test-lint"#
-            )
-        );
-        assert!(first.contains(
-            r#"checks=$(RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" make -s -- test-flake-list)"#
-        ));
-        assert!(first.contains("      RUSTC_WRAPPER: \"\"\n      CARGO_BUILD_RUSTC_WRAPPER: \"\""));
-        assert!(!first.contains("run: make "));
+        assert!(first.contains("run: make -- test-lint"));
+        assert!(first.contains("checks=$(make -s -- test-flake-list)"));
+        assert!(first.contains(SCCACHE_ACTION));
+        assert!(first.contains("D2B_CI_SCCACHE: \"1\""));
+        assert!(first.contains(".sccache"));
+        assert!(!first.contains("RUSTC_WRAPPER=\"\""));
+        assert!(!first.contains("CARGO_BUILD_RUSTC_WRAPPER=\"\""));
+        assert!(!first.contains("run: make test-"));
+        assert!(!first.contains("run: make -s test-"));
     }
 
     #[test]

@@ -316,6 +316,18 @@ fn delivery_tool_sources_and_toolchains_are_exactly_pinned() {
         flake.contains("overlays.default = _final: _prev: { };"),
         "developer tooling must not expand the public overlay"
     );
+    let layer1_workflow = read_repo_file(".github/workflows/pr-l1-static-fast.yml");
+    assert!(
+        layer1_workflow
+            .contains("mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696")
+            && layer1_workflow.contains("D2B_CI_SCCACHE: \"1\"")
+            && layer1_workflow.contains(".sccache")
+            && !layer1_workflow.contains("RUSTC_WRAPPER=\"\"")
+            && !layer1_workflow.contains("CARGO_BUILD_RUSTC_WRAPPER=\"\"")
+            && !layer1_workflow.contains("RUSTC_WRAPPER: \"\"")
+            && !layer1_workflow.contains("CARGO_BUILD_RUSTC_WRAPPER: \"\""),
+        "generated Layer-1 CI must install and retain sccache without wrapper-clearing overrides"
+    );
     let lock = read_repo_file("flake.lock");
     for pin in [
         r#""rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786""#,

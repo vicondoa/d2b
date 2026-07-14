@@ -25,6 +25,8 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Kept sccache enabled throughout generated CI and persisted its local cache
+  without exposing cache-service credentials to compiled code.
 - Replaced the unavailable GitHub stack preview dependency with locked Git
   Town 23.0.1, ordinary GitHub PR authority, recursive parent-graph
   verification, and a typed fail-closed capability check.
