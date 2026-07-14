@@ -1,29 +1,32 @@
 use std::{
-    collections::VecDeque,
+    any::Any,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::{EndpointRole, ServicePackage},
+    v2_component_session::{
+        AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
+        AttachmentPurpose, BoundedVec, CloseReason, KernelObjectType, Remediation, RequestId,
+        ServicePackage, SessionErrorCode,
+    },
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        AdoptionRequest, AdoptionState, Fingerprint, Generation, PrincipalRef, ProviderFailureKind,
+        AdoptionRequest, AdoptionState, Fingerprint, Generation, ProviderFailureKind,
         ProviderMethod, RuntimeProvider,
     },
-    v2_services::{
-        StrictWireMessage, common, decode_strict, encode_strict, provider_credential_ttrpc,
-        provider_runtime_ttrpc,
-    },
+    v2_services::{StrictWireMessage, common, provider_credential_ttrpc, provider_runtime_ttrpc},
 };
-use d2b_provider::{
-    CancellationToken, ProviderInstance, ProviderRegistryBuilder, RpcProviderProxy, SessionIdentity,
-};
+use d2b_provider::{ProviderInstance, ProviderRegistryBuilder, RpcProviderProxy, SessionIdentity};
 use d2b_provider_toolkit::{
-    AuthenticatedSessionState, ClosedProviderMethod, ComponentSessionDriver, DeterministicClock,
-    FakeProvider, Fixture, GeneratedProviderServiceServer, OwnedAttachment, ProviderAgentAdapter,
-    Redacted, Secret, SessionDriverError, TransportPacket, check_provider_conformance,
-    register_exact_instances, sample_lease_request,
+    DeterministicClock, FakeProvider, Fixture, GeneratedProviderServiceServer,
+    ProviderAgentAdapter, Redacted, Secret, check_provider_conformance, register_exact_instances,
+    sample_lease_request,
+};
+use d2b_session::{
+    AttachmentPayload, AttachmentValidationError, ComponentSessionDriver, OwnedAttachment,
+    SessionDriverHandle, SessionError, SessionEvent, StreamEvent, StreamId,
 };
 use protobuf::{EnumOrUnknown, MessageField};
 
@@ -209,112 +212,154 @@ fn redaction_wrappers_do_not_expose_canaries() {
 }
 
 struct FakeSessionDriver {
-    state: Mutex<AuthenticatedSessionState>,
-    cancellation: CancellationToken,
-    remaining_nanos: Mutex<u64>,
+    generation: Mutex<u64>,
     attachments: Mutex<Vec<OwnedAttachment>>,
-    incoming: Mutex<VecDeque<TransportPacket>>,
-    outgoing: Mutex<VecDeque<TransportPacket>>,
 }
 
 impl FakeSessionDriver {
-    fn new(fixture: &Fixture) -> Self {
-        let operation = fixture
-            .operation(ProviderMethod::RuntimePlan)
-            .unwrap_or_else(|_| unreachable!());
+    fn new(_: &Fixture) -> Self {
         Self {
-            state: Mutex::new(AuthenticatedSessionState {
-                local_provider_id: fixture.descriptor.provider_id.clone(),
-                local_provider_type: fixture.descriptor.provider_type(),
-                local_provider_generation: fixture.descriptor.registry_generation,
-                local_role: EndpointRole::ProviderAgent,
-                peer_role: EndpointRole::RealmController,
-                service: ServicePackage::ProviderV2,
-                session_generation: 7,
-                principal: PrincipalRef::parse("authenticated-controller")
-                    .unwrap_or_else(|_| unreachable!()),
-                authorized_scope: operation.scope,
-            }),
-            cancellation: CancellationToken::new(),
-            remaining_nanos: Mutex::new(30_000_000_000),
+            generation: Mutex::new(7),
             attachments: Mutex::new(Vec::new()),
-            incoming: Mutex::new(VecDeque::new()),
-            outgoing: Mutex::new(VecDeque::new()),
         }
-    }
-
-    fn push_packet(&self, packet: TransportPacket) {
-        self.incoming
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push_back(packet);
-    }
-
-    fn pop_response(&self) -> TransportPacket {
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pop_front()
-            .unwrap_or_else(|| unreachable!())
     }
 }
 
 #[async_trait]
 impl ComponentSessionDriver for FakeSessionDriver {
-    fn authenticated_state(&self) -> Result<AuthenticatedSessionState, SessionDriverError> {
-        Ok(self
-            .state
+    fn generation(&self) -> u64 {
+        *self
+            .generation
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone())
     }
 
-    fn cancellation(&self, _: [u8; 16]) -> CancellationToken {
-        self.cancellation.clone()
+    async fn invoke(&self, _: RequestId, _: Vec<u8>) -> d2b_session::Result<Vec<u8>> {
+        Err(unsupported_session_operation())
     }
 
-    fn monotonic_remaining_nanos(&self, _: [u8; 16]) -> Result<u64, SessionDriverError> {
-        Ok(*self
-            .remaining_nanos
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()))
+    async fn cancel(&self, _: u64, _: RequestId) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
     }
 
-    async fn take_attachments(
+    async fn send_ttrpc(&self, _: Vec<u8>) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn receive_ttrpc(&self) -> d2b_session::Result<Vec<u8>> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn send_attachments(&self, _: Vec<OwnedAttachment>) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn receive_attachments(&self) -> d2b_session::Result<Vec<OwnedAttachment>> {
+        Ok(std::mem::take(
+            &mut *self
+                .attachments
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        ))
+    }
+
+    async fn open_named_stream(&self, _: StreamId, _: u32, _: u32) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn send_named_stream(&self, _: StreamId, _: Vec<u8>) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn receive_named_stream(&self) -> d2b_session::Result<StreamEvent> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn grant_named_stream_credit(&self, _: StreamId, _: u32) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn close_named_stream(&self, _: StreamId) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn reset_named_stream(&self, _: StreamId) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn drive_keepalive(&self, _: Instant) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn receive_control(&self) -> d2b_session::Result<SessionEvent> {
+        Err(unsupported_session_operation())
+    }
+
+    async fn close(&self, _: CloseReason, _: Remediation) -> d2b_session::Result<()> {
+        Err(unsupported_session_operation())
+    }
+}
+
+fn unsupported_session_operation() -> SessionError {
+    SessionError::new(SessionErrorCode::InternalInvariant)
+}
+
+struct BytesPayload(Vec<u8>);
+
+impl AttachmentPayload for BytesPayload {
+    fn close(self: Box<Self>) {}
+
+    fn as_any(&self) -> &dyn Any {
+        &self.0
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        Box::new(self.0)
+    }
+
+    fn validate_descriptor(
         &self,
-        _: [u8; 16],
-        indexes: &[u32],
-    ) -> Result<Vec<OwnedAttachment>, SessionDriverError> {
-        let mut available = self
-            .attachments
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if available
-            .iter()
-            .map(OwnedAttachment::index)
-            .eq(indexes.iter().copied())
-        {
-            Ok(std::mem::take(&mut *available))
-        } else {
-            Err(SessionDriverError::AttachmentMismatch)
-        }
-    }
-
-    async fn receive_packet(&self) -> Result<TransportPacket, SessionDriverError> {
-        self.incoming
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pop_front()
-            .ok_or(SessionDriverError::Disconnected)
-    }
-
-    async fn send_packet(&self, packet: TransportPacket) -> Result<(), SessionDriverError> {
-        self.outgoing
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push_back(packet);
+        _: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
         Ok(())
     }
+}
+
+fn owned_bytes(index: u16, payload: Vec<u8>) -> OwnedAttachment {
+    OwnedAttachment::new(
+        AttachmentDescriptor {
+            index,
+            kind: AttachmentKind::FileDescriptor,
+            object_type: KernelObjectType::Memfd,
+            access: AttachmentAccess::ReadOnly,
+            purpose: AttachmentPurpose::RequestInput,
+            service: ServicePackage::ProviderV2,
+            method_id: 1,
+            request_id: RequestId::new(vec![0x11; 16]).unwrap_or_else(|_| unreachable!()),
+            operation_id: None,
+            packet_sequence: 1,
+            reconnect_generation: 7,
+            duplicate_object_allowed: false,
+            cloexec_required: true,
+            credit_classes: BoundedVec::new(vec![
+                AttachmentCreditClass::Packet,
+                AttachmentCreditClass::Request,
+                AttachmentCreditClass::Operation,
+                AttachmentCreditClass::Session,
+                AttachmentCreditClass::Process,
+                AttachmentCreditClass::Host,
+            ])
+            .unwrap_or_else(|_| unreachable!()),
+        },
+        Box::new(BytesPayload(payload)),
+    )
+}
+
+fn assert_canonical_handle<T: ComponentSessionDriver>() {}
+
+#[test]
+fn canonical_session_handle_implements_provider_transport() {
+    assert_canonical_handle::<SessionDriverHandle>();
 }
 
 fn generated_request(fixture: &Fixture, method: ProviderMethod) -> common::ProviderRequest {
@@ -435,7 +480,7 @@ async fn generated_server_dispatches_closed_methods_over_authenticated_session()
 }
 
 #[tokio::test]
-async fn packet_proxy_preserves_owned_attachments_and_fails_closed() {
+async fn canonical_session_attachments_are_owned_and_index_bound() {
     let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
     let driver = Arc::new(FakeSessionDriver::new(&fixture));
     let server = GeneratedProviderServiceServer::new(
@@ -446,33 +491,32 @@ async fn packet_proxy_preserves_owned_attachments_and_fails_closed() {
     .unwrap_or_else(|_| unreachable!());
     let mut request = generated_request(&fixture, ProviderMethod::RuntimePlan);
     request.attachment_indexes = vec![4];
-    let payload = encode_strict(&request, false).unwrap_or_else(|_| unreachable!());
-    driver.push_packet(TransportPacket {
-        request_id: [0x11; 16],
-        method: ClosedProviderMethod::Invoke(ProviderMethod::RuntimePlan),
-        payload,
-        attachments: vec![OwnedAttachment::new(4, vec![0x55; 8])],
-    });
-    server
-        .serve_next_packet()
+    driver
+        .attachments
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(owned_bytes(4, vec![0x55; 8]));
+    let context = ttrpc::r#async::TtrpcContext {
+        mh: Default::default(),
+        metadata: Default::default(),
+        timeout_nano: 30_000_000_000,
+    };
+    let response = provider_runtime_ttrpc::RuntimeProviderService::plan(&server, &context, request)
         .await
         .unwrap_or_else(|error| panic!("{error:?}"));
-    let response = driver.pop_response();
-    let response: common::ProviderResponse =
-        decode_strict(&response.payload, false).unwrap_or_else(|_| unreachable!());
     assert!(!response.resource_handle.is_empty());
 
-    driver.cancellation.cancel();
-    let request = generated_request(&fixture, ProviderMethod::RuntimeInspect);
-    driver.push_packet(TransportPacket {
-        request_id: [0x11; 16],
-        method: ClosedProviderMethod::Invoke(ProviderMethod::RuntimeInspect),
-        payload: encode_strict(&request, false).unwrap_or_else(|_| unreachable!()),
-        attachments: Vec::new(),
-    });
-    assert_eq!(
-        server.serve_next_packet().await,
-        Err(SessionDriverError::Protocol)
+    let mut mismatch = generated_request(&fixture, ProviderMethod::RuntimeInspect);
+    mismatch.attachment_indexes = vec![3];
+    driver
+        .attachments
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(owned_bytes(4, vec![0x66; 8]));
+    assert!(
+        provider_runtime_ttrpc::RuntimeProviderService::inspect(&server, &context, mismatch,)
+            .await
+            .is_err()
     );
 }
 
@@ -496,7 +540,7 @@ async fn generated_credential_service_owns_lease_payloads_and_continuity() {
         .attachments
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .push(OwnedAttachment::new(
+        .push(owned_bytes(
             0,
             serde_json::to_vec(&lease_request).unwrap_or_else(|_| unreachable!()),
         ));
@@ -526,7 +570,7 @@ async fn generated_credential_service_owns_lease_payloads_and_continuity() {
 }
 
 #[tokio::test]
-async fn generated_server_reauthenticates_and_rechecks_deadlines_per_request() {
+async fn generated_server_rechecks_session_generation_and_deadline_per_request() {
     let fixture = Fixture::new(ProviderType::Runtime, 0).unwrap_or_else(|_| unreachable!());
     let driver = Arc::new(FakeSessionDriver::new(&fixture));
     let server = GeneratedProviderServiceServer::new(
@@ -542,10 +586,10 @@ async fn generated_server_reauthenticates_and_rechecks_deadlines_per_request() {
     };
 
     driver
-        .state
+        .generation
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .session_generation = 8;
+        .map(|mut generation| *generation = 8)
+        .unwrap_or_else(|error| *error.into_inner() = 8);
     assert!(
         provider_runtime_ttrpc::RuntimeProviderService::plan(
             &server,
@@ -557,22 +601,21 @@ async fn generated_server_reauthenticates_and_rechecks_deadlines_per_request() {
     );
 
     driver
-        .state
+        .generation
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .session_generation = 7;
-    *driver
-        .remaining_nanos
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = 0;
+        .map(|mut generation| *generation = 7)
+        .unwrap_or_else(|error| *error.into_inner() = 7);
+    let mut expired = generated_request(&fixture, ProviderMethod::RuntimePlan);
+    expired
+        .context
+        .as_mut()
+        .and_then(|context| context.metadata.as_mut())
+        .unwrap_or_else(|| unreachable!())
+        .expires_at_unix_ms = fixture.now_unix_ms - 1;
     assert!(
-        provider_runtime_ttrpc::RuntimeProviderService::plan(
-            &server,
-            &context,
-            generated_request(&fixture, ProviderMethod::RuntimePlan),
-        )
-        .await
-        .is_err()
+        provider_runtime_ttrpc::RuntimeProviderService::plan(&server, &context, expired,)
+            .await
+            .is_err()
     );
 
     assert!(server.shutdown(std::time::Duration::from_millis(10)).await);

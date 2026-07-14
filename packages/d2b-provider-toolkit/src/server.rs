@@ -6,40 +6,39 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use d2b_contracts::{
-    v2_component_session::ServicePackage,
-    v2_identity::ProviderType,
+    v2_component_session::{ServicePackage, SessionErrorCode},
+    v2_identity::{ProviderType, RealmId, RoleId, WorkloadId},
     v2_provider::{
         AdoptionRequest, AuthorizedProviderScope, CorrelationId, CredentialLease,
         CredentialLeaseRequest, Fingerprint, IdempotencyKey, MutationState, ObservedLifecycleState,
-        OperationId, PROVIDER_SCHEMA_VERSION, ProviderCapability, ProviderDescriptor,
+        OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef, ProviderCapability, ProviderDescriptor,
         ProviderFailure, ProviderFailureKind, ProviderHandle, ProviderHealth, ProviderHealthState,
         ProviderMethod, ProviderObservation, ProviderOperationContext, ProviderOperationRequest,
         ProviderPlan, ProviderTarget, RetryClass,
     },
     v2_services::{
-        StrictWireMessage, admit_metadata, common, decode_strict, encode_strict,
-        provider_audio_ttrpc, provider_credential_ttrpc, provider_device_ttrpc,
-        provider_display_ttrpc, provider_infrastructure_ttrpc, provider_network_ttrpc,
-        provider_observability_ttrpc, provider_runtime_ttrpc, provider_storage_ttrpc,
-        provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
+        StrictWireMessage, common, provider_audio_ttrpc, provider_credential_ttrpc,
+        provider_device_ttrpc, provider_display_ttrpc, provider_infrastructure_ttrpc,
+        provider_network_ttrpc, provider_observability_ttrpc, provider_runtime_ttrpc,
+        provider_storage_ttrpc, provider_substrate_ttrpc, provider_transport_ttrpc, provider_type,
     },
 };
 use d2b_provider::{
     ProviderClock, ProviderInstance, RpcCall, RpcOperation, RpcPayload, RpcResponse,
     SessionIdentity,
 };
+use d2b_session::{
+    ComponentSessionDriver, DeadlineBudget, OwnedAttachment, SessionDriverHandle, SessionError,
+};
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::sync::Notify;
 
-use crate::{
-    AuthenticatedSessionState, ClosedProviderMethod, ComponentSessionDriver, OwnedAttachment,
-    ProviderAgentAdapter, SessionDriverError, ToolkitError, TransportPacket,
-};
+use crate::{ProviderAgentAdapter, ToolkitError};
 
 #[derive(Default)]
 struct ObjectStore {
@@ -75,22 +74,29 @@ impl std::fmt::Debug for GeneratedProviderServiceServer {
 }
 
 impl GeneratedProviderServiceServer {
+    pub fn from_session_handle(
+        instance: ProviderInstance,
+        driver: SessionDriverHandle,
+        clock: Arc<dyn ProviderClock>,
+    ) -> Result<Self, ToolkitError> {
+        Self::new(instance, Arc::new(driver), clock)
+    }
+
     pub fn new(
         instance: ProviderInstance,
         driver: Arc<dyn ComponentSessionDriver>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, ToolkitError> {
-        let state = driver
-            .authenticated_state()
-            .map_err(|_| ToolkitError::DescriptorInvalid)?;
         let descriptor = instance.descriptor();
-        validate_session_binding(&state, &descriptor)?;
+        if descriptor.placement.agent_binding().is_none() || driver.generation() == 0 {
+            return Err(ToolkitError::DescriptorInvalid);
+        }
         let identity = SessionIdentity {
-            peer_role: state.local_role,
-            service: state.service,
-            provider_id: state.local_provider_id,
-            provider_type: state.local_provider_type,
-            provider_generation: state.local_provider_generation,
+            peer_role: d2b_contracts::v2_component_session::EndpointRole::ProviderAgent,
+            service: ServicePackage::ProviderV2,
+            provider_id: descriptor.provider_id.clone(),
+            provider_type: descriptor.provider_type(),
+            provider_generation: descriptor.registry_generation,
         };
         let adapter = Arc::new(ProviderAgentAdapter::new(
             instance,
@@ -164,75 +170,6 @@ impl GeneratedProviderServiceServer {
         }
     }
 
-    pub async fn serve_next_packet(&self) -> Result<(), SessionDriverError> {
-        let packet = self.driver.receive_packet().await?;
-        let method = packet.method;
-        let request_id = packet.request_id;
-        let response_payload = match method {
-            ClosedProviderMethod::Capabilities(provider_type) => {
-                self.ensure_axis(provider_type)
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                let request: common::CapabilityRequest = decode_strict(&packet.payload, false)
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                let response = self
-                    .capability_call(request, None)
-                    .await
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                encode_strict(&response, false).map_err(|_| SessionDriverError::Protocol)?
-            }
-            ClosedProviderMethod::Health(provider_type) => {
-                self.ensure_axis(provider_type)
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                let request: common::ProviderRequest = decode_strict(&packet.payload, false)
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                let response = self
-                    .provider_call(
-                        RpcOperation::Health,
-                        request,
-                        None,
-                        Some(packet.attachments),
-                    )
-                    .await
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                encode_strict(&response, false).map_err(|_| SessionDriverError::Protocol)?
-            }
-            ClosedProviderMethod::Invoke(provider_method) => {
-                self.ensure_axis(provider_method.provider_type())
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                let requires_idempotency = method_requires_idempotency(provider_method);
-                let request: common::ProviderRequest =
-                    decode_strict(&packet.payload, requires_idempotency)
-                        .map_err(|_| SessionDriverError::Protocol)?;
-                let response = self
-                    .provider_call(
-                        RpcOperation::Method(provider_method),
-                        request,
-                        None,
-                        Some(packet.attachments),
-                    )
-                    .await
-                    .map_err(|_| SessionDriverError::Protocol)?;
-                encode_strict(&response, false).map_err(|_| SessionDriverError::Protocol)?
-            }
-        };
-        self.driver
-            .send_packet(TransportPacket {
-                request_id,
-                method,
-                payload: response_payload,
-                attachments: Vec::new(),
-            })
-            .await
-    }
-
-    fn ensure_axis(&self, provider_type: ProviderType) -> Result<(), ttrpc::Error> {
-        if provider_type == self.descriptor.provider_type() {
-            Ok(())
-        } else {
-            Err(rpc_status(ttrpc::Code::PERMISSION_DENIED))
-        }
-    }
-
     async fn capability_call(
         &self,
         request: common::CapabilityRequest,
@@ -294,7 +231,6 @@ impl GeneratedProviderServiceServer {
         operation: RpcOperation,
         request: common::ProviderRequest,
         ttrpc_timeout_nanos: Option<u64>,
-        packet_attachments: Option<Vec<OwnedAttachment>>,
     ) -> ttrpc::Result<common::ProviderResponse> {
         let _admission = self.admit_request()?;
         let method = match operation {
@@ -322,14 +258,13 @@ impl GeneratedProviderServiceServer {
             requires_idempotency,
             ttrpc_timeout_nanos,
         )?;
-        let request_id = request_id(wire_context)?;
-        let mut attachments = match packet_attachments {
-            Some(attachments) => attachments,
-            None => self
-                .driver
-                .take_attachments(request_id, &request.attachment_indexes)
+        let mut attachments = if request.attachment_indexes.is_empty() {
+            Vec::new()
+        } else {
+            self.driver
+                .receive_attachments()
                 .await
-                .map_err(session_error)?,
+                .map_err(session_error)?
         };
         validate_attachments(&request.attachment_indexes, &attachments)?;
         let canonical_request = self.canonical_request(
@@ -372,9 +307,8 @@ impl GeneratedProviderServiceServer {
         context: ProviderOperationContext,
         session_generation: u64,
     ) -> ttrpc::Result<ProviderOperationRequest> {
-        let state = self.driver.authenticated_state().map_err(session_error)?;
         let target = if request.resource_id.is_empty() {
-            target_from_scope(&state.authorized_scope)
+            target_from_scope(&context.scope)
         } else {
             let objects = self
                 .objects
@@ -391,7 +325,7 @@ impl GeneratedProviderServiceServer {
                     handle_generation: handle.resource_generation,
                 }
             } else {
-                target_from_scope(&state.authorized_scope)
+                target_from_scope(&context.scope)
             }
         };
         let canonical = ProviderOperationRequest {
@@ -461,9 +395,12 @@ impl GeneratedProviderServiceServer {
                 let [attachment] = attachments else {
                     return Err(rpc_status(ttrpc::Code::INVALID_ARGUMENT));
                 };
-                let mut lease_request: CredentialLeaseRequest =
-                    serde_json::from_slice(attachment.payload())
-                        .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
+                let bytes = attachment
+                    .payload()
+                    .and_then(|payload| payload.downcast_ref::<Vec<u8>>())
+                    .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
+                let mut lease_request: CredentialLeaseRequest = serde_json::from_slice(bytes)
+                    .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
                 lease_request.context = request.context.clone();
                 Ok(OwnedDispatchPayload::LeaseRequest(Box::new(lease_request)))
             }
@@ -587,47 +524,40 @@ impl GeneratedProviderServiceServer {
         requires_idempotency: bool,
         ttrpc_timeout_nanos: Option<u64>,
     ) -> ttrpc::Result<AdmittedWireContext> {
-        let state = self.driver.authenticated_state().map_err(session_error)?;
-        validate_session_binding(&state, &self.descriptor)
-            .map_err(|_| rpc_status(ttrpc::Code::UNAUTHENTICATED))?;
-        validate_wire_scope(wire, &state)?;
         let metadata = wire
             .metadata
             .as_ref()
             .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
-        if metadata.session_generation != state.session_generation {
-            return Err(rpc_status(ttrpc::Code::FAILED_PRECONDITION));
-        }
-        let request_id = request_id(wire)?;
-        let session_remaining = self
-            .driver
-            .monotonic_remaining_nanos(request_id)
-            .map_err(session_error)?;
-        let remaining_nanos = admit_metadata(
+        let session_generation = self.driver.generation();
+        let now = Instant::now();
+        let deadline = DeadlineBudget::admit_metadata(
             metadata,
+            session_generation,
             requires_idempotency,
             self.clock.now_unix_ms(),
+            now,
             d2b_contracts::v2_provider::MAX_PROVIDER_REQUEST_LIFETIME_MS,
-            Some(session_remaining),
             ttrpc_timeout_nanos,
         )
-        .map_err(|_| rpc_status(ttrpc::Code::DEADLINE_EXCEEDED))?;
-        let cancellation = self.driver.cancellation(request_id);
-        if cancellation.is_cancelled() {
-            return Err(rpc_status(ttrpc::Code::CANCELLED));
+        .map_err(session_error)?;
+        let remaining_nanos = deadline
+            .remaining_nanos(self.clock.now_unix_ms(), now, ttrpc_timeout_nanos)
+            .map_err(session_error)?;
+        let scope = scope_from_wire(wire)?;
+        if wire.provider_id != self.descriptor.provider_id.as_str()
+            || scope.realm_id() != self.descriptor.placement.realm_id()
+        {
+            return Err(rpc_status(ttrpc::Code::PERMISSION_DENIED));
         }
-        let operation = canonical_context(wire, metadata, method, &state)?;
+        let operation = canonical_context(wire, metadata, method, &self.descriptor, scope)?;
         operation
             .validate(&self.descriptor, self.clock.now_unix_ms())
             .map_err(|_| rpc_status(ttrpc::Code::PERMISSION_DENIED))?;
         let remaining_ms = u32::try_from((remaining_nanos / 1_000_000).max(1)).unwrap_or(u32::MAX);
         Ok(AdmittedWireContext {
             operation,
-            peer_role: state.peer_role,
-            service: state.service,
             remaining_ms,
-            cancellation,
-            session_generation: state.session_generation,
+            session_generation,
         })
     }
 
@@ -674,10 +604,7 @@ enum OwnedDispatchPayload {
 
 struct AdmittedWireContext {
     operation: ProviderOperationContext,
-    peer_role: d2b_contracts::v2_component_session::EndpointRole,
-    service: ServicePackage,
     remaining_ms: u32,
-    cancellation: d2b_provider::CancellationToken,
     session_generation: u64,
 }
 
@@ -685,84 +612,39 @@ impl AdmittedWireContext {
     fn call_context(&self) -> d2b_contracts::v2_provider::ProviderCallContext<'_> {
         d2b_contracts::v2_provider::ProviderCallContext {
             operation: &self.operation,
-            peer_role: self.peer_role,
-            service: self.service,
+            peer_role: d2b_contracts::v2_component_session::EndpointRole::RealmController,
+            service: ServicePackage::ProviderV2,
             monotonic_deadline_remaining_ms: self.remaining_ms,
-            cancelled: self.cancellation.is_cancelled(),
+            cancelled: false,
         }
     }
 }
 
-fn validate_session_binding(
-    state: &AuthenticatedSessionState,
-    descriptor: &ProviderDescriptor,
-) -> Result<(), ToolkitError> {
-    if state.local_provider_id != descriptor.provider_id
-        || state.local_provider_type != descriptor.provider_type()
-        || state.local_provider_generation != descriptor.registry_generation
-        || state.local_role != d2b_contracts::v2_component_session::EndpointRole::ProviderAgent
-        || !matches!(
-            state.peer_role,
-            d2b_contracts::v2_component_session::EndpointRole::LocalRootController
-                | d2b_contracts::v2_component_session::EndpointRole::RealmController
-        )
-        || state.service != ServicePackage::ProviderV2
-        || state.authorized_scope.realm_id() != descriptor.placement.realm_id()
-    {
-        Err(ToolkitError::DescriptorInvalid)
-    } else {
-        Ok(())
-    }
-}
-
-fn request_id(context: &common::ProviderOperationContext) -> ttrpc::Result<[u8; 16]> {
-    let value = &context
-        .metadata
-        .as_ref()
-        .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?
-        .request_id;
-    value
-        .as_slice()
-        .try_into()
-        .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))
-}
-
-fn validate_wire_scope(
+fn scope_from_wire(
     wire: &common::ProviderOperationContext,
-    state: &AuthenticatedSessionState,
-) -> ttrpc::Result<()> {
+) -> ttrpc::Result<AuthorizedProviderScope> {
     let scope = wire
         .scope
         .as_ref()
         .ok_or_else(|| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
-    let matches = match &state.authorized_scope {
-        AuthorizedProviderScope::Realm { realm_id } => {
-            scope.realm_id == realm_id.as_str()
-                && scope.workload_id.is_empty()
-                && scope.role_id.is_empty()
-        }
-        AuthorizedProviderScope::Workload {
+    let realm_id = RealmId::parse(scope.realm_id.clone())
+        .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?;
+    if scope.workload_id.is_empty() && scope.role_id.is_empty() {
+        Ok(AuthorizedProviderScope::Realm { realm_id })
+    } else if scope.role_id.is_empty() {
+        Ok(AuthorizedProviderScope::Workload {
             realm_id,
-            workload_id,
-        } => {
-            scope.realm_id == realm_id.as_str()
-                && scope.workload_id == workload_id.as_str()
-                && scope.role_id.is_empty()
-        }
-        AuthorizedProviderScope::WorkloadRole {
-            realm_id,
-            workload_id,
-            role_id,
-        } => {
-            scope.realm_id == realm_id.as_str()
-                && scope.workload_id == workload_id.as_str()
-                && scope.role_id == role_id.as_str()
-        }
-    };
-    if matches && wire.provider_id == state.local_provider_id.as_str() {
-        Ok(())
+            workload_id: WorkloadId::parse(scope.workload_id.clone())
+                .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?,
+        })
     } else {
-        Err(rpc_status(ttrpc::Code::PERMISSION_DENIED))
+        Ok(AuthorizedProviderScope::WorkloadRole {
+            realm_id,
+            workload_id: WorkloadId::parse(scope.workload_id.clone())
+                .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?,
+            role_id: RoleId::parse(scope.role_id.clone())
+                .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?,
+        })
     }
 }
 
@@ -770,11 +652,12 @@ fn canonical_context(
     wire: &common::ProviderOperationContext,
     metadata: &common::RequestMetadata,
     method: ProviderMethod,
-    state: &AuthenticatedSessionState,
+    descriptor: &ProviderDescriptor,
+    scope: AuthorizedProviderScope,
 ) -> ttrpc::Result<ProviderOperationContext> {
     if provider_type(wire).map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?
-        != state.local_provider_type
-        || wire.provider_generation != state.local_provider_generation.get()
+        != descriptor.provider_type()
+        || wire.provider_generation != descriptor.registry_generation.get()
     {
         return Err(rpc_status(ttrpc::Code::FAILED_PRECONDITION));
     }
@@ -804,11 +687,12 @@ fn canonical_context(
         idempotency_key: IdempotencyKey::parse(idempotency)
             .map_err(|_| rpc_status(ttrpc::Code::INVALID_ARGUMENT))?,
         request_digest: fingerprint_from_bytes(&wire.request_digest)?,
-        scope: state.authorized_scope.clone(),
-        principal: state.principal.clone(),
-        provider_id: state.local_provider_id.clone(),
-        provider_type: state.local_provider_type,
-        provider_generation: state.local_provider_generation,
+        scope,
+        principal: PrincipalRef::parse("component-session-peer")
+            .map_err(|_| rpc_status(ttrpc::Code::INTERNAL))?,
+        provider_id: descriptor.provider_id.clone(),
+        provider_type: descriptor.provider_type(),
+        provider_generation: descriptor.registry_generation,
         capability: ProviderCapability(method),
         method,
         policy_epoch: d2b_contracts::v2_provider::Generation::new(wire.policy_epoch)
@@ -845,10 +729,11 @@ fn target_from_scope(scope: &AuthorizedProviderScope) -> ProviderTarget {
 
 fn validate_attachments(indexes: &[u32], attachments: &[OwnedAttachment]) -> ttrpc::Result<()> {
     if indexes.len() == attachments.len()
-        && indexes
-            .iter()
-            .zip(attachments)
-            .all(|(index, attachment)| *index == attachment.index())
+        && indexes.iter().zip(attachments).all(|(index, attachment)| {
+            attachment
+                .descriptor()
+                .is_some_and(|descriptor| *index == u32::from(descriptor.index))
+        })
     {
         Ok(())
     } else {
@@ -1067,15 +952,18 @@ fn alpha_hex(value: &[u8]) -> String {
     output
 }
 
-fn session_error(error: SessionDriverError) -> ttrpc::Error {
-    rpc_status(match error {
-        SessionDriverError::Unauthenticated => ttrpc::Code::UNAUTHENTICATED,
-        SessionDriverError::GenerationMismatch => ttrpc::Code::FAILED_PRECONDITION,
-        SessionDriverError::AttachmentMismatch | SessionDriverError::Protocol => {
-            ttrpc::Code::INVALID_ARGUMENT
+fn session_error(error: SessionError) -> ttrpc::Error {
+    rpc_status(match error.code() {
+        SessionErrorCode::GenerationMismatch => ttrpc::Code::FAILED_PRECONDITION,
+        SessionErrorCode::DeadlineInvalid | SessionErrorCode::DeadlineExpired => {
+            ttrpc::Code::DEADLINE_EXCEEDED
         }
-        SessionDriverError::Cancelled => ttrpc::Code::CANCELLED,
-        SessionDriverError::Disconnected => ttrpc::Code::UNAVAILABLE,
+        SessionErrorCode::Cancelled => ttrpc::Code::CANCELLED,
+        SessionErrorCode::AttachmentDescriptorMismatch
+        | SessionErrorCode::AttachmentObjectMismatch
+        | SessionErrorCode::AttachmentAccessMismatch
+        | SessionErrorCode::AttachmentMissingCloexec => ttrpc::Code::INVALID_ARGUMENT,
+        _ => ttrpc::Code::UNAVAILABLE,
     })
 }
 
@@ -1107,7 +995,6 @@ macro_rules! provider_service {
                     RpcOperation::Health,
                     request,
                     ttrpc_timeout(context),
-                    None,
                 )
                 .await
             }
@@ -1130,7 +1017,6 @@ macro_rules! provider_service {
                         RpcOperation::Method(ProviderMethod::$method),
                         request,
                         ttrpc_timeout(context),
-                        None,
                     )
                     .await
                 }

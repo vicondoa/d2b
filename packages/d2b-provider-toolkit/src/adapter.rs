@@ -12,8 +12,8 @@ use d2b_provider::{
     RpcResponse, SessionIdentity,
 };
 
-use crate::OwnedAttachment;
 use crate::ToolkitError;
+use d2b_session::OwnedAttachment;
 
 pub struct ProviderAgentAdapter {
     instance: ProviderInstance,
@@ -79,8 +79,12 @@ impl ProviderAgentAdapter {
         attachments: &mut [OwnedAttachment],
     ) -> ProviderResult<RpcResponse> {
         if attachments
-            .windows(2)
-            .any(|pair| pair[0].index() >= pair[1].index())
+            .iter()
+            .any(|attachment| attachment.descriptor().is_none())
+            || attachments.windows(2).any(|pair| {
+                pair[0].descriptor().map(|value| value.index)
+                    >= pair[1].descriptor().map(|value| value.index)
+            })
         {
             return Err(self.failure(
                 &call,
