@@ -12,7 +12,7 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Added canonical d2b 2.0 crate boundaries for Unix sessions, authenticated
+- Added canonical d2b 2.0 implementations for Unix sessions, authenticated
   sessions, providers, provider tooling, state persistence, and clients.
 - Added independent Rust and pure-Nix canonical v2 identity derivation with
   shared vectors, plus generated schemas and references for identity,

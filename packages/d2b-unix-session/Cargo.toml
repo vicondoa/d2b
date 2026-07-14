@@ -16,7 +16,7 @@ host-socket = [
 ]
 
 [dependencies]
-d2b-contracts = { workspace = true, optional = true, features = ["v2-component-session"] }
+d2b-contracts = { workspace = true, default-features = false, optional = true, features = ["v2-component-session"] }
 rustix = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["net"] }
 

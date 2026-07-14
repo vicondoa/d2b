@@ -159,5 +159,16 @@ fn v2_foundation_crates_are_default_empty_and_not_publishable() {
                 .exists(),
             "{package} must use the workspace lockfile"
         );
+        for dependency in ["d2b-contracts", "d2b-provider", "d2b-session", "ttrpc"] {
+            if manifest.contains(&format!("{dependency} =")) {
+                assert!(
+                    manifest.lines().any(|line| {
+                        line.starts_with(&format!("{dependency} ="))
+                            && line.contains("default-features = false")
+                    }),
+                    "{package} must disable default features for {dependency}"
+                );
+            }
+        }
     }
 }

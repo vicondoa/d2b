@@ -12,12 +12,12 @@ default = []
 
 [dependencies]
 async-trait.workspace = true
-d2b-contracts = { workspace = true, features = ["v2-component-session", "v2-services"] }
+d2b-contracts = { workspace = true, default-features = false, features = ["v2-component-session", "v2-services"] }
 protobuf.workspace = true
 sha2.workspace = true
 snow.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
-ttrpc = { workspace = true, features = ["async"] }
+ttrpc = { workspace = true, default-features = false, features = ["async"] }
 
 [lints]
 workspace = true

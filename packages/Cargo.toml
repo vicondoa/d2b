@@ -89,6 +89,7 @@ d2b-state = { path = "d2b-state", version = "2.0.0", default-features = false }
 d2b-unix-session = { path = "d2b-unix-session", version = "2.0.0", default-features = false }
 d2b-wayland-proxy = { path = "d2b-wayland-proxy", version = "2.0.0" }
 async-trait = "0.1"
+nix = { version = "0.29", default-features = false }
 protobuf = "=3.7.2"
 protobuf-codegen = "=3.7.2"
 serde = { version = "1", features = ["derive"] }

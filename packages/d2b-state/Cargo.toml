@@ -19,8 +19,8 @@ host-fs = [
 ]
 
 [dependencies]
-d2b-contracts = { workspace = true, features = ["v2-state"], optional = true }
-nix = { version = "0.29", default-features = false, features = ["fs"], optional = true }
+d2b-contracts = { workspace = true, default-features = false, features = ["v2-state"], optional = true }
+nix = { workspace = true, features = ["fs"], optional = true }
 rustix = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, features = ["raw_value"], optional = true }
