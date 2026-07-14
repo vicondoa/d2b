@@ -606,6 +606,8 @@ struct AcceptLoopControl {
     first_client_timeout: Option<Duration>,
 }
 
+const TERMINAL_FIRST_CLIENT_STABILITY: Duration = Duration::from_secs(1);
+
 fn report_first_client_ready(
     readiness: &mut ReadinessReporter,
     pending: &mut bool,
@@ -617,6 +619,39 @@ fn report_first_client_ready(
     *pending = false;
     *deadline = None;
     readiness.ready(ProxyReadinessStage::FirstClient)
+}
+
+fn observe_first_client(
+    readiness: &mut ReadinessReporter,
+    pending: &mut bool,
+    deadline: &mut Option<Instant>,
+    terminal_stable_at: &mut Option<Instant>,
+    terminal_child_present: bool,
+    now: Instant,
+) -> io::Result<()> {
+    if !*pending {
+        return Ok(());
+    }
+    if terminal_child_present {
+        terminal_stable_at.get_or_insert(now + TERMINAL_FIRST_CLIENT_STABILITY);
+        Ok(())
+    } else {
+        report_first_client_ready(readiness, pending, deadline)
+    }
+}
+
+fn report_stable_terminal_ready(
+    readiness: &mut ReadinessReporter,
+    pending: &mut bool,
+    deadline: &mut Option<Instant>,
+    terminal_stable_at: &mut Option<Instant>,
+    now: Instant,
+) -> io::Result<()> {
+    if !terminal_stable_at.is_some_and(|stable_at| now >= stable_at) {
+        return Ok(());
+    }
+    *terminal_stable_at = None;
+    report_first_client_ready(readiness, pending, deadline)
 }
 
 fn accept_loop(
@@ -677,6 +712,7 @@ fn accept_loop(
     let mut listener_backoff_until: Option<Instant> = None;
     let mut first_client_pending = true;
     let mut first_client_deadline = first_client_timeout.map(|timeout| Instant::now() + timeout);
+    let mut terminal_stable_at: Option<Instant> = None;
     while state.is_not_destroyed() {
         if first_client_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let _ = readiness.failed(
@@ -693,6 +729,12 @@ fn accept_loop(
         if let Some(child) = terminal_child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    if first_client_pending {
+                        let _ = readiness.failed(
+                            ProxyReadinessStage::FirstClient,
+                            ProxyReadinessFailure::ClientRejected,
+                        );
+                    }
                     state.destroy();
                     diag.borrow_mut().flush_suppressed();
                     return child_exit_code(status);
@@ -704,7 +746,23 @@ fn accept_loop(
                 }
             }
         }
-        let (listener_ready, _state_ready, bridge_ready) = {
+        if report_stable_terminal_ready(
+            &mut readiness,
+            &mut first_client_pending,
+            &mut first_client_deadline,
+            &mut terminal_stable_at,
+            Instant::now(),
+        )
+        .is_err()
+        {
+            if let Some(child) = terminal_child.as_mut() {
+                child.terminate();
+            }
+            state.destroy();
+            diag.borrow_mut().flush_suppressed();
+            return 70;
+        }
+        let (listener_ready, _state_ready, bridge_ready, _child_ready) = {
             let now = Instant::now();
             let listener_in_backoff = accept_backoff_active(listener_backoff_until, now);
             if !listener_in_backoff {
@@ -717,15 +775,22 @@ fn accept_loop(
                 listener_backoff_until,
                 clipboard_ref.bridge_retry_deadline(),
                 now,
-                terminal_child.is_some(),
             );
             let timeout = first_client_deadline
                 .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
                 .unwrap_or(timeout);
-            let mut poll_fds: SmallVec<[PollFd<'_>; 3]> = smallvec![
+            let timeout = terminal_stable_at
+                .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
+                .unwrap_or(timeout);
+            let mut poll_fds: SmallVec<[PollFd<'_>; 4]> = smallvec![
                 PollFd::new(&listener, listener_accept_poll_flags(listener_in_backoff)),
                 PollFd::new(state.poll_fd(), PollFlags::IN),
             ];
+            let child_poll_index = terminal_child.as_ref().map(|child| {
+                let index = poll_fds.len();
+                poll_fds.push(PollFd::new(child.poll_fd(), PollFlags::IN));
+                index
+            });
             let bridge_poll_index = poll_fds.len();
             if let Some((bridge, flags)) = clipboard_ref.bridge_poll_stream_and_flags() {
                 poll_fds.push(PollFd::new(bridge, flags));
@@ -743,6 +808,9 @@ fn accept_loop(
                 !poll_fds[1].revents().is_empty(),
                 poll_fds
                     .get(bridge_poll_index)
+                    .is_some_and(|fd| !fd.revents().is_empty()),
+                child_poll_index
+                    .and_then(|index| poll_fds.get(index))
                     .is_some_and(|fd| !fd.revents().is_empty()),
             )
         };
@@ -790,10 +858,13 @@ fn accept_loop(
                             clipboard.clone(),
                             decoration.clone(),
                         );
-                        if report_first_client_ready(
+                        if observe_first_client(
                             &mut readiness,
                             &mut first_client_pending,
                             &mut first_client_deadline,
+                            &mut terminal_stable_at,
+                            terminal_child.is_some(),
+                            Instant::now(),
                         )
                         .is_err()
                         {
@@ -894,7 +965,6 @@ fn accept_poll_timeout_ms(
     listener_backoff_until: Option<Instant>,
     bridge_retry_until: Option<Instant>,
     now: Instant,
-    watching_child: bool,
 ) -> i32 {
     let backoff_timeout = listener_backoff_until
         .map(|until| until.saturating_duration_since(now))
@@ -902,15 +972,9 @@ fn accept_poll_timeout_ms(
     let bridge_timeout = bridge_retry_until
         .map(|until| until.saturating_duration_since(now))
         .unwrap_or(diag_timeout);
-    let child_timeout = if watching_child {
-        Duration::from_millis(100)
-    } else {
-        diag_timeout
-    };
     diag_timeout
         .min(backoff_timeout)
         .min(bridge_timeout)
-        .min(child_timeout)
         .as_millis()
         .min(i32::MAX as u128) as i32
 }
@@ -1142,6 +1206,62 @@ mod tests {
     }
 
     #[test]
+    fn terminal_first_client_waits_for_child_stability() {
+        let args = Args::try_parse_from([
+            "d2b-wayland-proxy",
+            "--target",
+            "browser.host.d2b",
+            "--provider-kind",
+            "local-vm",
+            "--listen",
+            "target/test.sock",
+            "--connect",
+            "wayland-1",
+        ])
+        .expect("parse args");
+        let identity = resolve_identity(&args).unwrap();
+        let mut readiness = ReadinessReporter::disabled(identity);
+        let mut pending = true;
+        let start = Instant::now();
+        let mut deadline = Some(start + Duration::from_secs(10));
+        let mut stable_at = None;
+
+        observe_first_client(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            true,
+            start,
+        )
+        .unwrap();
+        assert!(pending);
+        assert_eq!(stable_at, Some(start + TERMINAL_FIRST_CLIENT_STABILITY));
+
+        report_stable_terminal_ready(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            start + TERMINAL_FIRST_CLIENT_STABILITY - Duration::from_millis(1),
+        )
+        .unwrap();
+        assert!(pending);
+
+        report_stable_terminal_ready(
+            &mut readiness,
+            &mut pending,
+            &mut deadline,
+            &mut stable_at,
+            start + TERMINAL_FIRST_CLIENT_STABILITY,
+        )
+        .unwrap();
+        assert!(!pending);
+        assert!(deadline.is_none());
+        assert!(stable_at.is_none());
+    }
+
+    #[test]
     fn legacy_long_lived_vm_proxy_does_not_gain_an_initial_client_deadline() {
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
@@ -1190,13 +1310,7 @@ mod tests {
             PollFlags::IN | PollFlags::ERR | PollFlags::HUP
         );
         assert_eq!(
-            accept_poll_timeout_ms(
-                Duration::from_secs(60),
-                Some(backoff_until),
-                None,
-                now,
-                false,
-            ),
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), None, now,),
             50
         );
         assert_eq!(
@@ -1205,7 +1319,6 @@ mod tests {
                 Some(now + Duration::from_secs(5)),
                 Some(now + Duration::from_millis(25)),
                 now,
-                false,
             ),
             25
         );
@@ -1219,17 +1332,8 @@ mod tests {
             now
         ));
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now, false),
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now),
             0
-        );
-    }
-
-    #[test]
-    fn child_watch_bounds_accept_poll_timeout() {
-        let now = Instant::now();
-        assert_eq!(
-            accept_poll_timeout_ms(Duration::from_secs(60), None, None, now, true),
-            100
         );
     }
 

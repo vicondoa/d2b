@@ -99,6 +99,13 @@ deprecations ship one minor release before removal.
 - Aligned delivery documentation and fail-closed policy checks with the
   hardened candidate/content identifiers, external panel attestations,
   manifest-driven Layer-1 commands, and PR-before-final-gates order.
+- Delayed host-terminal first-client readiness until the terminal child remains
+  alive through a bounded stabilization window, preventing desktop launchers
+  from reporting success when WezTerm immediately rejects its configured
+  domain, and made child-exit observation event-driven through its pidfd.
+- Derived `persistent-shell` and `pty` workload capabilities from
+  `shell.enable`, keeping provider-neutral desktop discovery consistent with
+  the generated shell launcher item and guest runtime.
 - Removed stale per-VM observability relay sockets before broker spawn so a
   normal VM down/up cycle cannot fail with the relay address still in use.
 - Kept persistent-shell integration scratch paths within Linux UNIX-socket
