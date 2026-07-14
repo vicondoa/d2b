@@ -12,8 +12,8 @@ use rustix::{
     io::{FdFlags, IoSlice, IoSliceMut, fcntl_getfd, read, write},
     net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
-        SendAncillaryMessage, SendFlags, SocketFlags, SocketType, UCred, recvmsg, sendmsg,
-        socketpair,
+        SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, UCred, recvmsg,
+        sendmsg, shutdown, socketpair,
         sockopt::{
             get_socket_domain, get_socket_passcred, get_socket_peercred, get_socket_type,
             set_socket_passcred,
@@ -21,7 +21,15 @@ use rustix::{
     },
     process::{getgid, getpid, getuid},
 };
-use std::{collections::VecDeque, fmt, io, mem::size_of, sync::Arc};
+use std::{
+    collections::VecDeque,
+    fmt, io,
+    mem::size_of,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::io::unix::AsyncFd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +186,7 @@ pub struct SendBurst {
 
 pub struct SeqpacketSocket {
     io: AsyncFd<OwnedFd>,
+    received_any: AtomicBool,
 }
 
 impl fmt::Debug for SeqpacketSocket {
@@ -191,6 +200,7 @@ impl SeqpacketSocket {
         validate_socket(&fd, SocketType::SEQPACKET)?;
         Ok(Self {
             io: AsyncFd::new(fd).map_err(io_error)?,
+            received_any: AtomicBool::new(false),
         })
     }
 
@@ -207,6 +217,10 @@ impl SeqpacketSocket {
 
     pub fn verify_parent_prearmed(&self) -> Result<(), UnixSessionError> {
         verify_parent_prearmed(self.io.get_ref())
+    }
+
+    pub fn close(&self) -> Result<(), UnixSessionError> {
+        shutdown(self.io.get_ref(), Shutdown::ReadWrite).map_err(io_error)
     }
 
     pub async fn recv_burst(
@@ -227,6 +241,7 @@ impl SeqpacketSocket {
             match ready.try_io(|inner| recv_one(inner.get_ref(), payload_capacity, capacity.bytes))
             {
                 Ok(Ok((payload, controls, unknown_control))) => {
+                    let first_on_socket = !self.received_any.swap(true, Ordering::AcqRel);
                     let credits = ingress_credit_scopes
                         .reserve_ingress(controls.len())
                         .map_err(|_| UnixSessionError::CreditExceeded)?;
@@ -234,10 +249,14 @@ impl SeqpacketSocket {
                         payload,
                         controls,
                         unknown_control,
+                        first_on_socket,
                         credits,
                     });
                 }
-                Ok(Err(error)) => return Err(classify_io(error)),
+                Ok(Err(error)) => {
+                    self.received_any.store(true, Ordering::Release);
+                    return Err(classify_io(error));
+                }
                 Err(_) => {
                     return Ok(PacketBurst {
                         packets,
@@ -444,6 +463,10 @@ impl StreamSocket {
         get_socket_peercred(self.io.get_ref())
             .map(PeerCredentials::from_ucred)
             .map_err(io_error)
+    }
+
+    pub fn close(&self) -> Result<(), UnixSessionError> {
+        shutdown(self.io.get_ref(), Shutdown::ReadWrite).map_err(io_error)
     }
 
     pub async fn read_available(

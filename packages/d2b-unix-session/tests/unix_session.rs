@@ -3,16 +3,21 @@ use d2b_contracts::v2_component_session::{
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
     KernelObjectType, LimitProfile, RequestId, ServicePackage,
 };
+use d2b_session::{OwnedTransport, TransportPacket};
 use d2b_unix_session::{
-    AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy, ObjectIdentity,
-    OutboundPacket, ProcessCreditLimit, SeqpacketSocket, StreamSocket, UnixSessionError,
-    prearmed_seqpacket_pair,
+    AcceptedAttachment, AncillaryCapacity, CreditPool, CreditScopeSet, DescriptorPolicy,
+    ObjectIdentity, OutboundPacket, OwnedUnixAttachment, PidfdEvidence, PidfdIdentityPolicy,
+    PidfdInfoSource, ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, ProcessCreditLimit,
+    SentPacket, SeqpacketSocket, StreamSocket, UnixSeqpacketTransport, UnixSessionError,
+    UnixStreamTransport, parse_pidfd_fdinfo, prearmed_seqpacket_pair,
 };
 use rustix::{
+    fd::BorrowedFd,
     fs::fstat,
     io::{DupFlags, FdFlags, dup3, fcntl_getfd},
     net::{AddressFamily, SocketFlags, SocketType, socketpair},
     pipe::{PipeFlags, pipe, pipe_with},
+    process::{PidfdFlags, getpid, getppid, pidfd_open},
 };
 use std::{
     collections::VecDeque,
@@ -213,15 +218,19 @@ async fn first_packet_has_exact_directional_credentials() {
     let capacity = AncillaryCapacity::from_policy(policy).unwrap();
     let (sender_scopes, _) = scopes(64);
     let (receiver_scopes, _) = scopes(8);
-    let outbound = OutboundPacket::with_current_credentials(
-        b"preface".to_vec(),
-        Vec::new(),
-        LimitProfile::local_default(),
-        capacity,
-        &sender_scopes,
-    )
-    .unwrap();
-    let mut queue = VecDeque::from([outbound]);
+    let mut queue = VecDeque::new();
+    for payload in [b"preface".as_slice(), b"later".as_slice()] {
+        queue.push_back(
+            OutboundPacket::with_current_credentials(
+                payload.to_vec(),
+                Vec::new(),
+                LimitProfile::local_default(),
+                capacity,
+                &sender_scopes,
+            )
+            .unwrap(),
+        );
+    }
     let sent = sender.send_burst(&mut queue, capacity, 8).await.unwrap();
     assert!(sent.queue_empty);
 
@@ -229,10 +238,14 @@ async fn first_packet_has_exact_directional_credentials() {
         .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 8)
         .await
         .unwrap();
-    assert_eq!(received.packets.len(), 1);
+    assert_eq!(received.packets.len(), 2);
     received.packets[0]
         .verify_first_packet_credentials(expected)
         .unwrap();
+    assert_eq!(
+        received.packets[1].verify_first_packet_credentials(expected),
+        Err(UnixSessionError::CredentialMismatch)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -357,6 +370,233 @@ async fn duplicate_kernel_objects_are_rejected_and_cleaned_up() {
     assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
     drop(sent);
     assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() {
+    let _serial = serialize_fd_test().await;
+    let (sender_socket, receiver_socket) = seqpacket_pair();
+    let policy = attachment_policy(1, false);
+    let (sender_scopes, sender_pools) = scopes(8);
+    let (receiver_scopes, receiver_pools) = scopes(8);
+    let mut sender = UnixSeqpacketTransport::new(
+        sender_socket,
+        d2b_contracts::v2_component_session::TransportClass::UnixSeqpacket,
+        d2b_contracts::v2_component_session::Locality::HostLocal,
+        LimitProfile::local_default(),
+        policy,
+        sender_scopes,
+    )
+    .unwrap();
+    let mut receiver = UnixSeqpacketTransport::new(
+        receiver_socket,
+        d2b_contracts::v2_component_session::TransportClass::UnixSeqpacket,
+        d2b_contracts::v2_component_session::Locality::HostLocal,
+        LimitProfile::local_default(),
+        policy,
+        receiver_scopes,
+    )
+    .unwrap();
+
+    let (read_end, write_end) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    let pipe_inode = fstat(&read_end).unwrap().st_ino;
+    let identity = ObjectIdentity::from_trusted(
+        &read_end,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+    )
+    .unwrap();
+    let metadata = descriptor(
+        0,
+        KernelObjectType::PipeRead,
+        AttachmentAccess::ReadOnly,
+        false,
+    );
+    let attachment = OwnedUnixAttachment::file(
+        metadata.clone(),
+        read_end,
+        &DescriptorPolicy::File(identity.clone()),
+    )
+    .unwrap();
+    let sent = sender
+        .send_owned(
+            TransportPacket::new(b"protected-record".to_vec()),
+            vec![attachment],
+        )
+        .await
+        .unwrap();
+    assert!(sender_pools.iter().all(|pool| pool.used() == 1));
+    assert_eq!(pipe_handle_count(pipe_inode), 2);
+    let verified = receiver
+        .receive_owned(
+            LimitProfile::local_default().protected_ciphertext_bytes as usize,
+            &packet(vec![metadata]),
+            &[DescriptorPolicy::File(identity)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(pipe_handle_count(pipe_inode), 3);
+    assert_eq!(verified.payload(), b"protected-record");
+    let AcceptedAttachment::File(received_read_end) = &verified.attachments()[0] else {
+        panic!("expected owned file");
+    };
+    rustix::io::write(&write_end, b"x").unwrap();
+    let mut byte = [0_u8; 1];
+    assert_eq!(rustix::io::read(received_read_end, &mut byte).unwrap(), 1);
+    assert_eq!(byte, *b"x");
+    drop(verified);
+    assert!(receiver_pools.iter().all(|pool| pool.used() == 0));
+    assert_eq!(pipe_handle_count(pipe_inode), 2);
+    sent.acknowledge();
+    assert!(sender_pools.iter().all(|pool| pool.used() == 0));
+    assert_eq!(pipe_handle_count(pipe_inode), 1);
+
+    let (left, right) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    let mut stream_sender = UnixStreamTransport::new(
+        StreamSocket::from_owned(left).unwrap(),
+        d2b_contracts::v2_component_session::Locality::HostLocal,
+    );
+    let mut stream_receiver = UnixStreamTransport::new(
+        StreamSocket::from_owned(right).unwrap(),
+        d2b_contracts::v2_component_session::Locality::HostLocal,
+    );
+    stream_sender
+        .send(TransportPacket::new(b"stream-record".to_vec()))
+        .await
+        .unwrap();
+    let stream_packet = stream_receiver.receive(64).await.unwrap();
+    assert_eq!(stream_packet.as_bytes(), b"stream-record");
+    stream_sender.close().await.unwrap();
+    stream_receiver.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process() {
+    let _serial = serialize_fd_test().await;
+    let (left, right) = prearmed_seqpacket_pair().unwrap();
+    let left = SeqpacketSocket::from_parent_prearmed(left).unwrap();
+    let right = SeqpacketSocket::from_parent_prearmed(right).unwrap();
+    let credentials = right.acceptor_peer_credentials().unwrap();
+    let policy = attachment_policy(1, true);
+    let capacity = AncillaryCapacity::from_policy(policy).unwrap();
+    let (sender_scopes, _) = scopes(8);
+    let (receiver_scopes, _) = scopes(8);
+    let outbound = OutboundPacket::new(
+        b"preface".to_vec(),
+        Vec::new(),
+        Some(credentials),
+        LimitProfile::local_default(),
+        capacity,
+        &sender_scopes,
+    )
+    .unwrap();
+    let mut queue = VecDeque::from([outbound]);
+    let sent = left.send_burst(&mut queue, capacity, 1).await.unwrap();
+    let mut packets = right
+        .recv_burst(LimitProfile::local_default(), capacity, &receiver_scopes, 1)
+        .await
+        .unwrap()
+        .packets;
+    let first_packet_credentials = packets
+        .pop()
+        .unwrap()
+        .verify_first_packet_credentials(credentials)
+        .unwrap();
+    sent.sent.into_iter().for_each(SentPacket::acknowledge);
+    let expected_pid = getpid();
+    let executable_digest = [0x31; 32];
+    let cgroup_digest = [0x42; 32];
+    let evidence = PidfdEvidence::new(
+        expected_pid,
+        first_packet_credentials,
+        executable_digest,
+        cgroup_digest,
+    )
+    .unwrap();
+    let verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        ProcSelfFdInfoSource,
+        Arc::new(move |_| Ok(executable_digest)),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    let own_pidfd = pidfd_open(expected_pid, PidfdFlags::empty()).unwrap();
+    assert!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            verifier.clone(),
+        )
+        .is_ok()
+    );
+    let injected_verifier = Arc::new(ProcPidfdIdentityVerifier::new(
+        FixedPidfdInfo {
+            contents: format!("Pid:\t{}\n", expected_pid.as_raw_nonzero()),
+        },
+        Arc::new(move |_| Ok(executable_digest)),
+        Arc::new(move |_| Ok(cgroup_digest)),
+    ));
+    assert!(
+        PidfdIdentityPolicy::new(
+            &own_pidfd,
+            AttachmentAccess::ReadWrite,
+            evidence,
+            injected_verifier,
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        ObjectIdentity::from_trusted(
+            &own_pidfd,
+            KernelObjectType::Pidfd,
+            AttachmentAccess::ReadWrite,
+        ),
+        Err(UnixSessionError::PidfdEvidenceUnavailable)
+    );
+
+    let parent = getppid().expect("test process has a parent");
+    let unrelated = pidfd_open(parent, PidfdFlags::empty()).unwrap();
+    assert!(matches!(
+        PidfdIdentityPolicy::new(&unrelated, AttachmentAccess::ReadWrite, evidence, verifier,),
+        Err(UnixSessionError::PidfdIdentityMismatch)
+    ));
+}
+
+struct FixedPidfdInfo {
+    contents: String,
+}
+
+impl PidfdInfoSource for FixedPidfdInfo {
+    fn read_fdinfo(&self, _pidfd: BorrowedFd<'_>) -> Result<String, UnixSessionError> {
+        Ok(self.contents.clone())
+    }
+}
+
+#[test]
+fn pidfd_fdinfo_parser_is_strict_and_redacted_errors_are_stable() {
+    let pid = getpid();
+    let input = format!(
+        "pos:\t0\nflags:\t02000002\nPid:\t{}\nNSpid:\t1\n",
+        pid.as_raw_nonzero()
+    );
+    assert_eq!(parse_pidfd_fdinfo(&input).unwrap(), pid);
+    assert_eq!(
+        parse_pidfd_fdinfo("Pid:\t7\nPid:\t8\n"),
+        Err(UnixSessionError::PidfdEvidenceUnavailable)
+    );
+    assert_eq!(
+        parse_pidfd_fdinfo("Pid:\t-1\n"),
+        Err(UnixSessionError::PidfdEvidenceUnavailable)
+    );
+    assert_eq!(
+        format!("{:?}", UnixSessionError::PidfdIdentityMismatch),
+        "unix-session-pidfd-identity-mismatch"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

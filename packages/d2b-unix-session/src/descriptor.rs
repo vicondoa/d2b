@@ -1,6 +1,7 @@
 use crate::{
     credit::{CreditBundle, CreditScope, CreditScopeSet},
     error::{UnixSessionError, io_error},
+    pidfd::{PidfdEvidence, PidfdIdentityVerifier, verify_pidfd},
 };
 use d2b_contracts::v2_component_session::{
     AttachmentAccess, AttachmentKind, AttachmentPacket, AttachmentPolicy, KernelObjectType,
@@ -15,7 +16,7 @@ use rustix::{
     },
     process::{Gid, Pid, Uid},
 };
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PeerCredentials(UCred);
@@ -48,6 +49,21 @@ impl fmt::Debug for PeerCredentials {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct FirstPacketCredentials(PeerCredentials);
+
+impl FirstPacketCredentials {
+    pub fn pid(self) -> Pid {
+        self.0.pid()
+    }
+}
+
+impl fmt::Debug for FirstPacketCredentials {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("FirstPacketCredentials(REDACTED)")
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ObjectIdentity {
     device: u64,
@@ -72,7 +88,7 @@ impl ObjectIdentity {
         object_type: KernelObjectType,
         access: AttachmentAccess,
     ) -> Result<Self, UnixSessionError> {
-        inspect_identity(fd, object_type, access)
+        inspect_identity(fd, object_type, access, false)
     }
 
     fn same_kernel_object(&self, other: &Self) -> bool {
@@ -85,8 +101,53 @@ impl ObjectIdentity {
 }
 
 #[derive(Clone)]
+pub struct PidfdIdentityPolicy {
+    expected: ObjectIdentity,
+    evidence: PidfdEvidence,
+    verifier: Arc<dyn PidfdIdentityVerifier>,
+}
+
+impl fmt::Debug for PidfdIdentityPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PidfdIdentityPolicy(REDACTED)")
+    }
+}
+
+impl PidfdIdentityPolicy {
+    pub fn new(
+        trusted_pidfd: impl AsFd,
+        access: AttachmentAccess,
+        evidence: PidfdEvidence,
+        verifier: Arc<dyn PidfdIdentityVerifier>,
+    ) -> Result<Self, UnixSessionError> {
+        verify_pidfd(trusted_pidfd.as_fd(), &evidence, verifier.as_ref())?;
+        let expected = inspect_identity(trusted_pidfd, KernelObjectType::Pidfd, access, true)?;
+        Ok(Self {
+            expected,
+            evidence,
+            verifier,
+        })
+    }
+
+    fn validate(
+        &self,
+        pidfd: impl AsFd,
+        access: AttachmentAccess,
+    ) -> Result<ObjectIdentity, UnixSessionError> {
+        verify_pidfd(pidfd.as_fd(), &self.evidence, self.verifier.as_ref())?;
+        let actual = inspect_identity(pidfd, KernelObjectType::Pidfd, access, true)?;
+        if actual == self.expected {
+            Ok(actual)
+        } else {
+            Err(UnixSessionError::PidfdIdentityMismatch)
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum DescriptorPolicy {
     File(ObjectIdentity),
+    Pidfd(PidfdIdentityPolicy),
     Credentials(PeerCredentials),
 }
 
@@ -94,6 +155,7 @@ impl fmt::Debug for DescriptorPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::File(_) => "DescriptorPolicy::File(REDACTED)",
+            Self::Pidfd(_) => "DescriptorPolicy::Pidfd(REDACTED)",
             Self::Credentials(_) => "DescriptorPolicy::Credentials(REDACTED)",
         })
     }
@@ -156,6 +218,7 @@ pub struct ReceivedPacket {
     pub(crate) payload: Vec<u8>,
     pub(crate) controls: Vec<ReceivedControl>,
     pub(crate) unknown_control: bool,
+    pub(crate) first_on_socket: bool,
     pub(crate) credits: CreditBundle,
 }
 
@@ -181,9 +244,14 @@ impl ReceivedPacket {
     pub fn verify_first_packet_credentials(
         &self,
         expected: PeerCredentials,
-    ) -> Result<(), UnixSessionError> {
+    ) -> Result<FirstPacketCredentials, UnixSessionError> {
+        if !self.first_on_socket {
+            return Err(UnixSessionError::CredentialMismatch);
+        }
         match self.controls.as_slice() {
-            [ReceivedControl::Credentials(actual)] if *actual == expected => Ok(()),
+            [ReceivedControl::Credentials(actual)] if *actual == expected => {
+                Ok(FirstPacketCredentials(*actual))
+            }
             [ReceivedControl::Credentials(_)] => Err(UnixSessionError::CredentialMismatch),
             _ => Err(UnixSessionError::ControlMismatch),
         }
@@ -240,11 +308,27 @@ impl ReceivedPacket {
                     ReceivedControl::File(fd),
                     AttachmentKind::FileDescriptor,
                     DescriptorPolicy::File(expected),
-                ) => {
-                    let actual = inspect_identity(&fd, descriptor.object_type, descriptor.access)?;
+                ) if descriptor.object_type != KernelObjectType::Pidfd => {
+                    let actual =
+                        inspect_identity(&fd, descriptor.object_type, descriptor.access, false)?;
                     if actual != *expected {
                         return Err(UnixSessionError::DescriptorMismatch);
                     }
+                    if identities.iter().any(|(prior, prior_allows)| {
+                        prior.same_kernel_object(&actual)
+                            && (!descriptor.duplicate_object_allowed || !prior_allows)
+                    }) {
+                        return Err(UnixSessionError::DuplicateObject);
+                    }
+                    identities.push((actual, descriptor.duplicate_object_allowed));
+                    accepted.push(AcceptedAttachment::File(fd));
+                }
+                (
+                    ReceivedControl::File(fd),
+                    AttachmentKind::FileDescriptor,
+                    DescriptorPolicy::Pidfd(policy),
+                ) if descriptor.object_type == KernelObjectType::Pidfd => {
+                    let actual = policy.validate(&fd, descriptor.access)?;
                     if identities.iter().any(|(prior, prior_allows)| {
                         prior.same_kernel_object(&actual)
                             && (!descriptor.duplicate_object_allowed || !prior_allows)
@@ -272,6 +356,7 @@ fn inspect_identity(
     fd: impl AsFd,
     object_type: KernelObjectType,
     access: AttachmentAccess,
+    pidfd_verified: bool,
 ) -> Result<ObjectIdentity, UnixSessionError> {
     let fd = fd.as_fd();
     if !fcntl_getfd(fd)
@@ -334,10 +419,12 @@ fn inspect_identity(
             None
         }
         KernelObjectType::Pidfd => {
-            // A trusted method policy supplies the exact pidfd identity. Linux
-            // exposes anon-inode pidfds without a stronger safe stat class.
+            if !pidfd_verified {
+                return Err(UnixSessionError::PidfdEvidenceUnavailable);
+            }
             None
         }
+
         KernelObjectType::ProcessCredentials => {
             return Err(UnixSessionError::DescriptorMismatch);
         }
@@ -359,6 +446,32 @@ fn inspect_identity(
         socket,
         seals,
     })
+}
+
+pub(crate) fn validate_owned_file(
+    fd: impl AsFd,
+    descriptor: &d2b_contracts::v2_component_session::AttachmentDescriptor,
+    policy: &DescriptorPolicy,
+) -> Result<(), UnixSessionError> {
+    if descriptor.kind != AttachmentKind::FileDescriptor {
+        return Err(UnixSessionError::DescriptorMismatch);
+    }
+    match policy {
+        DescriptorPolicy::File(expected) if descriptor.object_type != KernelObjectType::Pidfd => {
+            let actual = inspect_identity(fd, descriptor.object_type, descriptor.access, false)?;
+            if actual == *expected {
+                Ok(())
+            } else {
+                Err(UnixSessionError::DescriptorMismatch)
+            }
+        }
+        DescriptorPolicy::Pidfd(policy) if descriptor.object_type == KernelObjectType::Pidfd => {
+            policy.validate(fd, descriptor.access).map(|_| ())
+        }
+        DescriptorPolicy::File(_)
+        | DescriptorPolicy::Pidfd(_)
+        | DescriptorPolicy::Credentials(_) => Err(UnixSessionError::DescriptorMismatch),
+    }
 }
 
 fn require_type(actual: FileType, expected: FileType) -> Result<(), UnixSessionError> {

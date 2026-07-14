@@ -10,13 +10,17 @@ publish = false
 [features]
 default = []
 host-socket = [
+    "dep:async-trait",
     "dep:d2b-contracts",
+    "dep:d2b-session",
     "dep:rustix",
     "dep:tokio",
 ]
 
 [dependencies]
+async-trait = { workspace = true, optional = true }
 d2b-contracts = { workspace = true, default-features = false, optional = true, features = ["v2-component-session"] }
+d2b-session = { workspace = true, default-features = false, optional = true }
 rustix = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["net"] }
 
