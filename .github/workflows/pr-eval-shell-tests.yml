@@ -11,6 +11,9 @@ jobs:
   eval-shell-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
       - name: Checkout candidate head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -33,6 +36,11 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+
+      - name: Install pinned sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+        with:
+          version: "v0.10.0"
 
       # ---------------------------------------------------------------------------
       # Static text/grep eval tests.

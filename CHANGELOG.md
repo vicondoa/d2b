@@ -121,6 +121,8 @@ deprecations ship one minor release before removal.
   backing it up and restoring it through the source tree.
 - Made canonical drift generation run in a writable detached clone while
   preserving the in-place developer path and sccache wrapper.
+- Installed pinned sccache in the non-generated Rust eval workflow and enforced
+  its cache environment in policy tests.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave

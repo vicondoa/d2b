@@ -482,6 +482,14 @@ fn non_generated_pr_workflows_cover_stacked_bases_safely() {
                 path.display()
             );
         }
+        let eval_shell = read_repo_file(".github/workflows/pr-eval-shell-tests.yml");
+        assert!(
+            eval_shell.contains(
+                "mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696"
+            ) && eval_shell.contains("D2B_CI_SCCACHE: \"1\"")
+                && eval_shell.contains("SCCACHE_DIR: ${{ github.workspace }}/.sccache"),
+            "the Rust eval workflow must preserve the pinned sccache wrapper and cache directory"
+        );
     }
 }
 
