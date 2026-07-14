@@ -447,15 +447,14 @@ fn verify_fresh_ci(
                 required.name
             )));
         };
-        let workflow_advanced = if new_workflow_run > old_workflow_run {
-            new_workflow_created > old_workflow_updated
-                && new_workflow_updated >= new_workflow_created
-        } else if new_workflow_run == old_workflow_run {
-            new_workflow_created == old_workflow_created
-                && new_workflow_updated > old_workflow_updated
-        } else {
-            false
-        };
+        let workflow_advanced = workflow_attempt_advanced(
+            old_workflow_run,
+            new_workflow_run,
+            old_workflow_created,
+            new_workflow_created,
+            old_workflow_updated,
+            new_workflow_updated,
+        );
         if !workflow_advanced {
             return Err(DeliveryError::new(format!(
                 "required check {} did not advance to a fresh workflow attempt",
@@ -464,6 +463,23 @@ fn verify_fresh_ci(
         }
     }
     Ok(())
+}
+
+fn workflow_attempt_advanced(
+    old_run: u64,
+    new_run: u64,
+    old_created: u64,
+    new_created: u64,
+    old_updated: u64,
+    new_updated: u64,
+) -> bool {
+    if new_run > old_run {
+        new_created > old_created && new_updated >= new_created
+    } else if new_run == old_run {
+        new_created == old_created && new_updated > old_updated
+    } else {
+        false
+    }
 }
 
 fn transitive_dependencies(
@@ -514,5 +530,13 @@ mod tests {
             calls: std::cell::Cell::new(0),
         };
         assert_eq!(merger.calls.get(), 0);
+    }
+
+    #[test]
+    fn fresh_workflow_order_ignores_later_updates_to_older_run() {
+        assert!(workflow_attempt_advanced(10, 11, 100, 200, 500, 250));
+        assert!(workflow_attempt_advanced(10, 10, 100, 100, 200, 201));
+        assert!(!workflow_attempt_advanced(10, 9, 100, 300, 200, 300));
+        assert!(!workflow_attempt_advanced(10, 11, 200, 100, 300, 400));
     }
 }

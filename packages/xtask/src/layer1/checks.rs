@@ -1,5 +1,6 @@
 use std::{
     env,
+    os::unix::ffi::OsStrExt,
     path::Path,
     process::{Command, Output},
 };
@@ -15,7 +16,7 @@ pub fn discover_check_json(root: &Path, requested_system: Option<&str>) -> Resul
         None => discover_native_system()?,
     };
     eprintln!("test-flake-list: enumerating checks.{system}.*");
-    let flake_ref = format!("git+file://{}", root.display());
+    let flake_ref = git_file_flake_ref(root)?;
     let output = nix_command()
         .args([
             "eval",
@@ -33,7 +34,24 @@ pub fn discover_check_json(root: &Path, requested_system: Option<&str>) -> Resul
             output.status.code().unwrap_or(1)
         )));
     }
+
     normalize_check_json(&output.stdout)
+}
+
+fn git_file_flake_ref(root: &Path) -> Result<String> {
+    if !root.is_absolute() {
+        return Err(Layer1Error::new("flake repository root must be absolute"));
+    }
+    let mut encoded = String::from("git+file://");
+    for byte in root.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(*byte));
+        } else {
+            use std::fmt::Write;
+            write!(encoded, "%{byte:02X}").expect("write to string");
+        }
+    }
+    Ok(encoded)
 }
 
 fn discover_native_system() -> Result<String> {
@@ -144,5 +162,14 @@ mod tests {
         assert!(normalize_check_json(br#"["same","same"]"#).is_err());
         assert!(normalize_check_json(br#"["$(command)"]"#).is_err());
         assert!(normalize_check_json(br#"[]"#).is_err());
+    }
+
+    #[test]
+    fn git_file_flake_ref_percent_encodes_path_delimiters() {
+        assert_eq!(
+            git_file_flake_ref(Path::new("/tmp/d2b path/#candidate?")).unwrap(),
+            "git+file:///tmp/d2b%20path/%23candidate%3F"
+        );
+        assert!(git_file_flake_ref(Path::new("relative")).is_err());
     }
 }

@@ -173,9 +173,13 @@ fn simple_nix_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         CHECKOUT_REF,
         nix_setup_step(),
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_make_command(make_target(job))
     )
+}
+
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("validated workflow string")
 }
 
 fn tier0_job(job: &JobSpec) -> String {
@@ -201,7 +205,7 @@ fn tier0_job(job: &JobSpec) -> String {
         timeout(job),
         CHECKOUT_ACTION,
         CHECKOUT_REF,
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_make_command(make_target(job))
     )
 }
@@ -225,7 +229,7 @@ fn changelog_job(job: &JobSpec) -> String {
         timeout(job),
         CHECKOUT_ACTION,
         CHECKOUT_REF,
-        job.display_name
+        yaml_string(&job.display_name)
     )
 }
 
@@ -304,7 +308,7 @@ fn rust_job(job: &JobSpec) -> String {
         CHECKOUT_REF,
         nix_setup_step(),
         RUST_CACHE_ACTION,
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_make_command(make_target(job))
     )
 }
@@ -335,7 +339,7 @@ fn flake_discover_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         CHECKOUT_REF,
         nix_setup_step(),
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_silent_make_command("test-flake-list")
     )
 }
@@ -387,7 +391,7 @@ fn flake_x86_shards_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         CHECKOUT_REF,
         nix_setup_step(),
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_make_command("test-flake")
     )
 }
@@ -413,7 +417,7 @@ fn flake_x86_outputs_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         CHECKOUT_REF,
         nix_setup_step(),
-        job.display_name,
+        yaml_string(&job.display_name),
         ci_make_command("test-flake")
     )
 }
@@ -445,7 +449,7 @@ fn flake_x86_rollup_job(job: &JobSpec) -> String {
         yaml_list(&job.needs),
         runs_on(job),
         timeout(job),
-        job.display_name,
+        yaml_string(&job.display_name),
         discover_job,
         shards_job,
         outputs_job,
@@ -477,7 +481,7 @@ fn flake_aarch64_smoke_job(job: &JobSpec) -> String {
         CHECKOUT_ACTION,
         CHECKOUT_REF,
         nix_setup_step(),
-        job.display_name
+        yaml_string(&job.display_name)
     )
 }
 
@@ -576,6 +580,11 @@ mod tests {
         assert!(!first.contains("CARGO_BUILD_RUSTC_WRAPPER=\"\""));
         assert!(!first.contains("run: make test-"));
         assert!(!first.contains("run: make -s test-"));
+    }
+
+    #[test]
+    fn yaml_strings_quote_structural_display_name_characters() {
+        assert_eq!(yaml_string("gate: value # note"), r#""gate: value # note""#);
     }
 
     #[test]

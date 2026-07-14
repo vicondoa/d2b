@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Tier 0 first-pass gate
+      - name: "Tier 0 first-pass gate"
         run: make -- check-tier0
       - name: ADR index coverage guard
         run: bash tests/unit/meta/adr-index-coverage.sh
@@ -44,7 +44,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: Lint gate (preflight + parse + shellcheck)
+      - name: "Lint gate (preflight + parse + shellcheck)"
         run: make -- test-lint
 
   test-changelog:
@@ -57,7 +57,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-      - name: Changelog policy gate
+      - name: "Changelog policy gate"
         run: bash scripts/changelog-check.sh
 
   test-rust:
@@ -125,7 +125,7 @@ jobs:
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
-      - name: Rust workspace gate
+      - name: "Rust workspace gate"
         # Skip the fixture nix-build (~35 min) - the same fixtures are
         # already evaluated by the flake-eval-x86 (fixture-smoke) and
         # (fixture-smoke-full) shards. The contract tests that depend on
@@ -152,7 +152,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: Proof crates gate
+      - name: "Proof crates gate"
         run: make -- test-proofs
 
   flake-eval-discover:
@@ -175,7 +175,7 @@ jobs:
         with:
           version: "v0.10.0"
       - id: list
-        name: Enumerate flake checks (x86_64-linux)
+        name: "Enumerate flake checks (x86_64-linux)"
         run: |
           checks=$(make -s -- test-flake-list)
           echo "discovered checks: $checks"
@@ -218,7 +218,7 @@ jobs:
           version: "v0.10.0"
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
-      - name: Flake check shard (x86_64-linux)
+      - name: "Flake check shard (x86_64-linux)"
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
         # `D2B_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
@@ -244,7 +244,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: Flake non-checks outputs (x86_64-linux)
+      - name: "Flake non-checks outputs (x86_64-linux)"
         env:
           D2B_FLAKE_OUTPUTS: "1"
         run: make -- test-flake
@@ -255,7 +255,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all x86 flake jobs to pass
+      - name: "Require all x86 flake jobs to pass"
         run: |
           discover='${{ needs.flake-eval-discover.result }}'
           shards='${{ needs.flake-eval-x86.result }}'
@@ -285,7 +285,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: aarch64 smoke eval
+      - name: "aarch64 smoke eval"
         run: |
           nix-instantiate --eval --strict \
             -E 'let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath' \
@@ -308,7 +308,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: Drift gate
+      - name: "Drift gate"
         run: make -- test-drift
 
   test-policy:
@@ -328,7 +328,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
         with:
           version: "v0.10.0"
-      - name: Policy meta-gates
+      - name: "Policy meta-gates"
         run: make -- test-policy
 
   check:

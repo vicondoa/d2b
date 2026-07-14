@@ -123,6 +123,8 @@ deprecations ship one minor release before removal.
   preserving the in-place developer path and sccache wrapper.
 - Installed pinned sccache in the non-generated Rust eval workflow and enforced
   its cache environment in policy tests.
+- Quoted generated workflow display names, percent-encoded local flake URIs,
+  and made fresh-CI ordering robust to later updates of an older workflow run.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
