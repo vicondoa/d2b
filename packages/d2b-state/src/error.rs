@@ -29,6 +29,7 @@ pub enum ErrorCode {
     Cancelled,
     TransferDenied,
     AuditInvalid,
+    TaskJoin,
     Io,
 }
 
@@ -43,6 +44,10 @@ pub enum Error {
     Quarantine {
         reason: QuarantineReason,
         remediation: Remediation,
+    },
+    TaskJoin {
+        cancelled: bool,
+        panicked: bool,
     },
 }
 
@@ -88,6 +93,15 @@ impl Error {
                 _ => ErrorCode::InvalidSchema,
             },
             Self::Quarantine { .. } => ErrorCode::QuarantineRequired,
+            Self::TaskJoin { .. } => ErrorCode::TaskJoin,
+        }
+    }
+
+    #[cfg(feature = "tokio")]
+    pub(crate) fn task_join(error: tokio::task::JoinError) -> Self {
+        Self::TaskJoin {
+            cancelled: error.is_cancelled(),
+            panicked: error.is_panic(),
         }
     }
 }

@@ -6,6 +6,7 @@ use std::{
         unix::ffi::OsStrExt,
     },
     path::Path,
+    sync::Arc,
 };
 
 use d2b_contracts::v2_state::ResourceId;
@@ -94,8 +95,9 @@ impl fmt::Debug for RelativePath {
     }
 }
 
+#[derive(Clone)]
 pub struct AnchoredDir {
-    fd: OwnedFd,
+    fd: Arc<OwnedFd>,
 }
 
 impl fmt::Debug for AnchoredDir {
@@ -115,7 +117,7 @@ impl AnchoredDir {
             Mode::empty(),
         )
         .map_err(|error| Error::io(ErrorCode::PathRejected, error))?;
-        Ok(Self { fd })
+        Ok(Self { fd: Arc::new(fd) })
     }
 
     pub fn from_owned_fd(fd: OwnedFd) -> Result<Self> {
@@ -128,7 +130,7 @@ impl AnchoredDir {
         if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
             return Err(Error::Code(ErrorCode::PathRejected));
         }
-        Ok(Self { fd })
+        Ok(Self { fd: Arc::new(fd) })
     }
 
     pub(crate) fn open_beneath(
@@ -138,7 +140,7 @@ impl AnchoredDir {
         mode: Mode,
     ) -> Result<OwnedFd> {
         openat2(
-            &self.fd,
+            self.fd.as_ref(),
             path.as_str(),
             flags | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             mode,
@@ -157,17 +159,18 @@ impl AnchoredDir {
     }
 
     pub(crate) fn fd(&self) -> impl AsFd + '_ {
-        self.fd.as_fd()
+        self.fd.as_ref().as_fd()
     }
 }
 
-pub struct AnchoredResource<'a> {
+#[derive(Clone)]
+pub struct AnchoredResource {
     pub resource_id: ResourceId,
-    pub directory: &'a AnchoredDir,
+    pub directory: AnchoredDir,
     pub leaf: LeafName,
 }
 
-impl fmt::Debug for AnchoredResource<'_> {
+impl fmt::Debug for AnchoredResource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnchoredResource")
             .field("resource_id", &self.resource_id)
@@ -175,11 +178,11 @@ impl fmt::Debug for AnchoredResource<'_> {
     }
 }
 
-impl<'a> AnchoredResource<'a> {
-    pub fn new(resource_id: ResourceId, directory: &'a AnchoredDir, leaf: LeafName) -> Self {
+impl AnchoredResource {
+    pub fn new(resource_id: ResourceId, directory: &AnchoredDir, leaf: LeafName) -> Self {
         Self {
             resource_id,
-            directory,
+            directory: directory.clone(),
             leaf,
         }
     }

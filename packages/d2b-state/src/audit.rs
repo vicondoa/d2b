@@ -286,8 +286,8 @@ pub fn detect_gap(
     )?)
 }
 
-pub struct AuditAppender<'a> {
-    resource: AnchoredResource<'a>,
+pub struct AuditAppender {
+    resource: AnchoredResource,
     fd: OwnedFd,
     stream: AuditStream,
     next_sequence: u64,
@@ -297,7 +297,7 @@ pub struct AuditAppender<'a> {
     poisoned: bool,
 }
 
-impl fmt::Debug for AuditAppender<'_> {
+impl fmt::Debug for AuditAppender {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AuditAppender")
             .field("resource_id", &self.resource.resource_id)
@@ -307,9 +307,9 @@ impl fmt::Debug for AuditAppender<'_> {
     }
 }
 
-impl<'a> AuditAppender<'a> {
+impl AuditAppender {
     pub fn create(
-        resource: AnchoredResource<'a>,
+        resource: AnchoredResource,
         metadata: MetadataExpectation,
         stream: AuditStream,
         previous_segment_digest: Digest,
@@ -348,7 +348,7 @@ impl<'a> AuditAppender<'a> {
     }
 
     pub fn resume(
-        resource: AnchoredResource<'a>,
+        resource: AnchoredResource,
         metadata: MetadataExpectation,
         stream: AuditStream,
         previous_segment_digest: Digest,

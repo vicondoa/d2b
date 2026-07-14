@@ -464,12 +464,12 @@ impl fmt::Debug for RealTemp {
     }
 }
 
-pub struct RealAtomicFilesystem<'a> {
-    resource: AnchoredResource<'a>,
-    quarantine_directory: Option<&'a crate::AnchoredDir>,
+pub struct RealAtomicFilesystem {
+    resource: AnchoredResource,
+    quarantine_directory: Option<crate::AnchoredDir>,
 }
 
-impl fmt::Debug for RealAtomicFilesystem<'_> {
+impl fmt::Debug for RealAtomicFilesystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RealAtomicFilesystem")
             .field("resource_id", &self.resource.resource_id)
@@ -477,8 +477,8 @@ impl fmt::Debug for RealAtomicFilesystem<'_> {
     }
 }
 
-impl<'a> RealAtomicFilesystem<'a> {
-    pub fn new(resource: AnchoredResource<'a>) -> Self {
+impl RealAtomicFilesystem {
+    pub fn new(resource: AnchoredResource) -> Self {
         Self {
             resource,
             quarantine_directory: None,
@@ -486,12 +486,12 @@ impl<'a> RealAtomicFilesystem<'a> {
     }
 
     pub fn with_quarantine(
-        resource: AnchoredResource<'a>,
-        quarantine_directory: &'a crate::AnchoredDir,
+        resource: AnchoredResource,
+        quarantine_directory: &crate::AnchoredDir,
     ) -> Self {
         Self {
             resource,
-            quarantine_directory: Some(quarantine_directory),
+            quarantine_directory: Some(quarantine_directory.clone()),
         }
     }
 
@@ -517,7 +517,7 @@ impl<'a> RealAtomicFilesystem<'a> {
     }
 }
 
-impl AtomicFilesystem for RealAtomicFilesystem<'_> {
+impl AtomicFilesystem for RealAtomicFilesystem {
     type Temp = RealTemp;
 
     fn resource_id(&self) -> &d2b_contracts::v2_state::ResourceId {
@@ -638,6 +638,7 @@ impl AtomicFilesystem for RealAtomicFilesystem<'_> {
     fn quarantine_target(&mut self, quarantine_name: &LeafName) -> Result<()> {
         let quarantine_directory = self
             .quarantine_directory
+            .as_ref()
             .ok_or(Error::Code(ErrorCode::PathRejected))?;
         rustix::fs::renameat_with(
             self.resource.directory.fd(),
