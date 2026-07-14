@@ -659,6 +659,9 @@ fn validate_metadata(
     if requires_idempotency && envelope.idempotency_key.is_none() {
         return Err(ServiceContractError::MissingIdempotency);
     }
+    if value.session_generation == 0 {
+        return Err(ServiceContractError::InvalidId);
+    }
     let lifetime = envelope
         .expires_at_unix_ms
         .checked_sub(envelope.issued_at_unix_ms)
@@ -667,7 +670,6 @@ fn validate_metadata(
         || envelope.expires_at_unix_ms == 0
         || lifetime == 0
         || lifetime > MAX_REQUEST_LIFETIME_MS
-        || value.session_generation == 0
     {
         return Err(ServiceContractError::InvalidDeadline);
     }

@@ -648,12 +648,12 @@ running live guest activation.
 | `AuditEvent` | enum | [`AuditEvent`](../../packages/d2b-contracts/src/v2_state.rs#L1953) | `StorageCreate`; `StorageReconcile`; `StorageRepair`; `StorageDelete`; `RestartDiscover`; `RestartAdopt`; `RestartQuarantine`; `LockAcquire`; `LockRelease`; `LeaseGrant`; `LeaseRevoke`; `ProviderOperation`; `SessionOperation`; `SegmentSeal`; `Checkpoint`; `GapDetected`; `RetentionPrune`; `Export` |
 | `AuditOutcome` | enum | [`AuditOutcome`](../../packages/d2b-contracts/src/v2_state.rs#L1976) | `Succeeded`; `Denied`; `Failed`; `Degraded`; `Quarantined`; `Cancelled` |
 | `AuditReason` | enum | [`AuditReason`](../../packages/d2b-contracts/src/v2_state.rs#L1987) | `PolicyAllowed`; `PolicyDenied`; `IdentityVerified`; `IdentityMismatch`; `GenerationMismatch`; `OwnerAmbiguous`; `StorageDrift`; `LockContended`; `LeaseExpired`; `CorruptState`; `SequenceGap`; `RetentionLimit`; `OperatorRequested` |
-| `AuditActor` | enum | [`AuditActor`](../../packages/d2b-contracts/src/v2_state.rs#L2013) | `LocalRootAllocator`; `LocalRootBroker`; `RealmController` — struct { `realm_id`: `RealmId` }; `RealmBroker` — struct { `realm_id`: `RealmId` }; `Provider` — struct { `provider_id`: `ProviderId` }; `WorkloadRole` — struct { `role_id`: `RoleId` } |
-| `PruneStatus` | enum | [`PruneStatus`](../../packages/d2b-contracts/src/v2_state.rs#L2224) | `Retained`; `EligibleAfterCheckpoint`; `PrunedWithCheckpoint` |
-| `AuditRetentionDecision` | enum | [`AuditRetentionDecision`](../../packages/d2b-contracts/src/v2_state.rs#L2540) | `Retain`; `SealCurrentSegment`; `CreateCheckpoint`; `PruneCheckpointedSegment` |
-| `AuditExportFormat` | enum | [`AuditExportFormat`](../../packages/d2b-contracts/src/v2_state.rs#L2630) | `RedactedJsonLines`; `CheckpointBundle` |
-| `ProjectionAuthority` | enum | [`ProjectionAuthority`](../../packages/d2b-contracts/src/v2_state.rs#L2704) | `DiagnosticsOnly` |
-| `ProjectionStatus` | enum | [`ProjectionStatus`](../../packages/d2b-contracts/src/v2_state.rs#L2710) | `Ready`; `Starting`; `Stopped`; `Degraded`; `Quarantined`; `Unknown` |
+| `AuditActor` | enum | [`AuditActor`](../../packages/d2b-contracts/src/v2_state.rs#L2013) | `LocalRootAllocator`; `LocalRootBroker`; `RealmController` — struct { `realm_id`: `RealmId` }; `RealmBroker` — struct { `realm_id`: `RealmId` }; `Provider` — struct { `provider_id`: `ProviderId` }; `WorkloadRole` — struct { `realm_id`: `RealmId`; `workload_id`: `WorkloadId`; `role_id`: `RoleId` } |
+| `PruneStatus` | enum | [`PruneStatus`](../../packages/d2b-contracts/src/v2_state.rs#L2234) | `Retained`; `EligibleAfterCheckpoint`; `PrunedWithCheckpoint` |
+| `AuditRetentionDecision` | enum | [`AuditRetentionDecision`](../../packages/d2b-contracts/src/v2_state.rs#L2550) | `Retain`; `SealCurrentSegment`; `CreateCheckpoint`; `PruneCheckpointedSegment` |
+| `AuditExportFormat` | enum | [`AuditExportFormat`](../../packages/d2b-contracts/src/v2_state.rs#L2640) | `RedactedJsonLines`; `CheckpointBundle` |
+| `ProjectionAuthority` | enum | [`ProjectionAuthority`](../../packages/d2b-contracts/src/v2_state.rs#L2714) | `DiagnosticsOnly` |
+| `ProjectionStatus` | enum | [`ProjectionStatus`](../../packages/d2b-contracts/src/v2_state.rs#L2720) | `Ready`; `Starting`; `Stopped`; `Degraded`; `Quarantined`; `Unknown` |
 <!-- END AUTO-GENERATED: enum-variants -->
 
 ## Error envelope

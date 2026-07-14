@@ -2026,6 +2026,10 @@ pub enum AuditActor {
         provider_id: ProviderId,
     },
     WorkloadRole {
+        #[serde(rename = "realmId")]
+        realm_id: RealmId,
+        #[serde(rename = "workloadId")]
+        workload_id: WorkloadId,
         #[serde(rename = "roleId")]
         role_id: RoleId,
     },
@@ -2118,8 +2122,14 @@ fn hash_audit_actor(hasher: &mut CanonicalHasher, actor: &AuditActor) {
             hasher.string("provider");
             hasher.string(provider_id.as_str());
         }
-        AuditActor::WorkloadRole { role_id } => {
+        AuditActor::WorkloadRole {
+            realm_id,
+            workload_id,
+            role_id,
+        } => {
             hasher.string("workload-role");
+            hasher.string(realm_id.as_str());
+            hasher.string(workload_id.as_str());
             hasher.string(role_id.as_str());
         }
     }

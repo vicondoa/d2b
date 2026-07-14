@@ -411,6 +411,13 @@ fn responses_bind_attachments_streams_and_error_outcomes() {
 
 #[test]
 fn strict_wire_errors_classify_the_rejected_field() {
+    let mut generation = valid_request();
+    generation.metadata.as_mut().unwrap().session_generation = 0;
+    assert_eq!(
+        generation.validate_wire(true),
+        Err(ServiceContractError::InvalidId)
+    );
+
     let mut request = valid_request();
     request.desired_state = EnumOrUnknown::from_i32(999);
     assert_eq!(

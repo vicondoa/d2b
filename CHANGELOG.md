@@ -77,9 +77,9 @@ deprecations ship one minor release before removal.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed
-  validation errors, making role scopes workload-bound, keeping schema and
-  serde enum-field casing identical, and distinguishing `SCM_CREDENTIALS`
-  records from pidfds.
+  validation errors, making role scopes and audit actors workload-bound,
+  keeping schema and serde enum-field casing identical, and distinguishing
+  `SCM_CREDENTIALS` records from pidfds.
 - Made identity rejection vectors portable to Nix implementations that cannot
   materialize NUL-containing JSON strings, and corrected generated tuple-struct
   API documentation.

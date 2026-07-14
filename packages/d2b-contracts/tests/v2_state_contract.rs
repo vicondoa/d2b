@@ -1401,6 +1401,16 @@ fn audit_is_redacted_bounded_and_has_closed_labels() {
     assert!(serde_json::from_str::<AuditOutcome>("\"maybe\"").is_err());
     assert!(serde_json::from_str::<AuditReason>("\"free-form\"").is_err());
 
+    let role_actor = AuditActor::WorkloadRole {
+        realm_id: realm_id(),
+        workload_id: workload_id(),
+        role_id: role_id(),
+    };
+    let role_actor_json = serde_json::to_value(role_actor).unwrap();
+    assert_eq!(role_actor_json["realmId"], realm_id().as_str());
+    assert_eq!(role_actor_json["workloadId"], workload_id().as_str());
+    assert_eq!(role_actor_json["roleId"], role_id().as_str());
+
     let mut oversized = record;
     oversized.encoded_bytes = MAX_AUDIT_RECORD_BYTES + 1;
     assert_eq!(
