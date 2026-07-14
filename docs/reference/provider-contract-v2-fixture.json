@@ -1,0 +1,328 @@
+{
+  "contractFingerprint": "daf51d65ed5c7273865fbfedb2e753c20cc20fec90bf3014f1cdf128395a5313",
+  "credentialLease": {
+    "agentBinding": {
+      "agentGeneration": 3,
+      "realmId": "yl2hpmks5td5dkeso6qq",
+      "roleId": "7xrbjonser3hpi7hqojq",
+      "workloadId": "q5h7jtqteem7kua4tfva"
+    },
+    "allowedOperations": [
+      "authenticate",
+      "create"
+    ],
+    "consumerProviderGeneration": 7,
+    "consumerProviderId": "eaaaaaaaaaaaaaaaaaaq",
+    "credentialProviderGeneration": 7,
+    "credentialProviderId": "caaaaaaaaaaaaaaaaaaq",
+    "expiresAtUnixMs": 8000,
+    "issuedAtUnixMs": 2000,
+    "leaseId": "lease-1",
+    "revokedAtUnixMs": null,
+    "rotationGeneration": 1,
+    "sourceVersion": "source-1",
+    "state": "active",
+    "transferPolicy": "forbidden"
+  },
+  "failure": {
+    "binding": {
+      "idempotencyKey": "idempotency-1",
+      "operationId": "operation-1",
+      "providerGeneration": 7,
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "requestDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "correlationId": "correlation-1",
+    "kind": "unavailable",
+    "occurredAtUnixMs": 4500,
+    "providerType": "runtime",
+    "reason": "session-disconnected",
+    "remediation": "restart-agent",
+    "retry": "same-operation"
+  },
+  "handle": {
+    "configurationFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "createdAtUnixMs": 3000,
+    "createdBy": {
+      "idempotencyKey": "idempotency-1",
+      "operationId": "operation-1",
+      "providerGeneration": 7,
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "requestDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "expiresAtUnixMs": null,
+    "handleId": "handle-1",
+    "kind": "runtime",
+    "owner": {
+      "kind": "provider",
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "realmId": "yl2hpmks5td5dkeso6qq"
+    },
+    "ownershipTransfer": {
+      "ownershipEpoch": 1,
+      "state": "stationary"
+    },
+    "providerGeneration": 7,
+    "providerId": "f7z3k5e3awgn43aljt2a",
+    "realmId": "yl2hpmks5td5dkeso6qq",
+    "resourceGeneration": 2,
+    "schemaVersion": 2,
+    "workloadId": "q5h7jtqteem7kua4tfva"
+  },
+  "observation": {
+    "adoption": "adopted",
+    "handleId": "handle-1",
+    "health": {
+      "observedAtUnixMs": 4000,
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "reason": "none",
+      "registryGeneration": 7,
+      "remediation": "none",
+      "state": "healthy"
+    },
+    "lifecycle": "running",
+    "observedAtUnixMs": 4000,
+    "providerGeneration": 7,
+    "providerId": "f7z3k5e3awgn43aljt2a",
+    "realmId": "yl2hpmks5td5dkeso6qq",
+    "reason": "none",
+    "resourceGeneration": 2,
+    "workloadId": "q5h7jtqteem7kua4tfva"
+  },
+  "operation": {
+    "context": {
+      "authorizationDecisionDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "capability": "runtime.plan",
+      "correlationId": "correlation-1",
+      "expiresAtUnixMs": 10000,
+      "idempotencyKey": "idempotency-1",
+      "issuedAtUnixMs": 2000,
+      "method": "runtime.plan",
+      "operationId": "operation-1",
+      "policyEpoch": 9,
+      "principal": "principal-1",
+      "providerGeneration": 7,
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "providerType": "runtime",
+      "requestDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "schemaVersion": 2,
+      "scope": {
+        "kind": "workload",
+        "realmId": "yl2hpmks5td5dkeso6qq",
+        "workloadId": "q5h7jtqteem7kua4tfva"
+      },
+      "traceId": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "expectedConfigurationFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "target": {
+      "kind": "workload",
+      "realmId": "yl2hpmks5td5dkeso6qq",
+      "workloadId": "q5h7jtqteem7kua4tfva"
+    }
+  },
+  "plan": {
+    "binding": {
+      "idempotencyKey": "idempotency-1",
+      "operationId": "operation-1",
+      "providerGeneration": 7,
+      "providerId": "f7z3k5e3awgn43aljt2a",
+      "requestDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "configurationFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "createdAtUnixMs": 2500,
+    "expiresAtUnixMs": 9000,
+    "method": "runtime.plan",
+    "planId": "plan-1",
+    "realmId": "yl2hpmks5td5dkeso6qq",
+    "resources": [
+      "workload-execution"
+    ],
+    "schemaVersion": 2,
+    "workloadId": "q5h7jtqteem7kua4tfva"
+  },
+  "registry": {
+    "axes": [
+      {
+        "providerType": "runtime",
+        "providers": [
+          "eaaaaaaaaaaaaaaaaaaq",
+          "f7z3k5e3awgn43aljt2a"
+        ]
+      },
+      {
+        "providerType": "infrastructure",
+        "providers": []
+      },
+      {
+        "providerType": "transport",
+        "providers": []
+      },
+      {
+        "providerType": "substrate",
+        "providers": []
+      },
+      {
+        "providerType": "credential",
+        "providers": [
+          "caaaaaaaaaaaaaaaaaaq"
+        ]
+      },
+      {
+        "providerType": "display",
+        "providers": []
+      },
+      {
+        "providerType": "network",
+        "providers": []
+      },
+      {
+        "providerType": "storage",
+        "providers": []
+      },
+      {
+        "providerType": "device",
+        "providers": []
+      },
+      {
+        "providerType": "audio",
+        "providers": []
+      },
+      {
+        "providerType": "observability",
+        "providers": []
+      }
+    ],
+    "configurationFingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+    "factories": [
+      {
+        "implementationId": "azure-container-apps",
+        "providerType": "runtime"
+      },
+      {
+        "implementationId": "entra",
+        "providerType": "credential"
+      }
+    ],
+    "generation": 7,
+    "lifecycle": "accepting",
+    "providers": [
+      {
+        "apiVersion": {
+          "major": 2,
+          "minor": 0
+        },
+        "authority": {
+          "type": "credential"
+        },
+        "capabilities": [
+          "credential.status",
+          "credential.acquire-lease",
+          "credential.refresh-lease",
+          "credential.revoke-lease"
+        ],
+        "configurationSchemaFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "configuredScopeDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "implementationId": "entra",
+        "placement": {
+          "agentGeneration": 3,
+          "endpointRole": "provider-agent",
+          "kind": "provider-agent",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "roleId": "7xrbjonser3hpi7hqojq",
+          "service": "d2b.provider.v2",
+          "workloadId": "q5h7jtqteem7kua4tfva"
+        },
+        "providerId": "caaaaaaaaaaaaaaaaaaq",
+        "registryGeneration": 7,
+        "schemaVersion": 2
+      },
+      {
+        "apiVersion": {
+          "major": 2,
+          "minor": 0
+        },
+        "authority": {
+          "posture": {
+            "cgroup": "provider-managed-remote",
+            "deviceMediation": "provider-managed-typed",
+            "network": "isolated-namespace",
+            "persistentIdentity": "none",
+            "process": "provider-managed-remote",
+            "userNamespace": "none"
+          },
+          "type": "runtime"
+        },
+        "capabilities": [
+          "runtime.plan",
+          "runtime.ensure",
+          "runtime.start",
+          "runtime.stop",
+          "runtime.execute",
+          "runtime.inspect",
+          "runtime.adopt",
+          "runtime.destroy"
+        ],
+        "configurationSchemaFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "configuredScopeDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "implementationId": "azure-container-apps",
+        "placement": {
+          "agentGeneration": 3,
+          "endpointRole": "provider-agent",
+          "kind": "provider-agent",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "roleId": "7xrbjonser3hpi7hqojq",
+          "service": "d2b.provider.v2",
+          "workloadId": "q5h7jtqteem7kua4tfva"
+        },
+        "providerId": "eaaaaaaaaaaaaaaaaaaq",
+        "registryGeneration": 7,
+        "schemaVersion": 2
+      },
+      {
+        "apiVersion": {
+          "major": 2,
+          "minor": 0
+        },
+        "authority": {
+          "posture": {
+            "cgroup": "provider-managed-remote",
+            "deviceMediation": "provider-managed-typed",
+            "network": "isolated-namespace",
+            "persistentIdentity": "none",
+            "process": "provider-managed-remote",
+            "userNamespace": "none"
+          },
+          "type": "runtime"
+        },
+        "capabilities": [
+          "runtime.plan",
+          "runtime.ensure",
+          "runtime.start",
+          "runtime.stop",
+          "runtime.execute",
+          "runtime.inspect",
+          "runtime.adopt",
+          "runtime.destroy"
+        ],
+        "configurationSchemaFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "configuredScopeDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+        "implementationId": "azure-container-apps",
+        "placement": {
+          "agentGeneration": 3,
+          "endpointRole": "provider-agent",
+          "kind": "provider-agent",
+          "realmId": "yl2hpmks5td5dkeso6qq",
+          "roleId": "7xrbjonser3hpi7hqojq",
+          "service": "d2b.provider.v2",
+          "workloadId": "q5h7jtqteem7kua4tfva"
+        },
+        "providerId": "f7z3k5e3awgn43aljt2a",
+        "registryGeneration": 7,
+        "schemaVersion": 2
+      }
+    ],
+    "publishedAtUnixMs": 1000,
+    "schemaVersion": 2
+  },
+  "schemaVersion": 2
+}
