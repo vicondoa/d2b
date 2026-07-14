@@ -6,7 +6,8 @@ use std::{
 };
 
 use d2b_contracts::v2_state::{
-    CancellationPolicy, ContentionPolicy, FdTransferPolicy, LockKind, LockSpec, ResourceId,
+    AuthorityRef, CancellationPolicy, ContentionPolicy, FdTransferPolicy, LockKind, LockSpec,
+    OwnershipEpoch, ResourceId,
 };
 use nix::{
     errno::Errno,
@@ -74,6 +75,9 @@ impl OfdTransfer<'_> {
 pub struct LockGuard {
     fd: OwnedFd,
     lock_id: ResourceId,
+    resource_id: ResourceId,
+    owner: AuthorityRef,
+    ownership_epoch: OwnershipEpoch,
     global_order: u32,
     transfer: FdTransferPolicy,
     held: bool,
@@ -83,6 +87,8 @@ impl fmt::Debug for LockGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LockGuard")
             .field("lock_id", &self.lock_id)
+            .field("resource_id", &self.resource_id)
+            .field("ownership_epoch", &self.ownership_epoch)
             .field("global_order", &self.global_order)
             .field("held", &self.held)
             .finish_non_exhaustive()
@@ -96,6 +102,22 @@ impl LockGuard {
 
     pub fn global_order(&self) -> u32 {
         self.global_order
+    }
+
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    pub fn owner(&self) -> &AuthorityRef {
+        &self.owner
+    }
+
+    pub fn ownership_epoch(&self) -> OwnershipEpoch {
+        self.ownership_epoch
+    }
+
+    pub fn is_held(&self) -> bool {
+        self.held
     }
 
     pub fn authorize_transfer(&self, requested: FdTransferPolicy) -> Result<OfdTransfer<'_>> {
@@ -114,6 +136,31 @@ impl LockGuard {
 
     pub fn release(mut self) -> Result<()> {
         self.unlock()
+    }
+
+    pub fn release_in_place(&mut self) -> Result<()> {
+        self.unlock()
+    }
+
+    pub(crate) fn validate_state_binding(
+        &self,
+        lock_id: &ResourceId,
+        resource_id: &ResourceId,
+        owner: &AuthorityRef,
+        ownership_epoch: OwnershipEpoch,
+    ) -> Result<()> {
+        if !self.held {
+            return Err(Error::Code(ErrorCode::LockReleased));
+        }
+        if &self.lock_id != lock_id
+            || &self.resource_id != resource_id
+            || &self.owner != owner
+            || self.ownership_epoch != ownership_epoch
+            || self.transfer != FdTransferPolicy::Never
+        {
+            return Err(Error::Code(ErrorCode::LockMismatch));
+        }
+        Ok(())
     }
 
     fn unlock(&mut self) -> Result<()> {
@@ -155,9 +202,17 @@ impl LockSet {
         spec: &LockSpec,
         resource: &AnchoredResource<'_>,
         metadata: MetadataExpectation,
+        ownership_epoch: OwnershipEpoch,
         cancellation: &impl Cancellation,
     ) -> Result<&LockGuard> {
-        self.acquire_with_clock(spec, resource, metadata, cancellation, &SystemClock)
+        self.acquire_with_clock(
+            spec,
+            resource,
+            metadata,
+            ownership_epoch,
+            cancellation,
+            &SystemClock,
+        )
     }
 
     pub fn acquire_with_clock<C: Clock>(
@@ -165,6 +220,7 @@ impl LockSet {
         spec: &LockSpec,
         resource: &AnchoredResource<'_>,
         metadata: MetadataExpectation,
+        ownership_epoch: OwnershipEpoch,
         cancellation: &impl Cancellation,
         clock: &C,
     ) -> Result<&LockGuard> {
@@ -172,8 +228,9 @@ impl LockSet {
         if self.held(&spec.lock_id)
             || self
                 .guards
-                .last()
-                .is_some_and(|guard| guard.global_order >= spec.global_order)
+                .iter()
+                .filter(|guard| guard.held)
+                .any(|guard| guard.global_order >= spec.global_order)
             || spec
                 .acquire_after
                 .iter()
@@ -234,6 +291,9 @@ impl LockSet {
         self.guards.push(LockGuard {
             fd,
             lock_id: spec.lock_id.clone(),
+            resource_id: spec.key.resource_id.clone(),
+            owner: spec.owner.clone(),
+            ownership_epoch,
             global_order: spec.global_order,
             transfer: spec.fd_transfer,
             held: true,
@@ -247,6 +307,14 @@ impl LockSet {
     pub fn release_last(&mut self) -> Result<()> {
         let guard = self.guards.pop().ok_or(Error::Code(ErrorCode::LockOrder))?;
         guard.release()
+    }
+
+    pub fn last(&self) -> Option<&LockGuard> {
+        self.guards.last()
+    }
+
+    pub fn last_mut(&mut self) -> Option<&mut LockGuard> {
+        self.guards.last_mut()
     }
 }
 

@@ -2,7 +2,11 @@ use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
 };
 
 use d2b_contracts::v2_state::{
@@ -10,7 +14,8 @@ use d2b_contracts::v2_state::{
     AuditReason, AuditRetentionDecision, AuditRetentionEvidence, AuditRetentionPolicy, AuditStream,
     AuthorityRef, CancellationPolicy, ContentionPolicy, Digest, FdTransferPolicy, Generation,
     IdentityScope, LeaseRevocation, LockClass, LockKey, LockKind, LockSpec,
-    MAX_AUDIT_RECORDS_PER_SEGMENT, MAX_AUDIT_SEGMENT_BYTES, PruneStatus, ResourceId,
+    MAX_AUDIT_RECORDS_PER_SEGMENT, MAX_AUDIT_SEGMENT_BYTES, OwnershipEpoch, PruneStatus,
+    ResourceId,
 };
 use d2b_state::{
     AnchoredDir, AnchoredResource, AtomicFilesystem, AtomicWrite, AuditAppender, AuditRecordInput,
@@ -23,6 +28,10 @@ use serde::{Deserialize, Serialize};
 
 fn generation(value: u64) -> Generation {
     Generation::new(value).unwrap()
+}
+
+fn epoch(value: u64) -> OwnershipEpoch {
+    OwnershipEpoch::new(value).unwrap()
 }
 
 fn resource(value: &str) -> ResourceId {
@@ -165,6 +174,8 @@ fn write_policy(state: u64, previous: Option<u64>) -> WritePolicy {
         config_generation: generation(7),
         state_generation: generation(state),
         expected_previous: previous.map(generation),
+        lock_id: resource("state-lock"),
+        ownership_epoch: epoch(1),
     }
 }
 
@@ -178,9 +189,14 @@ fn read_policy(state: u64) -> ReadPolicy {
 }
 
 fn seeded_fake() -> FakeFs {
+    let lock = held_state_lock("state", "state-lock");
     let mut writer = AtomicWrite::new(FakeFs::empty());
     writer
-        .write(&Payload { value: 1 }, &write_policy(1, None))
+        .write(
+            &Payload { value: 1 },
+            &write_policy(1, None),
+            Some(lock.guard()),
+        )
         .unwrap();
     let mut fake = writer.into_inner();
     fake.events.clear();
@@ -189,11 +205,16 @@ fn seeded_fake() -> FakeFs {
 
 #[test]
 fn atomic_write_orders_all_durability_steps_and_completes_partial_writes() {
+    let lock = held_state_lock("state", "state-lock");
     let mut fake = FakeFs::empty();
     fake.write_limit = 7;
     let mut writer = AtomicWrite::new(fake);
     let receipt = writer
-        .write(&Payload { value: 1 }, &write_policy(1, None))
+        .write(
+            &Payload { value: 1 },
+            &write_policy(1, None),
+            Some(lock.guard()),
+        )
         .unwrap();
     assert!(receipt.success);
     assert_eq!(receipt.resource_id, resource("state"));
@@ -223,9 +244,14 @@ fn every_crash_phase_fails_closed_and_never_reports_success_early() {
         let prior = baseline.target.clone();
         let mut fake = baseline;
         fake.fail = Some(failure);
+        let lock = held_state_lock("state", "state-lock");
         let mut writer = AtomicWrite::new(fake);
         let error = writer
-            .write(&Payload { value: 2 }, &write_policy(2, Some(1)))
+            .write(
+                &Payload { value: 2 },
+                &write_policy(2, Some(1)),
+                Some(lock.guard()),
+            )
             .unwrap_err();
         if failure == Event::ParentSync {
             assert_eq!(error.code(), ErrorCode::QuarantineRequired);
@@ -335,14 +361,22 @@ fn writer_metadata_and_generation_are_closed_and_monotonic() {
 
     assert_eq!(
         AtomicWrite::new(baseline.clone())
-            .write(&Payload { value: 2 }, &write_policy(1, Some(1)))
+            .write(
+                &Payload { value: 2 },
+                &write_policy(1, Some(1)),
+                Some(held_state_lock("state", "state-lock").guard()),
+            )
             .unwrap_err()
             .code(),
         ErrorCode::GenerationGap
     );
     assert_eq!(
         AtomicWrite::new(baseline)
-            .write(&Payload { value: 3 }, &write_policy(3, Some(1)))
+            .write(
+                &Payload { value: 3 },
+                &write_policy(3, Some(1)),
+                Some(held_state_lock("state", "state-lock").guard()),
+            )
             .unwrap_err()
             .code(),
         ErrorCode::GenerationGap
@@ -353,7 +387,14 @@ fn writer_metadata_and_generation_are_closed_and_monotonic() {
 fn corrupt_state_has_typed_quarantine_and_is_moved_narrowly() {
     let baseline = seeded_fake();
     let error = Error::Code(ErrorCode::ChecksumMismatch);
-    let record = QuarantineRecord::for_error(resource("state"), &error, baseline.target.as_deref());
+    let record = QuarantineRecord::for_error(
+        resource("state"),
+        resource("state-lock"),
+        AuthorityRef::LocalRootBroker,
+        epoch(1),
+        &error,
+        baseline.target.as_deref(),
+    );
     assert_eq!(
         record.reason,
         d2b_contracts::v2_state::QuarantineReason::CorruptState
@@ -361,7 +402,39 @@ fn corrupt_state_has_typed_quarantine_and_is_moved_narrowly() {
     assert!(record.observed_document_digest.is_some());
 
     let mut writer = AtomicWrite::new(baseline);
-    writer.quarantine(&record).unwrap();
+    assert_eq!(
+        writer.quarantine(&record, None).unwrap_err().code(),
+        ErrorCode::LockRequired
+    );
+    let wrong = held_state_lock("other-state", "other-lock");
+    assert_eq!(
+        writer
+            .quarantine(&record, Some(wrong.guard()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockMismatch
+    );
+    let correct = held_state_lock("state", "state-lock");
+    let mut stale_record = record.clone();
+    stale_record.ownership_epoch = epoch(2);
+    assert_eq!(
+        writer
+            .quarantine(&stale_record, Some(correct.guard()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockMismatch
+    );
+    let mut released = held_state_lock("state", "state-lock");
+    released.set.last_mut().unwrap().release_in_place().unwrap();
+    assert_eq!(
+        writer
+            .quarantine(&record, Some(released.guard()))
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockReleased
+    );
+    let lock = held_state_lock("state", "state-lock");
+    writer.quarantine(&record, Some(lock.guard())).unwrap();
     let fake = writer.into_inner();
     assert!(fake.target.is_none());
     assert!(fake.quarantine.is_some());
@@ -369,6 +442,56 @@ fn corrupt_state_has_typed_quarantine_and_is_moved_narrowly() {
         &fake.events[fake.events.len() - 2..],
         [Event::Quarantine, Event::ParentSync]
     );
+}
+
+#[test]
+fn generation_sensitive_writes_reject_missing_wrong_and_released_guards() {
+    let baseline = seeded_fake();
+    let prior = baseline.target.clone();
+    let mut writer = AtomicWrite::new(baseline);
+    assert_eq!(
+        writer
+            .write(&Payload { value: 2 }, &write_policy(2, Some(1)), None)
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockRequired
+    );
+    let wrong = held_state_lock("other-state", "other-lock");
+    assert_eq!(
+        writer
+            .write(
+                &Payload { value: 2 },
+                &write_policy(2, Some(1)),
+                Some(wrong.guard()),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockMismatch
+    );
+    let correct = held_state_lock("state", "state-lock");
+    let mut stale_epoch = write_policy(2, Some(1));
+    stale_epoch.ownership_epoch = epoch(2);
+    assert_eq!(
+        writer
+            .write(&Payload { value: 2 }, &stale_epoch, Some(correct.guard()),)
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockMismatch
+    );
+    let mut released = held_state_lock("state", "state-lock");
+    released.set.last_mut().unwrap().release_in_place().unwrap();
+    assert_eq!(
+        writer
+            .write(
+                &Payload { value: 2 },
+                &write_policy(2, Some(1)),
+                Some(released.guard()),
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::LockReleased
+    );
+    assert_eq!(writer.into_inner().target, prior);
 }
 
 static SCRATCH_ID: AtomicU64 = AtomicU64::new(1);
@@ -440,7 +563,9 @@ fn real_io_is_anchored_nofollow_and_checks_exact_mode() {
         metadata,
         ..write_policy(1, None)
     };
-    real.write(&Payload { value: 9 }, &policy).unwrap();
+    let lock = held_state_lock("state", "state-lock");
+    real.write(&Payload { value: 9 }, &policy, Some(lock.guard()))
+        .unwrap();
     fs::set_permissions(
         scratch.0.join("state.json"),
         fs::Permissions::from_mode(0o640),
@@ -473,6 +598,7 @@ fn real_quarantine_moves_only_the_anchored_resource_and_syncs_both_directories()
         state_resource,
         &quarantine_anchor,
     ));
+    let lock = held_state_lock("state", "state-lock");
     writer
         .write(
             &Payload { value: 1 },
@@ -480,6 +606,7 @@ fn real_quarantine_moves_only_the_anchored_resource_and_syncs_both_directories()
                 metadata,
                 ..write_policy(1, None)
             },
+            Some(lock.guard()),
         )
         .unwrap();
     let mut bytes = fs::read(scratch.0.join("state.json")).unwrap();
@@ -495,8 +622,15 @@ fn real_quarantine_moves_only_the_anchored_resource_and_syncs_both_directories()
             ..read_policy(1)
         })
         .unwrap_err();
-    let record = QuarantineRecord::for_error(resource("state"), &error, Some(&bytes));
-    writer.quarantine(&record).unwrap();
+    let record = QuarantineRecord::for_error(
+        resource("state"),
+        resource("state-lock"),
+        AuthorityRef::LocalRootBroker,
+        epoch(1),
+        &error,
+        Some(&bytes),
+    );
+    writer.quarantine(&record, Some(lock.guard())).unwrap();
     assert!(!scratch.0.join("state.json").exists());
     assert_eq!(fs::read_dir(&quarantine_path).unwrap().count(), 1);
 }
@@ -529,6 +663,43 @@ fn lock_spec(
     }
 }
 
+struct HeldLock {
+    set: LockSet,
+    _scratch: Scratch,
+}
+
+impl HeldLock {
+    fn guard(&self) -> &d2b_state::LockGuard {
+        self.set.last().unwrap()
+    }
+}
+
+fn held_state_lock(resource_id: &str, lock_id: &str) -> HeldLock {
+    let scratch = Scratch::new("state-lock");
+    let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+    let metadata = host_metadata(&scratch.0, 0o600);
+    let spec = lock_spec(
+        lock_id,
+        resource_id,
+        1,
+        &[],
+        ContentionPolicy::FailFast,
+        FdTransferPolicy::Never,
+    );
+    let lock_resource = AnchoredResource::new(
+        resource(resource_id),
+        &anchor,
+        LeafName::parse("state.lock").unwrap(),
+    );
+    let mut set = LockSet::new();
+    set.acquire(&spec, &lock_resource, metadata, epoch(1), &NeverCancelled)
+        .unwrap();
+    HeldLock {
+        set,
+        _scratch: scratch,
+    }
+}
+
 #[test]
 fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     let scratch = Scratch::new("locks");
@@ -555,7 +726,7 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     );
     let mut set_a = LockSet::new();
     let guard = set_a
-        .acquire(&first_spec, &first_a, metadata, &NeverCancelled)
+        .acquire(&first_spec, &first_a, metadata, epoch(1), &NeverCancelled)
         .unwrap();
     assert_eq!(
         guard
@@ -567,7 +738,7 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     let mut set_b = LockSet::new();
     assert_eq!(
         set_b
-            .acquire(&first_spec, &first_b, metadata, &NeverCancelled)
+            .acquire(&first_spec, &first_b, metadata, epoch(1), &NeverCancelled,)
             .unwrap_err()
             .code(),
         ErrorCode::LockContended
@@ -583,14 +754,14 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     waiting_spec.contention = ContentionPolicy::BoundedWait;
     assert_eq!(
         set_b
-            .acquire(&waiting_spec, &first_b, metadata, &Cancelled)
+            .acquire(&waiting_spec, &first_b, metadata, epoch(1), &Cancelled,)
             .unwrap_err()
             .code(),
         ErrorCode::Cancelled
     );
     assert_eq!(
         set_b
-            .acquire(&waiting_spec, &first_b, metadata, &NeverCancelled)
+            .acquire(&waiting_spec, &first_b, metadata, epoch(1), &NeverCancelled,)
             .unwrap_err()
             .code(),
         ErrorCode::Deadline
@@ -610,7 +781,7 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
         LeafName::parse("second.lock").unwrap(),
     );
     let second_guard = set_a
-        .acquire(&second_spec, &second, metadata, &NeverCancelled)
+        .acquire(&second_spec, &second, metadata, epoch(1), &NeverCancelled)
         .unwrap();
     assert!(
         second_guard
@@ -633,11 +804,131 @@ fn ofd_locks_enforce_order_contention_deadline_cancellation_and_transfer() {
     );
     assert_eq!(
         set_a
-            .acquire(&third_spec, &third, metadata, &NeverCancelled)
+            .acquire(&third_spec, &third, metadata, epoch(1), &NeverCancelled,)
             .unwrap_err()
             .code(),
         ErrorCode::LockOrder
     );
+}
+
+#[test]
+fn two_generation_writers_serialize_and_only_one_can_commit_next_generation() {
+    let scratch = Scratch::new("writer-race");
+    let metadata = host_metadata(&scratch.0, 0o600);
+    let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+    let mut spec = lock_spec(
+        "state-lock",
+        "state",
+        1,
+        &[],
+        ContentionPolicy::BoundedWait,
+        FdTransferPolicy::Never,
+    );
+    spec.deadline_ms = 2_000;
+    let lock_resource = AnchoredResource::new(
+        resource("state"),
+        &anchor,
+        LeafName::parse("state.lock").unwrap(),
+    );
+    let mut initial_lock = LockSet::new();
+    initial_lock
+        .acquire(&spec, &lock_resource, metadata, epoch(1), &NeverCancelled)
+        .unwrap();
+    let state_resource = AnchoredResource::new(
+        resource("state"),
+        &anchor,
+        LeafName::parse("state.json").unwrap(),
+    );
+    AtomicWrite::new(RealAtomicFilesystem::new(state_resource))
+        .write(
+            &Payload { value: 1 },
+            &WritePolicy {
+                metadata,
+                ..write_policy(1, None)
+            },
+            initial_lock.last(),
+        )
+        .unwrap();
+    initial_lock.release_last().unwrap();
+
+    let root = Arc::new(scratch.0.clone());
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [10_u64, 20_u64].map(|value| {
+        let root = Arc::clone(&root);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            let anchor = AnchoredDir::open_trusted(&root).unwrap();
+            let metadata = host_metadata(&root, 0o600);
+            let mut spec = lock_spec(
+                "state-lock",
+                "state",
+                1,
+                &[],
+                ContentionPolicy::BoundedWait,
+                FdTransferPolicy::Never,
+            );
+            spec.deadline_ms = 2_000;
+            let lock_resource = AnchoredResource::new(
+                resource("state"),
+                &anchor,
+                LeafName::parse("state.lock").unwrap(),
+            );
+            let mut locks = LockSet::new();
+            barrier.wait();
+            locks
+                .acquire(&spec, &lock_resource, metadata, epoch(1), &NeverCancelled)
+                .unwrap();
+            let state_resource = AnchoredResource::new(
+                resource("state"),
+                &anchor,
+                LeafName::parse("state.json").unwrap(),
+            );
+            let result = AtomicWrite::new(RealAtomicFilesystem::new(state_resource)).write(
+                &Payload { value },
+                &WritePolicy {
+                    metadata,
+                    ..write_policy(2, Some(1))
+                },
+                locks.last(),
+            );
+            locks.release_last().unwrap();
+            (value, result.map(|receipt| receipt.generation))
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|(_, result)| result.as_ref().err())
+            .map(Error::code)
+            .collect::<Vec<_>>(),
+        vec![ErrorCode::GenerationRollback]
+    );
+    let successful_value = results
+        .iter()
+        .find_map(|(value, result)| result.is_ok().then_some(*value))
+        .unwrap();
+
+    let anchor = AnchoredDir::open_trusted(&scratch.0).unwrap();
+    let state_resource = AnchoredResource::new(
+        resource("state"),
+        &anchor,
+        LeafName::parse("state.json").unwrap(),
+    );
+    let mut reader = AtomicWrite::new(RealAtomicFilesystem::new(state_resource));
+    let committed = reader
+        .read::<Payload>(&ReadPolicy {
+            metadata,
+            writer: AuthorityRef::LocalRootBroker,
+            config_generation: generation(7),
+            state_generation: GenerationPolicy::Exact(generation(2)),
+        })
+        .unwrap();
+    assert_eq!(committed.payload.value, successful_value);
 }
 
 fn audit_input(sequence: u64) -> AuditRecordInput {
