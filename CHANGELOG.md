@@ -82,7 +82,8 @@ deprecations ship one minor release before removal.
 - Closed d2b 2.0 foundation integration gaps with a driven ComponentSession,
   authenticated two-phase descriptor binding, phase-aware peer credentials,
   canonical provider-agent serving, lock-bound state generations, and bounded
-  logical-stream fragmentation.
+  application-gated logical streams, cancellation-safe async kernel adapters,
+  framed Unix streams, transport-scoped routing, and race-free provider drain.
 - Closed W2 service-contract ambiguity by making provider capability claims
   method-exact, binding response attachments and streams, rejecting mixed
   identity scopes and contradictory error outcomes, returning exact typed

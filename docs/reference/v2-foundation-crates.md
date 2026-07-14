@@ -10,7 +10,7 @@ six are versioned with the workspace, use the workspace lockfile, set
 | `d2b-session` | Portable authenticated ComponentSession handshake, record, lifecycle, cancellation, and named-stream runtime | none |
 | `d2b-provider` | Provider traits, registry generations, operation admission, lifecycle, and authenticated RPC proxy | none |
 | `d2b-provider-toolkit` | Provider-agent adapter, exact registration, fixtures, redaction, and shared conformance | none |
-| `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs`, `tokio` |
+| `d2b-state` | Atomic JSON, quarantine, generations, anchored paths, locks, leases, and audit segments | `host-fs` (Linux), `tokio` |
 | `d2b-client` | Typed target resolution, session connection, generated service clients, retries, cancellation, attachments, and named streams | none |
 
 ## Dependency and authority boundaries
@@ -67,7 +67,9 @@ attachments, lifecycle, and named streams through one owned transport.
 `SessionDriverHandle` is the clonable object-safe seam consumed by clients and
 provider-agent servers. Logical named-stream messages remain bounded at 1 MiB
 and are fragmented, scheduled, and reassembled internally under a 256 KiB
-credit window.
+credit window. Final-fragment credit remains withheld until the application
+consumes the logical message and explicitly grants its length; the driver maps
+that grant to the exact withheld transport bytes.
 
 ## State invariants
 
@@ -86,8 +88,10 @@ generation bindings from `d2b-contracts`.
 The `tokio` feature adds async atomic-state, lock, and audit adapters. Blocking
 filesystem and kernel lock operations run only through
 `tokio::task::spawn_blocking`; they are never executed directly on a Tokio
-worker. The `host-fs` feature remains usable without Tokio for synchronous
-broker-side composition.
+worker. Dropping or timing out a contended async lock acquisition signals its
+blocking cancellation token so the worker terminates. The Linux-only `host-fs`
+feature remains usable without Tokio for synchronous broker-side composition
+and fails explicitly when selected on another platform.
 
 ## Client invariants
 
