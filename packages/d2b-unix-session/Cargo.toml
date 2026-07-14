@@ -9,8 +9,23 @@ publish = false
 
 [features]
 default = []
+host-socket = [
+    "dep:d2b-contracts",
+    "dep:rustix",
+    "dep:tokio",
+]
 
 [dependencies]
+d2b-contracts = { workspace = true, optional = true, features = ["v2-component-session"] }
+rustix = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "unix_session"
+required-features = ["host-socket"]
