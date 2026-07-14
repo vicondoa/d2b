@@ -285,7 +285,6 @@ fn rust_job(job: &JobSpec) -> String {
             packages -> target
           cache-directories: |
             .sccache
-            packages/.d2b-gate-targets
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"

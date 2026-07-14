@@ -71,6 +71,8 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Kept unified toolchain-scoped Cargo gate targets out of CI caches while
+  retaining `.sccache`, and installed pinned sccache for release builds.
 - Hardened final delivery authority with secret-free validation environments,
   authenticated merged-prefix topology, tolerant external GraphQL decoding,
   shared signal forwarding, and kernel-backed child-output polling.

@@ -28,10 +28,15 @@ if ! grep -q 'd2b_cargo_gate_target_dir' "$test_script"; then
   rc=1
 fi
 
-if grep -q 'packages/.d2b-gate-targets' "$wf"; then
-  log "FAIL: toolchain-scoped Cargo gate targets must not be restored from CI cache"
-  rc=1
-fi
+for workflow in \
+  "$wf" \
+  "$ROOT/.github/workflows/release-host-binaries.yml"
+do
+  if grep -q 'packages/.d2b-gate-targets' "$workflow"; then
+    log "FAIL: toolchain-scoped Cargo gate targets must not be restored from CI cache: $workflow"
+    rc=1
+  fi
+done
 
 if [ "$rc" = 0 ]; then
   ok "ci-rust-cache-sync: pinned Cargo gate targets are isolated from CI cache"

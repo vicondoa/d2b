@@ -50,18 +50,24 @@ jobs:
     env:
       GITHUB_TOKEN: ""
       ACTIONS_RUNTIME_TOKEN: ""
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
       CARGO_INCREMENTAL: "0"
     permissions: {}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+      - name: Install pinned sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+        with:
+          version: "v0.10.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
             packages -> target
           cache-directories: |
-            packages/.d2b-gate-targets
+            .sccache
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
