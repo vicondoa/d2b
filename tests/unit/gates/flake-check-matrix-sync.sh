@@ -54,9 +54,10 @@ if [ ! -f "$wf" ]; then
   exit 1
 fi
 
-# discover job sources the names from the live flake with wrappers disabled.
+# The discover job sources names from the live flake without overriding the
+# configured build cache wrappers.
 assert_wf "discover enumerates via make test-flake-list" \
-  'RUSTC_WRAPPER=""[[:space:]]+CARGO_BUILD_RUSTC_WRAPPER=""[[:space:]]+make -s -- test-flake-list'
+  'checks=\$\(make -s -- test-flake-list\)'
 # matrix consumes the discovered JSON (not a hardcoded list)
 assert_wf "matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.checks\)'
 # each shard runs the make-routed single-check evaluation

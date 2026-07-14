@@ -5673,12 +5673,7 @@ mod tests {
 
     #[test]
     fn credential_loader_rejects_unsafe_sources_without_leaking_path() {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join(format!("d2b-guestd-cred-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = scratch_dir("credential-loader");
         let token = root.join(TOKEN_FILE_NAME);
         fs::write(&token, b"secret-token\n").unwrap();
         fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
@@ -5691,7 +5686,13 @@ mod tests {
         fs::set_permissions(&token, fs::Permissions::from_mode(0o666)).unwrap();
         let error = load_token_from_credentials_dir(&root).unwrap_err();
         assert_eq!(error, GuestdServiceError::UnsafeCredential);
-        assert!(!error.public_message().contains("d2b-guestd-cred-test"));
+        assert!(
+            !error.public_message().contains(
+                root.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("scratch filename")
+            )
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6296,10 +6297,14 @@ mod tests {
     // ---- ReadGuestFile ------------------------------------------------
 
     fn scratch_dir(tag: &str) -> PathBuf {
-        // Keep scratch under the worktree; this session forbids /tmp writes.
-        let base = std::env::current_dir()
-            .unwrap()
-            .join(".scratch-guestd-tests");
+        let base = std::env::var_os("D2B_VALIDATION_OUTPUT_DIR")
+            .map(PathBuf::from)
+            .map(|root| root.join("rust-test-scratch/d2b-guestd"))
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .expect("current directory")
+                    .join(".scratch-guestd-tests")
+            });
         let _ = std::fs::create_dir_all(&base);
         let dir = base.join(format!(
             "guestd-rgf-{tag}-{}-{}",

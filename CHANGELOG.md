@@ -75,6 +75,14 @@ deprecations ship one minor release before removal.
   ignored Cargo target directories to remain writable.
 - Added ShellCheck to the delivery environment and routed the remaining short
   CLI socket fixture through the validation socket root.
+- Routed guestd credential, activation, guest-file, and output-ring fixtures
+  through validation-owned scratch when the checkout is read-only.
+- Made deliverable regression-gate discovery deterministic under `pipefail`
+  instead of relying on a SIGPIPE-prone `grep | head` pipeline.
+- Made local flake-shard discovery retain command failure, retry one transient
+  evaluator/daemon disconnect, and fail explicitly if discovery still fails.
+- Updated flake-matrix drift enforcement to require cache-preserving discovery
+  instead of the retired Rust wrapper-clearing command.
 - Made terminal-signal cleanup coverage use explicit same-group Rust children,
   eliminating shell job-control races.
 - Pinned Git Town and GitHub CLI source builds and separated stacked-wave
