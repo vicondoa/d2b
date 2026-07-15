@@ -642,6 +642,19 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
             "production lifecycle routing is missing provider admission path {required}"
         );
     }
+    for required in [
+        "provider_lifecycle_deadline(",
+        "registry\n        .admit(",
+        "AdmissionOptions {",
+        "deadline_after: deadline.duration",
+        "ProviderFailureKind::AmbiguousMutation",
+        "RetryClass::AfterObservation",
+    ] {
+        assert!(
+            composition.contains(required),
+            "mapped runtime lifecycle is missing bounded admission or ambiguous-timeout handling {required}"
+        );
+    }
 
     let effects = read_repo_file("packages/d2bd/src/provider_effects.rs");
     for forbidden in ["d2b_priv_broker", "std::process::Command", "Command::new"] {
@@ -655,6 +668,10 @@ fn daemon_provider_composition_is_exact_startup_owned_and_credential_free() {
         "dispatch_broker_vm_stop_as_async",
         "resolve_current_runtime_route",
         "still_alive_same_start_time",
+        "ProviderLifecycleTasks",
+        "LifecycleMutationKey::from_request",
+        "std::thread::Builder::new()",
+        "task.wait().await",
     ] {
         assert!(
             effects.contains(required),

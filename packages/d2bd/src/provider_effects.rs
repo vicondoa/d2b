@@ -22,8 +22,9 @@ use d2b_contracts::{
     public_wire::{MutationFlags, VmLifecycleRequest},
     v2_identity::ProviderId,
     v2_provider::{
-        AuthorizedProviderScope, HandleId, HandleOwner, MutationState, ObservationReason,
-        ObservedLifecycleState, OperationId, PlanId, ProviderDescriptor,
+        AuthorizedProviderScope, HandleId, HandleOwner, IdempotencyKey, MutationState,
+        ObservationReason, ObservedLifecycleState, OperationId, PlanId, ProviderDescriptor,
+        ProviderMethod,
     },
 };
 use d2b_provider_audio_pipewire_vhost_user::{AudioEffectPort, AudioQueryPort};
@@ -42,8 +43,8 @@ use d2b_provider_substrate_host::HostSubstratePort;
 use d2b_provider_transport_local::LocalEndpointPort;
 
 use crate::{
-    ServerState, TypedError, dispatch_broker_vm_start_async, dispatch_broker_vm_stop_as_async,
-    provider_registry::resolve_current_runtime_route,
+    ServerState, TypedError, block_on_future, dispatch_broker_vm_start_async,
+    dispatch_broker_vm_stop_as_async, provider_registry::resolve_current_runtime_route,
 };
 
 #[cfg(test)]
@@ -72,6 +73,7 @@ type LifecycleInvocationParts = (
     BrokerCallerRole,
     Arc<Mutex<Option<LifecycleDispatchResult>>>,
 );
+const MAX_TRACKED_LIFECYCLE_MUTATIONS: usize = 256;
 
 #[derive(Debug)]
 struct ProviderLifecycleInvocation {
@@ -170,6 +172,130 @@ impl Drop for ProviderLifecycleInvocationHandle {
         if !self.finished {
             self.dispatch.remove(&self.operation_id);
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LifecycleMutationKey {
+    operation_id: OperationId,
+    idempotency_key: IdempotencyKey,
+    method: ProviderMethod,
+}
+
+impl LifecycleMutationKey {
+    fn from_request(request: &RuntimeOperationControl) -> Self {
+        let operation = request.context().operation();
+        Self {
+            operation_id: operation.operation_id.clone(),
+            idempotency_key: operation.idempotency_key.clone(),
+            method: operation.method,
+        }
+    }
+}
+
+struct TrackedLifecycleMutation {
+    result: Mutex<Option<LifecycleDispatchResult>>,
+    completed: tokio::sync::Notify,
+}
+
+impl TrackedLifecycleMutation {
+    fn pending() -> Self {
+        Self {
+            result: Mutex::new(None),
+            completed: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn result(&self) -> Option<LifecycleDispatchResult> {
+        self.result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn complete(&self, result: LifecycleDispatchResult) {
+        let mut slot = self
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(result);
+        drop(slot);
+        self.completed.notify_waiters();
+    }
+
+    async fn wait(&self) -> LifecycleDispatchResult {
+        loop {
+            let completed = self.completed.notified();
+            if let Some(result) = self.result() {
+                return result;
+            }
+            completed.await;
+        }
+    }
+}
+
+#[derive(Default)]
+struct ProviderLifecycleTasks {
+    tasks: Mutex<BTreeMap<LifecycleMutationKey, Arc<TrackedLifecycleMutation>>>,
+}
+
+impl ProviderLifecycleTasks {
+    fn existing(
+        &self,
+        key: &LifecycleMutationKey,
+    ) -> Result<Option<Arc<TrackedLifecycleMutation>>, RuntimeControlError> {
+        self.tasks
+            .lock()
+            .map(|tasks| tasks.get(key).cloned())
+            .map_err(|_| RuntimeControlError::Unavailable)
+    }
+
+    fn spawn<F>(
+        &self,
+        key: LifecycleMutationKey,
+        work: F,
+    ) -> Result<Arc<TrackedLifecycleMutation>, RuntimeControlError>
+    where
+        F: FnOnce() -> LifecycleDispatchResult + Send + 'static,
+    {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| RuntimeControlError::Unavailable)?;
+        if let Some(task) = tasks.get(&key) {
+            return Ok(Arc::clone(task));
+        }
+        if tasks.len() >= MAX_TRACKED_LIFECYCLE_MUTATIONS
+            && let Some(completed) = tasks
+                .iter()
+                .find_map(|(key, task)| task.result().is_some().then(|| key.clone()))
+        {
+            tasks.remove(&completed);
+        }
+        if tasks.len() >= MAX_TRACKED_LIFECYCLE_MUTATIONS {
+            return Err(RuntimeControlError::Unavailable);
+        }
+
+        let task = Arc::new(TrackedLifecycleMutation::pending());
+        tasks.insert(key.clone(), Arc::clone(&task));
+        let owned_task = Arc::clone(&task);
+        if std::thread::Builder::new()
+            .name("d2b-provider-lifecycle".to_owned())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                    .unwrap_or_else(|_| {
+                        Err(TypedError::InternalConfig {
+                            detail: "provider lifecycle worker failed".to_owned(),
+                        })
+                    });
+                owned_task.complete(result);
+            })
+            .is_err()
+        {
+            tasks.remove(&key);
+            return Err(RuntimeControlError::Unavailable);
+        }
+        Ok(task)
     }
 }
 
@@ -369,6 +495,7 @@ impl DaemonEffectAdapters {
                             state: state.clone(),
                             entry: entry.clone(),
                             binding: binding.clone(),
+                            lifecycle_tasks: Arc::new(ProviderLifecycleTasks::default()),
                         });
                     builder.bind_runtime(entry.descriptor.clone(), adapter)?;
                 }
@@ -383,6 +510,7 @@ struct DaemonLocalRuntimeControl {
     state: Weak<ServerState>,
     entry: ProviderRegistryEntryV2,
     binding: LocalRuntimeProviderBindingV2,
+    lifecycle_tasks: Arc<ProviderLifecycleTasks>,
 }
 
 impl fmt::Debug for DaemonLocalRuntimeControl {
@@ -523,22 +651,70 @@ impl DaemonLocalRuntimeControl {
         response.get("outcome").and_then(serde_json::Value::as_str) == Some("applied")
     }
 
+    fn publish_lifecycle_result(
+        result_slot: &Arc<Mutex<Option<LifecycleDispatchResult>>>,
+        result: &LifecycleDispatchResult,
+    ) -> Result<(), RuntimeControlError> {
+        *result_slot
+            .lock()
+            .map_err(|_| RuntimeControlError::Unavailable)? = Some(result.clone());
+        Ok(())
+    }
+
+    fn publish_retry_result(
+        &self,
+        request: &RuntimeOperationControl,
+        vm: &str,
+        result: &LifecycleDispatchResult,
+    ) -> Result<(), RuntimeControlError> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or(RuntimeControlError::Unavailable)?;
+        let dispatch = state
+            .provider_registry()
+            .map_err(|_| RuntimeControlError::Unavailable)?
+            .lifecycle_dispatch();
+        if let Ok((_, _, result_slot)) =
+            dispatch.invocation(&request.context().operation().operation_id, vm)
+        {
+            Self::publish_lifecycle_result(&result_slot, result)?;
+        }
+        Ok(())
+    }
+
     async fn invoke_direct_start(
         &self,
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
     ) -> Result<(), RuntimeControlError> {
+        let key = LifecycleMutationKey::from_request(request);
+        if let Some(task) = self.lifecycle_tasks.existing(&key)? {
+            let result = task.wait().await;
+            self.publish_retry_result(request, &resolved.vm, &result)?;
+            return if result.as_ref().is_ok_and(Self::response_applied) {
+                Ok(())
+            } else {
+                Err(RuntimeControlError::Unavailable)
+            };
+        }
+        if request.context().is_cancelled() {
+            return Err(RuntimeControlError::CancelledBeforeMutation);
+        }
         let (lifecycle, _, result_slot) = resolved
             .state
             .provider_registry()
             .map_err(|_| RuntimeControlError::Unavailable)?
             .lifecycle_dispatch()
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
-        let result = dispatch_broker_vm_start_async(&resolved.state, lifecycle).await;
+        let state = Arc::clone(&resolved.state);
+        let task = self.lifecycle_tasks.spawn(key, move || {
+            let result = block_on_future(dispatch_broker_vm_start_async(&state, lifecycle));
+            let _ = Self::publish_lifecycle_result(&result_slot, &result);
+            result
+        })?;
+        let result = task.wait().await;
         let applied = result.as_ref().is_ok_and(Self::response_applied);
-        *result_slot
-            .lock()
-            .map_err(|_| RuntimeControlError::Unavailable)? = Some(result);
         if applied {
             Ok(())
         } else {
@@ -551,18 +727,37 @@ impl DaemonLocalRuntimeControl {
         request: &RuntimeOperationControl,
         resolved: &ResolvedDaemonRuntime,
     ) -> Result<(), RuntimeControlError> {
+        let key = LifecycleMutationKey::from_request(request);
+        if let Some(task) = self.lifecycle_tasks.existing(&key)? {
+            let result = task.wait().await;
+            self.publish_retry_result(request, &resolved.vm, &result)?;
+            return if result.as_ref().is_ok_and(Self::response_applied) {
+                Ok(())
+            } else {
+                Err(RuntimeControlError::Unavailable)
+            };
+        }
+        if request.context().is_cancelled() {
+            return Err(RuntimeControlError::CancelledBeforeMutation);
+        }
         let (lifecycle, caller_role, result_slot) = resolved
             .state
             .provider_registry()
             .map_err(|_| RuntimeControlError::Unavailable)?
             .lifecycle_dispatch()
             .invocation(&request.context().operation().operation_id, &resolved.vm)?;
-        let result =
-            dispatch_broker_vm_stop_as_async(&resolved.state, lifecycle, caller_role).await;
+        let state = Arc::clone(&resolved.state);
+        let task = self.lifecycle_tasks.spawn(key, move || {
+            let result = block_on_future(dispatch_broker_vm_stop_as_async(
+                &state,
+                lifecycle,
+                caller_role,
+            ));
+            let _ = Self::publish_lifecycle_result(&result_slot, &result);
+            result
+        })?;
+        let result = task.wait().await;
         let applied = result.as_ref().is_ok_and(Self::response_applied);
-        *result_slot
-            .lock()
-            .map_err(|_| RuntimeControlError::Unavailable)? = Some(result);
         if applied {
             Ok(())
         } else {
@@ -612,10 +807,15 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         #[cfg(test)]
         TEST_RUNTIME_START_CALLS.set(TEST_RUNTIME_START_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
-        if resolved
-            .state
-            .pidfd_table
-            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        let tracked = self
+            .lifecycle_tasks
+            .existing(&LifecycleMutationKey::from_request(&request))?
+            .is_some();
+        if !tracked
+            && resolved
+                .state
+                .pidfd_table
+                .still_alive_same_start_time(&resolved.vm, &resolved.role)
         {
             return self.observed(request.context(), &resolved);
         }
@@ -635,10 +835,15 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         #[cfg(test)]
         TEST_RUNTIME_STOP_CALLS.set(TEST_RUNTIME_STOP_CALLS.get() + 1);
         let resolved = self.validate_target(&request)?;
-        if !resolved
-            .state
-            .pidfd_table
-            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        let tracked = self
+            .lifecycle_tasks
+            .existing(&LifecycleMutationKey::from_request(&request))?
+            .is_some();
+        if !tracked
+            && !resolved
+                .state
+                .pidfd_table
+                .still_alive_same_start_time(&resolved.vm, &resolved.role)
         {
             return self.observed(request.context(), &resolved);
         }
@@ -685,22 +890,40 @@ impl RuntimeControlPort for DaemonLocalRuntimeControl {
         request: RuntimeOperationControl,
     ) -> Result<RuntimeMutationOutcome, RuntimeControlError> {
         let resolved = self.validate_target(&request)?;
-        if !resolved
-            .state
-            .pidfd_table
-            .still_alive_same_start_time(&resolved.vm, &resolved.role)
+        let key = LifecycleMutationKey::from_request(&request);
+        let existing = self.lifecycle_tasks.existing(&key)?;
+        if existing.is_none()
+            && !resolved
+                .state
+                .pidfd_table
+                .still_alive_same_start_time(&resolved.vm, &resolved.role)
         {
             return Ok(RuntimeMutationOutcome::new(MutationState::NotApplicable));
         }
-        let response = dispatch_broker_vm_stop_as_async(
-            &resolved.state,
-            Self::lifecycle_request(resolved.vm),
-            BrokerCallerRole::AdminUid {
-                uid: resolved.state.daemon_uid,
-            },
-        )
-        .await
-        .map_err(|_| RuntimeControlError::Unavailable)?;
+        if existing.is_none() && request.context().is_cancelled() {
+            return Err(RuntimeControlError::CancelledBeforeMutation);
+        }
+        let task = match existing {
+            Some(task) => task,
+            None => {
+                let state = Arc::clone(&resolved.state);
+                let lifecycle = Self::lifecycle_request(resolved.vm);
+                let caller_role = BrokerCallerRole::AdminUid {
+                    uid: state.daemon_uid,
+                };
+                self.lifecycle_tasks.spawn(key, move || {
+                    block_on_future(dispatch_broker_vm_stop_as_async(
+                        &state,
+                        lifecycle,
+                        caller_role,
+                    ))
+                })?
+            }
+        };
+        let response = task
+            .wait()
+            .await
+            .map_err(|_| RuntimeControlError::Unavailable)?;
         if Self::response_applied(&response) {
             Ok(RuntimeMutationOutcome::new(MutationState::Applied))
         } else {
@@ -839,6 +1062,11 @@ fn resolve<T: ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        time::Duration,
+    };
+
     use d2b_contracts::v2_identity::ProviderType;
     use d2b_provider_toolkit::Fixture;
 
@@ -866,5 +1094,51 @@ mod tests {
             resolve(&bindings, &mismatched),
             Err(DaemonEffectAdapterError::ConfigurationMismatch)
         ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiter_leaves_cleanup_running_and_retry_joins() {
+        let tasks = ProviderLifecycleTasks::default();
+        let key = LifecycleMutationKey {
+            operation_id: OperationId::parse("lifecycle-cancellation").expect("operation id"),
+            idempotency_key: IdempotencyKey::parse("lifecycle-cancellation")
+                .expect("idempotency key"),
+            method: ProviderMethod::RuntimeStop,
+        };
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let cleanup_complete = Arc::new(AtomicBool::new(false));
+        let task_dispatches = Arc::clone(&dispatches);
+        let task_cleanup = Arc::clone(&cleanup_complete);
+        let first = tasks
+            .spawn(key.clone(), move || {
+                task_dispatches.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(100));
+                task_cleanup.store(true, Ordering::SeqCst);
+                Ok(serde_json::json!({ "outcome": "applied" }))
+            })
+            .expect("spawn lifecycle cleanup");
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), first.wait())
+                .await
+                .is_err(),
+            "the provider waiter must time out before cleanup completes"
+        );
+        let retry_dispatches = Arc::clone(&dispatches);
+        let retry = tasks
+            .spawn(key, move || {
+                retry_dispatches.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({ "outcome": "applied" }))
+            })
+            .expect("join lifecycle cleanup");
+        assert!(Arc::ptr_eq(&first, &retry));
+        let result = retry.wait().await.expect("cleanup result");
+        assert_eq!(result["outcome"], "applied");
+        assert!(cleanup_complete.load(Ordering::SeqCst));
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "retry must not dispatch a second lifecycle mutation"
+        );
     }
 }

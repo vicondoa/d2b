@@ -12,7 +12,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use d2b_contracts::{
@@ -23,10 +23,10 @@ use d2b_contracts::{
     },
     v2_provider::{
         AuthorizedProviderScope, CorrelationId, Fingerprint, Generation, IdempotencyKey,
-        OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef, ProviderCallContext,
-        ProviderCapability, ProviderDescriptor, ProviderFactoryKey, ProviderMethod,
-        ProviderOperationContext, ProviderOperationInput, ProviderOperationRequest,
-        ProviderPlacement, ProviderTarget,
+        MAX_PROVIDER_REQUEST_LIFETIME_MS, OperationId, PROVIDER_SCHEMA_VERSION, PrincipalRef,
+        ProviderCallContext, ProviderCapability, ProviderDescriptor, ProviderFactoryKey,
+        ProviderFailureKind, ProviderMethod, ProviderOperationContext, ProviderOperationInput,
+        ProviderOperationRequest, ProviderPlacement, ProviderTarget, RetryClass,
     },
 };
 use d2b_core::{
@@ -34,8 +34,9 @@ use d2b_core::{
     processes::ProcessRole,
 };
 use d2b_provider::{
-    FactoryError, ProviderFactory, ProviderInstance, ProviderRegistry, ProviderRegistryBuilder,
-    RegistryBuildError, provider_capabilities_are_dispatchable,
+    AdmissionOptions, CancellationToken, FactoryError, ProviderFactory, ProviderInstance,
+    ProviderRegistry, ProviderRegistryBuilder, RegistryBuildError,
+    provider_capabilities_are_dispatchable,
 };
 use d2b_provider_audio_pipewire_vhost_user::{
     AudioConfiguration, IMPLEMENTATION_ID as AUDIO_IMPLEMENTATION_ID,
@@ -1095,6 +1096,32 @@ pub(crate) enum RuntimeLifecycleInvocation {
     Unmapped,
     Direct(serde_json::Value),
     Converged,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProviderLifecycleDeadline {
+    pub duration: Duration,
+    pub milliseconds: u32,
+}
+
+pub(crate) fn provider_lifecycle_deadline(
+    state: &ServerState,
+    request: &d2b_contracts::public_wire::VmLifecycleRequest,
+    method: ProviderMethod,
+) -> Result<ProviderLifecycleDeadline, crate::TypedError> {
+    let actual = crate::mapped_runtime_lifecycle_budget(state, request, method)?;
+    let milliseconds = actual
+        .as_millis()
+        .clamp(1, u128::from(MAX_PROVIDER_REQUEST_LIFETIME_MS));
+    let milliseconds =
+        u32::try_from(milliseconds).map_err(|_| crate::TypedError::InternalConfig {
+            detail: "provider lifecycle deadline exceeds contract bounds".to_owned(),
+        })?;
+    Ok(ProviderLifecycleDeadline {
+        duration: Duration::from_millis(u64::from(milliseconds)),
+        milliseconds,
+    })
 }
 
 pub(crate) async fn invoke_runtime_lifecycle(
@@ -1121,17 +1148,6 @@ pub(crate) async fn invoke_runtime_lifecycle(
         .ok_or_else(|| crate::TypedError::InternalConfig {
             detail: "mapped runtime provider registry is empty".to_owned(),
         })?;
-    let instance = registry
-        .instance(&entry.descriptor.provider_id)
-        .ok_or_else(|| crate::TypedError::InternalConfig {
-            detail: "mapped runtime provider instance is unavailable".to_owned(),
-        })?;
-    let ProviderInstance::Runtime(runtime) = instance else {
-        return Err(crate::TypedError::InternalConfig {
-            detail: "mapped runtime provider has the wrong axis".to_owned(),
-        });
-    };
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| crate::TypedError::InternalConfig {
@@ -1142,6 +1158,7 @@ pub(crate) async fn invoke_runtime_lifecycle(
         .map_err(|_| crate::TypedError::InternalConfig {
             detail: "system time exceeds provider contract bounds".to_owned(),
         })?;
+    let deadline = provider_lifecycle_deadline(state, &request, method)?;
     let sequence = NEXT_LIFECYCLE_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
     let operation_id = OperationId::parse(format!("lifecycle-{sequence}")).map_err(|_| {
         crate::TypedError::InternalConfig {
@@ -1192,11 +1209,11 @@ pub(crate) async fn invoke_runtime_lifecycle(
         })?,
         authorization_decision_digest: request_digest,
         issued_at_unix_ms: now,
-        expires_at_unix_ms: now.checked_add(30_000).ok_or_else(|| {
-            crate::TypedError::InternalConfig {
+        expires_at_unix_ms: now
+            .checked_add(u64::from(deadline.milliseconds))
+            .ok_or_else(|| crate::TypedError::InternalConfig {
                 detail: "provider lifecycle deadline overflow".to_owned(),
-            }
-        })?,
+            })?,
         correlation_id: CorrelationId::parse(format!("lifecycle-{sequence}")).map_err(|_| {
             crate::TypedError::InternalConfig {
                 detail: "provider lifecycle correlation id is invalid".to_owned(),
@@ -1210,13 +1227,6 @@ pub(crate) async fn invoke_runtime_lifecycle(
             detail: "provider lifecycle trace id is invalid".to_owned(),
         })?,
     };
-    let call = ProviderCallContext {
-        operation: &operation,
-        peer_role: EndpointRole::RealmController,
-        service: ServicePackage::ProviderV2,
-        monotonic_deadline_remaining_ms: 30_000,
-        cancelled: false,
-    };
     let provider_request = ProviderOperationRequest {
         context: operation.clone(),
         target: ProviderTarget::Workload {
@@ -1229,6 +1239,32 @@ pub(crate) async fn invoke_runtime_lifecycle(
             .clone(),
         input: ProviderOperationInput::NoInput,
     };
+    let admitted = registry
+        .admit(
+            operation.clone(),
+            AdmissionOptions {
+                expected_method: method,
+                peer_role: EndpointRole::RealmController,
+                service: ServicePackage::ProviderV2,
+                deadline_after: deadline.duration,
+                caller_cancellation: CancellationToken::new(),
+                now_unix_ms: now,
+            },
+        )
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider admission failed".to_owned(),
+        })?;
+    let call = admitted
+        .context
+        .call_context()
+        .map_err(|_| crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider call context is unavailable".to_owned(),
+        })?;
+    let ProviderInstance::Runtime(runtime) = &admitted.instance else {
+        return Err(crate::TypedError::InternalConfig {
+            detail: "mapped runtime provider has the wrong axis".to_owned(),
+        });
+    };
     let invocation =
         startup.begin_lifecycle_invocation(&operation.operation_id, request, caller_role)?;
     let provider_result = match method {
@@ -1239,16 +1275,31 @@ pub(crate) async fn invoke_runtime_lifecycle(
     let direct_result = invocation.finish();
     if let Some(result) = direct_result {
         let value = result?;
-        if value.get("outcome").and_then(serde_json::Value::as_str) == Some("applied") {
-            provider_result.map_err(|_| crate::TypedError::InternalConfig {
+        if value.get("outcome").and_then(serde_json::Value::as_str) == Some("applied")
+            && let Err(failure) = provider_result
+            && (failure.kind != ProviderFailureKind::AmbiguousMutation
+                || failure.retry != RetryClass::AfterObservation)
+        {
+            return Err(crate::TypedError::InternalConfig {
                 detail: "mapped runtime provider rejected applied lifecycle dispatch".to_owned(),
-            })?;
+            });
         }
         return Ok(RuntimeLifecycleInvocation::Direct(value));
     }
-    let observation = provider_result.map_err(|_| crate::TypedError::InternalConfig {
-        detail: "mapped runtime provider rejected lifecycle dispatch".to_owned(),
-    })?;
+    let observation = match provider_result {
+        Ok(observation) => observation,
+        Err(failure)
+            if failure.kind == ProviderFailureKind::AmbiguousMutation
+                && failure.retry == RetryClass::AfterObservation =>
+        {
+            return Ok(RuntimeLifecycleInvocation::Ambiguous);
+        }
+        Err(_) => {
+            return Err(crate::TypedError::InternalConfig {
+                detail: "mapped runtime provider rejected lifecycle dispatch".to_owned(),
+            });
+        }
+    };
     observation
         .validate()
         .map_err(|_| crate::TypedError::InternalConfig {

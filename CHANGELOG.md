@@ -114,6 +114,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Made mapped runtime-provider lifecycle deadlines cover readiness, graceful
+  shutdown, rollback, forced cleanup, and state snapshots. Timed-out mutation
+  waiters now return an observation-required ambiguous result while an owned
+  daemon task completes cleanup, and same-operation retries join that task
+  instead of dispatching twice.
 - Removed nested Tokio runtime bridging from mapped runtime-provider start,
   graceful stop, and restart dispatch. Provider adapters now await daemon
   lifecycle effects directly, and Cloud Hypervisor observations use the

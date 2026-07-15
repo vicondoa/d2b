@@ -290,6 +290,9 @@ pub const DEFAULT_ACCEPTED_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 pub const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const VM_START_ROLLBACK_TERM_TIMEOUT: Duration = Duration::from_secs(10);
+const VM_START_ROLLBACK_KILL_TIMEOUT: Duration = Duration::from_secs(5);
+const LIFECYCLE_SNAPSHOT_MARGIN: Duration = Duration::from_secs(5);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 90;
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -11910,6 +11913,19 @@ fn applied_response(verb: &str, summary: String) -> Value {
     })
 }
 
+fn provider_lifecycle_ambiguous_response(verb: &str, vm: &str) -> Value {
+    broker_failure_response(
+        verb,
+        format!(
+            "{verb} {vm}: provider deadline elapsed while daemon cleanup continues to completion"
+        ),
+        format!(
+            "Inspect `d2b vm status {vm}` before retrying; a retry of the same provider operation joins the in-flight lifecycle task."
+        ),
+        None,
+    )
+}
+
 fn append_response_summary(response: &mut Value, suffix: &str) {
     let Some(summary) = response
         .get("summary")
@@ -13665,8 +13681,8 @@ fn rollback_failed_vm_start(
             "vm start",
             vm,
             &entry.role,
-            Duration::from_secs(10),
-            Duration::from_secs(5),
+            VM_START_ROLLBACK_TERM_TIMEOUT,
+            VM_START_ROLLBACK_KILL_TIMEOUT,
         )?;
     }
     let _mguard = state.pidfd_table.mutation_guard();
@@ -14591,6 +14607,83 @@ fn live_activation_timeout_for(state: &ServerState, vm: &str) -> Duration {
         .unwrap_or(state.config.live_activation_timeout_seconds)
         .clamp(1, 3600);
     Duration::from_secs(secs)
+}
+
+fn vm_start_api_and_readiness_timeouts() -> (Duration, Duration) {
+    let api_timeout = Duration::from_secs(
+        std::env::var("D2B_API_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(supervisor::dag::DEFAULT_API_TIMEOUT_SECONDS),
+    );
+    let readiness_timeout = Duration::from_secs(
+        std::env::var("D2B_READINESS_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(api_timeout.as_secs().max(300)),
+    );
+    (api_timeout, readiness_timeout)
+}
+
+pub(crate) fn mapped_runtime_lifecycle_budget(
+    state: &ServerState,
+    request: &public_wire::VmLifecycleRequest,
+    method: d2b_contracts::v2_provider::ProviderMethod,
+) -> Result<Duration, TypedError> {
+    match method {
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStart => {
+            let resolver = load_bundle_resolver(state)?;
+            let dag = resolver
+                .processes
+                .vms
+                .iter()
+                .find(|dag| dag.vm == request.vm)
+                .ok_or_else(|| TypedError::InternalConfig {
+                    detail: "mapped runtime start has no process DAG".to_owned(),
+                })?;
+            let rollback_roles = dag
+                .nodes
+                .iter()
+                .filter(|node| {
+                    matches!(
+                        vm_start_node_mode(&node.role),
+                        VmStartNodeMode::LongLived(_)
+                    )
+                })
+                .count()
+                .max(1)
+                .min(u32::MAX as usize) as u32;
+            let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
+            let readiness_max = api_timeout.max(readiness_timeout);
+            let rollback_margin = (VM_START_ROLLBACK_TERM_TIMEOUT + VM_START_ROLLBACK_KILL_TIMEOUT)
+                .saturating_mul(rollback_roles)
+                .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
+            Ok(readiness_max.saturating_add(rollback_margin))
+        }
+        d2b_contracts::v2_provider::ProviderMethod::RuntimeStop => {
+            let manifest_entry = manifest_entry_for_vm(state, &request.vm).ok_or_else(|| {
+                TypedError::InternalConfig {
+                    detail: "mapped runtime stop has no manifest entry".to_owned(),
+                }
+            })?;
+            let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
+                Duration::ZERO
+            } else {
+                graceful_shutdown_timeout_for(state, &manifest_entry)
+            };
+            let stop_roles = ordered_vm_stop_entries(state, &request.vm)
+                .len()
+                .max(1)
+                .min(u32::MAX as usize) as u32;
+            let forced_cleanup = (VM_STOP_TIMEOUT + VM_STOP_TIMEOUT)
+                .saturating_mul(stop_roles)
+                .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
+            Ok(graceful.saturating_add(forced_cleanup))
+        }
+        _ => Err(TypedError::InternalConfig {
+            detail: "unsupported mapped runtime lifecycle budget".to_owned(),
+        }),
+    }
 }
 
 fn graceful_shutdown_enabled(manifest_entry: &Value) -> bool {
@@ -16110,18 +16203,7 @@ async fn dispatch_broker_vm_start_async(
         ));
     }
 
-    let api_timeout = Duration::from_secs(
-        std::env::var("D2B_API_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(supervisor::dag::DEFAULT_API_TIMEOUT_SECONDS),
-    );
-    let readiness_timeout = Duration::from_secs(
-        std::env::var("D2B_READINESS_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(api_timeout.as_secs().max(300)),
-    );
+    let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
     let split_mode = if request.no_wait_api {
         supervisor::dag::SplitReadinessMode::NoWaitApi
     } else {
@@ -16811,6 +16893,9 @@ fn dispatch_provider_or_broker_vm_start(
             VERB,
             format!("vm start {}: provider already converged", request.vm),
         )),
+        provider_registry::RuntimeLifecycleInvocation::Ambiguous => {
+            Ok(provider_lifecycle_ambiguous_response(VERB, &request.vm))
+        }
     }
 }
 
@@ -16839,6 +16924,9 @@ fn dispatch_provider_or_broker_vm_stop_as(
             VERB,
             format!("vm stop {}: provider already converged", request.vm),
         )),
+        provider_registry::RuntimeLifecycleInvocation::Ambiguous => {
+            Ok(provider_lifecycle_ambiguous_response(VERB, &request.vm))
+        }
     }
 }
 
@@ -24810,6 +24898,59 @@ mod broker_dispatch_tests {
             provider_registry::probe_startup_registry(first, &artifact).await,
             Err(provider_registry::ProviderCompositionError::StartupProbeFailed)
         ));
+    }
+
+    #[test]
+    fn mapped_provider_deadlines_cover_readiness_grace_and_cleanup() {
+        let state = mapped_cloud_hypervisor_state("provider-lifecycle-deadlines");
+        let request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: true,
+        };
+
+        let start_budget = crate::mapped_runtime_lifecycle_budget(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
+        )
+        .expect("start lifecycle budget");
+        let start_deadline = provider_registry::provider_lifecycle_deadline(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStart,
+        )
+        .expect("start provider deadline");
+        assert!(start_budget >= Duration::from_secs(300));
+        assert!(start_deadline.duration > Duration::from_secs(30));
+        assert_eq!(
+            u128::from(start_deadline.milliseconds),
+            start_deadline.duration.as_millis()
+        );
+
+        let stop_budget = crate::mapped_runtime_lifecycle_budget(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
+        )
+        .expect("stop lifecycle budget");
+        let stop_deadline = provider_registry::provider_lifecycle_deadline(
+            &state,
+            &request,
+            d2b_contracts::v2_provider::ProviderMethod::RuntimeStop,
+        )
+        .expect("stop provider deadline");
+        assert!(stop_budget >= Duration::from_secs(90 + 30 + 30 + 5));
+        assert!(stop_deadline.duration > Duration::from_secs(30));
+        assert_eq!(
+            u128::from(stop_deadline.milliseconds),
+            stop_deadline.duration.as_millis()
+        );
     }
 
     #[test]

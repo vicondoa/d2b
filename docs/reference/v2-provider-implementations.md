@@ -76,6 +76,17 @@ the existing daemon authority. Restart is a provider stop followed by a
 provider start, and host-shutdown stop uses the same route. VMs without an
 explicit provider row retain the direct compatibility path.
 
+Mutation deadlines cover the daemon's complete lifecycle budget rather than a
+fixed provider timeout. Start includes the configured readiness wait and
+rollback/snapshot margin; stop and restart include graceful shutdown,
+SIGTERM/SIGKILL cleanup, and snapshot margin. These budgets are capped by the
+provider contract maximum. Runtime adapters retain each admitted mutation in an
+owned task keyed by its operation and idempotency identity. If the provider
+waiter expires after dispatch, it reports an ambiguous result requiring
+observation while the daemon task continues through normal cleanup. A retry of
+that operation joins the retained task and cannot dispatch the mutation twice.
+Read-only inspection does not need this retention and remains cancellable.
+
 Other first-party host implementation crates remain dependencies so their exact
 factory contracts are checked and available for the eventual composition
 cutover, but they are not registered by the production artifact yet:
