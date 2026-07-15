@@ -1,10 +1,10 @@
 use std::{error::Error, fmt};
 
 use d2b_contracts::{
-    v2_identity::{ProviderId, RealmId},
+    v2_identity::{ProviderId, ProviderType, RealmId},
     v2_provider::{
         Fingerprint, Generation, ImplementationId, MAX_SAFE_JSON_INTEGER, OperationBinding, PlanId,
-        PrincipalRef, ProviderDescriptor,
+        PrincipalRef, ProviderContractError, ProviderDescriptor, ProviderFactoryKey,
     },
 };
 
@@ -12,6 +12,8 @@ pub const MAX_CHECK_FINDINGS: usize = 64;
 pub const MAX_PLAN_FINDINGS: usize = 32;
 pub const MAX_FINDING_DIAGNOSTICS: usize = 8;
 pub const MAX_REPORT_DIAGNOSTICS: usize = 128;
+pub const NIXOS_IMPLEMENTATION_ID: &str = "nixos";
+pub const LINUX_IMPLEMENTATION_ID: &str = "linux";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostModelError {
@@ -40,6 +42,26 @@ impl Error for HostModelError {}
 pub enum HostSubstrateKind {
     NixOs,
     GenericLinux,
+}
+
+impl HostSubstrateKind {
+    pub const fn implementation_id(self) -> &'static str {
+        match self {
+            Self::NixOs => NIXOS_IMPLEMENTATION_ID,
+            Self::GenericLinux => LINUX_IMPLEMENTATION_ID,
+        }
+    }
+
+    pub fn canonical_implementation_id(self) -> Result<ImplementationId, ProviderContractError> {
+        ImplementationId::parse(self.implementation_id())
+    }
+
+    pub fn factory_key(self) -> Result<ProviderFactoryKey, ProviderContractError> {
+        Ok(ProviderFactoryKey {
+            provider_type: ProviderType::Substrate,
+            implementation_id: self.canonical_implementation_id()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -120,7 +120,6 @@ impl HostProviderCore {
     fn new(
         descriptor: ProviderDescriptor,
         configuration: HostSubstrateConfiguration,
-        expected_implementation: &str,
         port: Arc<dyn HostSubstratePort>,
         clock: Arc<dyn ProviderClock>,
     ) -> Result<Self, HostProviderConstructionError> {
@@ -132,7 +131,7 @@ impl HostProviderCore {
         {
             return Err(HostProviderConstructionError::DescriptorInvalid);
         }
-        if descriptor.implementation_id.as_str() != expected_implementation {
+        if descriptor.implementation_id.as_str() != configuration.substrate().implementation_id() {
             return Err(HostProviderConstructionError::ImplementationMismatch);
         }
         let exact_methods = [
@@ -1074,7 +1073,6 @@ impl NixOsSubstrateProvider {
             core: Arc::new(HostProviderCore::new(
                 descriptor,
                 HostSubstrateConfiguration::nixos(),
-                "nixos",
                 port,
                 clock,
             )?),
@@ -1121,7 +1119,6 @@ impl LinuxSubstrateProvider {
             core: Arc::new(HostProviderCore::new(
                 descriptor,
                 HostSubstrateConfiguration::generic_linux(),
-                "linux",
                 port,
                 clock,
             )?),
