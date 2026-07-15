@@ -11,20 +11,27 @@
 
 mod binding;
 mod connector;
+mod factory;
 mod provider;
 
 #[cfg(test)]
 mod tests;
 
 pub use binding::{
-    AttachmentCapability, AuthenticationOwner, BundleEndpointId, EndpointLeaseId,
-    EndpointProvenance, EndpointSource, LocalTransportKind, OwnedEndpointDescriptor,
-    OwnedEndpointError, TransportBinding, TransportCapabilityProfile,
+    AttachmentCapability, AuthenticationOwner, BundleEndpointId,
+    CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY, CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID, EndpointLeaseId,
+    EndpointProvenance, EndpointSource, LocalTransportKind, NATIVE_VSOCK_FACTORY_KEY,
+    NATIVE_VSOCK_IMPLEMENTATION_ID, OwnedEndpointDescriptor, OwnedEndpointError, TransportBinding,
+    TransportCapabilityProfile, UNIX_SEQPACKET_FACTORY_KEY, UNIX_SEQPACKET_IMPLEMENTATION_ID,
+    UNIX_STREAM_FACTORY_KEY, UNIX_STREAM_IMPLEMENTATION_ID,
 };
 pub use connector::{
     EndpointCloseRequest, EndpointCloseResult, EndpointCloseState, EndpointConnectRequest,
     EndpointConnection, EndpointInspectRequest, EndpointObservation, EndpointObservationState,
     EndpointPortError, LocalEndpointPort, ReachabilityEvidence,
+};
+pub use factory::{
+    LocalTransportFactory, LocalTransportFactoryError, MAX_LOCAL_TRANSPORT_FACTORY_PROVIDERS,
 };
 pub use provider::{
     LocalTransportClock, LocalTransportConfigurationError, LocalTransportLimits,

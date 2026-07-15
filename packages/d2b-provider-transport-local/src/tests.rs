@@ -23,16 +23,21 @@ use d2b_contracts::{
         TransportProvider,
     },
 };
+use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use tokio::sync::Notify;
 
 use crate::{
-    AttachmentCapability, AuthenticationOwner, BundleEndpointId, EndpointCloseRequest,
-    EndpointCloseResult, EndpointCloseState, EndpointConnectRequest, EndpointConnection,
-    EndpointInspectRequest, EndpointLeaseId, EndpointObservation, EndpointObservationState,
-    EndpointPortError, EndpointProvenance, EndpointSource, LocalEndpointPort, LocalTransportClock,
-    LocalTransportConfigurationError, LocalTransportKind, LocalTransportLimits,
-    LocalTransportProvider, OwnedEndpointDescriptor, ReachabilityEvidence, TransportBinding,
-    TransportCapabilityProfile, local_transport_capabilities,
+    AttachmentCapability, AuthenticationOwner, BundleEndpointId,
+    CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY, CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
+    EndpointCloseRequest, EndpointCloseResult, EndpointCloseState, EndpointConnectRequest,
+    EndpointConnection, EndpointInspectRequest, EndpointLeaseId, EndpointObservation,
+    EndpointObservationState, EndpointPortError, EndpointProvenance, EndpointSource,
+    LocalEndpointPort, LocalTransportClock, LocalTransportConfigurationError,
+    LocalTransportFactory, LocalTransportKind, LocalTransportLimits, LocalTransportProvider,
+    NATIVE_VSOCK_FACTORY_KEY, NATIVE_VSOCK_IMPLEMENTATION_ID, OwnedEndpointDescriptor,
+    ReachabilityEvidence, TransportBinding, TransportCapabilityProfile, UNIX_SEQPACKET_FACTORY_KEY,
+    UNIX_SEQPACKET_IMPLEMENTATION_ID, UNIX_STREAM_FACTORY_KEY, UNIX_STREAM_IMPLEMENTATION_ID,
+    local_transport_capabilities,
 };
 
 const NOW_UNIX_MS: u64 = 1_700_000_000_000;
@@ -351,8 +356,7 @@ fn descriptor(kind: LocalTransportKind) -> ProviderDescriptor {
         schema_version: PROVIDER_SCHEMA_VERSION,
         provider_id: ProviderId::parse(provider_id).expect("valid provider id"),
         authority: ProviderAuthority::Transport,
-        implementation_id: ImplementationId::parse(kind.implementation_id())
-            .expect("valid implementation id"),
+        implementation_id: kind.implementation_id().clone(),
         api_version: ProviderApiVersion::V2,
         capabilities: local_transport_capabilities(),
         configuration_schema_fingerprint: fingerprint(0x11),
@@ -385,6 +389,28 @@ fn binding(
     )
 }
 
+fn factory(
+    kind: LocalTransportKind,
+    endpoint_port: Arc<dyn LocalEndpointPort>,
+    bindings: Vec<TransportBinding>,
+) -> LocalTransportFactory {
+    let result = match kind {
+        LocalTransportKind::UnixStream => {
+            LocalTransportFactory::unix_stream(endpoint_port, bindings)
+        }
+        LocalTransportKind::UnixSeqpacket => {
+            LocalTransportFactory::unix_seqpacket(endpoint_port, bindings)
+        }
+        LocalTransportKind::NativeVsock => {
+            LocalTransportFactory::native_vsock(endpoint_port, bindings)
+        }
+        LocalTransportKind::CloudHypervisorVsock => {
+            LocalTransportFactory::cloud_hypervisor_vsock(endpoint_port, bindings)
+        }
+    };
+    result.expect("valid local transport factory")
+}
+
 fn fingerprint(value: u8) -> Fingerprint {
     Fingerprint::parse(format!("{value:02x}").repeat(32)).expect("valid fingerprint")
 }
@@ -399,6 +425,134 @@ fn transport_binding_id(value: &str) -> TransportBindingId {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[test]
+fn every_live_implementation_exposes_an_exact_registry_factory() {
+    for kind in KINDS {
+        let descriptor = descriptor(kind);
+        let scope = AuthorizedProviderScope::Realm {
+            realm_id: descriptor.placement.realm_id().clone(),
+        };
+        let binding = binding(
+            &descriptor,
+            kind,
+            transport_binding_id("factory-binding"),
+            scope,
+            fingerprint(0x31),
+            generation(5),
+        );
+        let factory = factory(kind, Arc::new(FakeEndpointPort::default()), vec![binding]);
+        let (exported_id, exported_key) = match kind {
+            LocalTransportKind::UnixStream => {
+                (&*UNIX_STREAM_IMPLEMENTATION_ID, &*UNIX_STREAM_FACTORY_KEY)
+            }
+            LocalTransportKind::UnixSeqpacket => (
+                &*UNIX_SEQPACKET_IMPLEMENTATION_ID,
+                &*UNIX_SEQPACKET_FACTORY_KEY,
+            ),
+            LocalTransportKind::NativeVsock => {
+                (&*NATIVE_VSOCK_IMPLEMENTATION_ID, &*NATIVE_VSOCK_FACTORY_KEY)
+            }
+            LocalTransportKind::CloudHypervisorVsock => (
+                &*CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
+                &*CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY,
+            ),
+        };
+        assert_eq!(factory.kind(), kind);
+        assert_eq!(factory.implementation_id(), exported_id);
+        assert_eq!(factory.key(), (*exported_key).clone());
+        assert_eq!(factory.registered_provider_count(), 1);
+        let instance = factory
+            .construct(&descriptor)
+            .expect("matching descriptor constructs");
+        assert!(matches!(&instance, ProviderInstance::Transport(_)));
+        assert_eq!(instance.descriptor(), descriptor);
+    }
+}
+
+#[test]
+fn factory_rejects_wrong_descriptor_type_and_implementation() {
+    let kind = LocalTransportKind::UnixStream;
+    let descriptor = descriptor(kind);
+    let binding = binding(
+        &descriptor,
+        kind,
+        transport_binding_id("factory-rejection-binding"),
+        AuthorizedProviderScope::Realm {
+            realm_id: descriptor.placement.realm_id().clone(),
+        },
+        fingerprint(0x32),
+        generation(6),
+    );
+    let port = Arc::new(FakeEndpointPort::default());
+    let factory = LocalTransportFactory::unix_stream(port.clone(), vec![binding])
+        .expect("valid unix-stream factory");
+
+    let mut wrong_type = descriptor.clone();
+    wrong_type.authority = ProviderAuthority::Storage;
+    wrong_type.capabilities = ProviderCapabilitySet::new(vec![
+        ProviderCapability(ProviderMethod::StoragePlan),
+        ProviderCapability(ProviderMethod::StorageEnsure),
+        ProviderCapability(ProviderMethod::StorageInspect),
+        ProviderCapability(ProviderMethod::StorageAdopt),
+        ProviderCapability(ProviderMethod::StorageDestroy),
+    ])
+    .expect("valid storage capabilities");
+    wrong_type.validate().expect("valid wrong-type descriptor");
+    assert!(matches!(
+        factory.construct(&wrong_type),
+        Err(FactoryError::Rejected)
+    ));
+
+    let mut wrong_implementation = descriptor;
+    wrong_implementation.implementation_id =
+        ImplementationId::parse("other-local-transport").expect("valid implementation id");
+    wrong_implementation
+        .validate()
+        .expect("valid wrong-implementation descriptor");
+    assert!(matches!(
+        factory.construct(&wrong_implementation),
+        Err(FactoryError::Rejected)
+    ));
+    assert!(port.connect_calls().is_empty());
+}
+
+#[test]
+fn registry_builder_constructs_transport_from_public_factory_and_key() {
+    let kind = LocalTransportKind::UnixSeqpacket;
+    let descriptor = descriptor(kind);
+    let binding = binding(
+        &descriptor,
+        kind,
+        transport_binding_id("registry-factory-binding"),
+        AuthorizedProviderScope::Realm {
+            realm_id: descriptor.placement.realm_id().clone(),
+        },
+        fingerprint(0x33),
+        generation(7),
+    );
+    let factory = Arc::new(
+        LocalTransportFactory::unix_seqpacket(Arc::new(FakeEndpointPort::default()), vec![binding])
+            .expect("valid seqpacket factory"),
+    );
+    let mut builder = ProviderRegistryBuilder::new(
+        descriptor.registry_generation,
+        fingerprint(0x34),
+        NOW_UNIX_MS,
+    );
+    builder
+        .register_factory(factory.key(), factory)
+        .expect("factory registers");
+    builder
+        .register_instance(descriptor.clone())
+        .expect("factory constructs instance");
+    let registry = builder.finish().expect("registry builds");
+    let instance = registry
+        .instance(&descriptor.provider_id)
+        .expect("constructed transport registered");
+    assert!(matches!(&instance, ProviderInstance::Transport(_)));
+    assert_eq!(instance.descriptor(), descriptor);
 }
 
 #[allow(clippy::result_large_err)]
@@ -468,7 +622,7 @@ fn advertises_only_live_methods_and_exact_transport_metadata() {
 async fn connects_all_four_kinds_over_closed_bindings() {
     for kind in KINDS {
         let harness = Harness::new(kind);
-        let operation_id = format!("connect-{}", kind.implementation_id());
+        let operation_id = format!("connect-{}", kind.implementation_id().as_str());
         let handle = connect(&harness, &operation_id)
             .await
             .expect("transport connects");

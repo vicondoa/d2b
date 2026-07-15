@@ -191,7 +191,7 @@ impl LocalTransportProvider {
         if descriptor.provider_type() != ProviderType::Transport {
             return Err(LocalTransportConfigurationError::WrongAuthority);
         }
-        if descriptor.implementation_id.as_str() != kind.implementation_id() {
+        if &descriptor.implementation_id != kind.implementation_id() {
             return Err(LocalTransportConfigurationError::WrongImplementation);
         }
         if !matches!(

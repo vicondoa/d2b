@@ -1,14 +1,35 @@
 use std::{
     fmt,
     os::fd::{AsFd, OwnedFd},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use d2b_contracts::{
     v2_component_session::{Locality, TransportClass},
-    v2_identity::{ProviderId, RealmId, WorkloadId},
-    v2_provider::{AuthorizedProviderScope, Fingerprint, Generation, TransportBindingId},
+    v2_identity::{ProviderId, ProviderType, RealmId, WorkloadId},
+    v2_provider::{
+        AuthorizedProviderScope, Fingerprint, Generation, ImplementationId, ProviderFactoryKey,
+        TransportBindingId,
+    },
 };
+
+pub static UNIX_STREAM_IMPLEMENTATION_ID: LazyLock<ImplementationId> =
+    LazyLock::new(|| canonical_implementation_id("unix-stream"));
+pub static UNIX_SEQPACKET_IMPLEMENTATION_ID: LazyLock<ImplementationId> =
+    LazyLock::new(|| canonical_implementation_id("unix-seqpacket"));
+pub static NATIVE_VSOCK_IMPLEMENTATION_ID: LazyLock<ImplementationId> =
+    LazyLock::new(|| canonical_implementation_id("native-vsock"));
+pub static CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID: LazyLock<ImplementationId> =
+    LazyLock::new(|| canonical_implementation_id("cloud-hypervisor-vsock"));
+
+pub static UNIX_STREAM_FACTORY_KEY: LazyLock<ProviderFactoryKey> =
+    LazyLock::new(|| transport_factory_key(&UNIX_STREAM_IMPLEMENTATION_ID));
+pub static UNIX_SEQPACKET_FACTORY_KEY: LazyLock<ProviderFactoryKey> =
+    LazyLock::new(|| transport_factory_key(&UNIX_SEQPACKET_IMPLEMENTATION_ID));
+pub static NATIVE_VSOCK_FACTORY_KEY: LazyLock<ProviderFactoryKey> =
+    LazyLock::new(|| transport_factory_key(&NATIVE_VSOCK_IMPLEMENTATION_ID));
+pub static CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY: LazyLock<ProviderFactoryKey> =
+    LazyLock::new(|| transport_factory_key(&CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID));
 
 /// The four local transports accepted by this implementation crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -21,12 +42,22 @@ pub enum LocalTransportKind {
 
 impl LocalTransportKind {
     /// Canonical provider implementation ID for this transport.
-    pub const fn implementation_id(self) -> &'static str {
+    pub fn implementation_id(self) -> &'static ImplementationId {
         match self {
-            Self::UnixStream => "unix-stream",
-            Self::UnixSeqpacket => "unix-seqpacket",
-            Self::NativeVsock => "native-vsock",
-            Self::CloudHypervisorVsock => "cloud-hypervisor-vsock",
+            Self::UnixStream => &UNIX_STREAM_IMPLEMENTATION_ID,
+            Self::UnixSeqpacket => &UNIX_SEQPACKET_IMPLEMENTATION_ID,
+            Self::NativeVsock => &NATIVE_VSOCK_IMPLEMENTATION_ID,
+            Self::CloudHypervisorVsock => &CLOUD_HYPERVISOR_VSOCK_IMPLEMENTATION_ID,
+        }
+    }
+
+    /// Canonical registry key for this transport implementation.
+    pub fn factory_key(self) -> ProviderFactoryKey {
+        match self {
+            Self::UnixStream => (*UNIX_STREAM_FACTORY_KEY).clone(),
+            Self::UnixSeqpacket => (*UNIX_SEQPACKET_FACTORY_KEY).clone(),
+            Self::NativeVsock => (*NATIVE_VSOCK_FACTORY_KEY).clone(),
+            Self::CloudHypervisorVsock => (*CLOUD_HYPERVISOR_VSOCK_FACTORY_KEY).clone(),
         }
     }
 
@@ -62,6 +93,18 @@ impl LocalTransportKind {
                 authentication: AuthenticationOwner::ComponentSession,
             },
         }
+    }
+}
+
+fn canonical_implementation_id(value: &str) -> ImplementationId {
+    ImplementationId::parse(value)
+        .unwrap_or_else(|_| unreachable!("fixed local transport implementation ID is valid"))
+}
+
+fn transport_factory_key(implementation_id: &ImplementationId) -> ProviderFactoryKey {
+    ProviderFactoryKey {
+        provider_type: ProviderType::Transport,
+        implementation_id: implementation_id.clone(),
     }
 }
 
