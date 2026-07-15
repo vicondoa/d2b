@@ -8,13 +8,14 @@ use std::{
 };
 
 use crate::{
-    AZURE_RELAY_IMPLEMENTATION_ID, AzureRelayConfiguration, AzureRelayProviderBuildError,
-    AzureRelayTransportProvider, RELAY_ACCEPT_QUEUE_CAPACITY, RELAY_MAX_CREDENTIAL_TTL_SECS,
-    RELAY_MAX_FRAME_BYTES, RELAY_MAX_PROLOGUE_BYTES, RELAY_MAX_RECONNECT_BACKOFF_MS,
-    RELAY_RECONNECT_STABLE_RESET_MS, RELAY_SENDER_RETRY_DELAY_MS, RELAY_SENDER_RETRY_LIMIT,
-    RelayAdoptRequest, RelayCloseOutcome, RelayCloseRequest, RelayControlPort, RelayInspectRequest,
-    RelayInspection, RelayOpenRequest, RelayPortFailure, RelayRendezvousId, RelayResource,
-    RelayResourceState, RelayTransportLimits, azure_relay_capabilities,
+    AZURE_RELAY_IMPLEMENTATION_ID, AzureRelayConfiguration, AzureRelayFactoryBuildError,
+    AzureRelayProviderBuildError, AzureRelayProviderFactory, AzureRelayTransportProvider,
+    RELAY_ACCEPT_QUEUE_CAPACITY, RELAY_MAX_CREDENTIAL_TTL_SECS, RELAY_MAX_FRAME_BYTES,
+    RELAY_MAX_PROLOGUE_BYTES, RELAY_MAX_RECONNECT_BACKOFF_MS, RELAY_RECONNECT_STABLE_RESET_MS,
+    RELAY_SENDER_RETRY_DELAY_MS, RELAY_SENDER_RETRY_LIMIT, RelayAdoptRequest, RelayCloseOutcome,
+    RelayCloseRequest, RelayControlPort, RelayInspectRequest, RelayInspection, RelayOpenRequest,
+    RelayPortFailure, RelayRendezvousId, RelayResource, RelayResourceState, RelayTransportLimits,
+    azure_relay_capabilities, azure_relay_factory_key, azure_relay_implementation_id,
 };
 use async_trait::async_trait;
 use d2b_contracts::{
@@ -22,12 +23,12 @@ use d2b_contracts::{
     v2_identity::{ProviderType, RealmId},
     v2_provider::{
         AdoptionState, AuthorizedProviderScope, Generation, HandleId, HandleOwner,
-        ImplementationId, LeaseId, MutationState, ProviderCallContext, ProviderFailureKind,
-        ProviderHealthReason, ProviderMethod, ProviderOperationInput, ProviderPlacement,
-        ProviderTarget, TransportBindingId, TransportProvider,
+        ImplementationId, LeaseId, MutationState, ProviderAuthority, ProviderCallContext,
+        ProviderFailureKind, ProviderHealthReason, ProviderMethod, ProviderOperationInput,
+        ProviderPlacement, ProviderTarget, TransportBindingId, TransportProvider,
     },
 };
-use d2b_provider::ProviderInstance;
+use d2b_provider::{FactoryError, ProviderFactory, ProviderInstance, ProviderRegistryBuilder};
 use d2b_provider_toolkit::{DeterministicClock, Fixture, check_provider_conformance};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -826,6 +827,133 @@ async fn canonical_handle_inspection_uses_the_verified_adoption_seam() {
     assert_eq!(
         harness.port.calls().last().map(|call| call.kind),
         Some(CallKind::Adopt)
+    );
+}
+
+#[test]
+fn factory_key_and_constructor_integrate_with_registry_builder() {
+    let harness = harness();
+    let descriptor = harness.fixture.descriptor.clone();
+    let mut second_fixture = Fixture::new(ProviderType::Transport, 1).expect("second fixture");
+    second_fixture.descriptor.implementation_id = azure_relay_implementation_id();
+    second_fixture.descriptor.capabilities = azure_relay_capabilities();
+    let second_configuration = AzureRelayConfiguration::new(
+        second_fixture
+            .operation(ProviderMethod::TransportInspect)
+            .expect("second inspect operation")
+            .scope,
+        TransportBindingId::parse("transport-binding-two").expect("second binding"),
+        RelayRendezvousId::parse("relay-rendezvous-two").expect("second rendezvous"),
+        LeaseId::parse("relay-connect-lease-two").expect("second connect lease"),
+        LeaseId::parse("relay-listen-lease-two").expect("second listen lease"),
+    )
+    .expect("second configuration");
+    let factory = AzureRelayProviderFactory::new(
+        harness.port,
+        [
+            (
+                descriptor.provider_id.clone(),
+                harness.provider.configuration().clone(),
+            ),
+            (
+                second_fixture.descriptor.provider_id.clone(),
+                second_configuration,
+            ),
+        ],
+    )
+    .expect("factory");
+
+    let key = azure_relay_factory_key();
+    assert_eq!(key, AzureRelayProviderFactory::key());
+    assert_eq!(key.provider_type, ProviderType::Transport);
+    assert_eq!(key.implementation_id, azure_relay_implementation_id());
+    assert_eq!(
+        key.implementation_id.as_str(),
+        AZURE_RELAY_IMPLEMENTATION_ID
+    );
+    assert_eq!(factory.configuration_count(), 2);
+
+    let mut builder = ProviderRegistryBuilder::new(
+        descriptor.registry_generation,
+        descriptor.configuration_schema_fingerprint.clone(),
+        harness.fixture.now_unix_ms,
+    );
+    builder
+        .register_factory(key, Arc::new(factory))
+        .expect("register factory");
+    builder
+        .register_instance(descriptor.clone())
+        .expect("construct registered instance");
+    builder
+        .register_instance(second_fixture.descriptor.clone())
+        .expect("construct second registered instance");
+    let registry = builder.finish().expect("finish registry");
+    let instance = registry
+        .instance(&descriptor.provider_id)
+        .expect("registered instance");
+    assert_eq!(instance.provider_type(), ProviderType::Transport);
+    assert_eq!(instance.descriptor(), descriptor);
+    assert_eq!(
+        registry
+            .instance(&second_fixture.descriptor.provider_id)
+            .expect("second registered instance")
+            .descriptor(),
+        second_fixture.descriptor
+    );
+}
+
+#[test]
+fn factory_rejects_wrong_descriptor_type_and_implementation() {
+    let harness = harness();
+    let descriptor = harness.fixture.descriptor.clone();
+    let factory = AzureRelayProviderFactory::new(
+        harness.port.clone(),
+        [(
+            descriptor.provider_id.clone(),
+            harness.provider.configuration().clone(),
+        )],
+    )
+    .expect("factory");
+
+    let mut wrong_type = descriptor.clone();
+    wrong_type.authority = ProviderAuthority::Credential;
+    assert_eq!(
+        factory.construct(&wrong_type).expect_err("wrong type"),
+        FactoryError::Rejected
+    );
+
+    let mut wrong_implementation = descriptor;
+    wrong_implementation.implementation_id =
+        ImplementationId::parse("not-azure-relay").expect("implementation ID");
+    assert_eq!(
+        factory
+            .construct(&wrong_implementation)
+            .expect_err("wrong implementation"),
+        FactoryError::Rejected
+    );
+    assert_eq!(harness.port.call_count(), 0);
+}
+
+#[test]
+fn factory_configuration_set_is_nonempty_and_duplicate_free() {
+    let harness = harness();
+    let provider_id = harness.fixture.descriptor.provider_id.clone();
+    let configuration = harness.provider.configuration().clone();
+    let empty = AzureRelayProviderFactory::new(harness.port.clone(), []);
+    assert_eq!(
+        empty.expect_err("empty factory"),
+        AzureRelayFactoryBuildError::EmptyConfigurations
+    );
+    let duplicate = AzureRelayProviderFactory::new(
+        harness.port,
+        [
+            (provider_id.clone(), configuration.clone()),
+            (provider_id, configuration),
+        ],
+    );
+    assert_eq!(
+        duplicate.expect_err("duplicate provider"),
+        AzureRelayFactoryBuildError::DuplicateProvider
     );
 }
 
