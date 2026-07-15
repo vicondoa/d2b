@@ -301,6 +301,9 @@ const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_KILL_BROKER_TIMEOUT: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
+const USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND: Duration = Duration::from_secs(15);
+const USBIP_STOP_HOST_UNBIND_BOUND: Duration = Duration::from_secs(15);
+const USBIP_STOP_PROXY_RECONCILE_BOUND: Duration = Duration::from_secs(15);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// Default cap on concurrent in-flight connection-handler threads.
@@ -6250,8 +6253,9 @@ fn lifecycle_broker_ack(
     state: &ServerState,
     op_name: &str,
     request: BrokerRequest,
+    timeout: Duration,
 ) -> Result<(), usbip_reconcile_state::UsbipLifecycleStepError> {
-    match dispatch_broker_request(state, request) {
+    match dispatch_broker_request_with_timeout(state, request, timeout) {
         Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
         Ok(BrokerResponse::Error(error)) => {
             Err(usbip_reconcile_state::UsbipLifecycleStepError::new(
@@ -6294,6 +6298,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 bundle_usbip_bind_intent_ref: BundleOpId::new(claim.claim_ref.clone()),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STRICT_RECONCILE_TIMEOUT,
         )
     }
 
@@ -6328,6 +6333,7 @@ impl usbip_reconcile_state::UsbipVmStartReconcileExecutor
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STRICT_RECONCILE_TIMEOUT,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -6435,6 +6441,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 preserve_durable_claim: true,
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND.saturating_add(USBIP_STOP_HOST_UNBIND_BOUND),
         )
     }
 
@@ -6451,6 +6458,7 @@ impl usbip_reconcile_state::UsbipVmStopCarrierCleanup for DaemonUsbipStopCleanup
                 scope_id: ScopeId::new(format!("vm:{}", claim.vm)),
                 tracing_span_id: Some(tracing_span_id),
             }),
+            USBIP_STOP_PROXY_RECONCILE_BOUND,
         )
         .map_err(|mut error| {
             error.kind = usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
@@ -14635,34 +14643,56 @@ pub(crate) struct MappedRuntimeLifecycleBudgets {
     pub restart: Duration,
 }
 
-fn bounded_duration_count(count: usize) -> u32 {
-    count.max(1).min(u32::MAX as usize) as u32
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MappedRuntimeUsbipLifecycleBudgets {
+    start: Duration,
+    stop: Duration,
 }
 
-fn mapped_runtime_role_cleanup_budget(term: Duration, kill: Duration) -> Duration {
-    term.saturating_add(kill)
-        .saturating_add(CGROUP_KILL_BROKER_TIMEOUT)
-        .saturating_add(CGROUP_EMPTY_POST_KILL_WAIT)
+fn lifecycle_budget_overflow() -> TypedError {
+    TypedError::InternalConfig {
+        detail: "mapped runtime lifecycle budget overflow".to_owned(),
+    }
 }
 
-fn mapped_runtime_graceful_shutdown_budget(configured: Duration) -> Duration {
+fn checked_lifecycle_budget_add(left: Duration, right: Duration) -> Result<Duration, TypedError> {
+    left.checked_add(right)
+        .ok_or_else(lifecycle_budget_overflow)
+}
+
+fn checked_lifecycle_budget_mul(duration: Duration, count: usize) -> Result<Duration, TypedError> {
+    let count = u32::try_from(count).map_err(|_| lifecycle_budget_overflow())?;
+    duration
+        .checked_mul(count)
+        .ok_or_else(lifecycle_budget_overflow)
+}
+
+fn mapped_runtime_role_cleanup_budget(
+    term: Duration,
+    kill: Duration,
+) -> Result<Duration, TypedError> {
+    checked_lifecycle_budget_add(term, kill)
+        .and_then(|total| checked_lifecycle_budget_add(total, CGROUP_KILL_BROKER_TIMEOUT))
+        .and_then(|total| checked_lifecycle_budget_add(total, CGROUP_EMPTY_POST_KILL_WAIT))
+}
+
+fn mapped_runtime_graceful_shutdown_budget(configured: Duration) -> Result<Duration, TypedError> {
     let request = ch_api::DEFAULT_TIMEOUT;
     let trailing_poll = ch_api::DEFAULT_TIMEOUT;
-    configured
-        .saturating_add(request)
-        .saturating_add(trailing_poll)
+    checked_lifecycle_budget_add(configured, request)
+        .and_then(|total| checked_lifecycle_budget_add(total, trailing_poll))
 }
 
 fn mapped_runtime_start_budget_for_dag(
     dag: &d2b_core::processes::VmProcessDag,
     api_timeout: Duration,
     readiness_timeout: Duration,
-) -> Duration {
+) -> Result<Duration, TypedError> {
     let node_budget = supervisor::dag::NodeBudget {
         readiness: readiness_timeout,
         ..supervisor::dag::NodeBudget::default()
     };
-    let sequential_nodes = dag.nodes.iter().fold(Duration::ZERO, |total, node| {
+    let sequential_nodes = dag.nodes.iter().try_fold(Duration::ZERO, |total, node| {
         let spawn = if matches!(
             vm_start_node_mode(&node.role),
             VmStartNodeMode::OneShot(_) | VmStartNodeMode::LongLived(_)
@@ -14681,36 +14711,76 @@ fn mapped_runtime_start_budget_for_dag(
         } else {
             Duration::ZERO
         };
-        total
-            .saturating_add(spawn)
-            .saturating_add(readiness)
-            .saturating_add(qemu_boot)
-    });
-    let rollback_roles = bounded_duration_count(
-        dag.nodes
-            .iter()
-            .filter(|node| {
-                matches!(
-                    vm_start_node_mode(&node.role),
-                    VmStartNodeMode::LongLived(_)
-                )
-            })
-            .count(),
-    );
-    let rollback = mapped_runtime_role_cleanup_budget(
-        VM_START_ROLLBACK_TERM_TIMEOUT,
-        VM_START_ROLLBACK_KILL_TIMEOUT,
+        checked_lifecycle_budget_add(total, spawn)
+            .and_then(|total| checked_lifecycle_budget_add(total, readiness))
+            .and_then(|total| checked_lifecycle_budget_add(total, qemu_boot))
+    })?;
+    let rollback_roles = dag
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                vm_start_node_mode(&node.role),
+                VmStartNodeMode::LongLived(_)
+            )
+        })
+        .count()
+        .max(1);
+    let rollback = checked_lifecycle_budget_mul(
+        mapped_runtime_role_cleanup_budget(
+            VM_START_ROLLBACK_TERM_TIMEOUT,
+            VM_START_ROLLBACK_KILL_TIMEOUT,
+        )?,
+        rollback_roles,
     )
-    .saturating_mul(rollback_roles)
-    .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN);
-    sequential_nodes.saturating_add(rollback)
+    .and_then(|rollback| checked_lifecycle_budget_add(rollback, LIFECYCLE_SNAPSHOT_MARGIN))?;
+    checked_lifecycle_budget_add(sequential_nodes, rollback)
 }
 
-fn mapped_runtime_stop_budget_for_roles(graceful_budget: Duration, stop_roles: usize) -> Duration {
-    let per_role = mapped_runtime_role_cleanup_budget(VM_STOP_TIMEOUT, VM_STOP_TIMEOUT);
-    graceful_budget
-        .saturating_add(per_role.saturating_mul(bounded_duration_count(stop_roles)))
-        .saturating_add(LIFECYCLE_SNAPSHOT_MARGIN)
+fn mapped_runtime_stop_budget_for_roles(
+    graceful_budget: Duration,
+    stop_roles: usize,
+) -> Result<Duration, TypedError> {
+    let per_role = mapped_runtime_role_cleanup_budget(VM_STOP_TIMEOUT, VM_STOP_TIMEOUT)?;
+    checked_lifecycle_budget_mul(per_role, stop_roles.max(1))
+        .and_then(|roles| checked_lifecycle_budget_add(graceful_budget, roles))
+        .and_then(|total| checked_lifecycle_budget_add(total, LIFECYCLE_SNAPSHOT_MARGIN))
+}
+
+fn configured_usbip_claim_count(resolver: &BundleResolver, vm: &str) -> Result<usize, TypedError> {
+    resolver
+        .usbip_bind_intent_ids()
+        .try_fold(0usize, |count, intent_id| {
+            let intent = resolver.find_usbip_bind_intent(intent_id).ok_or_else(|| {
+                TypedError::InternalConfig {
+                    detail: "mapped runtime USBIP intent is missing".to_owned(),
+                }
+            })?;
+            if intent.vm_name == vm {
+                count.checked_add(1).ok_or_else(lifecycle_budget_overflow)
+            } else {
+                Ok(count)
+            }
+        })
+}
+
+fn mapped_runtime_usbip_lifecycle_budgets(
+    claim_count: usize,
+    strict_start: bool,
+) -> Result<MappedRuntimeUsbipLifecycleBudgets, TypedError> {
+    let start = if strict_start && claim_count > 0 {
+        USBIP_STRICT_RECONCILE_TIMEOUT
+    } else {
+        Duration::ZERO
+    };
+    let per_claim_stop = checked_lifecycle_budget_add(
+        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
+        USBIP_STOP_FIREWALL_WITHDRAWAL_BOUND,
+    )
+    .and_then(|total| checked_lifecycle_budget_add(total, USBIP_STOP_HOST_UNBIND_BOUND))
+    .and_then(|total| checked_lifecycle_budget_add(total, USBIP_STOP_PROXY_RECONCILE_BOUND))?;
+    let stop = checked_lifecycle_budget_mul(per_claim_stop, claim_count)?;
+    Ok(MappedRuntimeUsbipLifecycleBudgets { start, stop })
 }
 
 pub(crate) fn mapped_runtime_lifecycle_budgets(
@@ -14731,14 +14801,14 @@ pub(crate) fn mapped_runtime_lifecycle_budgets(
             detail: "mapped runtime lifecycle has no manifest entry".to_owned(),
         })?;
     let (api_timeout, readiness_timeout) = vm_start_api_and_readiness_timeouts();
-    let start = mapped_runtime_start_budget_for_dag(dag, api_timeout, readiness_timeout);
+    let base_start = mapped_runtime_start_budget_for_dag(dag, api_timeout, readiness_timeout)?;
     let graceful = if request.force || !graceful_shutdown_enabled(&manifest_entry) {
         Duration::ZERO
     } else {
         mapped_runtime_graceful_shutdown_budget(graceful_shutdown_timeout_for(
             state,
             &manifest_entry,
-        ))
+        ))?
     };
     let declared_roles = dag
         .nodes
@@ -14751,11 +14821,18 @@ pub(crate) fn mapped_runtime_lifecycle_budgets(
         })
         .count();
     let stop_roles = declared_roles.max(ordered_vm_stop_entries(state, &request.vm).len());
-    let stop = mapped_runtime_stop_budget_for_roles(graceful, stop_roles);
+    let base_stop = mapped_runtime_stop_budget_for_roles(graceful, stop_roles)?;
+    let usbip = mapped_runtime_usbip_lifecycle_budgets(
+        configured_usbip_claim_count(&resolver, &request.vm)?,
+        usbip_start_reconciles_synchronously(request),
+    )?;
+    let start = checked_lifecycle_budget_add(base_start, usbip.start)?;
+    let stop = checked_lifecycle_budget_add(base_stop, usbip.stop)?;
+    let restart = checked_lifecycle_budget_add(stop, start)?;
     Ok(MappedRuntimeLifecycleBudgets {
         start,
         stop,
-        restart: stop.saturating_add(start),
+        restart,
     })
 }
 
@@ -24729,6 +24806,68 @@ mod broker_dispatch_tests {
             .expect("chmod resealed bundle");
     }
 
+    fn configure_provider_test_usbip_claims(
+        state: &ServerState,
+        claim_count: usize,
+        graceful_timeout_seconds: u64,
+    ) {
+        let artifacts = &state.config.artifacts;
+        let bundle: Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        let configured_host_path = PathBuf::from(
+            bundle["hostPath"]
+                .as_str()
+                .expect("configured host artifact path"),
+        );
+        let host_path = if configured_host_path.is_absolute() {
+            configured_host_path
+        } else {
+            artifacts
+                .bundle_path
+                .parent()
+                .expect("bundle parent")
+                .join(configured_host_path)
+        };
+        let bus_ids = (1..=claim_count)
+            .map(|index| format!("1-{index}"))
+            .collect::<Vec<_>>();
+        let mut host: Value =
+            serde_json::from_slice(&fs::read(&host_path).expect("read host artifact"))
+                .expect("parse host artifact");
+        host["environments"][0]["env"] = json!("dev");
+        host["environments"][0]["usbipBackendPort"] = json!(3241);
+        host["environments"][0]["usbipBusidLocks"] = json!([
+            {
+                "lockOwner": "daemon",
+                "scope": "per-busid",
+                "vm": "vm-a",
+                "busIds": bus_ids
+            }
+        ]);
+        write_json_file(&host_path, &host);
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640))
+            .expect("chmod host artifact");
+
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&artifacts.public_manifest_path).expect("read public manifest"),
+        )
+        .expect("parse public manifest");
+        manifest["vm-a"]["lifecycle"] = json!({
+            "gracefulShutdown": {
+                "enable": true,
+                "timeoutSeconds": graceful_timeout_seconds
+            }
+        });
+        write_json_file(&artifacts.public_manifest_path, &manifest);
+        fs::set_permissions(
+            &artifacts.public_manifest_path,
+            fs::Permissions::from_mode(0o640),
+        )
+        .expect("chmod public manifest");
+        reseal_provider_test_bundle(artifacts);
+    }
+
     fn uninitialized_provider_registry_state(label: &str) -> Arc<ServerState> {
         let mut state = test_state_with_broker_socket(unreachable_broker_socket_path(label));
         state.provider_registry = Arc::new(OnceLock::new());
@@ -25039,6 +25178,96 @@ mod broker_dispatch_tests {
             u128::from(stop_deadline.milliseconds),
             stop_deadline.duration.as_millis()
         );
+
+        let mut strict_without_usb = request;
+        strict_without_usb.no_wait_api = false;
+        assert_eq!(
+            crate::mapped_runtime_lifecycle_budgets(&state, &strict_without_usb)
+                .expect("strict USB-free lifecycle budgets"),
+            budgets,
+            "strict starts must not pay a phantom USBIP reconciliation cost"
+        );
+    }
+
+    #[test]
+    fn mapped_provider_usbip_budgets_are_claim_scoped_and_checked() {
+        let usb_free = crate::mapped_runtime_usbip_lifecycle_budgets(0, true)
+            .expect("USB-free lifecycle budget");
+        assert_eq!(usb_free.start, Duration::ZERO);
+        assert_eq!(usb_free.stop, Duration::ZERO);
+
+        let relaxed = crate::mapped_runtime_usbip_lifecycle_budgets(3, false)
+            .expect("relaxed USBIP lifecycle budget");
+        assert_eq!(relaxed.start, Duration::ZERO);
+        assert_eq!(relaxed.stop, Duration::from_secs(3 * 60));
+
+        let strict = crate::mapped_runtime_usbip_lifecycle_budgets(3, true)
+            .expect("strict USBIP lifecycle budget");
+        assert_eq!(strict.start, crate::USBIP_STRICT_RECONCILE_TIMEOUT);
+        assert_eq!(strict.stop, relaxed.stop);
+
+        if let Ok(too_many_claims) = usize::try_from(u64::from(u32::MAX) + 1) {
+            assert!(crate::mapped_runtime_usbip_lifecycle_budgets(too_many_claims, true).is_err());
+        }
+        assert!(crate::checked_lifecycle_budget_mul(Duration::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn mapped_provider_usbip_claims_enforce_exact_contract_boundary() {
+        let state = uninitialized_provider_registry_state("provider-usbip-budget-boundary");
+        let artifact = local_runtime_provider_artifact("runner:vm:vm-a:role:cloud-hypervisor");
+        install_provider_registry_artifact(&state.config.artifacts, &artifact);
+        configure_provider_test_usbip_claims(&state, 6, 100);
+
+        let strict_request = VmLifecycleRequest {
+            vm: "vm-a".to_owned(),
+            flags: MutationFlags {
+                apply: true,
+                dry_run: false,
+                json: true,
+            },
+            force: false,
+            no_wait_api: false,
+        };
+        let resolver = load_bundle_resolver(&state).expect("load USBIP provider bundle");
+        assert_eq!(
+            crate::configured_usbip_claim_count(&resolver, "vm-a")
+                .expect("trusted configured USBIP claim count"),
+            6
+        );
+        assert_eq!(
+            crate::configured_usbip_claim_count(&resolver, "other-vm")
+                .expect("unmapped VM claim count"),
+            0
+        );
+
+        let exact = crate::mapped_runtime_lifecycle_budgets(&state, &strict_request)
+            .expect("exact-limit mapped lifecycle budget");
+        assert_eq!(exact.start, Duration::from_secs(355));
+        assert_eq!(exact.stop, Duration::from_secs(545));
+        assert_eq!(exact.restart, Duration::from_secs(900));
+        assert!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None)
+                .is_ok(),
+            "an exact 900-second USBIP lifecycle budget must be accepted"
+        );
+
+        let mut relaxed_request = strict_request.clone();
+        relaxed_request.no_wait_api = true;
+        let relaxed = crate::mapped_runtime_lifecycle_budgets(&state, &relaxed_request)
+            .expect("relaxed mapped lifecycle budget");
+        assert_eq!(relaxed.start, Duration::from_secs(340));
+        assert_eq!(relaxed.stop, exact.stop);
+        assert_eq!(relaxed.restart, Duration::from_secs(885));
+
+        configure_provider_test_usbip_claims(&state, 6, 101);
+        let over = crate::mapped_runtime_lifecycle_budgets(&state, &strict_request)
+            .expect("over-limit mapped lifecycle budget");
+        assert_eq!(over.restart, Duration::from_secs(901));
+        assert!(matches!(
+            provider_registry::compose_startup_registry_with_policy(&state, &artifact, None),
+            Err(provider_registry::ProviderCompositionError::LifecycleBudgetExceeded)
+        ));
     }
 
     #[test]
@@ -25055,9 +25284,11 @@ mod broker_dispatch_tests {
             &dag,
             Duration::from_secs(60),
             Duration::from_secs(300),
-        );
+        )
+        .expect("start budget");
         let stop =
-            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len());
+            crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(90), dag.nodes.len())
+                .expect("stop budget");
         assert_eq!(
             start,
             Duration::from_secs((2 * (10 + 300)) + (2 * (10 + 5 + 5 + 5)) + 5)
@@ -25071,9 +25302,11 @@ mod broker_dispatch_tests {
         );
 
         let exact_limit = start
-            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(80), dag.nodes.len());
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(80), dag.nodes.len())
+                .expect("exact-limit stop budget");
         let over_limit = start
-            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(81), dag.nodes.len());
+            + crate::mapped_runtime_stop_budget_for_roles(Duration::from_secs(81), dag.nodes.len())
+                .expect("over-limit stop budget");
         assert_eq!(exact_limit, Duration::from_secs(900));
         assert_eq!(over_limit, Duration::from_secs(901));
     }

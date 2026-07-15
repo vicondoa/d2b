@@ -82,10 +82,16 @@ readiness or API-readiness budget, qemu-media boot readiness, every possible
 rollback TERM/KILL and cgroup-kill/emptiness wait, and snapshot margin. Stop
 sums the configured graceful timer plus its bounded request and trailing poll
 overhead, every declared or currently tracked role's TERM/KILL waits, broker
-cgroup-kill request and post-kill emptiness waits, and snapshot margin. Restart
-is the sum of stop and start. Startup rejects a mapped runtime whose full
-restart budget exceeds the provider contract maximum; it never truncates a
-required cleanup budget.
+cgroup-kill request and post-kill emptiness waits, and snapshot margin. A
+strict start with configured USBIP claims adds the 15-second reconciliation
+window once. Stop adds each trusted configured claim's bounded guest detach,
+firewall withdrawal, host unbind, and proxy reconciliation phases. Each stop
+phase reserves 15 seconds, for 60 seconds per claim. USB-free VMs add no USBIP
+cost, and a no-wait start does not charge its detached background
+reconciliation to the mutation. Restart is the sum of stop and start. All sums
+and claim multiplications are checked. Startup rejects a mapped runtime whose
+full restart budget exceeds the provider contract maximum; it never truncates
+a required cleanup budget.
 
 Runtime adapters retain each admitted mutation in an owned task keyed by its
 operation and idempotency identity. The task also retains exclusive per-VM

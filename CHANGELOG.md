@@ -121,8 +121,9 @@ deprecations ship one minor release before removal.
   instead of dispatching twice. The owned task retains per-VM serialization
   through completion, fresh operations wait behind it, sequential node and
   per-role cleanup budgets are summed—including rollback cgroup cleanup and
-  graceful request/poll overhead—and over-limit mappings fail startup instead
-  of truncating required cleanup.
+  graceful request/poll overhead, strict-start USBIP reconciliation, and every
+  configured USBIP claim's bounded stop cleanup—and over-limit or overflowing
+  mappings fail startup instead of truncating required cleanup.
 - Removed nested Tokio runtime bridging from mapped runtime-provider start,
   graceful stop, and restart dispatch. Provider adapters now await daemon
   lifecycle effects directly, and Cloud Hypervisor observations use the
