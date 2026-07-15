@@ -54,6 +54,50 @@ type WebSocketSource = SplitStream<WebSocketStream>;
 type SharedRelaySocket = Arc<dyn RelaySocket>;
 type AcceptedRelaySockets = Arc<Mutex<mpsc::Receiver<SharedRelaySocket>>>;
 
+#[cfg(test)]
+struct StreamTerminationGate {
+    reached: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+    close_reached: tokio::sync::Semaphore,
+    close_release: tokio::sync::Semaphore,
+}
+
+#[cfg(test)]
+impl StreamTerminationGate {
+    fn new() -> Self {
+        Self {
+            reached: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+            close_reached: tokio::sync::Semaphore::new(0),
+            close_release: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    async fn wait_reached(&self) {
+        self.reached
+            .acquire()
+            .await
+            .expect("receive error gate remains open")
+            .forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+
+    async fn wait_close_reached(&self) {
+        self.close_reached
+            .acquire()
+            .await
+            .expect("close source gate remains open")
+            .forget();
+    }
+
+    fn release_close(&self) {
+        self.close_release.add_permits(1);
+    }
+}
+
 /// A bounded in-process secret that zeroizes its owned bytes on drop.
 pub struct RelaySecret(Vec<u8>);
 
@@ -643,6 +687,8 @@ struct WebSocketRelaySocket {
     source: Mutex<WebSocketSource>,
     lifecycle: SocketLifecycle,
     source_end_reason: SourceEndReason,
+    #[cfg(test)]
+    stream_termination_gate: StdMutex<Option<Arc<StreamTerminationGate>>>,
     max_frame_bytes: usize,
 }
 
@@ -654,6 +700,8 @@ impl WebSocketRelaySocket {
             source: Mutex::new(source),
             lifecycle: SocketLifecycle::open(),
             source_end_reason: SourceEndReason::unobserved(),
+            #[cfg(test)]
+            stream_termination_gate: StdMutex::new(None),
             max_frame_bytes,
         }
     }
@@ -697,6 +745,48 @@ impl WebSocketRelaySocket {
         self.finish_close();
         Ok(())
     }
+
+    #[cfg(test)]
+    fn set_stream_termination_gate(&self, gate: Arc<StreamTerminationGate>) {
+        *self
+            .stream_termination_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(gate);
+    }
+
+    #[cfg(test)]
+    async fn pause_before_receive_error_observation(&self) {
+        let gate = self
+            .stream_termination_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(gate) = gate {
+            gate.reached.add_permits(1);
+            gate.release
+                .acquire()
+                .await
+                .expect("receive error gate remains open")
+                .forget();
+        }
+    }
+
+    #[cfg(test)]
+    async fn pause_before_close_source_observation(&self) {
+        let gate = self
+            .stream_termination_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(gate) = gate {
+            gate.close_reached.add_permits(1);
+            gate.close_release
+                .acquire()
+                .await
+                .expect("close source gate remains open")
+                .forget();
+        }
+    }
 }
 
 impl fmt::Debug for WebSocketRelaySocket {
@@ -718,18 +808,27 @@ impl RelaySocket for WebSocketRelaySocket {
 
     async fn receive(&self) -> Result<RelaySocketEvent, RelaySocketFailure> {
         loop {
-            let message = self.source.lock().await.next().await;
-            let Some(message) = message else {
-                self.observe_source_end()?;
-                return Ok(RelaySocketEvent::Closed);
-            };
-            let message = match message {
-                Ok(message) => message,
-                Err(error) => {
+            let mut source = self.source.lock().await;
+            let message = match source.next().await {
+                None => {
+                    let result = self.observe_source_end();
+                    drop(source);
+                    result?;
+                    return Ok(RelaySocketEvent::Closed);
+                }
+                Some(Err(error)) => {
+                    #[cfg(test)]
+                    self.pause_before_receive_error_observation().await;
                     self.observe_receive_error(&error);
+                    drop(source);
                     return Err(classify_socket_error(error));
                 }
+                Some(Ok(message)) => message,
             };
+            if matches!(&message, Message::Close(_)) {
+                let _ = self.lifecycle.begin_close();
+            }
+            drop(source);
             match message {
                 Message::Binary(bytes) => {
                     return RelayFrame::new(bytes.to_vec(), self.max_frame_bytes)
@@ -743,10 +842,7 @@ impl RelaySocket for WebSocketRelaySocket {
                     return RelayFrame::new(bytes.to_vec(), self.max_frame_bytes)
                         .map(RelaySocketEvent::Ping);
                 }
-                Message::Close(_) => {
-                    let _ = self.lifecycle.begin_close();
-                    return Ok(RelaySocketEvent::Closed);
-                }
+                Message::Close(_) => return Ok(RelaySocketEvent::Closed),
                 Message::Pong(_) | Message::Frame(_) => {}
             }
         }
@@ -822,6 +918,8 @@ impl RelaySocket for WebSocketRelaySocket {
         }
         drop(sink);
 
+        #[cfg(test)]
+        self.pause_before_close_source_observation().await;
         let mut source = self.source.lock().await;
         loop {
             match source.next().await {
@@ -2335,7 +2433,7 @@ mod internal_tests {
     }
 
     #[tokio::test]
-    async fn receive_error_keeps_fused_stream_shutdown_ambiguous() {
+    async fn concurrent_receive_error_serializes_fused_stream_close() {
         use tokio::io::AsyncWriteExt;
 
         let timeout = Duration::from_secs(2);
@@ -2371,14 +2469,36 @@ mod internal_tests {
                 .expect("frame bound fits usize"),
         ));
         let external = Arc::clone(&socket);
+        let stream_termination_gate = Arc::new(StreamTerminationGate::new());
+        socket.set_stream_termination_gate(Arc::clone(&stream_termination_gate));
         tokio::time::timeout(timeout, frame_sent_rx)
             .await
             .expect("malformed frame deadline")
             .expect("malformed frame observation");
+        let receive_socket = Arc::clone(&socket);
+        let receive_task = tokio::spawn(async move { receive_socket.receive().await });
+        tokio::time::timeout(timeout, stream_termination_gate.wait_reached())
+            .await
+            .expect("receive error barrier deadline");
+        assert!(!external.source_end_reason.fused_after_non_terminal_error());
+
+        let close_socket = Arc::clone(&socket);
+        let close_task = tokio::spawn(async move { close_socket.close().await });
+        tokio::time::timeout(timeout, stream_termination_gate.wait_close_reached())
+            .await
+            .expect("close source barrier deadline");
+        assert!(!close_task.is_finished());
+        stream_termination_gate.release_close();
+        tokio::task::yield_now().await;
+        assert!(!close_task.is_finished());
+        assert!(external.is_open());
+
+        stream_termination_gate.release();
         assert_eq!(
-            tokio::time::timeout(timeout, socket.receive())
+            tokio::time::timeout(timeout, receive_task)
                 .await
                 .expect("receive error deadline")
+                .expect("receive error task")
                 .expect_err("malformed frame fails receive"),
             RelaySocketFailure::Protocol
         );
@@ -2386,9 +2506,10 @@ mod internal_tests {
         assert!(external.source_end_reason.fused_after_non_terminal_error());
 
         assert_eq!(
-            tokio::time::timeout(timeout, socket.close())
+            tokio::time::timeout(timeout, close_task)
                 .await
                 .expect("ambiguous close deadline")
+                .expect("ambiguous close task")
                 .expect_err("fused stream cannot confirm shutdown"),
             RelaySocketFailure::ShutdownAmbiguous
         );
