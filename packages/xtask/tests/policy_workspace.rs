@@ -78,7 +78,13 @@ fn git_tracked_files() -> Vec<String> {
 fn workspace_metadata() -> serde_json::Value {
     let output = Command::new("cargo")
         .current_dir(repo_root().join("packages"))
-        .args(["metadata", "--format-version", "1", "--locked"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--all-features",
+        ])
         .output()
         .expect("run cargo metadata");
     assert!(
@@ -135,6 +141,7 @@ fn transitive_package_names(metadata: &serde_json::Value, root_package: &str) ->
         if !visited.insert(id.clone()) {
             continue;
         }
+
         if let Some(name) = package_names.get(&id) {
             names.insert(name.clone());
         }
@@ -143,6 +150,20 @@ fn transitive_package_names(metadata: &serde_json::Value, root_package: &str) ->
         }
     }
     names
+}
+
+fn declared_dependencies<'a>(
+    metadata: &'a serde_json::Value,
+    package_name: &str,
+) -> &'a [serde_json::Value] {
+    metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some(package_name))
+        .and_then(|package| package["dependencies"].as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| panic!("workspace package {package_name} dependencies not found"))
 }
 
 #[test]
@@ -283,6 +304,55 @@ fn w4_provider_workspace_inventory_is_reserved_and_dependency_minimal() {
         "d2b-provider-infrastructure-azure-vm",
         "d2b-provider-runtime-azure-vm",
     ] {
+        let allowed_direct = if package == W4_SUPPORT_CRATE {
+            ["async-trait", "serde", "tokio"].as_slice()
+        } else {
+            [
+                "async-trait",
+                "d2b-azure-vm-fake-sdk",
+                "d2b-contracts",
+                "d2b-provider",
+                "d2b-provider-toolkit",
+                "serde",
+                "tokio",
+            ]
+            .as_slice()
+        };
+        for dependency in declared_dependencies(&metadata, package) {
+            let dependency_name = dependency["name"].as_str().expect("dependency name");
+            assert!(
+                allowed_direct.contains(&dependency_name),
+                "{package} has unapproved direct dependency {dependency_name}"
+            );
+            assert!(
+                dependency["optional"].as_bool() == Some(false),
+                "{package} must not hide dependencies behind optional features"
+            );
+            let features = dependency["features"]
+                .as_array()
+                .expect("dependency features")
+                .iter()
+                .map(|feature| feature.as_str().expect("feature name"))
+                .collect::<BTreeSet<_>>();
+            let allowed_features = match dependency_name {
+                "d2b-contracts" => BTreeSet::from(["v2-provider"]),
+                "serde" => BTreeSet::from(["derive"]),
+                "tokio" => BTreeSet::from([
+                    "macros",
+                    "rt",
+                    "rt-multi-thread",
+                    "sync",
+                    "test-util",
+                    "time",
+                ]),
+                _ => BTreeSet::new(),
+            };
+            assert!(
+                features.is_subset(&allowed_features),
+                "{package} enables unapproved {dependency_name} features: {features:?}"
+            );
+        }
+
         let dependencies = transitive_package_names(&metadata, package);
         for dependency in dependencies {
             let forbidden = dependency.starts_with("azure")

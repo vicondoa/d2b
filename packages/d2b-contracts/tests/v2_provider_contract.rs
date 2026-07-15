@@ -817,6 +817,24 @@ fn user_agent_placement_requires_the_user_service_and_role() {
         invalid_service.validate(),
         Err(ProviderContractError::PlacementMismatch)
     );
+
+    let operation = operation_request().context;
+    let valid_call = ProviderCallContext {
+        operation: &operation,
+        peer_role: EndpointRole::UserAgent,
+        service: ServicePackage::UserV2,
+        monotonic_deadline_remaining_ms: 1,
+        cancelled: false,
+    };
+    valid_call.validate().unwrap();
+    let invalid_call = ProviderCallContext {
+        service: ServicePackage::ProviderV2,
+        ..valid_call
+    };
+    assert_eq!(
+        invalid_call.validate(),
+        Err(ProviderContractError::PlacementMismatch)
+    );
 }
 
 fn assert_no_forbidden_keys(value: &Value) {

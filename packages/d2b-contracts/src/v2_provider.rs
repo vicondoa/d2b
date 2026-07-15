@@ -1086,7 +1086,16 @@ impl ProviderCallContext<'_> {
         if self.cancelled || self.monotonic_deadline_remaining_ms == 0 {
             return Err(ProviderContractError::RequestExpired);
         }
-        if self.service != ServicePackage::ProviderV2 {
+        let placement_service_matches = matches!(
+            (self.peer_role, self.service),
+            (
+                EndpointRole::LocalRootController
+                    | EndpointRole::RealmController
+                    | EndpointRole::ProviderAgent,
+                ServicePackage::ProviderV2
+            ) | (EndpointRole::UserAgent, ServicePackage::UserV2)
+        );
+        if !placement_service_matches {
             return Err(ProviderContractError::PlacementMismatch);
         }
         Ok(())
