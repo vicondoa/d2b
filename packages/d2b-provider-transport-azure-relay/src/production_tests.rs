@@ -11,13 +11,15 @@ use async_trait::async_trait;
 use d2b_contracts::{
     v2_identity::{ProviderId, ProviderType},
     v2_provider::{
-        Fingerprint, Generation, HandleId, LeaseId, OperationBinding, OperationId, ProviderMethod,
-        TransportBindingId,
+        Fingerprint, Generation, HandleId, LeaseId, MAX_PROVIDER_REGISTRY_ENTRIES,
+        OperationBinding, OperationId, ProviderMethod, TransportBindingId,
     },
 };
 use d2b_provider::{ProviderFactory, ProviderInstance};
 use d2b_provider_toolkit::Fixture;
+use tokio::sync::Semaphore;
 
+use crate::production::{RELAY_CLOSE_REPLAY_CAPACITY, RELAY_OPEN_REPLAY_CAPACITY};
 use crate::{
     AzureRelayBinding, AzureRelayConfiguration, AzureRelayFactoryEntry, AzureRelayProviderFactory,
     ProductionRelayControlPort, RELAY_ACCEPT_QUEUE_CAPACITY, RELAY_MAX_CREDENTIAL_TTL_SECS,
@@ -102,13 +104,15 @@ impl RelayCredentialSource for FakeCredentialSource {
 struct FakeSocket {
     open: AtomicBool,
     close_calls: AtomicUsize,
+    close_gate: Arc<OneShotGate>,
 }
 
 impl FakeSocket {
-    fn new() -> Self {
+    fn new(close_gate: Arc<OneShotGate>) -> Self {
         Self {
             open: AtomicBool::new(true),
             close_calls: AtomicUsize::new(0),
+            close_gate,
         }
     }
 }
@@ -137,6 +141,7 @@ impl RelaySocket for FakeSocket {
     async fn close(&self) -> Result<(), RelaySocketFailure> {
         self.close_calls.fetch_add(1, Ordering::AcqRel);
         self.open.store(false, Ordering::Release);
+        self.close_gate.block_if_armed().await;
         Ok(())
     }
 }
@@ -149,6 +154,56 @@ impl Drop for DropSignal {
     }
 }
 
+struct OneShotGate {
+    remaining: AtomicUsize,
+    started: Semaphore,
+    release: Semaphore,
+}
+
+impl OneShotGate {
+    fn new() -> Self {
+        Self {
+            remaining: AtomicUsize::new(0),
+            started: Semaphore::new(0),
+            release: Semaphore::new(0),
+        }
+    }
+
+    fn arm(&self) {
+        self.remaining.store(1, Ordering::Release);
+    }
+
+    async fn block_if_armed(&self) {
+        if self
+            .remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_err()
+        {
+            return;
+        }
+        self.started.add_permits(1);
+        self.release
+            .acquire()
+            .await
+            .expect("gate remains open")
+            .forget();
+    }
+
+    async fn wait_started(&self) {
+        self.started
+            .acquire()
+            .await
+            .expect("gate remains open")
+            .forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
 struct FakeSocketConnector {
     calls: AtomicUsize,
     listener_not_ready: AtomicUsize,
@@ -157,10 +212,14 @@ struct FakeSocketConnector {
     roles: Mutex<Vec<RelaySocketRole>>,
     request_debug: Mutex<Vec<String>>,
     sockets: Mutex<Vec<Arc<FakeSocket>>>,
+    connect_gate: Arc<OneShotGate>,
+    close_gate: Arc<OneShotGate>,
 }
 
 impl FakeSocketConnector {
     fn ready() -> Self {
+        let connect_gate = Arc::new(OneShotGate::new());
+        let close_gate = Arc::new(OneShotGate::new());
         Self {
             calls: AtomicUsize::new(0),
             listener_not_ready: AtomicUsize::new(0),
@@ -169,6 +228,8 @@ impl FakeSocketConnector {
             roles: Mutex::new(Vec::new()),
             request_debug: Mutex::new(Vec::new()),
             sockets: Mutex::new(Vec::new()),
+            connect_gate,
+            close_gate,
         }
     }
 
@@ -205,10 +266,11 @@ impl RelaySocketConnector for FakeSocketConnector {
             pending::<()>().await;
             unreachable!("a hanging connector cannot complete");
         }
+        self.connect_gate.block_if_armed().await;
         if self.take_listener_not_ready() {
             return Err(RelaySocketFailure::ListenerNotReady);
         }
-        let socket = Arc::new(FakeSocket::new());
+        let socket = Arc::new(FakeSocket::new(Arc::clone(&self.close_gate)));
         self.sockets
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -224,6 +286,8 @@ struct ProductionHarness {
     connector: Arc<FakeSocketConnector>,
     binding_id: TransportBindingId,
     rendezvous_id: RelayRendezvousId,
+    other_binding_id: TransportBindingId,
+    other_rendezvous_id: RelayRendezvousId,
     lease_id: LeaseId,
 }
 
@@ -231,6 +295,9 @@ fn production_harness(credentials: FakeCredentialSource) -> ProductionHarness {
     let provider_id = operation(ProviderMethod::TransportConnect).provider_id;
     let binding_id = TransportBindingId::parse("transport-binding").expect("binding");
     let rendezvous_id = RelayRendezvousId::parse("relay-rendezvous").expect("rendezvous");
+    let other_binding_id = TransportBindingId::parse("other-transport-binding").expect("binding");
+    let other_rendezvous_id =
+        RelayRendezvousId::parse("other-relay-rendezvous").expect("rendezvous");
     let lease_id = LeaseId::parse("credential-lease").expect("lease");
     let binding = AzureRelayBinding::new(
         provider_id,
@@ -241,13 +308,26 @@ fn production_harness(credentials: FakeCredentialSource) -> ProductionHarness {
         None,
     )
     .expect("private binding");
+    let other_binding = AzureRelayBinding::new(
+        operation(ProviderMethod::TransportConnect).provider_id,
+        other_binding_id.clone(),
+        other_rendezvous_id.clone(),
+        "other-url-canary.servicebus.windows.net",
+        "other-hybrid-connection",
+        None,
+    )
+    .expect("other private binding");
     let credentials = Arc::new(credentials);
     let connector = Arc::new(FakeSocketConnector::ready());
     let credential_port: Arc<dyn RelayCredentialSource> = credentials.clone();
     let socket_port: Arc<dyn RelaySocketConnector> = connector.clone();
     let port = Arc::new(
-        ProductionRelayControlPort::with_socket_connector([binding], credential_port, socket_port)
-            .expect("production port"),
+        ProductionRelayControlPort::with_socket_connector(
+            [binding, other_binding],
+            credential_port,
+            socket_port,
+        )
+        .expect("production port"),
     );
     ProductionHarness {
         port,
@@ -255,6 +335,8 @@ fn production_harness(credentials: FakeCredentialSource) -> ProductionHarness {
         connector,
         binding_id,
         rendezvous_id,
+        other_binding_id,
+        other_rendezvous_id,
         lease_id,
     }
 }
@@ -266,6 +348,15 @@ fn operation(method: ProviderMethod) -> OperationBinding {
         .expect("operation request")
         .context
         .binding()
+}
+
+fn unique_operation(method: ProviderMethod, prefix: &str, sequence: usize) -> OperationBinding {
+    let mut operation = operation(method);
+    operation.operation_id =
+        OperationId::parse(format!("{prefix}-{sequence:04}")).expect("unique operation");
+    operation.request_digest =
+        Fingerprint::parse(format!("{:064x}", sequence + 1_000)).expect("unique request digest");
+    operation
 }
 
 fn open_request(
@@ -283,6 +374,21 @@ fn open_request(
     )
 }
 
+fn other_open_request(
+    harness: &ProductionHarness,
+    operation: OperationBinding,
+    deadline_remaining_ms: u32,
+) -> RelayOpenRequest {
+    RelayOpenRequest::new(
+        operation,
+        harness.other_binding_id.clone(),
+        harness.other_rendezvous_id.clone(),
+        harness.lease_id.clone(),
+        deadline_remaining_ms,
+        RelayTransportLimits::production(),
+    )
+}
+
 fn inspect_request(
     harness: &ProductionHarness,
     operation: OperationBinding,
@@ -291,6 +397,19 @@ fn inspect_request(
         operation,
         harness.binding_id.clone(),
         harness.rendezvous_id.clone(),
+        5_000,
+        RelayTransportLimits::production(),
+    )
+}
+
+fn other_inspect_request(
+    harness: &ProductionHarness,
+    operation: OperationBinding,
+) -> RelayInspectRequest {
+    RelayInspectRequest::new(
+        operation,
+        harness.other_binding_id.clone(),
+        harness.other_rendezvous_id.clone(),
         5_000,
         RelayTransportLimits::production(),
     )
@@ -646,6 +765,202 @@ async fn credential_roles_are_exact_and_relay_authentication_grants_no_authority
 }
 
 #[tokio::test]
+async fn slow_connect_keeps_inspection_and_other_bindings_responsive() {
+    let harness = production_harness(FakeCredentialSource::available());
+    harness.connector.connect_gate.arm();
+    let slow_operation = unique_operation(ProviderMethod::TransportConnect, "slow-connect", 0);
+    let slow_request = open_request(&harness, slow_operation.clone(), 5_000);
+    let slow_port = Arc::clone(&harness.port);
+    let slow_connect = tokio::spawn(async move { slow_port.connect(slow_request).await });
+    harness.connector.connect_gate.wait_started().await;
+    assert_eq!(harness.port.test_state_counts().2, 1);
+    let duplicate = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        harness
+            .port
+            .connect(open_request(&harness, slow_operation, 5_000)),
+    )
+    .await
+    .expect("duplicate admission remained responsive")
+    .expect_err("duplicate in-flight operation stays single-flight");
+    assert_eq!(duplicate, RelayPortFailure::Unavailable);
+    assert_eq!(harness.connector.call_count(), 1);
+
+    let inspection = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        harness.port.inspect(inspect_request(
+            &harness,
+            unique_operation(
+                ProviderMethod::TransportInspect,
+                "inspect-during-connect",
+                0,
+            ),
+        )),
+    )
+    .await
+    .expect("inspection remained responsive")
+    .expect("inspection");
+    assert_eq!(inspection, RelayInspection::Absent);
+
+    let other = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        harness.port.connect(other_open_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportConnect, "other-connect", 0),
+            5_000,
+        )),
+    )
+    .await
+    .expect("other binding remained responsive")
+    .expect("other binding connect");
+    assert_eq!(other.transport_binding_id(), &harness.other_binding_id);
+
+    harness.connector.connect_gate.release();
+    slow_connect
+        .await
+        .expect("slow task")
+        .expect("slow connect");
+    assert_eq!(harness.port.test_state_counts().2, 0);
+}
+
+#[tokio::test]
+async fn slow_close_keeps_inspection_and_other_bindings_responsive() {
+    let harness = production_harness(FakeCredentialSource::available());
+    harness
+        .port
+        .connect(open_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportConnect, "close-primary-open", 0),
+            5_000,
+        ))
+        .await
+        .expect("primary connect");
+    harness
+        .port
+        .connect(other_open_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportConnect, "close-other-open", 0),
+            5_000,
+        ))
+        .await
+        .expect("other connect");
+
+    harness.connector.close_gate.arm();
+    let close = close_request(
+        &harness,
+        unique_operation(ProviderMethod::TransportRevokeBinding, "slow-close", 0),
+    );
+    let close_port = Arc::clone(&harness.port);
+    let slow_close = tokio::spawn(async move { close_port.close(close).await });
+    harness.connector.close_gate.wait_started().await;
+    assert_eq!(harness.port.test_state_counts().3, 1);
+
+    let primary = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        harness.port.inspect(inspect_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportInspect, "inspect-during-close", 0),
+        )),
+    )
+    .await
+    .expect("primary inspection remained responsive")
+    .expect("primary inspection");
+    assert!(matches!(
+        primary,
+        RelayInspection::Present(ref resource)
+            if resource.state() == RelayResourceState::Closed
+    ));
+
+    let other = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        harness.port.inspect(other_inspect_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportInspect, "inspect-other-close", 0),
+        )),
+    )
+    .await
+    .expect("other inspection remained responsive")
+    .expect("other inspection");
+    assert!(matches!(other, RelayInspection::Present(_)));
+
+    harness.connector.close_gate.release();
+    assert_eq!(
+        slow_close
+            .await
+            .expect("slow close task")
+            .expect("slow close"),
+        RelayCloseOutcome::Closed
+    );
+    assert_eq!(harness.port.test_state_counts().3, 0);
+}
+
+#[tokio::test]
+async fn terminal_replays_evict_and_cleanup_continues_beyond_capacity() {
+    let harness = production_harness(FakeCredentialSource::available());
+    let operation_count = MAX_PROVIDER_REGISTRY_ENTRIES + 32;
+    for sequence in 0..operation_count {
+        harness
+            .port
+            .connect(open_request(
+                &harness,
+                unique_operation(ProviderMethod::TransportConnect, "evict-open", sequence),
+                5_000,
+            ))
+            .await
+            .expect("open beyond replay capacity");
+        assert_eq!(
+            harness
+                .port
+                .close(close_request(
+                    &harness,
+                    unique_operation(
+                        ProviderMethod::TransportRevokeBinding,
+                        "evict-close",
+                        sequence,
+                    ),
+                ))
+                .await
+                .expect("cleanup beyond replay capacity"),
+            RelayCloseOutcome::Closed
+        );
+    }
+
+    let (open_replays, close_replays, open_in_flight, close_in_flight) =
+        harness.port.test_state_counts();
+    assert_eq!(open_replays, RELAY_OPEN_REPLAY_CAPACITY);
+    assert_eq!(close_replays, RELAY_CLOSE_REPLAY_CAPACITY);
+    assert_eq!(open_in_flight, 0);
+    assert_eq!(close_in_flight, 0);
+    assert_eq!(harness.connector.call_count(), operation_count);
+
+    harness
+        .port
+        .connect(open_request(
+            &harness,
+            unique_operation(ProviderMethod::TransportConnect, "evict-open", 0),
+            5_000,
+        ))
+        .await
+        .expect("evicted operation can execute again");
+    assert_eq!(harness.connector.call_count(), operation_count + 1);
+    assert_eq!(
+        harness
+            .port
+            .close(close_request(
+                &harness,
+                unique_operation(
+                    ProviderMethod::TransportRevokeBinding,
+                    "evict-final-cleanup",
+                    0,
+                ),
+            ))
+            .await
+            .expect("reserved cleanup remains available"),
+        RelayCloseOutcome::Closed
+    );
+}
+
+#[tokio::test]
 async fn retries_and_deadlines_are_bounded_and_drop_in_flight_socket_io() {
     let harness = production_harness(FakeCredentialSource::available());
     harness
@@ -680,6 +995,17 @@ async fn retries_and_deadlines_are_bounded_and_drop_in_flight_socket_io() {
         harness.connector.dropped_connects.load(Ordering::Acquire),
         1
     );
+    assert_eq!(harness.port.test_state_counts().2, 0);
+    harness.connector.hang.store(false, Ordering::Release);
+    harness
+        .port
+        .connect(open_request(
+            &harness,
+            operation(ProviderMethod::TransportConnect),
+            5_000,
+        ))
+        .await
+        .expect("cancelled reservation rolled back");
 }
 
 #[tokio::test]

@@ -651,10 +651,27 @@ struct ActiveRelayResource {
     connection: Arc<RelaySocketConnection>,
 }
 
+const RELAY_REPLAY_TTL: Duration = Duration::from_secs(15 * 60);
+const RELAY_REPLAY_SEQUENCE_WINDOW: u64 = (MAX_PROVIDER_REGISTRY_ENTRIES as u64) * 2;
+const RELAY_CLEANUP_RESERVATION_CAPACITY: usize = 64;
+const RELAY_OPEN_RESERVATION_CAPACITY: usize =
+    MAX_PROVIDER_REGISTRY_ENTRIES - RELAY_CLEANUP_RESERVATION_CAPACITY;
+pub(crate) const RELAY_OPEN_REPLAY_CAPACITY: usize = MAX_PROVIDER_REGISTRY_ENTRIES;
+pub(crate) const RELAY_CLOSE_REPLAY_CAPACITY: usize = RELAY_CLEANUP_RESERVATION_CAPACITY;
+
+type RelayBindingKey = (ProviderId, TransportBindingId, RelayRendezvousId);
+
+#[derive(Clone, Copy)]
+struct ReplayStamp {
+    sequence: u64,
+    completed_at: Instant,
+}
+
 struct OpenReplay {
     request_digest: Fingerprint,
     role: RelaySocketRole,
     resource: RelayResource,
+    stamp: ReplayStamp,
 }
 
 struct CloseReplay {
@@ -663,13 +680,49 @@ struct CloseReplay {
     transport_binding_id: TransportBindingId,
     rendezvous_id: RelayRendezvousId,
     outcome: RelayCloseOutcome,
+    stamp: ReplayStamp,
+}
+
+struct OpenInFlight {
+    token: u64,
+    request_digest: Fingerprint,
+    role: RelaySocketRole,
+    binding_key: RelayBindingKey,
+}
+
+struct CloseInFlight {
+    token: u64,
+    request_digest: Fingerprint,
+    binding_key: RelayBindingKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReservationKind {
+    Open,
+    Close,
+}
+
+struct BindingInFlight {
+    token: u64,
+    kind: ReservationKind,
+}
+
+struct CloseTarget {
+    handle_id: HandleId,
+    resource_generation: Generation,
+    connection: Arc<RelaySocketConnection>,
 }
 
 struct ProductionState {
     active: BTreeMap<HandleId, ActiveRelayResource>,
     open_replays: BTreeMap<OperationId, OpenReplay>,
     close_replays: BTreeMap<OperationId, CloseReplay>,
+    open_in_flight: BTreeMap<OperationId, OpenInFlight>,
+    close_in_flight: BTreeMap<OperationId, CloseInFlight>,
+    bindings_in_flight: BTreeMap<RelayBindingKey, BindingInFlight>,
     next_generation: Generation,
+    next_reservation_token: u64,
+    next_replay_sequence: u64,
 }
 
 impl ProductionState {
@@ -678,8 +731,13 @@ impl ProductionState {
             active: BTreeMap::new(),
             open_replays: BTreeMap::new(),
             close_replays: BTreeMap::new(),
+            open_in_flight: BTreeMap::new(),
+            close_in_flight: BTreeMap::new(),
+            bindings_in_flight: BTreeMap::new(),
             next_generation: Generation::new(1)
                 .unwrap_or_else(|_| unreachable!("one is a valid generation")),
+            next_reservation_token: 1,
+            next_replay_sequence: 1,
         }
     }
 
@@ -690,14 +748,167 @@ impl ProductionState {
             .map_err(|_| RelayPortFailure::Unavailable)?;
         Ok(generation)
     }
+
+    fn take_reservation_token(&mut self) -> Result<u64, RelayPortFailure> {
+        let token = self.next_reservation_token;
+        self.next_reservation_token = token.checked_add(1).ok_or(RelayPortFailure::Unavailable)?;
+        Ok(token)
+    }
+
+    fn take_replay_stamp(&mut self, now: Instant) -> Result<ReplayStamp, RelayPortFailure> {
+        let sequence = self.next_replay_sequence;
+        self.next_replay_sequence = sequence
+            .checked_add(1)
+            .ok_or(RelayPortFailure::Unavailable)?;
+        Ok(ReplayStamp {
+            sequence,
+            completed_at: now,
+        })
+    }
+
+    fn evict_terminal_replays(&mut self, now: Instant) {
+        let minimum_sequence = self
+            .next_replay_sequence
+            .saturating_sub(RELAY_REPLAY_SEQUENCE_WINDOW);
+        self.open_replays
+            .retain(|_, replay| replay_is_retained(replay.stamp, minimum_sequence, now));
+        self.close_replays
+            .retain(|_, replay| replay_is_retained(replay.stamp, minimum_sequence, now));
+    }
+
+    fn reserve_open_replay_slot(&mut self) {
+        evict_oldest_replays(
+            &mut self.open_replays,
+            RELAY_OPEN_REPLAY_CAPACITY,
+            |replay| replay.stamp.sequence,
+        );
+    }
+
+    fn reserve_close_replay_slot(&mut self) {
+        evict_oldest_replays(
+            &mut self.close_replays,
+            RELAY_CLOSE_REPLAY_CAPACITY,
+            |replay| replay.stamp.sequence,
+        );
+    }
+
+    fn reservation_matches(
+        &self,
+        kind: ReservationKind,
+        operation_id: &OperationId,
+        binding_key: &RelayBindingKey,
+        token: u64,
+    ) -> bool {
+        let operation_matches = match kind {
+            ReservationKind::Open => self
+                .open_in_flight
+                .get(operation_id)
+                .is_some_and(|reservation| reservation.token == token),
+            ReservationKind::Close => self
+                .close_in_flight
+                .get(operation_id)
+                .is_some_and(|reservation| reservation.token == token),
+        };
+        operation_matches
+            && self
+                .bindings_in_flight
+                .get(binding_key)
+                .is_some_and(|reservation| reservation.token == token && reservation.kind == kind)
+    }
+
+    fn release_reservation(
+        &mut self,
+        kind: ReservationKind,
+        operation_id: &OperationId,
+        binding_key: &RelayBindingKey,
+        token: u64,
+    ) {
+        if !self.reservation_matches(kind, operation_id, binding_key, token) {
+            return;
+        }
+        match kind {
+            ReservationKind::Open => {
+                self.open_in_flight.remove(operation_id);
+            }
+            ReservationKind::Close => {
+                self.close_in_flight.remove(operation_id);
+            }
+        }
+        self.bindings_in_flight.remove(binding_key);
+    }
+}
+
+fn replay_is_retained(stamp: ReplayStamp, minimum_sequence: u64, now: Instant) -> bool {
+    stamp.sequence >= minimum_sequence
+        && now.saturating_duration_since(stamp.completed_at) <= RELAY_REPLAY_TTL
+}
+
+fn evict_oldest_replays<K: Ord + Clone, V>(
+    replays: &mut BTreeMap<K, V>,
+    capacity: usize,
+    sequence: impl Fn(&V) -> u64,
+) {
+    while replays.len() >= capacity {
+        let Some(oldest) = replays
+            .iter()
+            .min_by_key(|(_, replay)| sequence(replay))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        replays.remove(&oldest);
+    }
+}
+
+struct StateReservation<'a> {
+    state: &'a StdMutex<ProductionState>,
+    kind: ReservationKind,
+    operation_id: OperationId,
+    binding_key: RelayBindingKey,
+    token: u64,
+    armed: bool,
+}
+
+impl StateReservation<'_> {
+    fn release_locked(&mut self, state: &mut ProductionState) {
+        state.release_reservation(self.kind, &self.operation_id, &self.binding_key, self.token);
+        self.armed = false;
+    }
+}
+
+impl Drop for StateReservation<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.release_reservation(self.kind, &self.operation_id, &self.binding_key, self.token);
+    }
+}
+
+enum OpenAdmission<'a> {
+    Replay(RelayResource),
+    Reserved(StateReservation<'a>),
+}
+
+enum CloseAdmission<'a> {
+    Replay(RelayCloseOutcome),
+    Reserved {
+        reservation: StateReservation<'a>,
+        targets: Vec<CloseTarget>,
+        empty_outcome: RelayCloseOutcome,
+    },
 }
 
 /// Production co-located Relay control/client port.
 pub struct ProductionRelayControlPort {
-    bindings: BTreeMap<(ProviderId, TransportBindingId, RelayRendezvousId), AzureRelayBinding>,
+    bindings: BTreeMap<RelayBindingKey, AzureRelayBinding>,
     credentials: Arc<dyn RelayCredentialSource>,
     connector: Arc<dyn RelaySocketConnector>,
-    state: Mutex<ProductionState>,
+    state: StdMutex<ProductionState>,
 }
 
 impl ProductionRelayControlPort {
@@ -740,18 +951,32 @@ impl ProductionRelayControlPort {
             bindings: by_id,
             credentials,
             connector,
-            state: Mutex::new(ProductionState::new()),
+            state: StdMutex::new(ProductionState::new()),
         })
     }
 
     pub async fn connected_socket(&self, handle_id: &HandleId) -> Option<Arc<dyn RelaySocket>> {
         self.state
             .lock()
-            .await
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .active
             .get(handle_id)
             .filter(|active| active.resource.state() == RelayResourceState::Connected)
             .map(|active| active.connection.socket())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_state_counts(&self) -> (usize, usize, usize, usize) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            state.open_replays.len(),
+            state.close_replays.len(),
+            state.open_in_flight.len(),
+            state.close_in_flight.len(),
+        )
     }
 
     pub async fn accept_socket(
@@ -765,15 +990,16 @@ impl ProductionRelayControlPort {
         tokio::time::timeout(
             Duration::from_millis(u64::from(deadline_remaining_ms)),
             async {
-                let connection = self
-                    .state
-                    .lock()
-                    .await
-                    .active
-                    .get(handle_id)
-                    .filter(|active| active.resource.state() == RelayResourceState::Listening)
-                    .map(|active| Arc::clone(&active.connection))
-                    .ok_or(RelayPortFailure::IdentityMismatch)?;
+                let connection = {
+                    self.state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .active
+                        .get(handle_id)
+                        .filter(|active| active.resource.state() == RelayResourceState::Listening)
+                        .map(|active| Arc::clone(&active.connection))
+                        .ok_or(RelayPortFailure::IdentityMismatch)?
+                };
                 connection
                     .accept(deadline_remaining_ms)
                     .await
@@ -831,22 +1057,12 @@ impl ProductionRelayControlPort {
             request.transport_binding_id(),
             request.rendezvous_id(),
         )?;
-        let mut state = self.state.lock().await;
-        if let Some(replay) = state.open_replays.get(&request.operation().operation_id) {
-            return if replay.request_digest == request.operation().request_digest
-                && replay.role == role
-                && replay.resource.provider_id() == &request.operation().provider_id
-                && replay.resource.transport_binding_id() == request.transport_binding_id()
-                && replay.resource.rendezvous_id() == request.rendezvous_id()
-            {
-                Ok(replay.resource.clone())
-            } else {
-                Err(RelayPortFailure::IdentityMismatch)
-            };
-        }
-        if state.open_replays.len() >= MAX_PROVIDER_REGISTRY_ENTRIES {
-            return Err(RelayPortFailure::QueueFull);
-        }
+        let handle_id = HandleId::parse(request.operation().operation_id.as_str())
+            .map_err(|_| RelayPortFailure::IdentityMismatch)?;
+        let mut reservation = match self.begin_open(&request, role, &handle_id)? {
+            OpenAdmission::Replay(resource) => return Ok(resource),
+            OpenAdmission::Reserved(reservation) => reservation,
+        };
 
         let credential = self
             .credentials
@@ -874,34 +1090,136 @@ impl ProductionRelayControlPort {
                 .await
                 .map_err(map_socket_failure)?,
         };
-        let handle_id = HandleId::parse(request.operation().operation_id.as_str())
-            .map_err(|_| RelayPortFailure::IdentityMismatch)?;
-        let resource = RelayResource::new(
+        let connection = Arc::new(connection);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.reservation_matches(
+            ReservationKind::Open,
+            &reservation.operation_id,
+            &reservation.binding_key,
+            reservation.token,
+        ) {
+            drop(state);
+            return Err(RelayPortFailure::CompletionAmbiguous);
+        }
+        let result = (|| {
+            if state.active.contains_key(&handle_id) {
+                return Err(RelayPortFailure::IdentityMismatch);
+            }
+            let resource_generation = state.take_generation()?;
+            let now = Instant::now();
+            let stamp = state.take_replay_stamp(now)?;
+            state.evict_terminal_replays(now);
+            state.reserve_open_replay_slot();
+            let resource = RelayResource::new(
+                request.operation().provider_id.clone(),
+                binding.transport_binding_id.clone(),
+                binding.rendezvous_id.clone(),
+                handle_id.clone(),
+                request.operation().provider_generation,
+                resource_generation,
+                resource_state,
+                Some(expires_at_unix_ms),
+            );
+            state.active.insert(
+                handle_id,
+                ActiveRelayResource {
+                    resource: resource.clone(),
+                    connection,
+                },
+            );
+            state.open_replays.insert(
+                request.operation().operation_id.clone(),
+                OpenReplay {
+                    request_digest: request.operation().request_digest.clone(),
+                    role,
+                    resource: resource.clone(),
+                    stamp,
+                },
+            );
+            Ok(resource)
+        })();
+        reservation.release_locked(&mut state);
+        result
+    }
+
+    fn begin_open<'a>(
+        &'a self,
+        request: &RelayOpenRequest,
+        role: RelaySocketRole,
+        handle_id: &HandleId,
+    ) -> Result<OpenAdmission<'a>, RelayPortFailure> {
+        let binding_key = (
             request.operation().provider_id.clone(),
-            binding.transport_binding_id,
-            binding.rendezvous_id,
-            handle_id.clone(),
-            request.operation().provider_generation,
-            state.take_generation()?,
-            resource_state,
-            Some(expires_at_unix_ms),
+            request.transport_binding_id().clone(),
+            request.rendezvous_id().clone(),
         );
-        state.active.insert(
-            handle_id,
-            ActiveRelayResource {
-                resource: resource.clone(),
-                connection: Arc::new(connection),
-            },
-        );
-        state.open_replays.insert(
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.evict_terminal_replays(Instant::now());
+        if let Some(replay) = state.open_replays.get(&request.operation().operation_id) {
+            return if replay.request_digest == request.operation().request_digest
+                && replay.role == role
+                && replay.resource.provider_id() == &request.operation().provider_id
+                && replay.resource.transport_binding_id() == request.transport_binding_id()
+                && replay.resource.rendezvous_id() == request.rendezvous_id()
+            {
+                Ok(OpenAdmission::Replay(replay.resource.clone()))
+            } else {
+                Err(RelayPortFailure::IdentityMismatch)
+            };
+        }
+        if let Some(in_flight) = state.open_in_flight.get(&request.operation().operation_id) {
+            return if in_flight.request_digest == request.operation().request_digest
+                && in_flight.role == role
+                && in_flight.binding_key == binding_key
+            {
+                Err(RelayPortFailure::Unavailable)
+            } else {
+                Err(RelayPortFailure::IdentityMismatch)
+            };
+        }
+        if state.bindings_in_flight.contains_key(&binding_key) {
+            return Err(RelayPortFailure::Unavailable);
+        }
+        if state.active.contains_key(handle_id) {
+            return Err(RelayPortFailure::IdentityMismatch);
+        }
+        if state.open_in_flight.len() >= RELAY_OPEN_RESERVATION_CAPACITY
+            || state.active.len() + state.open_in_flight.len() >= MAX_PROVIDER_REGISTRY_ENTRIES
+        {
+            return Err(RelayPortFailure::QueueFull);
+        }
+        let token = state.take_reservation_token()?;
+        state.open_in_flight.insert(
             request.operation().operation_id.clone(),
-            OpenReplay {
+            OpenInFlight {
+                token,
                 request_digest: request.operation().request_digest.clone(),
                 role,
-                resource: resource.clone(),
+                binding_key: binding_key.clone(),
             },
         );
-        Ok(resource)
+        state.bindings_in_flight.insert(
+            binding_key.clone(),
+            BindingInFlight {
+                token,
+                kind: ReservationKind::Open,
+            },
+        );
+        drop(state);
+        Ok(OpenAdmission::Reserved(StateReservation {
+            state: &self.state,
+            kind: ReservationKind::Open,
+            operation_id: request.operation().operation_id.clone(),
+            binding_key,
+            token,
+            armed: true,
+        }))
     }
 
     async fn inspect_inner(
@@ -913,7 +1231,10 @@ impl ProductionRelayControlPort {
             request.transport_binding_id(),
             request.rendezvous_id(),
         )?;
-        let state = self.state.lock().await;
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let active = state
             .active
             .values()
@@ -945,22 +1266,120 @@ impl ProductionRelayControlPort {
             request.transport_binding_id(),
             request.rendezvous_id(),
         )?;
-        let mut state = self.state.lock().await;
+        let (mut reservation, targets, empty_outcome) = match self.begin_close(&request)? {
+            CloseAdmission::Replay(outcome) => return Ok(outcome),
+            CloseAdmission::Reserved {
+                reservation,
+                targets,
+                empty_outcome,
+            } => (reservation, targets, empty_outcome),
+        };
+        for target in &targets {
+            if target.connection.is_open() {
+                target
+                    .connection
+                    .close()
+                    .await
+                    .map_err(|_| RelayPortFailure::CompletionAmbiguous)?;
+            }
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.reservation_matches(
+            ReservationKind::Close,
+            &reservation.operation_id,
+            &reservation.binding_key,
+            reservation.token,
+        ) {
+            drop(state);
+            return Err(RelayPortFailure::CompletionAmbiguous);
+        }
+        let result = (|| {
+            for target in &targets {
+                let active = state
+                    .active
+                    .get(&target.handle_id)
+                    .ok_or(RelayPortFailure::CompletionAmbiguous)?;
+                if active.resource.resource_generation() != target.resource_generation
+                    || !Arc::ptr_eq(&active.connection, &target.connection)
+                {
+                    return Err(RelayPortFailure::CompletionAmbiguous);
+                }
+            }
+            let now = Instant::now();
+            let stamp = state.take_replay_stamp(now)?;
+            state.evict_terminal_replays(now);
+            state.reserve_close_replay_slot();
+            for target in &targets {
+                state.active.remove(&target.handle_id);
+            }
+            let outcome = if targets.is_empty() {
+                empty_outcome
+            } else {
+                RelayCloseOutcome::Closed
+            };
+            state.close_replays.insert(
+                request.operation().operation_id.clone(),
+                CloseReplay {
+                    request_digest: request.operation().request_digest.clone(),
+                    provider_id: request.operation().provider_id.clone(),
+                    transport_binding_id: request.transport_binding_id().clone(),
+                    rendezvous_id: request.rendezvous_id().clone(),
+                    outcome,
+                    stamp,
+                },
+            );
+            Ok(outcome)
+        })();
+        reservation.release_locked(&mut state);
+        result
+    }
+
+    fn begin_close<'a>(
+        &'a self,
+        request: &RelayCloseRequest,
+    ) -> Result<CloseAdmission<'a>, RelayPortFailure> {
+        let binding_key = (
+            request.operation().provider_id.clone(),
+            request.transport_binding_id().clone(),
+            request.rendezvous_id().clone(),
+        );
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.evict_terminal_replays(Instant::now());
         if let Some(replay) = state.close_replays.get(&request.operation().operation_id) {
             return if replay.request_digest == request.operation().request_digest
                 && replay.provider_id == request.operation().provider_id
                 && &replay.transport_binding_id == request.transport_binding_id()
                 && &replay.rendezvous_id == request.rendezvous_id()
             {
-                Ok(replay.outcome)
+                Ok(CloseAdmission::Replay(replay.outcome))
             } else {
                 Err(RelayPortFailure::IdentityMismatch)
             };
         }
-        if state.close_replays.len() >= MAX_PROVIDER_REGISTRY_ENTRIES {
+        if let Some(in_flight) = state.close_in_flight.get(&request.operation().operation_id) {
+            return if in_flight.request_digest == request.operation().request_digest
+                && in_flight.binding_key == binding_key
+            {
+                Err(RelayPortFailure::Unavailable)
+            } else {
+                Err(RelayPortFailure::IdentityMismatch)
+            };
+        }
+        if state.bindings_in_flight.contains_key(&binding_key) {
+            return Err(RelayPortFailure::Unavailable);
+        }
+        if state.close_in_flight.len() >= RELAY_CLEANUP_RESERVATION_CAPACITY {
             return Err(RelayPortFailure::QueueFull);
         }
-        let matching: Vec<_> = state
+        let token = state.take_reservation_token()?;
+        let targets: Vec<_> = state
             .active
             .iter()
             .filter(|(_, active)| {
@@ -968,46 +1387,50 @@ impl ProductionRelayControlPort {
                     && active.resource.rendezvous_id() == request.rendezvous_id()
                     && active.resource.provider_id() == &request.operation().provider_id
             })
-            .map(|(handle_id, _)| handle_id.clone())
+            .map(|(handle_id, active)| CloseTarget {
+                handle_id: handle_id.clone(),
+                resource_generation: active.resource.resource_generation(),
+                connection: Arc::clone(&active.connection),
+            })
             .collect();
-        let outcome = if matching.is_empty() {
-            if state.open_replays.values().any(|replay| {
+        let empty_outcome = if targets.is_empty()
+            && state.open_replays.values().any(|replay| {
                 replay.resource.transport_binding_id() == request.transport_binding_id()
                     && replay.resource.rendezvous_id() == request.rendezvous_id()
                     && replay.resource.provider_id() == &request.operation().provider_id
             }) {
-                RelayCloseOutcome::AlreadyClosed
-            } else {
-                RelayCloseOutcome::NotFound
-            }
+            RelayCloseOutcome::AlreadyClosed
         } else {
-            for handle_id in &matching {
-                let active = state
-                    .active
-                    .get(handle_id)
-                    .ok_or(RelayPortFailure::CompletionAmbiguous)?;
-                active
-                    .connection
-                    .close()
-                    .await
-                    .map_err(|_| RelayPortFailure::CompletionAmbiguous)?;
-            }
-            for handle_id in matching {
-                state.active.remove(&handle_id);
-            }
-            RelayCloseOutcome::Closed
+            RelayCloseOutcome::NotFound
         };
-        state.close_replays.insert(
+        state.close_in_flight.insert(
             request.operation().operation_id.clone(),
-            CloseReplay {
+            CloseInFlight {
+                token,
                 request_digest: request.operation().request_digest.clone(),
-                provider_id: request.operation().provider_id.clone(),
-                transport_binding_id: request.transport_binding_id().clone(),
-                rendezvous_id: request.rendezvous_id().clone(),
-                outcome,
+                binding_key: binding_key.clone(),
             },
         );
-        Ok(outcome)
+        state.bindings_in_flight.insert(
+            binding_key.clone(),
+            BindingInFlight {
+                token,
+                kind: ReservationKind::Close,
+            },
+        );
+        drop(state);
+        Ok(CloseAdmission::Reserved {
+            reservation: StateReservation {
+                state: &self.state,
+                kind: ReservationKind::Close,
+                operation_id: request.operation().operation_id.clone(),
+                binding_key,
+                token,
+                armed: true,
+            },
+            targets,
+            empty_outcome,
+        })
     }
 }
 
@@ -1090,7 +1513,10 @@ impl RelayControlPort for ProductionRelayControlPort {
                     request.transport_binding_id(),
                     request.rendezvous_id(),
                 )?;
-                let state = self.state.lock().await;
+                let state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let active = state
                     .active
                     .get(request.expected().handle_id())
@@ -1589,6 +2015,25 @@ mod internal_tests {
             RelayFrame::new(vec![b'x'; bound + 1], bound).expect_err("frame above bound"),
             RelaySocketFailure::FrameTooLarge
         );
+    }
+
+    #[test]
+    fn replay_retention_expires_by_time_and_sequence() {
+        let now = Instant::now();
+        let current = ReplayStamp {
+            sequence: 10,
+            completed_at: now,
+        };
+        assert!(replay_is_retained(current, 10, now));
+        assert!(!replay_is_retained(current, 11, now));
+
+        let expired = ReplayStamp {
+            sequence: 10,
+            completed_at: now
+                .checked_sub(RELAY_REPLAY_TTL + Duration::from_millis(1))
+                .expect("test instant supports replay age"),
+        };
+        assert!(!replay_is_retained(expired, 10, now));
     }
 
     #[test]
